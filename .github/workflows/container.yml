@@ -30,6 +30,10 @@ jobs:
       - name: Set up ko
         uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d # v0.9
 
+      - name: Extract tag name
+        id: extract_tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
@@ -37,15 +41,11 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract tag name
-        id: extract_tag
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
       - name: Build and push container image
         env:
           KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/${{ env.REPO_NAME }}
-          VERSION: ${{ steps.extract_tag.outputs.tag }}
           KO_LOG_LEVEL: debug
+          VERSION: ${{ steps.extract_tag.outputs.tag }}
         run: |
           ko publish . \
             --tags=${{ steps.extract_tag.outputs.tag }},latest \
