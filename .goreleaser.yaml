@@ -6,7 +6,9 @@ before:
     - go mod download
 
 builds:
-  - env:
+  # Lambda-specific binary (bootstrap)
+  - id: lambda
+    env:
       - CGO_ENABLED=0
     mod_timestamp: "{{ .CommitTimestamp }}"
     flags:
@@ -19,7 +21,6 @@ builds:
       - -s -w
       - -extldflags "-static"
     main: ./main.go
-
     goos:
       - linux
     goarch:
@@ -28,8 +29,11 @@ builds:
     binary: "bootstrap"
 
 archives:
-  - formats: ["zip"]
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: lambda
+    builds:
+      - lambda
+    formats: ["zip"]
+    name_template: "{{ .ProjectName }}_lambda_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 snapshot:
   version_template: "{{ .Tag }}-next"
@@ -38,6 +42,9 @@ checksum:
   algorithm: sha256
 release:
   draft: false
+  github:
+    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
+    name: "{{ .ProjectName }}"
 
 changelog:
   sort: asc
@@ -45,3 +52,20 @@ changelog:
     exclude:
       - "^docs:"
       - "^test:"
+      - "^ci:"
+      - "^build:"
+
+  # Group commits into categories based on their message
+  # This is useful for generating a changelog that highlights features, bug fixes, etc.
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: "Bug fixes"
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: "Security"
+      regexp: "^.*sec[(\\w)]*:+.*$"
+      order: 2
+    - title: Others
+      order: 999

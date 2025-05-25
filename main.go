@@ -79,7 +79,11 @@ func main() {
 	}()
 
 	// Set up deferred write of logs to S3 at the end of execution
-	defer s3log.WriteLogToS3(logBuffer)
+	defer func() {
+		if err := s3log.WriteLogToS3(logBuffer); err != nil {
+			slog.Error("Failed to write logs to S3", slog.String("error", err.Error()))
+		}
+	}()
 
 	consumer := aws.NewAwsConsumer(cfg)
 	if cfg.S3ConfigBucket != "" && cfg.S3ConfigPath != "" { // Read S3 configuration if it's provided

@@ -4,9 +4,10 @@ This project can be built and deployed using [ko](https://ko.build), a simple, f
 
 ## Prerequisites
 
-- [ko](https://ko.build/install/) installed on your system
-- AWS CLI configured with appropriate permissions
+- [ko](https://ko.build/install/) installed on your system (or use `make verify-ko` to auto-install)
 - Docker installed on your system
+- AWS CLI configured with appropriate permissions (for Lambda deployment)
+- GitHub Container Registry or Docker Hub access (for publishing images)
 
 ## Configuration
 
@@ -28,27 +29,26 @@ make verify-ko
 # Build a container image locally with ko
 make ko-build
 
-# Publish container image to the repository specified in KO_DOCKER_REPO
-make ko-publish
+# Publish container image to GitHub Container Registry
+make ko-publish-ghcr
 
-# Publish container image to AWS ECR
-make ko-publish-ecr
+# Publish container image to Docker Hub
+make ko-publish-dockerhub
 
-# Build, publish to ECR and deploy to AWS Lambda
-make ko-deploy-lambda
+# Publish container image to both registries
+make ko-publish-all
 ```
 
 ## Environment Variables
 
 You can customize the behavior by setting the following environment variables:
 
-- `KO_DOCKER_REPO`: Docker registry to push images to (default: ko.local)
-- `KO_TAGS`: Tags for the container image (default: git version tag)
-- `AWS_REGION`: AWS region to deploy to (default: us-east-1)
-- `LAMBDA_FUNCTION_NAME`: AWS Lambda function name (default: aws-oidc-warden)
-- `LAMBDA_MEMORY`: Lambda memory allocation in MB (default: 128)
-- `LAMBDA_TIMEOUT`: Lambda timeout in seconds (default: 10)
-- `LAMBDA_ROLE`: IAM role for Lambda execution (default: aws-oidc-warden-role)
+- `GITHUB_USER`: GitHub username (default: detected from git config)
+- `KO_DOCKER_REPO_GHCR`: GitHub Container Registry repository (default: `ghcr.io/$(GITHUB_USER)/$(APP_NAME)`)
+- `KO_DOCKER_REPO_DOCKERHUB`: Docker Hub repository (default: `$(GITHUB_USER)/$(APP_NAME)`)
+- `VERSION`: Version tag for the container image (default: git describe --tags)
+- `GOOS`: Go OS target (default: linux)
+- `GOARCH`: Go architecture target (default: arm64)
 
 ## Examples
 
@@ -58,24 +58,41 @@ You can customize the behavior by setting the following environment variables:
 make ko-build
 ```
 
-### Deploy to AWS Lambda
+### Publish to GitHub Container Registry
 
 ```sh
-# Deploy using default settings
-make ko-deploy-lambda
+# Push to your GitHub Container Registry (using git config user.name)
+make ko-publish-ghcr
 
-# Deploy with custom settings
-AWS_REGION=us-west-2 LAMBDA_MEMORY=256 LAMBDA_TIMEOUT=30 make ko-deploy-lambda
+# Push with custom GitHub username
+GITHUB_USER=myusername make ko-publish-ghcr
 ```
 
-### Publish to a specific registry
+### Publish to Docker Hub
 
 ```sh
-# Push to Docker Hub
-KO_DOCKER_REPO=docker.io/yourusername/aws-oidc-warden make ko-publish
+# Push to your Docker Hub (using git config user.name)
+make ko-publish-dockerhub
 
-# Push to GitHub Container Registry
-KO_DOCKER_REPO=ghcr.io/yourusername/aws-oidc-warden make ko-publish
+# Push with custom Docker Hub username
+GITHUB_USER=myusername make ko-publish-dockerhub
+```
+
+### Publish to both registries
+
+```sh
+# Push to both GitHub Container Registry and Docker Hub
+make ko-publish-all
+```
+
+### Custom configuration
+
+```sh
+# Build with custom parameters
+GITHUB_USER=myusername \
+VERSION=v1.0.0 \
+GOARCH=amd64 \
+make ko-build
 ```
 
 ## Advantages of using ko

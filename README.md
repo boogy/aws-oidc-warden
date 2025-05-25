@@ -65,6 +65,12 @@ Written in **Go** and optimized for deployment in **AWS Lambda**, this service i
    make build
    ```
 
+#### Alternative Installation Methods
+
+- **Download pre-built binaries**: Check the [Releases](https://github.com/boogy/aws-oidc-warden/releases) page for pre-built Lambda deployment packages
+- **Use container images**: Pull from `ghcr.io/boogy/aws-oidc-warden` (see [Container Images](#using-pre-built-container-images) section)
+- **Build with ko**: Use `make ko-build` for container-based deployment (see [Using ko](docs/USING_KO.md))
+
 ---
 
 ### Configuration
@@ -261,67 +267,52 @@ jobs:
 
 #### Deploying to AWS Lambda
 
-You have multiple options for deploying to AWS Lambda:
+The project provides multiple deployment options:
 
-1. **Deploy as a ZIP package** (fastest for testing):
+1. **Build Lambda binary locally**:
    ```bash
-   # Create a new Lambda function
-   make lambda-create LAMBDA_FUNCTION_NAME=my-oidc-warden LAMBDA_ROLE=my-lambda-role
-
-   # Update an existing Lambda function
-   make lambda-update LAMBDA_FUNCTION_NAME=my-oidc-warden
+   # Build the bootstrap binary for AWS Lambda
+   make build
    ```
 
-2. **Deploy as a container image** (recommended for production):
+2. **Build and publish container images with ko** (recommended):
    ```bash
-   # Build and deploy container image to Lambda
-   make lambda-container-deploy LAMBDA_FUNCTION_NAME=my-oidc-warden LAMBDA_ROLE=my-lambda-role
-   ```
+   # Verify ko installation (auto-installs if needed)
+   make verify-ko
 
-3. **Build and deploy using ko** (simplest option):
-   ```bash
-   # Build and deploy using ko
-   make verify-ko  # Verifies ko installation
-   make ko-deploy-lambda LAMBDA_FUNCTION_NAME=my-oidc-warden LAMBDA_ROLE=my-lambda-role
-   ```
-
-4. **Build without deploying**:
-   ```bash
-   # Just build the Lambda binary
-   make lambda-build
-
-   # Create the deployment package (ZIP)
-   make lambda-package
-
-   # Build and push container image to ECR
-   make lambda-container
-
-   # Build container with ko
+   # Build container image locally
    make ko-build
+
+   # Publish to GitHub Container Registry
+   make ko-publish-ghcr
+
+   # Publish to Docker Hub
+   make ko-publish-dockerhub
+
+   # Publish to both registries
+   make ko-publish-all
    ```
 
-5. **Use pre-built container images** (fastest for production):
+3. **Use GoReleaser for releases**:
    ```bash
-   # Deploy with pre-built image from GitHub Container Registry
-   make lambda-deploy-prebuilt LAMBDA_FUNCTION_NAME=my-oidc-warden LAMBDA_ROLE=my-lambda-role
-
-   # Deploy with pre-built image via ECR pull-through cache (recommended)
-   make lambda-deploy-ecr-cache LAMBDA_FUNCTION_NAME=my-oidc-warden LAMBDA_ROLE=my-lambda-role
+   # Create a release with pre-built Lambda ZIP packages
+   goreleaser release --clean
    ```
 
 These commands support additional configuration through environment variables:
 ```bash
 # Example with custom parameters
-make lambda-container-deploy \
-  LAMBDA_FUNCTION_NAME=aws-oidc-warden \
-  LAMBDA_ROLE=my-execution-role \
-  AWS_REGION=us-west-2 \
-  LAMBDA_MEMORY=256 \
-  LAMBDA_TIMEOUT=30 \
-  KO_TAGS=v1.0.0
+GITHUB_USER=myusername \
+KO_DOCKER_REPO_GHCR=ghcr.io/myusername/aws-oidc-warden \
+VERSION=v1.0.0 \
+make ko-publish-ghcr
 ```
 
 For detailed information about building and deploying with ko, see [Using ko](docs/USING_KO.md).
+
+For information about creating releases and using GoReleaser, see [Release Management](docs/RELEASES.md).
+
+For a comprehensive guide covering all build and deployment methods, see [Build and Deployment Guide](docs/BUILD_AND_DEPLOY.md).
 
 Run `make help` to see all available commands and configuration options.
 
@@ -529,7 +520,7 @@ The service automatically applies tags to the AWS sessions it creates. These tag
 
 These tags can be used for auditing, cost allocation, and for creating condition-based IAM policies.
 
-📖 **For detailed examples and security patterns**, see [Session Tagging Examples](docs/session_tagging_example.md)
+📖 **For detailed examples and security patterns**, see [Session Tagging](docs/SESSION_TAGGING.md)
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "success": false,
-  "statusCode": 401,
+  "statusCode": 403,
   "requestId": "12258876-a981-452b-a7ae-415f8fa737b6",
   "processingMs": 383,
   "message": "Permission denied for the requested operation",
