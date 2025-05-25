@@ -1,4 +1,10 @@
 # https://ko.build/configuration/
+baseImage: public.ecr.aws/lambda/provided:al2023
+
+defaultPlatforms:
+  - linux/arm64
+  - linux/amd64
+
 builds:
   - id: aws-oidc-warden
     dir: .
@@ -6,6 +12,7 @@ builds:
     binary: bootstrap # AWS Lambda container images require the executable to be named 'bootstrap'
     env:
       - CGO_ENABLED=0
+      - GOOS=linux
     ldflags:
       - -extldflags "-static"
       - -s -w
@@ -15,19 +22,6 @@ builds:
     flags:
       - -tags=lambda.norpc
       - -trimpath
-
-defaultPlatforms:
-  - linux/arm64
-  - linux/amd64
-
-# The base image for AWS Lambda container images
-# https://docs.aws.amazon.com/lambda/latest/dg/images-create.html#images-create-base-image
-baseImage: public.ecr.aws/lambda/provided:al2023
-
-# AWS Lambda container requires executable named 'bootstrap'
-env:
-  - GOOS=linux
-  # GOARCH is handled by defaultPlatforms (linux/amd64, linux/arm64)
 
 labels:
   org.opencontainers.image.title: "AWS OIDC Warden"
