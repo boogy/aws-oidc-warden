@@ -1,0 +1,47 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod download
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+    ldflags:
+      - -X main.buildVersion={{.Version}}
+      - -X main.buildCommit={{.ShortCommit}}
+      - -X main.buildDate={{.Date}}
+      - -s -w
+      - -extldflags "-static"
+    main: ./main.go
+
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    binary: "bootstrap"
+
+archives:
+  - formats: ["zip"]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+release:
+  draft: false
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"

@@ -1,0 +1,40 @@
+# https://ko.build/configuration/
+builds:
+  - id: aws-oidc-warden
+    dir: .
+    main: .
+    binary: bootstrap # AWS Lambda container images require the executable to be named 'bootstrap'
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -extldflags "-static"
+      - -s -w
+      - -X main.buildVersion={{.Git.Tag}}
+      - -X main.buildCommit={{.Git.ShortCommit}}
+      - -X main.buildDate={{.Date}}
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+
+defaultPlatforms:
+  - linux/arm64
+  - linux/amd64
+
+# The base image for AWS Lambda container images
+# https://docs.aws.amazon.com/lambda/latest/dg/images-create.html#images-create-base-image
+baseImage: public.ecr.aws/lambda/provided:al2023
+
+# AWS Lambda container requires executable named 'bootstrap'
+env:
+  - GOOS=linux
+  # GOARCH is handled by defaultPlatforms (linux/amd64, linux/arm64)
+
+labels:
+  org.opencontainers.image.title: "AWS OIDC Warden"
+  org.opencontainers.image.version: "{{.Git.Tag}}"
+  org.opencontainers.image.revision: "{{.Git.ShortCommit}}"
+  org.opencontainers.image.created: "{{.Date}}"
+  org.opencontainers.image.description: "AWS OIDC token validator for GitHub Actions"
+  org.opencontainers.image.source: "https://github.com/boogy/aws-oidc-warden"
+  org.opencontainers.image.licenses: "Apache License 2.0"
+  io.buildpacks.build.metadata: '{"aws_lambda_function_handler": "bootstrap"}'

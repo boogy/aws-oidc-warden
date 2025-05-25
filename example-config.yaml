@@ -1,0 +1,315 @@
+####################################################################################
+# AWS OIDC Warden Example Configuration
+# This example shows all available features and configuration options
+####################################################################################
+
+####################################################################################
+# OIDC TOKEN VALIDATION SETTINGS
+####################################################################################
+
+## Issuer URL for OIDC token validation
+## If configured in GitHub OIDC custom claims can be set to the organization name
+## e.g. "https://token.actions.githubusercontent.com/octo-org"
+## This allows to only accept tokens issued from the organization OIDC issuer
+issuer: "https://token.actions.githubusercontent.com"
+
+## Audience for the token validation (for AWS this is typically "sts.amazonaws.com")
+audience: "sts.amazonaws.com"
+
+## AWS Role Session name for the assumed role
+## This is used to identify the session in AWS CloudTrail logs
+role_session_name: aws-oidc-warden
+
+####################################################################################
+# CACHE CONFIGURATION
+# Configuration for JWKS keys caching to improve performance
+####################################################################################
+cache:
+  ## Cache type (select one): "memory", "dynamodb", or "s3"
+  ## - memory: Fast in-memory cache (default, no persistence between Lambda invocations)
+  ## - dynamodb: Use DynamoDB for persistent caching (good for Lambda environments)
+  ## - s3: Use S3 for larger cache objects (best for sharing across services)
+  type: "memory"
+
+  ## TTL (Time-To-Live) for cached JWKS keys
+  ## Format examples: "4h", "30m", "1h30m", "2d", "1w"
+  ttl: 4h
+
+  ## Maximum number of entries to store in local memory cache
+  ## Only applies when type is "memory" or as a local cache with other backends
+  max_local_size: 20
+
+  ## DynamoDB configuration (when type is "dynamodb")
+  # dynamodb_table: "aws-oidc-warden-cache"
+
+  ## S3 configuration (when type is "s3")
+  # s3_bucket: "arn:aws:s3:::aws-oidc-warden-cache" # S3 bucket for cache storage
+  # s3_prefix: "jwks-cache" # S3 prefix for cache objects
+  # s3_cleanup: true # Enable automatic cleanup of expired cache entries in S3
+
+####################################################################################
+# S3 CONFIGURATION
+####################################################################################
+
+## S3 bucket for storing session policies
+## These policies will be applied to the assumed role
+## The full S3 path will be: s3://${session_policy_bucket}/${session_policy_file}
+## Example: "s3://aws-oidc-warden-session-policies/org/repository-name/branch/main/policy.json"
+session_policy_bucket: "aws-oidc-warden-session-policies"
+
+## S3 config bucket (optional)
+## Used when loading config from S3 (for Lambda environments)
+# s3_config_bucket: "aws-oidc-warden-config"
+# s3_config_path: "config.yaml"
+
+####################################################################################
+# LOGGING CONFIGURATION
+####################################################################################
+
+## Enable logging to S3 (in addition to CloudWatch logs)
+## This provides persistent logs outside of Lambda execution context
+log_to_s3: false
+log_bucket: "aws-oidc-warden-logs"
+log_prefix: "logs/"
+
+####################################################################################
+# GITHUB REPOSITORY TO AWS IAM ROLE MAPPINGS
+# This section defines which GitHub Actions workflows can assume which AWS IAM roles
+# and what conditions (constraints) must be met for the assumption to succeed.
+####################################################################################
+repo_role_mappings:
+  ####################################################################################
+  # BASIC EXAMPLES
+  ####################################################################################
+
+  # Example 1: Simple mapping with branch constraint
+  - repo: "boogy/terragrunt-test"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-terragrunt
+    constraints:
+      branch: "refs/heads/main" # Only allow from main branch
+
+  # Example 2: Using external session policy file in S3
+  - repo: "org/main-branch-repo"
+    session_policy_file: "session-policies/org/main-branch-repo/main-branch-repo.json"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-create-repo
+    constraints:
+      branch: "refs/heads/main"
+
+  # Example 3: Using inline session policy
+  - repo: "org/inline-policy-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["ecr:DescribeRepositories"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-inline
+
+  ####################################################################################
+  # PATTERN MATCHING EXAMPLES
+  ####################################################################################
+
+  # Example 4: Branch pattern matching for dev branches
+  - repo: "org/dev-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["ecr:DescribeRepositories"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-dev
+    constraints:
+      branch: "refs/heads/dev.*" # Matches dev, develop, development, etc.
+
+  # Example 5: Repository pattern matching for multiple repos
+  - repo: "org/service-.*"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["ecs:DescribeServices"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-services
+
+  ####################################################################################
+  # EVENT CONSTRAINTS EXAMPLES
+  ####################################################################################
+
+  # Example 6: Restrict by GitHub event type
+  - repo: "org/push-only-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["s3:ListBucket"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-push
+    constraints:
+      event_name: "push" # Only for push events
+
+  # Example 7: Restrict by specific workflow file
+  - repo: "org/specific-workflow-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["dynamodb:ListTables"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-workflow
+    constraints:
+      workflow_ref: "deploy\\.ya?ml$" # Only match deploy.yml or deploy.yaml
+
+  ####################################################################################
+  # ACTOR AND ENVIRONMENT CONSTRAINTS
+  ####################################################################################
+
+  # Example 8: Restrict by GitHub actor (username)
+  - repo: "org/restricted-users-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["lambda:ListFunctions"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-users
+    constraints:
+      actor_matches:
+        - "admin-user"
+        - "authorized-.*" # Regex pattern for usernames starting with authorized-
+
+  # Example 9: Restrict by GitHub environment
+  - repo: "org/environment-restricted-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["rds:DescribeDBInstances"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-prod
+    constraints:
+      environment: "production" # Only for production environment
+
+  ####################################################################################
+  # MULTIPLE CONSTRAINTS (COMBINED RULES)
+  ####################################################################################
+
+  # Example 10: Multiple constraints (all must be satisfied)
+  - repo: "org/multi-constraint-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["ec2:DescribeInstances"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-full
+    constraints:
+      branch: "refs/heads/main"
+      event_name: "push"
+      environment: "github-hosted"
+
+  ####################################################################################
+  # SPECIAL CASES
+  ####################################################################################
+
+  # Example 11: Tag-based restrictions for releases
+  - repo: "org/tag-releases-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["s3:PutObject"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-tagger
+    constraints:
+      ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+" # Only match semantic version tags
+      ref_type: "tag"
+
+  # Example 12: Multiple roles for a single repo
+  - repo: "org/multi-role-repo"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["cloudformation:DescribeStacks"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-role1
+      - arn:aws:iam::123456789012:role/github-actions-role2
+
+  # Example 13: Default fallback for any repo in the org
+  - repo: "org/.*"
+    session_policy: >
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["sts:GetCallerIdentity"],
+            "Resource": "*"
+          }
+        ]
+      }
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-default-fallback
+    # No constraints means this applies to all branches/events

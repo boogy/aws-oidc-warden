@@ -1,0 +1,13 @@
+{
+  "success": true,
+  "statusCode": 200,
+  "requestId": "12258876-a981-452b-a7ae-415f8fa737b6",
+  "processingMs": 254,
+  "message": "Token validation successful and role assumed",
+  "data": {
+    "AccessKeyId": "ASIA1234567890EXAMPLE",
+    "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "SessionToken": "FwoGZXIvYXdzEPH//////////wEaDKLZ3MQOJZBKxR1JDiLBARJhUlx1g09xLW+oIYHDt15IZY4...",
+    "Expiration": "2023-09-29T20:31:14Z"
+  }
+}

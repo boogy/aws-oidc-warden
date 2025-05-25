@@ -1,0 +1,61 @@
+# Binaries for programs and plugins
+*.exe
+*.dll
+*.so
+*.dylib
+*.bin
+*.out
+*.o
+*.zip
+
+# Build directories
+/build/
+dist/
+
+# Dependency directories
+/vendor/
+
+# Go specific
+*.test
+*.log
+*.prof
+*.cover
+
+# IDE and editor specific
+.idea/
+.vscode/
+*.swp
+*.swo
+*.DS_Store
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.old
+*.swp
+*.swo
+
+# AWS Lambda specific
+.aws-sam/
+.env
+cmd/lambda/
+
+# Docker specific
+docker-compose.override.yml
+.dockerignore
+
+# Generated files
+*.gen.go
+*.generated.go
+
+# Cache files
+.cache/
+*.cache
+
+# Config files
+config.yaml
+# example-config.yaml
+
+# Local configuration files
+.github/copilot-instructions.md
