@@ -42,9 +42,6 @@ checksum:
   algorithm: sha256
 release:
   draft: false
-  github:
-    owner: boogy
-    name: aws-oidc-warden
 
 changelog:
   sort: asc
