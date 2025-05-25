@@ -7,10 +7,6 @@ on:
 
 env:
   REPO_NAME: aws-oidc-warden
-  KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/aws-oidc-warden
-  KO_DEFAULT_BASE_IMAGE: public.ecr.aws/lambda/provided:al2023
-  KO_DEFAULT_PLATFORMS: linux/arm64,linux/amd64
-  KO_LOG_LEVEL: debug
 
 jobs:
   build-and-push:
@@ -38,19 +34,18 @@ jobs:
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
+          username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push container image
         env:
           KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/${{ env.REPO_NAME }}
-          KO_LOG_LEVEL: debug
           VERSION: ${{ steps.extract_tag.outputs.tag }}
         run: |
           ko publish . \
-            --tags=${{ steps.extract_tag.outputs.tag }},latest \
+            --tags=$VERSION,latest \
             --bare
-        timeout-minutes: 15
+        timeout-minutes: 10
 
       - name: Scan container image
         uses: aquasecurity/trivy-action@6c175e9c4083a92bbca2f9724c8a5e33bc2d97a5 # v0.30.0
