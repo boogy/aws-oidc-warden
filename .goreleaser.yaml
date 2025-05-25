@@ -30,10 +30,10 @@ builds:
 
 archives:
   - id: lambda
-    builds:
-      - lambda
-    formats: ["zip"]
+    format: zip
     name_template: "{{ .ProjectName }}_lambda_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - none*
 
 snapshot:
   version_template: "{{ .Tag }}-next"
@@ -43,8 +43,8 @@ checksum:
 release:
   draft: false
   github:
-    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
-    name: "{{ .ProjectName }}"
+    owner: boogy
+    name: aws-oidc-warden
 
 changelog:
   sort: asc
