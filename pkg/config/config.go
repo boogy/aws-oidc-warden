@@ -94,6 +94,7 @@ func NewConfig() (*Config, error) {
 func (c *Config) LoadConfig() error {
 	// Set default config file name and path (yaml, json or toml or ...)
 	configName := utils.GetEnv("CONFIG_NAME", "config") // Configuration file name without extension
+	configPath := utils.GetEnv("CONFIG_PATH", ".")      // Configuration file path, default to current directory
 
 	// Set environment variable handling first
 	viper.SetEnvPrefix("aow") // Set the environment variable prefix ex: "AOW_"
@@ -101,7 +102,7 @@ func (c *Config) LoadConfig() error {
 	viper.AutomaticEnv()
 
 	viper.AddConfigPath("/etc/aws-oidc-warden/")
-	viper.AddConfigPath(".")
+	viper.AddConfigPath(configPath)
 	viper.SetConfigName(configName)
 
 	// Set default values

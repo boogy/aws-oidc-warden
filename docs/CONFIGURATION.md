@@ -46,9 +46,10 @@ AWS OIDC Warden can be configured using:
 
 ### Other Settings
 
-| Environment Variable | Config File Key | Description                          | Default  |
-| -------------------- | --------------- | ------------------------------------ | -------- |
-| `CONFIG_NAME`        | N/A             | Config file name (without extension) | `config` |
+| Environment Variable | Default Value                                        | Description                          | Default  |
+| -------------------- | ---------------------------------------------------- | ------------------------------------ | -------- |
+| `CONFIG_NAME`        | `config`                                             | Config file name (without extension) | `config` |
+| `CONFIG_PATH`        | <ul><li>/etc/aws-oidc-warden/</li><li>$PWD</li></ul> | Config file path                     | `config` |
 
 ## Configuration File Format
 
