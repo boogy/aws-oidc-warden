@@ -23,6 +23,9 @@ KO_DOCKER_REPO ?= ghcr.io/$(GITHUB_USER)/$(APP_NAME)
 .PHONY: all
 all: build-local
 
+.PHONY: build
+build: build-apigateway
+
 .PHONY: build-local
 build-local:
 	@echo "Building local development binary..."

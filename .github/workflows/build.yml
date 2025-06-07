@@ -1,4 +1,4 @@
-name: Container Build and Push
+name: Build and Push
 
 on:
   push:
@@ -49,6 +49,19 @@ jobs:
         id: extract_tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+      - name: Build and push default module (apigateway)
+        env:
+          GH_REPO: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
+          DR_REPO: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
+          VERSION: ${{ steps.extract_tag.outputs.tag }}
+        run: |
+          echo "Building and pushing apigateway to GHCR and Docker Hub..."
+          echo "VERSION: $VERSION"
+
+          KO_DOCKER_REPO=$GH_REPO ko publish ./cmd/apigateway/ --tags=$VERSION,latest --bare
+          KO_DOCKER_REPO=$DR_REPO ko publish ./cmd/apigateway/ --tags=$VERSION,latest --bare
+        timeout-minutes: 15
+
       - name: Build and push ${{ matrix.module }} to GHCR
         env:
           KO_DOCKER_REPO: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
@@ -76,7 +89,7 @@ jobs:
     needs: build-and-push
     strategy:
       matrix:
-        module: [apigateway, alb, lambdaurl, local]
+        module: [apigateway, alb, lambdaurl]
     steps:
       - name: Extract tag name
         id: extract_tag
@@ -84,10 +97,10 @@ jobs:
 
       - name: Pull image for scanning
         env:
-          IMAGE_REF: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ matrix.module }}-${{ steps.extract_tag.outputs.tag }}
+          IMAGE_REF: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ matrix.module }}-${{ steps.extract_tag.outputs.tag }}
         run: |
           echo "Pulling image for scanning: $IMAGE_REF"
-          for attempt in {1..5}; do
+          for attempt in {1..3}; do
             if docker pull $IMAGE_REF; then
               break
             fi
@@ -100,9 +113,9 @@ jobs:
           done
 
       - name: Scan container image
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # v0.31.0
         with:
-          image-ref: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ matrix.module }}-${{ steps.extract_tag.outputs.tag }}
+          image-ref: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ matrix.module }}-${{ steps.extract_tag.outputs.tag }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH

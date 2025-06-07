@@ -1,3 +1,8 @@
+> [!WARNING]
+> This project is still under active development and may not be production-ready. Features and functionality are subject to change. Use with caution and check back for updates.
+
+[![Build and Push](https://github.com/boogy/aws-oidc-warden/actions/workflows/build-and-push.yml/badge.svg)](https://github.com/boogy/aws-oidc-warden/actions/workflows/build.yml)
+
 # AWS OIDC Warden
 
 ![AWS OIDC Warden Architecture](./docs/img/aws-oidc-warden.png)
@@ -30,13 +35,14 @@ This service solves a critical security challenge: securely connecting CI/CD wor
 
 - **Universal OIDC Validation**: Validates tokens from GitHub Actions and any OIDC provider with JWKS endpoints
 - **Multiple Deployment Options**:
-  - **API Gateway + Lambda**: Traditional REST API approach with API Gateway proxy integration
+  - **API Gateway**: Traditional REST API approach with API Gateway proxy integration
   - **Lambda URLs**: Direct Lambda HTTP endpoints with function URLs (recommended for simple setups)
   - **Application Load Balancer**: Integration with ALB target groups for high-traffic, multi-region scenarios
-  - **Local Development Server**: HTTP server for testing and integration workflows
-- **Fine-Grained Access Control**: Configure access based on repository, branch, event type, actor, workflow file, and more
+  - **Local Development Server**: HTTP server for testing
+ - **AWS Fine-Grained Access Control**: Configure access based on repository, branch, event type, actor, workflow file, and more
+- **Session Policy Support**: Apply custom AWS session policies via inline JSON or S3-stored policy files to reduce AWS Role permissions and reduce the number of required roles
+- **Session Tagging**: Tag AWS sessions with GitHub-specific information for auditability and ABAC (Attribute Based Access Control)
 - **Flexible Constraint System**: Apply regular expression-based matching for dynamic authorization
-- **Repository-Based Mapping**: Map GitHub repositories to specific AWS IAM roles with custom session policies
 - **High-Performance Caching**:
   - **Memory Cache**: Fast in-memory caching with LRU eviction
   - **DynamoDB Cache**: Persistent caching across Lambda instances
@@ -46,10 +52,7 @@ This service solves a critical security challenge: securely connecting CI/CD wor
   - Structured JSON logging to CloudWatch
   - Optional S3 logging for long-term retention
   - Request tracking with correlation IDs
-- **Session Policy Support**: Apply custom AWS session policies via inline JSON or S3-stored policy files
-- **Session Tagging**: Tag AWS sessions with GitHub-specific information for auditability and ABAC
-- **Multi-Architecture Support**: Native builds for ARM64 and AMD64 architectures
-- **Container-Ready**: Docker builds with multi-platform support
+- **Multi-Architecture Support**: Native builds for ARM64 and AMD64 architectures with pre-build docker images
 
 ---
 
@@ -110,7 +113,7 @@ export LOG_LEVEL=debug # Note: This one doesn't use the AOW_ prefix
 
 #### Configuration File
 
-Alternatively, you can use a YAML or JSON configuration file:
+Alternatively, you can use a YAML, JSON or TOML configuration file:
 
 ```yaml
 issuer: https://token.actions.githubusercontent.com
