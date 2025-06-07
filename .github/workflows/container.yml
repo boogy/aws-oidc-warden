@@ -46,7 +46,7 @@ jobs:
         id: extract_tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Build and push container image to GitHub Container Registry
+      - name: Build and push container images to GitHub Container Registry
         env:
           KO_DOCKER_REPO: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
           VERSION: ${{ steps.extract_tag.outputs.tag }}
@@ -55,13 +55,28 @@ jobs:
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
           echo "VERSION: $VERSION"
 
-          # Publish with ko to GHCR
-          ko publish . \
+          # Publish API Gateway variant
+          ko publish ./cmd/apigateway \
+            --tags=$VERSION-apigateway,latest-apigateway \
+            --bare
+
+          # Publish ALB variant
+          ko publish ./cmd/alb \
+            --tags=$VERSION-alb,latest-alb \
+            --bare
+
+          # Publish Lambda URL variant
+          ko publish ./cmd/lambdaurl \
+            --tags=$VERSION-lambdaurl,latest-lambdaurl \
+            --bare
+
+          # Also publish a default variant (using apigateway as default)
+          ko publish ./cmd/apigateway \
             --tags=$VERSION,latest \
             --bare
-        timeout-minutes: 10
+        timeout-minutes: 15
 
-      - name: Build and push container image to Docker Hub
+      - name: Build and push container images to Docker Hub
         env:
           KO_DOCKER_REPO: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
           VERSION: ${{ steps.extract_tag.outputs.tag }}
@@ -70,11 +85,26 @@ jobs:
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
           echo "VERSION: $VERSION"
 
-          # Publish with ko to Docker Hub
-          ko publish . \
+          # Publish API Gateway variant
+          ko publish ./cmd/apigateway \
+            --tags=$VERSION-apigateway,latest-apigateway \
+            --bare
+
+          # Publish ALB variant
+          ko publish ./cmd/alb \
+            --tags=$VERSION-alb,latest-alb \
+            --bare
+
+          # Publish Lambda URL variant
+          ko publish ./cmd/lambdaurl \
+            --tags=$VERSION-lambdaurl,latest-lambdaurl \
+            --bare
+
+          # Also publish a default variant (using apigateway as default)
+          ko publish ./cmd/apigateway \
             --tags=$VERSION,latest \
             --bare
-        timeout-minutes: 10
+        timeout-minutes: 15
 
       - name: Pull image for scanning
         env:
@@ -95,17 +125,43 @@ jobs:
 
       - name: Generate deployment info
         run: |
-          echo "## Container Image" >> $GITHUB_STEP_SUMMARY
+          echo "## Container Images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The following container images have been built and pushed:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### GitHub Container Registry" >> $GITHUB_STEP_SUMMARY
+          echo "**Default (API Gateway):**" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**API Gateway variant:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}-apigateway\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest-apigateway\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**ALB variant:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}-alb\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest-alb\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Lambda URL variant:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}-lambdaurl\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest-lambdaurl\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Docker Hub" >> $GITHUB_STEP_SUMMARY
+          echo "**Default (API Gateway):**" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**API Gateway variant:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}-apigateway\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest-apigateway\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**ALB variant:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}-alb\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest-alb\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Lambda URL variant:**" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}-lambdaurl\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest-lambdaurl\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Architectures" >> $GITHUB_STEP_SUMMARY
           echo "- linux/amd64" >> $GITHUB_STEP_SUMMARY
@@ -113,14 +169,19 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Usage in AWS Lambda" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Use this image URI when creating or updating your Lambda function:" >> $GITHUB_STEP_SUMMARY
+          echo "Choose the appropriate image based on your Lambda integration:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**GitHub Container Registry:**" >> $GITHUB_STEP_SUMMARY
+          echo "**API Gateway (default):**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Docker Hub:**" >> $GITHUB_STEP_SUMMARY
+          echo "**Application Load Balancer:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}-alb" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Lambda URL:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}-lambdaurl" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
