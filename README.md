@@ -1,7 +1,8 @@
 > [!WARNING]
 > This project is still under active development and may not be production-ready. Features and functionality are subject to change. Use with caution and check back for updates.
 
-[![Build and Push](https://github.com/boogy/aws-oidc-warden/actions/workflows/build-and-push.yml/badge.svg)](https://github.com/boogy/aws-oidc-warden/actions/workflows/build.yml)
+[![Build](https://github.com/boogy/aws-oidc-warden/actions/workflows/build.yml/badge.svg?style=flat)](https://github.com/boogy/aws-oidc-warden/actions/workflows/build.yml)
+[![Docker Pulls](https://img.shields.io/docker/pulls/boogy/aws-oidc-warden)](https://hub.docker.com/r/boogy/aws-oidc-warden)
 
 # AWS OIDC Warden
 
