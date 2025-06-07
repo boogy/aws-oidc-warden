@@ -23,6 +23,11 @@ builds:
     flags:
       - -tags=lambda.norpc
       - -trimpath
+    tags:
+      - "{{.Git.Tag}}"
+      - "{{.Git.Tag}}-apigateway"
+      - latest
+      - latest-apigateway
 
   - id: alb
     dir: .
@@ -40,6 +45,9 @@ builds:
     flags:
       - -tags=lambda.norpc
       - -trimpath
+    tags:
+      - "{{.Git.Tag}}-alb"
+      - latest-alb
 
   - id: lambdaurl
     dir: .
@@ -57,6 +65,9 @@ builds:
     flags:
       - -tags=lambda.norpc
       - -trimpath
+    tags:
+      - "{{.Git.Tag}}-lambdaurl"
+      - latest-lambdaurl
 
 labels:
   org.opencontainers.image.title: "AWS OIDC Warden"
