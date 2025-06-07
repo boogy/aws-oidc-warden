@@ -1,8 +1,7 @@
 > [!WARNING]
 > This project is still under active development and may not be production-ready. Features and functionality are subject to change. Use with caution and check back for updates.
 
-[![Build](https://github.com/boogy/aws-oidc-warden/actions/workflows/build.yml/badge.svg?style=flat)](https://github.com/boogy/aws-oidc-warden/actions/workflows/build.yml)
-[![Docker Pulls](https://img.shields.io/docker/pulls/boogy/aws-oidc-warden)](https://hub.docker.com/r/boogy/aws-oidc-warden)
+[![Build](https://github.com/boogy/aws-oidc-warden/actions/workflows/build.yml/badge.svg?style=flat)](https://github.com/boogy/aws-oidc-warden/actions/workflows/build.yml) [![Docker Pulls](https://img.shields.io/docker/pulls/boogy/aws-oidc-warden)](https://hub.docker.com/r/boogy/aws-oidc-warden) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0) [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](https://github.com/boogy/aws-oidc-warden/security/dependabot) [![Go Version](https://img.shields.io/github/go-mod/go-version/boogy/aws-oidc-warden)](https://github.com/boogy/aws-oidc-warden/blob/main/go.mod)
 
 # AWS OIDC Warden
 
@@ -725,3 +724,5 @@ This project is licensed under the Apache License 2.0.
 - Inspired by [AOEpeople/lambda_token_auth](https://github.com/AOEpeople/lambda_token_auth)
 - Thanks to [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for their research on GitHub OIDC claims
 - Thanks to Jonathan for the tool name inspiration
+
+[![Repo Size](https://img.shields.io/github/repo-size/boogy/aws-oidc-warden)](https://github.com/boogy/aws-oidc-warden)
