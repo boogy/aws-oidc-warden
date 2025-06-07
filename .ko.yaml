@@ -7,7 +7,7 @@ defaultPlatforms:
 
 # AWS Lambda container images require the executable to be named 'bootstrap'
 builds:
-  - id: aws-oidc-warden-apigateway
+  - id: apigateway
     dir: .
     main: ./cmd/apigateway/main.go
     binary: bootstrap
@@ -24,7 +24,7 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
 
-  - id: aws-oidc-warden-alb
+  - id: alb
     dir: .
     main: ./cmd/alb/main.go
     binary: bootstrap
@@ -41,7 +41,7 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
 
-  - id: aws-oidc-warden-lambdaurl
+  - id: lambdaurl
     dir: .
     main: ./cmd/lambdaurl/main.go
     binary: bootstrap
