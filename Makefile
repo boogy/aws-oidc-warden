@@ -94,21 +94,54 @@ test-coverage:
 .PHONY: ko-build
 ko-build: verify-ko
 	@echo "Building container with ko locally..."
-	@VERSION=$(VERSION) KO_DOCKER_REPO=ko.local ko build . --base-import-paths --platform=linux/arm64,linux/amd64 --tags=$(VERSION),latest
+	@VERSION=$(VERSION) KO_DOCKER_REPO=ko.local ko build . --tags=$(VERSION),latest
 
 .PHONY: ko-publish-ghcr
-ko-publish-ghcr: verify-ko
+ko-publish-ghcr: verify-ko verify-docker-auth
 	@echo "Publishing container with ko to GitHub Container Registry..."
-	@VERSION=$(VERSION) KO_DOCKER_REPO=$(KO_DOCKER_REPO_GHCR) ko publish . --base-import-paths --platform=linux/arm64,linux/amd64 --tags=$(VERSION),latest --bare
+	@VERSION=$(VERSION) KO_DOCKER_REPO=$(KO_DOCKER_REPO_GHCR) ko publish . --bare --tags=$(VERSION),latest
 
 .PHONY: ko-publish-dockerhub
 ko-publish-dockerhub: verify-ko
 	@echo "Publishing container with ko to Docker Hub..."
-	@VERSION=$(VERSION) KO_DOCKER_REPO=$(KO_DOCKER_REPO_DOCKERHUB) ko publish . --base-import-paths --platform=linux/arm64,linux/amd64 --tags=$(VERSION),latest --bare
+	@VERSION=$(VERSION) KO_DOCKER_REPO=$(KO_DOCKER_REPO_DOCKERHUB) ko publish . --tags=$(VERSION),latest
 
 .PHONY: ko-publish-all
 ko-publish-all: ko-publish-ghcr ko-publish-dockerhub
 	@echo "Container published to both GitHub Container Registry and Docker Hub"
+
+# Simple publish with timeout handling
+.PHONY: ko-publish-simple
+ko-publish-simple: verify-ko verify-docker-auth
+	@echo "Publishing container with ko to GitHub Container Registry (simple)..."
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO_GHCR) ko publish --sbom=none --bare . || { \
+		echo "Build failed. Retrying..."; \
+		KO_DOCKER_REPO=$(KO_DOCKER_REPO_GHCR) ko publish --sbom=none --bare .; \
+	}
+
+# Alternative publish method with classic mode
+.PHONY: ko-publish-classic
+ko-publish-classic: verify-ko verify-docker-auth
+	@echo "Publishing container with ko using classic mode..."
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO_GHCR) ko publish --sbom=none --image-refs=/tmp/ko-refs.txt .
+
+.PHONY: setup-ghcr-auth
+setup-ghcr-auth:
+	@echo "Setting up GitHub Container Registry authentication..."
+	@echo ""
+	@echo "You need a GitHub Personal Access Token with these scopes:"
+	@echo "  ✓ repo"
+	@echo "  ✓ write:packages"
+	@echo "  ✓ read:packages"
+	@echo ""
+	@echo "Create one at: https://github.com/settings/tokens/new"
+	@echo ""
+	@echo "Then run these commands:"
+	@echo "  export GITHUB_TOKEN=your_token_here"
+	@echo "  echo \$$GITHUB_TOKEN | docker login ghcr.io -u $(GITHUB_USER) --password-stdin"
+	@echo ""
+	@echo "Or use GitHub CLI to create a token:"
+	@echo "  gh auth refresh --scopes write:packages,read:packages"
 
 # -----------------------------------------------------------------------------
 # Utility targets
@@ -120,6 +153,18 @@ verify-ko:
 	@command -v ko >/dev/null 2>&1 || { \
 		echo "ko not installed. Installing..."; \
 		go install github.com/google/ko@latest; \
+	}
+
+.PHONY: verify-docker-auth
+verify-docker-auth:
+	@echo "Verifying Docker daemon and authentication..."
+	@docker info >/dev/null 2>&1 || { \
+		echo "Docker daemon not running. Please start Docker and try again."; \
+		exit 1; \
+	}
+	@docker system info | grep -q "Registry:" || { \
+		echo "Authenticating with GitHub Container Registry..."; \
+		gh auth token | docker login ghcr.io -u $(GITHUB_USER) --password-stdin; \
 	}
 
 .PHONY: help
@@ -150,6 +195,9 @@ help:
 	@echo ""
 	@echo "Utilities:"
 	@echo "  make verify-ko            Verify ko installation and install if needed"
+	@echo ""
+	@echo "Authentication:"
+	@echo "  make setup-ghcr-auth      Set up GitHub Container Registry authentication"
 	@echo ""
 	@echo "Configuration variables:"
 	@echo "  GOOS                      Go OS target (default: $(GOOS))"
