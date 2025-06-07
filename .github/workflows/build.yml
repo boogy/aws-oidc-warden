@@ -151,10 +151,6 @@ jobs:
             echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:lambdaurl-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:lambdaurl-latest\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Local module:**" >> $GITHUB_STEP_SUMMARY
-            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:local-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:local-latest\`" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
           done
           echo "### Architectures" >> $GITHUB_STEP_SUMMARY
           echo "- linux/amd64" >> $GITHUB_STEP_SUMMARY
@@ -177,9 +173,4 @@ jobs:
           echo "**Lambda URL:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:lambdaurl-${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Local Development:**" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:local-${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
