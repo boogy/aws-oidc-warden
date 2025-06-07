@@ -100,7 +100,7 @@ jobs:
           done
 
       - name: Scan container image
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.31.0
         with:
           image-ref: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ matrix.module }}-${{ steps.extract_tag.outputs.tag }}
           format: table
