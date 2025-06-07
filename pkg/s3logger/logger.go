@@ -16,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	gtvcfg "github.com/boogy/aws-oidc-warden/config"
+	gtvcfg "github.com/boogy/aws-oidc-warden/pkg/config"
 	"github.com/google/uuid"
 )
 

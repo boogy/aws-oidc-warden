@@ -15,7 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/boogy/aws-oidc-warden/types"
+	"github.com/boogy/aws-oidc-warden/pkg/types"
 )
 
 // s3Cache implements the Cache interface using an S3 bucket

@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	gTypes "github.com/boogy/aws-oidc-warden/types"
+	gTypes "github.com/boogy/aws-oidc-warden/pkg/types"
 )
 
 // cacheEntry represents an entry in the local memory cache

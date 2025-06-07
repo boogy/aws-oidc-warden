@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/boogy/aws-oidc-warden/aws"
-	"github.com/boogy/aws-oidc-warden/cache"
-	"github.com/boogy/aws-oidc-warden/config"
-	"github.com/boogy/aws-oidc-warden/handler"
-	"github.com/boogy/aws-oidc-warden/validator"
+	"github.com/boogy/aws-oidc-warden/pkg/aws"
+	"github.com/boogy/aws-oidc-warden/pkg/cache"
+	"github.com/boogy/aws-oidc-warden/pkg/config"
+	"github.com/boogy/aws-oidc-warden/pkg/handler"
+	"github.com/boogy/aws-oidc-warden/pkg/validator"
+	"github.com/boogy/aws-oidc-warden/pkg/version"
 )
 
 // Settings for the local server
@@ -32,6 +33,14 @@ type ServerSettings struct {
 func main() {
 	settings := parseCliFlags()
 	setupLogging(settings.LogLevel)
+
+	// Log version information
+	versionInfo := version.Get()
+	slog.Info("Starting AWS OIDC Warden Local Server",
+		slog.String("version", versionInfo.Version),
+		slog.String("commit", versionInfo.Commit),
+		slog.String("date", versionInfo.Date),
+	)
 
 	// Load configuration
 	cfg, err := config.NewConfig()
@@ -54,7 +63,7 @@ func main() {
 	awsClient := aws.NewAwsConsumer(cfg)
 
 	// Create the handler function
-	handlerFunc := handler.NewHandler(cfg, awsClient, validator)
+	handlerFunc := handler.NewAwsApiGateway(cfg, awsClient, validator).Handler
 
 	// Set up HTTP server
 	http.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {

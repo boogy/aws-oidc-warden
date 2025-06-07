@@ -12,8 +12,8 @@ import (
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
-	gtvcfg "github.com/boogy/aws-oidc-warden/config"
-	gtypes "github.com/boogy/aws-oidc-warden/types"
+	gtvcfg "github.com/boogy/aws-oidc-warden/pkg/config"
+	gtypes "github.com/boogy/aws-oidc-warden/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

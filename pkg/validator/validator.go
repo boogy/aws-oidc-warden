@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/boogy/aws-oidc-warden/cache"
-	"github.com/boogy/aws-oidc-warden/config"
-	"github.com/boogy/aws-oidc-warden/types"
+	"github.com/boogy/aws-oidc-warden/pkg/cache"
+	"github.com/boogy/aws-oidc-warden/pkg/config"
+	"github.com/boogy/aws-oidc-warden/pkg/types"
 	"github.com/golang-jwt/jwt/v5"
 )
 

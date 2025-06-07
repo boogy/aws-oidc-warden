@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	gtvcfg "github.com/boogy/aws-oidc-warden/config"
-	s3logger "github.com/boogy/aws-oidc-warden/s3Logger"
+	gtvcfg "github.com/boogy/aws-oidc-warden/pkg/config"
+	s3logger "github.com/boogy/aws-oidc-warden/pkg/s3logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

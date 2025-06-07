@@ -6,8 +6,10 @@ before:
     - go mod download
 
 builds:
-  # Lambda-specific binary (bootstrap)
-  - id: lambda
+  - id: apigateway
+    dir: .
+    main: ./cmd/apigateway/main.go
+    binary: "bootstrap"
     env:
       - CGO_ENABLED=0
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -15,31 +17,96 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
     ldflags:
-      - -X main.buildVersion={{.Version}}
-      - -X main.buildCommit={{.ShortCommit}}
-      - -X main.buildDate={{.Date}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
       - -s -w
       - -extldflags "-static"
-    main: ./main.go
     goos:
       - linux
     goarch:
       - amd64
       - arm64
+
+  - id: alb
+    dir: .
+    main: ./cmd/alb/main.go
     binary: "bootstrap"
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+    ldflags:
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+      - -s -w
+      - -extldflags "-static"
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+  - id: lambdaurl
+    dir: .
+    main: ./cmd/lambdaurl/main.go
+    binary: "bootstrap"
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+    ldflags:
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+      - -s -w
+      - -extldflags "-static"
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
 
 archives:
-  - id: lambda
+  - id: apigateway
+    builds:
+      - apigateway
     format: zip
-    name_template: "{{ .ProjectName }}_lambda_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "{{ .ProjectName }}_apigateway_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
-      - none*
+      - src: dist/apigateway_{{ .Os }}_{{ .Arch }}*/bootstrap
+        dst: bootstrap
+
+  - id: alb
+    builds:
+      - alb
+    format: zip
+    name_template: "{{ .ProjectName }}_alb_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: dist/alb_{{ .Os }}_{{ .Arch }}*/bootstrap
+        dst: bootstrap
+
+  - id: lambdaurl
+    builds:
+      - lambdaurl
+    format: zip
+    name_template: "{{ .ProjectName }}_lambdaurl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: dist/lambdaurl_{{ .Os }}_{{ .Arch }}*/bootstrap
+        dst: bootstrap
 
 snapshot:
   version_template: "{{ .Tag }}-next"
+
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
   algorithm: sha256
+
 release:
   draft: false
 
@@ -52,8 +119,6 @@ changelog:
       - "^ci:"
       - "^build:"
 
-  # Group commits into categories based on their message
-  # This is useful for generating a changelog that highlights features, bug fixes, etc.
   groups:
     - title: Features
       regexp: "^.*feat[(\\w)]*:+.*$"

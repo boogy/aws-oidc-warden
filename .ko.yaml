@@ -5,23 +5,69 @@ defaultPlatforms:
   - linux/arm64
   - linux/amd64
 
+# AWS Lambda container images require the executable to be named 'bootstrap'
 builds:
-  - id: aws-oidc-warden
+  - id: apigateway
     dir: .
-    main: .
-    binary: bootstrap # AWS Lambda container images require the executable to be named 'bootstrap'
+    main: ./cmd/apigateway/main.go
+    binary: bootstrap
     env:
       - CGO_ENABLED=0
       - GOOS=linux
     ldflags:
       - -extldflags "-static"
       - -s -w
-      - -X main.buildVersion={{.Git.Tag}}
-      - -X main.buildCommit={{.Git.ShortCommit}}
-      - -X main.buildDate={{.Date}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Git.Tag}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.Git.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
     flags:
       - -tags=lambda.norpc
       - -trimpath
+    tags:
+      - "{{.Git.Tag}}"
+      - "{{.Git.Tag}}-apigateway"
+      - latest
+      - latest-apigateway
+
+  - id: alb
+    dir: .
+    main: ./cmd/alb/main.go
+    binary: bootstrap
+    env:
+      - CGO_ENABLED=0
+      - GOOS=linux
+    ldflags:
+      - -extldflags "-static"
+      - -s -w
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Git.Tag}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.Git.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+    tags:
+      - "{{.Git.Tag}}-alb"
+      - latest-alb
+
+  - id: lambdaurl
+    dir: .
+    main: ./cmd/lambdaurl/main.go
+    binary: bootstrap
+    env:
+      - CGO_ENABLED=0
+      - GOOS=linux
+    ldflags:
+      - -extldflags "-static"
+      - -s -w
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Git.Tag}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.Git.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+    tags:
+      - "{{.Git.Tag}}-lambdaurl"
+      - latest-lambdaurl
 
 labels:
   org.opencontainers.image.title: "AWS OIDC Warden"

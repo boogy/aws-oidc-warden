@@ -7,7 +7,8 @@ on:
 
 env:
   REPO_NAME: aws-oidc-warden
-  REGISTRY: ghcr.io
+  GHCR_REGISTRY: ghcr.io
+  DOCKERHUB_REGISTRY: docker.io
 
 jobs:
   build-and-push:
@@ -15,78 +16,157 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        module: [apigateway, alb, lambdaurl]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: stable
 
       - name: Set up ko
         uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d # v0.9
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.DOCKERHUB_REGISTRY }}
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: Extract tag name
         id: extract_tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Build and push container image
+      - name: Build and push ${{ matrix.module }} to GHCR
         env:
-          KO_DOCKER_REPO: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
+          KO_DOCKER_REPO: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
           VERSION: ${{ steps.extract_tag.outputs.tag }}
         run: |
-          echo "Building and pushing with ko..."
+          echo "Building and pushing ${{ matrix.module }} to GHCR..."
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
           echo "VERSION: $VERSION"
+          ko publish ./cmd/${{ matrix.module }}/ --tags=${{ matrix.module }}-$VERSION,${{ matrix.module }}-latest --bare
+        timeout-minutes: 15
 
-          # Publish with ko
-          ko publish . \
-            --tags=$VERSION,latest \
-            --bare
-        timeout-minutes: 10
+      - name: Build and push ${{ matrix.module }} to Docker Hub
+        env:
+          KO_DOCKER_REPO: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
+          VERSION: ${{ steps.extract_tag.outputs.tag }}
+        run: |
+          echo "Building and pushing ${{ matrix.module }} to Docker Hub..."
+          echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
+          echo "VERSION: $VERSION"
+          ko publish ./cmd/${{ matrix.module }}/ --tags=${{ matrix.module }}-$VERSION,${{ matrix.module }}-latest --bare
+        timeout-minutes: 15
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    strategy:
+      matrix:
+        module: [apigateway, alb, lambdaurl, local]
+    steps:
+      - name: Extract tag name
+        id: extract_tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Pull image for scanning
         env:
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}
+          IMAGE_REF: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ matrix.module }}-${{ steps.extract_tag.outputs.tag }}
         run: |
           echo "Pulling image for scanning: $IMAGE_REF"
-          # Wait a moment for image to be available in registry
-          sleep 10
-          docker pull $IMAGE_REF
+          for attempt in {1..5}; do
+            if docker pull $IMAGE_REF; then
+              break
+            fi
+            echo "Retry $attempt: Image not yet available, waiting..."
+            sleep 10
+            if [ $attempt -eq 5 ]; then
+              echo "Failed to pull image after 5 attempts"
+              exit 1
+            fi
+          done
 
       - name: Scan container image
-        uses: aquasecurity/trivy-action@6c175e9c4083a92bbca2f9724c8a5e33bc2d97a5 # v0.30.0
+        uses: aquasecurity/trivy-action@0.24.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}
+          image-ref: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ matrix.module }}-${{ steps.extract_tag.outputs.tag }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
 
+  generate-summary:
+    runs-on: ubuntu-latest
+    needs: [build-and-push, security-scan]
+    permissions:
+      actions: write # Required for writing to GITHUB_STEP_SUMMARY
+    steps:
+      - name: Extract tag name
+        id: extract_tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
       - name: Generate deployment info
         run: |
-          echo "## Container Image" >> $GITHUB_STEP_SUMMARY
+          echo "## Container Images" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The following container images have been built and pushed:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          for registry in "${{ env.GHCR_REGISTRY }}" "${{ env.DOCKERHUB_REGISTRY }}"; do
+            echo "### $( [[ $registry == "${{ env.GHCR_REGISTRY }}" ]] && echo "GitHub Container Registry" || echo "Docker Hub" )" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**API Gateway module:**" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigateway-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigateway-latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**ALB module:**" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:alb-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:alb-latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Lambda URL module:**" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:lambdaurl-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:lambdaurl-latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Local module:**" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:local-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:local-latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
           echo "### Architectures" >> $GITHUB_STEP_SUMMARY
           echo "- linux/amd64" >> $GITHUB_STEP_SUMMARY
           echo "- linux/arm64" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Usage in AWS Lambda" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Use this image URI when creating or updating your Lambda function:" >> $GITHUB_STEP_SUMMARY
+          echo "Choose the appropriate image based on your Lambda integration (use GHCR or Docker Hub images):" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**API Gateway:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigateway-${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Application Load Balancer:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:alb-${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Lambda URL:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:lambdaurl-${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Local Development:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:local-${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

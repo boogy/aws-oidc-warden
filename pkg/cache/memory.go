@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boogy/aws-oidc-warden/types"
+	"github.com/boogy/aws-oidc-warden/pkg/types"
 )
 
 type memoryCache struct {

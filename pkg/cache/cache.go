@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/boogy/aws-oidc-warden/config"
-	"github.com/boogy/aws-oidc-warden/types"
+	"github.com/boogy/aws-oidc-warden/pkg/config"
+	"github.com/boogy/aws-oidc-warden/pkg/types"
 )
 
 // CacheDefaults holds all default configuration values for cache implementations
