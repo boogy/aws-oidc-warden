@@ -7,7 +7,8 @@ on:
 
 env:
   REPO_NAME: aws-oidc-warden
-  REGISTRY: ghcr.io
+  GHCR_REGISTRY: ghcr.io
+  DOCKERHUB_REGISTRY: docker.io
 
 jobs:
   build-and-push:
@@ -17,10 +18,10 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: stable
 
@@ -30,24 +31,46 @@ jobs:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ env.GHCR_REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.DOCKERHUB_REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: Extract tag name
         id: extract_tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Build and push container image
+      - name: Build and push container image to GitHub Container Registry
         env:
-          KO_DOCKER_REPO: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
+          KO_DOCKER_REPO: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
           VERSION: ${{ steps.extract_tag.outputs.tag }}
         run: |
-          echo "Building and pushing with ko..."
+          echo "Building and pushing to GHCR with ko..."
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
           echo "VERSION: $VERSION"
 
-          # Publish with ko
+          # Publish with ko to GHCR
+          ko publish . \
+            --tags=$VERSION,latest \
+            --bare
+        timeout-minutes: 10
+
+      - name: Build and push container image to Docker Hub
+        env:
+          KO_DOCKER_REPO: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
+          VERSION: ${{ steps.extract_tag.outputs.tag }}
+        run: |
+          echo "Building and pushing to Docker Hub with ko..."
+          echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
+          echo "VERSION: $VERSION"
+
+          # Publish with ko to Docker Hub
           ko publish . \
             --tags=$VERSION,latest \
             --bare
@@ -55,7 +78,7 @@ jobs:
 
       - name: Pull image for scanning
         env:
-          IMAGE_REF: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}
+          IMAGE_REF: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}
         run: |
           echo "Pulling image for scanning: $IMAGE_REF"
           # Wait a moment for image to be available in registry
@@ -63,9 +86,9 @@ jobs:
           docker pull $IMAGE_REF
 
       - name: Scan container image
-        uses: aquasecurity/trivy-action@6c175e9c4083a92bbca2f9724c8a5e33bc2d97a5 # v0.30.0
+        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # v0.31.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}
+          image-ref: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
@@ -76,8 +99,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The following container images have been built and pushed:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "### GitHub Container Registry" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Docker Hub" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Architectures" >> $GITHUB_STEP_SUMMARY
           echo "- linux/amd64" >> $GITHUB_STEP_SUMMARY
@@ -87,6 +115,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Use this image URI when creating or updating your Lambda function:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**GitHub Container Registry:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Docker Hub:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

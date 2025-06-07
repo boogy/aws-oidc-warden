@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boogy/aws-oidc-warden/utils"
+	"github.com/boogy/aws-oidc-warden/pkg/utils"
 	"github.com/spf13/viper"
 )
 

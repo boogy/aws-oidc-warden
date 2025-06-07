@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boogy/aws-oidc-warden/config"
-	"github.com/boogy/aws-oidc-warden/types"
-	"github.com/boogy/aws-oidc-warden/validator"
+	"github.com/boogy/aws-oidc-warden/pkg/config"
+	"github.com/boogy/aws-oidc-warden/pkg/types"
+	"github.com/boogy/aws-oidc-warden/pkg/validator"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

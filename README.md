@@ -1,14 +1,23 @@
 # AWS OIDC Warden
 
-![AWS OIDC Warden Architecture](./img/aws-oidc-warden.png)
+![AWS OIDC Warden Architecture](./docs/img/aws-oidc-warden.png)
 
 ## Overview
 
-The **AWS OIDC Warden** is a secure, lightweight service that validates OpenID Connect (OIDC) tokens issued by GitHub Actions. It acts as a trusted intermediary between GitHub workflows and AWS resources, providing fine-grained access control based on repository, branch, actor, and other GitHub-specific attributes.
+The **AWS OIDC Warden** is a secure, lightweight Go service that validates OpenID Connect (OIDC) tokens issued by GitHub Actions and other OIDC providers. It acts as a trusted intermediary between GitHub workflows and AWS resources, providing fine-grained access control based on repository, branch, actor, and other configurable constraints.
 
-This service solves a common security challenge: securely connecting GitHub Actions workflows to AWS resources without storing long-lived credentials in GitHub and at scale. By validating OIDC tokens and applying customizable security constraints, it helps organizations implement the principle of least privilege while maintaining operational efficiency.
+This service solves a critical security challenge: securely connecting CI/CD workflows to AWS resources without storing long-lived credentials. By validating OIDC tokens and applying customizable security policies, it enables organizations to implement the principle of least privilege while maintaining operational efficiency at scale.
 
-Written in **Go** and optimized for deployment in **AWS Lambda**, this service is highly scalable, cost-effective, and designed for enterprise-grade security requirements.
+**Key Capabilities:**
+- **Multi-OIDC Support**: Works with GitHub Actions and any OIDC provider with JWKS endpoints
+- **Multiple Deployment Options**:
+  - **API Gateway + Lambda**: Traditional REST API with API Gateway proxy integration
+  - **Lambda URLs**: Direct Lambda HTTP endpoints with function URLs
+  - **Application Load Balancer**: Integration with ALB target groups for high-traffic scenarios
+  - **Local Development Server**: HTTP server for testing and integration
+- **Advanced Caching**: Multi-tier caching with memory, DynamoDB, and S3 backends
+- **Enterprise-Ready**: Comprehensive logging, monitoring, and security features
+- **Cloud-Native Architecture**: Stateless design with external state management
 
 ---
 
@@ -19,33 +28,32 @@ Written in **Go** and optimized for deployment in **AWS Lambda**, this service i
 
 ## Features
 
-- **Secure Token Validation**: Validates GitHub OIDC tokens against GitHub's JWKS endpoint with signature verification
+- **Universal OIDC Validation**: Validates tokens from GitHub Actions and any OIDC provider with JWKS endpoints
+- **Multiple Deployment Options**:
+  - **API Gateway + Lambda**: Traditional REST API approach with API Gateway proxy integration
+  - **Lambda URLs**: Direct Lambda HTTP endpoints with function URLs (recommended for simple setups)
+  - **Application Load Balancer**: Integration with ALB target groups for high-traffic, multi-region scenarios
+  - **Local Development Server**: HTTP server for testing and integration workflows
 - **Fine-Grained Access Control**: Configure access based on repository, branch, event type, actor, workflow file, and more
-- **Repository-Based Access**: Map GitHub repositories to specific AWS IAM roles with custom session policies
-- **Flexible Constraint System**: Apply regular expression-based matching for branches, actors, and workflows
-- **Performance Optimized**:
-  - **Multi-Level Caching**: Choose between in-memory, DynamoDB, or S3 caching for JWKS
-  - **Pattern Pre-compilation**: Regular expressions are compiled once during initialization
-  - **Configurable TTL**: Set custom time-to-live for cached JWKS
-- **Comprehensive Logging**: Structured logging to both CloudWatch and S3 (optional)
-- **AWS Integration**: Seamless integration with AWS Lambda, API Gateway, S3, and DynamoDB
-- **Multi-Architecture Support**: Binary or Docker builds for different architectures (amd64, arm64)
+- **Flexible Constraint System**: Apply regular expression-based matching for dynamic authorization
+- **Repository-Based Mapping**: Map GitHub repositories to specific AWS IAM roles with custom session policies
+- **High-Performance Caching**:
+  - **Memory Cache**: Fast in-memory caching with LRU eviction
+  - **DynamoDB Cache**: Persistent caching across Lambda instances
+  - **S3 Cache**: Large object caching with automatic cleanup
+  - **Configurable TTL**: Custom time-to-live for cached JWKS
+- **Comprehensive Logging**:
+  - Structured JSON logging to CloudWatch
+  - Optional S3 logging for long-term retention
+  - Request tracking with correlation IDs
 - **Session Policy Support**: Apply custom AWS session policies via inline JSON or S3-stored policy files
-- **Session Tagging**: Tag AWS sessions with GitHub-specific information for better auditability and IAM ABAC
+- **Session Tagging**: Tag AWS sessions with GitHub-specific information for auditability and ABAC
+- **Multi-Architecture Support**: Native builds for ARM64 and AMD64 architectures
+- **Container-Ready**: Docker builds with multi-platform support
 
 ---
 
 ## Getting Started
-
-### Prerequisites
-
-- **Go**: Version 1.23 or later (currently using Go 1.23.4)
-- **AWS CLI**: For managing AWS resources
-- **Docker**: If building and deploying containerized versions
-- **GitHub Actions**: For generating OIDC tokens
-- **ko** (optional): For simplified container builds and deployments
-
----
 
 ### Installation
 
@@ -68,14 +76,14 @@ Written in **Go** and optimized for deployment in **AWS Lambda**, this service i
 #### Alternative Installation Methods
 
 - **Download pre-built binaries**: Check the [Releases](https://github.com/boogy/aws-oidc-warden/releases) page for pre-built Lambda deployment packages
-- **Use container images**: Pull from `ghcr.io/boogy/aws-oidc-warden:latest` or `docker pull boogy/aws-oidc-warden:latest` (see [Container Images](#using-pre-built-container-images) section)
-- **Build with ko**: Use `make ko-build` for container-based deployment (see [Using ko](docs/USING_KO.md))
+- **Use container images**: Pull from GitHub: `ghcr.io/boogy/aws-oidc-warden:latest` (see [Pre-built Images](#using-pre-built-container-images))
+- **Build with ko**: Use `make ko-build` for container-based deployment.
 
 ---
 
 ### Configuration
 
-AWS OIDC Warden can be configured using environment variables, a YAML/JSON configuration file, or both. For a complete reference of all configuration options, see the [Configuration Documentation](docs/CONFIGURATION.md).
+AWS OIDC Warden can be configured using environment variables, a YAML/JSON/TOML configuration file. For a complete reference of all configuration options, see the [Configuration Documentation](docs/CONFIGURATION.md).
 
 #### Environment Variables
 
@@ -198,20 +206,39 @@ To use the service, send a POST request with the GitHub OIDC token and the desir
 ```
 
 #### Running Locally
-The application can be run locally for testing:
+The application includes a local development server that simulates AWS Lambda environments:
 
 ```bash
+# Start local development server (default port 8080)
 make run
+
+# Or with custom configuration
+make run-local CONFIG_PATH=example-config.yaml
+
+# Or run directly with Go
+go run cmd/local/main.go
+
+# With custom options
+go run cmd/local/main.go -port 9090 -config example-config.yaml -log-level debug
 ```
 
-This starts a local development server on port 8080 that simulates AWS API Gateway, wrapping the Lambda handler for proper testing.
+The local server provides these endpoints:
+- `POST /verify` - Token validation endpoint (matches Lambda behavior)
+- `GET /health` - Health check endpoint
 
-You can test it by sending a POST request to the `/verify` endpoint:
+You can test the `/verify` endpoint:
 ```bash
 curl -X POST http://localhost:8080/verify \
   -H "Content-Type: application/json" \
   -d '{"token": "your-github-oidc-token", "role": "your-aws-role-arn"}'
 ```
+
+**Local Server Features:**
+- Simulates AWS Lambda API Gateway proxy integration
+- Configurable latency simulation for testing
+- Graceful shutdown with SIGTERM/SIGINT
+- Structured JSON logging
+- Hot configuration reloading (restart required)
 
 #### Using in GitHub Actions Workflows
 
@@ -267,54 +294,83 @@ jobs:
 
 #### Deploying to AWS Lambda
 
-The project provides multiple deployment options:
+The project provides multiple deployment options depending on your AWS infrastructure:
 
-1. **Build Lambda binary locally**:
-   ```bash
-   # Build the bootstrap binary for AWS Lambda
-   make build
-   ```
+**1. API Gateway + Lambda (Recommended for Production)**
 
-2. **Build and publish container images with ko** (recommended):
-   ```bash
-   # Verify ko installation (auto-installs if needed)
-   make verify-ko
+API Gateway provides a public API endpoint that can be secured with API keys, restricting access to authorized repositories only. This approach minimizes endpoint exposure, enhancing security for safer usage.
 
-   # Build container image locally
-   make ko-build
-
-   # Publish to GitHub Container Registry
-   make ko-publish-ghcr
-
-   # Publish to Docker Hub
-   make ko-publish-dockerhub
-
-   # Publish to both registries
-   make ko-publish-all
-   ```
-
-3. **Use GoReleaser for releases**:
-   ```bash
-   # Create a release with pre-built Lambda ZIP packages
-   goreleaser release --clean
-   ```
-
-These commands support additional configuration through environment variables:
 ```bash
-# Example with custom parameters
-GITHUB_USER=myusername \
-KO_DOCKER_REPO_GHCR=ghcr.io/myusername/aws-oidc-warden \
-VERSION=v1.0.0 \
-make ko-publish-ghcr
+# Build the API Gateway handler
+GOOS=linux GOARCH=arm64 go build -o bootstrap cmd/apigateway/main.go
+zip lambda-apigateway.zip bootstrap
+
+# Create Lambda function
+aws lambda create-function \
+  --function-name aws-oidc-warden-apigateway \
+  --runtime provided.al2023 \
+  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role \
+  --handler bootstrap \
+  --zip-file fileb://lambda-apigateway.zip
 ```
 
-For detailed information about building and deploying with ko, see [Using ko](docs/USING_KO.md).
+**2. Lambda URLs (Recommended for Simple Setups)**
+```bash
+# Build the Lambda URL handler
+GOOS=linux GOARCH=arm64 go build -o bootstrap cmd/lambdaurl/main.go
+zip lambda-url.zip bootstrap
 
-For information about creating releases and using GoReleaser, see [Release Management](docs/RELEASES.md).
+# Create Lambda function with Function URL
+aws lambda create-function \
+  --function-name aws-oidc-warden-url \
+  --runtime provided.al2023 \
+  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role \
+  --handler bootstrap \
+  --zip-file fileb://lambda-url.zip
 
-For a comprehensive guide covering all build and deployment methods, see [Build and Deployment Guide](docs/BUILD_AND_DEPLOY.md).
+# Create Function URL
+aws lambda create-function-url-config \
+  --function-name aws-oidc-warden-url \
+  --auth-type NONE \
+  --cors '{"AllowOrigins":["*"],"AllowMethods":["POST"]}'
+```
 
-Run `make help` to see all available commands and configuration options.
+**3. Application Load Balancer (High Traffic)**
+```bash
+# Build the ALB handler
+GOOS=linux GOARCH=arm64 go build -o bootstrap cmd/alb/main.go
+zip lambda-alb.zip bootstrap
+
+# Create Lambda function for ALB target group
+aws lambda create-function \
+  --function-name aws-oidc-warden-alb \
+  --runtime provided.al2023 \
+  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role \
+  --handler bootstrap \
+  --zip-file fileb://lambda-alb.zip
+```
+
+**4. Container-Based Deployment (Recommended Lambda Deployment)**
+```bash
+# Using pre-built container images
+aws lambda create-function \
+  --function-name aws-oidc-warden \
+  --package-type Image \
+  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:latest \
+  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
+```
+
+**Build Automation:**
+```bash
+# Build all Lambda variants locally
+make build-all
+
+# Build and publish container images
+make ko-publish-all
+
+# Create release packages with GoReleaser
+make release
+```
 
 #### Using Pre-built Container Images
 
@@ -326,7 +382,7 @@ Run `make help` to see all available commands and configuration options.
 
 **Available tags**:
 - `latest` - Latest stable release
-- `v1.0.0` - Specific version tags
+- `v1.x.x` - Specific version tags
 - Multi-architecture support: `linux/amd64` and `linux/arm64`
 
 ##### Direct Lambda Deployment
@@ -347,12 +403,12 @@ aws lambda update-function-code \
 
 ##### Using ECR Pull-Through Cache (Recommended)
 
-To avoid GitHub Container Registry rate limits and improve performance, set up an ECR pull-through cache:
+To avoid GitHub Container Registry rate limits and improve performance for production deployments, set up an AWS ECR pull-through cache:
 
 1. **Create ECR pull-through cache rule**:
    ```bash
    aws ecr create-pull-through-cache-rule \
-     --ecr-repository-prefix ghcr-io \
+     --ecr-repository-prefix ghcr.io \
      --upstream-registry-url ghcr.io \
      --region us-east-1
    ```
@@ -363,13 +419,13 @@ To avoid GitHub Container Registry rate limits and improve performance, set up a
    aws lambda create-function \
      --function-name aws-oidc-warden \
      --package-type Image \
-     --code ImageUri=123456789012.dkr.ecr.us-east-1.amazonaws.com/ghcr-io/boogy/aws-oidc-warden:latest \
+     --code ImageUri=123456789012.dkr.ecr.us-east-1.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:latest \
      --role arn:aws:iam::123456789012:role/lambda-execution-role
 
    # Update existing Lambda function
    aws lambda update-function-code \
      --function-name aws-oidc-warden \
-     --image-uri 123456789012.dkr.ecr.us-east-1.amazonaws.com/ghcr-io/boogy/aws-oidc-warden:v1.0.0
+     --image-uri 123456789012.dkr.ecr.us-east-1.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:v1.0.0
    ```
 
 3. **Configure permissions for pull-through cache**:
@@ -394,13 +450,13 @@ To avoid GitHub Container Registry rate limits and improve performance, set up a
 
 **Benefits of ECR Pull-Through Cache**:
 - **No rate limits**: Avoid GitHub Container Registry throttling
-- **Faster deployments**: Images are cached in your AWS region
+- **Faster deployments**: Images are cached in your AWS Account and Region
 - **Better reliability**: Reduced dependency on external registries
 - **Cost optimization**: Lower data transfer costs for frequent deployments
 
 **Container Image URI Format**:
 - Direct: `ghcr.io/boogy/aws-oidc-warden:TAG`
-- Via ECR pull-through cache: `ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ghcr-io/boogy/aws-oidc-warden:TAG`
+- Via ECR pull-through cache: `ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:TAG`
 
 ---
 
@@ -441,8 +497,6 @@ When validation fails or the role cannot be assumed, the service returns an erro
   "errorDetails": "role not allowed for repository or doesn't meet constraints"
 }
 ```
-
-For detailed information about API responses, see [API Response Format](./docs/API_RESPONSE_FORMAT.md).
 
 ---
 
@@ -535,7 +589,7 @@ The service follows these steps to validate tokens and assume roles:
 4. **Check Repository Mapping**: The repository claim is matched against configured patterns
 5. **Apply Constraints**: Branch, actor, and other constraints are evaluated
 6. **Apply Session Policy**: Optional custom session policy is applied
-7. **Assume Role**: If all checks pass, the AWS role is assumed
+7. **Assume Role**: If all checks pass, the AWS role is assumed and session tags are set for the role ([AWS Role Session Tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html))
 8. **Return Credentials**: Temporary AWS credentials are returned to the requester
 
 ---
@@ -595,7 +649,6 @@ We welcome contributions from the community! Here's how you can help:
 For full functionality, the service requires these AWS resources:
 
 - **Lambda Function** - To run the validator service
-- **API Gateway** - To provide an HTTP endpoint for the Lambda
 - **IAM Role for Lambda** - With permissions to:
   - Assume the target roles
   - Access DynamoDB (if using DynamoDB cache)

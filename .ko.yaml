@@ -5,20 +5,55 @@ defaultPlatforms:
   - linux/arm64
   - linux/amd64
 
+# AWS Lambda container images require the executable to be named 'bootstrap'
 builds:
-  - id: aws-oidc-warden
+  - id: aws-oidc-warden-apigateway
     dir: .
-    main: .
-    binary: bootstrap # AWS Lambda container images require the executable to be named 'bootstrap'
+    main: ./cmd/apigateway/main.go
+    binary: bootstrap
     env:
       - CGO_ENABLED=0
       - GOOS=linux
     ldflags:
       - -extldflags "-static"
       - -s -w
-      - -X main.buildVersion={{.Git.Tag}}
-      - -X main.buildCommit={{.Git.ShortCommit}}
-      - -X main.buildDate={{.Date}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Git.Tag}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.Git.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+
+  - id: aws-oidc-warden-alb
+    dir: .
+    main: ./cmd/alb/main.go
+    binary: bootstrap
+    env:
+      - CGO_ENABLED=0
+      - GOOS=linux
+    ldflags:
+      - -extldflags "-static"
+      - -s -w
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Git.Tag}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.Git.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+
+  - id: aws-oidc-warden-lambdaurl
+    dir: .
+    main: ./cmd/lambdaurl/main.go
+    binary: bootstrap
+    env:
+      - CGO_ENABLED=0
+      - GOOS=linux
+    ldflags:
+      - -extldflags "-static"
+      - -s -w
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Git.Tag}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.Git.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
     flags:
       - -tags=lambda.norpc
       - -trimpath
