@@ -76,7 +76,37 @@ fmt:
 lint:
 	@echo "Running linter..."
 	@command -v golangci-lint >/dev/null 2>&1 || { echo >&2 "golangci-lint not installed"; exit 1; }
-	@golangci-lint run ./...
+	@golangci-lint run --no-config ./...
+
+.PHONY: lint-no-tests
+lint-no-tests:
+	@echo "Running linter (excluding test files)..."
+	@command -v golangci-lint >/dev/null 2>&1 || { echo >&2 "golangci-lint not installed"; exit 1; }
+	@golangci-lint run --no-config --tests=false ./...
+
+.PHONY: lint-fast
+lint-fast:
+	@echo "Running fast linter (excluding test files and some checks)..."
+	@command -v golangci-lint >/dev/null 2>&1 || { echo >&2 "golangci-lint not installed"; exit 1; }
+	@golangci-lint run --no-config --tests=false --fast-only ./...
+
+.PHONY: lint-specific
+lint-specific:
+	@echo "Running specific linters (excluding test files)..."
+	@command -v golangci-lint >/dev/null 2>&1 || { echo >&2 "golangci-lint not installed"; exit 1; }
+	@golangci-lint run --no-config --tests=false --enable-only=errcheck,govet,ineffassign,staticcheck,unused ./...
+
+.PHONY: lint-security
+lint-security:
+	@echo "Running security-focused linters..."
+	@command -v golangci-lint >/dev/null 2>&1 || { echo >&2 "golangci-lint not installed"; exit 1; }
+	@golangci-lint run --no-config --enable-only=gosec ./...
+
+.PHONY: lint-all
+lint-all:
+	@echo "Running comprehensive linting (excluding test files)..."
+	@command -v golangci-lint >/dev/null 2>&1 || { echo >&2 "golangci-lint not installed"; exit 1; }
+	@golangci-lint run --no-config --tests=false --enable-only=bodyclose,errcheck,govet,ineffassign,misspell,staticcheck,unused ./...
 
 .PHONY: check
 check: fmt lint test
@@ -143,7 +173,12 @@ help:
 	@echo ""
 	@echo "Code quality:"
 	@echo "  make fmt                  Format code"
-	@echo "  make lint                 Run linter"
+	@echo "  make lint                 Run linter (includes test files)"
+	@echo "  make lint-no-tests        Run linter (excludes test files)"
+	@echo "  make lint-fast            Run fast linter (excludes test files)"
+	@echo "  make lint-specific        Run specific linters (errcheck, gosimple, etc.)"
+	@echo "  make lint-security        Run security-focused linters (gosec)"
+	@echo "  make lint-all             Run comprehensive linting (excludes test files)"
 	@echo "  make check                Run all quality checks and tests"
 	@echo ""
 	@echo "Testing:"

@@ -115,31 +115,31 @@ func (c *Config) LoadConfig() error {
 
 	// Explicitly bind all config keys to environment variables
 	// Core settings
-	viper.BindEnv("issuer")                // AOW_ISSUER
-	viper.BindEnv("audience")              // AOW_AUDIENCE
-	viper.BindEnv("role_session_name")     // AOW_ROLE_SESSION_NAME
-	viper.BindEnv("s3_config_bucket")      // AOW_S3_CONFIG_BUCKET
-	viper.BindEnv("s3_config_path")        // AOW_S3_CONFIG_PATH
-	viper.BindEnv("session_policy_bucket") // AOW_SESSION_POLICY_BUCKET
-	viper.BindEnv("log_to_s3")             // AOW_LOG_TO_S3
-	viper.BindEnv("log_bucket")            // AOW_LOG_BUCKET
-	viper.BindEnv("log_prefix")            // AOW_LOG_PREFIX
+	_ = viper.BindEnv("issuer")                // AOW_ISSUER
+	_ = viper.BindEnv("audience")              // AOW_AUDIENCE
+	_ = viper.BindEnv("role_session_name")     // AOW_ROLE_SESSION_NAME
+	_ = viper.BindEnv("s3_config_bucket")      // AOW_S3_CONFIG_BUCKET
+	_ = viper.BindEnv("s3_config_path")        // AOW_S3_CONFIG_PATH
+	_ = viper.BindEnv("session_policy_bucket") // AOW_SESSION_POLICY_BUCKET
+	_ = viper.BindEnv("log_to_s3")             // AOW_LOG_TO_S3
+	_ = viper.BindEnv("log_bucket")            // AOW_LOG_BUCKET
+	_ = viper.BindEnv("log_prefix")            // AOW_LOG_PREFIX
 
 	// Cache settings
-	viper.BindEnv("cache.type")             // AOW_CACHE_TYPE
-	viper.BindEnv("cache.ttl")              // AOW_CACHE_TTL
-	viper.BindEnv("cache.max_local_size")   // AOW_CACHE_MAX_LOCAL_SIZE
-	viper.BindEnv("cache.dynamodb_table")   // AOW_CACHE_DYNAMODB_TABLE
-	viper.BindEnv("cache.s3_bucket")        // AOW_CACHE_S3_BUCKET
-	viper.BindEnv("cache.s3_prefix")        // AOW_CACHE_S3_PREFIX
-	viper.BindEnv("cache.s3_cleanup")       // AOW_CACHE_S3_CLEANUP
-	viper.BindEnv("cache.s3_config_bucket") // AOW_CACHE_S3_CONFIG_BUCKET
-	viper.BindEnv("cache.s3_config_path")   // AOW_CACHE_S3_CONFIG_PATH
+	_ = viper.BindEnv("cache.type")             // AOW_CACHE_TYPE
+	_ = viper.BindEnv("cache.ttl")              // AOW_CACHE_TTL
+	_ = viper.BindEnv("cache.max_local_size")   // AOW_CACHE_MAX_LOCAL_SIZE
+	_ = viper.BindEnv("cache.dynamodb_table")   // AOW_CACHE_DYNAMODB_TABLE
+	_ = viper.BindEnv("cache.s3_bucket")        // AOW_CACHE_S3_BUCKET
+	_ = viper.BindEnv("cache.s3_prefix")        // AOW_CACHE_S3_PREFIX
+	_ = viper.BindEnv("cache.s3_cleanup")       // AOW_CACHE_S3_CLEANUP
+	_ = viper.BindEnv("cache.s3_config_bucket") // AOW_CACHE_S3_CONFIG_BUCKET
+	_ = viper.BindEnv("cache.s3_config_path")   // AOW_CACHE_S3_CONFIG_PATH
 
 	// Logging settings
-	viper.BindEnv("log_to_s3")
-	viper.BindEnv("log_bucket")
-	viper.BindEnv("log_prefix")
+	_ = viper.BindEnv("log_to_s3")
+	_ = viper.BindEnv("log_bucket")
+	_ = viper.BindEnv("log_prefix")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
