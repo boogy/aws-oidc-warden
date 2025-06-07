@@ -74,6 +74,15 @@ jobs:
             --bare
         timeout-minutes: 10
 
+      - name: Pull image for scanning
+        env:
+          IMAGE_REF: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}
+        run: |
+          echo "Pulling image for scanning: $IMAGE_REF"
+          # Wait a moment for image to be available in registry
+          sleep 10
+          docker pull $IMAGE_REF
+
       - name: Scan container image
         uses: aquasecurity/trivy-action@6c175e9c4083a92bbca2f9724c8a5e33bc2d97a5 # v0.30.0
         with:
