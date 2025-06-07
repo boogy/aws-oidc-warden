@@ -68,7 +68,7 @@ Written in **Go** and optimized for deployment in **AWS Lambda**, this service i
 #### Alternative Installation Methods
 
 - **Download pre-built binaries**: Check the [Releases](https://github.com/boogy/aws-oidc-warden/releases) page for pre-built Lambda deployment packages
-- **Use container images**: Pull from `ghcr.io/boogy/aws-oidc-warden` (see [Container Images](#using-pre-built-container-images) section)
+- **Use container images**: Pull from `ghcr.io/boogy/aws-oidc-warden:latest` or `docker pull boogy/aws-oidc-warden:latest` (see [Container Images](#using-pre-built-container-images) section)
 - **Build with ko**: Use `make ko-build` for container-based deployment (see [Using ko](docs/USING_KO.md))
 
 ---
@@ -320,7 +320,9 @@ Run `make help` to see all available commands and configuration options.
 
 **Recommended for Production**: Instead of building your own images, you can use the pre-built container images from GitHub Container Registry (GHCR). These images are automatically built and published for each release.
 
-**Container Registry**: `ghcr.io/boogy/aws-oidc-warden`
+**Container Registries**:
+- `docker pull ghcr.io/boogy/aws-oidc-warden:latest`
+- `docker pull boogy/aws-oidc-warden:latest`
 
 **Available tags**:
 - `latest` - Latest stable release
@@ -482,7 +484,6 @@ The application includes a simple caching system for JWKS (JSON Web Key Sets) to
     ttl: "24h"
     s3_bucket: "aws-oidc-warden-cache"
     s3_prefix: "jwks-cache"
-    s3_cleanup: true
   ```
 
 ---
@@ -567,42 +568,6 @@ The service follows these steps to validate tokens and assume roles:
    - Verify the API Gateway is properly configured to pass all requests to the Lambda function
    - Check request transformer templates if using API Gateway mapping templates
    - Ensure the Lambda has the necessary permissions to be invoked by API Gateway
-
----
-
-## Automated Builds and Releases
-
-### Container Images
-
-Container images are automatically built and published to GitHub Container Registry (GHCR) whenever a new tag is created. The build process:
-
-1. **Triggers**: Automatically runs when you push a new tag (e.g., `v1.0.1`)
-2. **Multi-architecture**: Builds for both `linux/amd64` and `linux/arm64`
-3. **Registry**: Published to `ghcr.io/boogy/aws-oidc-warden`
-4. **Tags**: Creates both version-specific tags (`v1.0.1`) and updates `latest`
-
-The container build workflow uses `ko` for efficient Go container builds and is defined in `.github/workflows/container.yml`.
-
-### Binary Releases
-
-Binary releases are automatically created using GoReleaser when tags are pushed, providing pre-compiled binaries for different platforms.
-
-Both workflows run in parallel and are triggered by the same tag push, ensuring that both container images and binary releases are available for each version.
-
-### Creating a Release
-
-To create a new release and trigger the automated builds:
-
-```bash
-# Create and push a new tag
-git tag v1.0.1
-git push origin v1.0.1
-```
-
-This will automatically:
-1. Build and publish container images to `ghcr.io/boogy/aws-oidc-warden:v1.0.1` and `ghcr.io/boogy/aws-oidc-warden:latest`
-2. Create a GitHub release with compiled binaries for multiple platforms
-3. Generate release notes and deployment information
 
 ---
 
