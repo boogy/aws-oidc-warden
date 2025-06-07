@@ -76,7 +76,7 @@ archives:
   - id: apigateway
     builds:
       - apigateway
-    format: zip
+    formats: ["zip"]
     name_template: "{{ .ProjectName }}_apigateway_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - src: dist/apigateway_{{ .Os }}_{{ .Arch }}*/bootstrap
@@ -85,7 +85,7 @@ archives:
   - id: alb
     builds:
       - alb
-    format: zip
+    formats: ["zip"]
     name_template: "{{ .ProjectName }}_alb_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - src: dist/alb_{{ .Os }}_{{ .Arch }}*/bootstrap
@@ -94,7 +94,7 @@ archives:
   - id: lambdaurl
     builds:
       - lambdaurl
-    format: zip
+    formats: ["zip"]
     name_template: "{{ .ProjectName }}_lambdaurl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - src: dist/lambdaurl_{{ .Os }}_{{ .Arch }}*/bootstrap
