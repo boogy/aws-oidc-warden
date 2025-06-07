@@ -46,22 +46,29 @@ jobs:
           echo "Event: ${{ github.event_name }}"
           echo "Ref: ${{ github.ref }}"
           echo "Registry: ${{ env.REGISTRY }}"
-          echo "Target repo: ghcr.io/${{ github.repository_owner }}/aws-oidc-warden"
+          echo "Target repo: ghcr.io/${{ github.repository }}"
           # Test registry access
           docker images
           echo "Testing registry connectivity..."
           curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                -H "Accept: application/vnd.github.v3+json" \
                "https://api.github.com/user/packages?package_type=container" || echo "API call failed"
+          # Test specific package access
+          echo "Testing specific package access..."
+          curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               "https://api.github.com/orgs/${{ github.repository_owner }}/packages?package_type=container" || echo "Org packages API call failed"
 
       - name: Build and push container image
         env:
-          KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
+          KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/${{ env.REPO_NAME }}
           VERSION: ${{ steps.extract_tag.outputs.tag }}
         run: |
           echo "Building and pushing with ko..."
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
           echo "VERSION: $VERSION"
+          
+          # Publish with ko
           ko publish . \
             --tags=$VERSION,latest \
             --bare
@@ -70,7 +77,7 @@ jobs:
       - name: Scan container image
         uses: aquasecurity/trivy-action@6c175e9c4083a92bbca2f9724c8a5e33bc2d97a5 # v0.30.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}:${{ steps.extract_tag.outputs.tag }}
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
@@ -81,8 +88,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The following container images have been built and pushed:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- \`ghcr.io/${{ github.repository }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`ghcr.io/${{ github.repository }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/${{ github.repository_owner }}/${{ env.REPO_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Architectures" >> $GITHUB_STEP_SUMMARY
           echo "- linux/amd64" >> $GITHUB_STEP_SUMMARY
@@ -93,5 +100,5 @@ jobs:
           echo "Use this image URI when creating or updating your Lambda function:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "ghcr.io/${{ github.repository }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "ghcr.io/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
