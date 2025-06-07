@@ -38,11 +38,30 @@ jobs:
         id: extract_tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+      - name: Debug authentication and permissions
+        run: |
+          echo "Repository: ${{ github.repository }}"
+          echo "Repository Owner: ${{ github.repository_owner }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "Registry: ${{ env.REGISTRY }}"
+          echo "Target repo: ghcr.io/${{ github.repository_owner }}/aws-oidc-warden"
+          # Test registry access
+          docker images
+          echo "Testing registry connectivity..."
+          curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+               -H "Accept: application/vnd.github.v3+json" \
+               "https://api.github.com/user/packages?package_type=container" || echo "API call failed"
+
       - name: Build and push container image
         env:
-          KO_DOCKER_REPO: ghcr.io/${{ github.repository_owner }}/aws-oidc-warden
+          KO_DOCKER_REPO: ghcr.io/${{ github.repository }}
           VERSION: ${{ steps.extract_tag.outputs.tag }}
         run: |
+          echo "Building and pushing with ko..."
+          echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
+          echo "VERSION: $VERSION"
           ko publish . \
             --tags=$VERSION,latest \
             --bare
@@ -51,7 +70,7 @@ jobs:
       - name: Scan container image
         uses: aquasecurity/trivy-action@6c175e9c4083a92bbca2f9724c8a5e33bc2d97a5 # v0.30.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ github.repository_owner }}/aws-oidc-warden:${{ steps.extract_tag.outputs.tag }}
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}:${{ steps.extract_tag.outputs.tag }}
           format: table
           exit-code: 1
           severity: CRITICAL,HIGH
@@ -62,8 +81,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The following container images have been built and pushed:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- \`ghcr.io/${{ github.repository_owner }}/aws-oidc-warden:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`ghcr.io/${{ github.repository_owner }}/aws-oidc-warden:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/${{ github.repository }}:${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`ghcr.io/${{ github.repository }}:latest\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Architectures" >> $GITHUB_STEP_SUMMARY
           echo "- linux/amd64" >> $GITHUB_STEP_SUMMARY
@@ -74,5 +93,5 @@ jobs:
           echo "Use this image URI when creating or updating your Lambda function:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "ghcr.io/${{ github.repository_owner }}/aws-oidc-warden:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "ghcr.io/${{ github.repository }}:${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
