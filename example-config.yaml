@@ -83,9 +83,10 @@ repo_role_mappings:
   ####################################################################################
 
   # Example 1: Simple mapping with branch constraint
-  - repo: "boogy/terragrunt-test"
+  - repo: "org/some-repo-name"
     roles:
-      - arn:aws:iam::123456789012:role/github-actions-terragrunt
+      - arn:aws:iam::123456789012:role/github-actions-create-repo
+      - arn:aws:iam::123456789012:role/github-actions-readonly
     constraints:
       branch: "refs/heads/main" # Only allow from main branch
 
@@ -104,8 +105,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["ecr:DescribeRepositories"],
+            "Effect": "Deny",
+            "Action": ["ecr:CreateRepository"],
             "Resource": "*"
           }
         ]
@@ -124,8 +125,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["ecr:DescribeRepositories"],
+            "Effect": "Deny",
+            "Action": ["iam:Create*"],
             "Resource": "*"
           }
         ]
@@ -142,8 +143,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["ecs:DescribeServices"],
+            "Effect": "Deny",
+            "Action": ["s3:*", "iam:*", "ec2:*"],
             "Resource": "*"
           }
         ]
@@ -162,8 +163,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["s3:ListBucket"],
+            "Effect": "Deny",
+            "Action": ["s3:GetObject*"],
             "Resource": "*"
           }
         ]
@@ -180,8 +181,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["dynamodb:ListTables"],
+            "Effect": "Deny",
+            "Action": ["dynamodb:*"],
             "Resource": "*"
           }
         ]
@@ -202,8 +203,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["lambda:ListFunctions"],
+            "Effect": "Deny",
+            "Action": ["lambda:InvokeFunction"],
             "Resource": "*"
           }
         ]
@@ -222,7 +223,7 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
+            "Effect": "Deny",
             "Action": ["rds:DescribeDBInstances"],
             "Resource": "*"
           }
@@ -244,8 +245,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["ec2:DescribeInstances"],
+            "Effect": "Deny",
+            "Action": ["ec2:*"],
             "Resource": "*"
           }
         ]
@@ -268,7 +269,7 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
+            "Effect": "Deny",
             "Action": ["s3:PutObject"],
             "Resource": "*"
           }
@@ -287,8 +288,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["cloudformation:DescribeStacks"],
+            "Effect": "Deny",
+            "Action": ["iam:*"],
             "Resource": "*"
           }
         ]
@@ -304,8 +305,8 @@ repo_role_mappings:
         "Version": "2012-10-17",
         "Statement": [
           {
-            "Effect": "Allow",
-            "Action": ["sts:GetCallerIdentity"],
+            "Effect": "Deny",
+            "Action": ["sts:AssumeRole"],
             "Resource": "*"
           }
         ]
