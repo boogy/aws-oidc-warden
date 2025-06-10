@@ -128,7 +128,39 @@ func TestValidate(t *testing.T) {
 			name: "valid config",
 			config: Config{
 				Issuer:          "https://issuer.com",
+				Audiences:       []string{"audience"},
+				RoleSessionName: "session",
+				RepoRoleMappings: []RepoRoleMapping{
+					{
+						Repo:          "org/repo",
+						SessionPolicy: "policy",
+						Roles:         []string{"role1"},
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			name: "valid config with legacy audience field",
+			config: Config{
+				Issuer:          "https://issuer.com",
 				Audience:        "audience",
+				RoleSessionName: "session",
+				RepoRoleMappings: []RepoRoleMapping{
+					{
+						Repo:          "org/repo",
+						SessionPolicy: "policy",
+						Roles:         []string{"role1"},
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			name: "valid config with multiple audiences",
+			config: Config{
+				Issuer:          "https://issuer.com",
+				Audiences:       []string{"audience1", "audience2"},
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{
@@ -149,7 +181,7 @@ func TestValidate(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "missing audience",
+			name: "missing audience and audiences",
 			config: Config{
 				Issuer:          "https://issuer.com",
 				RoleSessionName: "session",
@@ -159,8 +191,8 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing role session name",
 			config: Config{
-				Issuer:   "https://issuer.com",
-				Audience: "audience",
+				Issuer:    "https://issuer.com",
+				Audiences: []string{"audience"},
 			},
 			expectErr: true,
 		},
@@ -168,7 +200,7 @@ func TestValidate(t *testing.T) {
 			name: "invalid mapping - missing repo",
 			config: Config{
 				Issuer:          "https://issuer.com",
-				Audience:        "audience",
+				Audiences:       []string{"audience"},
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{
@@ -183,7 +215,7 @@ func TestValidate(t *testing.T) {
 			name: "valid config - missing session policy",
 			config: Config{
 				Issuer:          "https://issuer.com",
-				Audience:        "audience",
+				Audiences:       []string{"audience"},
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{
@@ -198,7 +230,7 @@ func TestValidate(t *testing.T) {
 			name: "invalid mapping - empty roles",
 			config: Config{
 				Issuer:          "https://issuer.com",
-				Audience:        "audience",
+				Audiences:       []string{"audience"},
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{

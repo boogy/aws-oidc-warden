@@ -10,7 +10,8 @@ GOARCH ?= arm64
 GO_BUILD_FLAGS := -trimpath -ldflags="-s -w \
 	-X github.com/boogy/aws-oidc-warden/pkg/version.Version=$(VERSION) \
 	-X github.com/boogy/aws-oidc-warden/pkg/version.Commit=$(BUILD_COMMIT) \
-	-X github.com/boogy/aws-oidc-warden/pkg/version.Date=$(BUILD_DATE)"
+	-X github.com/boogy/aws-oidc-warden/pkg/version.Date=$(BUILD_DATE)" \
+	-tags=lambda.norpc # Use lambda.norpc tag to avoid using RPC in Lambda functions
 
 # Ko configuration
 GITHUB_USER ?= $(shell git config user.name)
@@ -35,23 +36,26 @@ build-local:
 .PHONY: build-lambda
 build-lambda: build-apigateway build-alb build-lambdaurl
 
+.PHONY: build-all
+build-all: build-local build-lambda
+
 .PHONY: build-apigateway
 build-apigateway:
 	@echo "Building API Gateway Lambda binary..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_FLAGS) -tags=lambda.norpc -o $(BUILD_DIR)/bootstrap-apigateway ./cmd/apigateway
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/bootstrap-apigateway ./cmd/apigateway
 
 .PHONY: build-alb
 build-alb:
 	@echo "Building ALB Lambda binary..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_FLAGS) -tags=lambda.norpc -o $(BUILD_DIR)/bootstrap-alb ./cmd/alb
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/bootstrap-alb ./cmd/alb
 
 .PHONY: build-lambdaurl
 build-lambdaurl:
 	@echo "Building Lambda URL binary..."
 	@mkdir -p $(BUILD_DIR)
-	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_FLAGS) -tags=lambda.norpc -o $(BUILD_DIR)/bootstrap-lambdaurl ./cmd/lambdaurl
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/bootstrap-lambdaurl ./cmd/lambdaurl
 
 .PHONY: run
 run: build-local
@@ -147,6 +151,31 @@ ko-publish: verify-ko
 	@echo "Publishing container images to $(KO_DOCKER_REPO)..."
 	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway ./cmd/alb ./cmd/lambdaurl --bare --tags=$(VERSION),latest
 
+.PHONY: ko-publish-all
+ko-publish-all: ko-publish
+
+# -----------------------------------------------------------------------------
+# Release targets
+# -----------------------------------------------------------------------------
+
+.PHONY: release
+release:
+	@echo "Creating release with GoReleaser..."
+	@command -v goreleaser >/dev/null 2>&1 || { \
+		echo "goreleaser not installed. Installing..."; \
+		go install github.com/goreleaser/goreleaser@latest; \
+	}
+	@goreleaser release --clean
+
+.PHONY: release-snapshot
+release-snapshot:
+	@echo "Creating snapshot release with GoReleaser..."
+	@command -v goreleaser >/dev/null 2>&1 || { \
+		echo "goreleaser not installed. Installing..."; \
+		go install github.com/goreleaser/goreleaser@latest; \
+	}
+	@goreleaser release --snapshot --clean
+
 # -----------------------------------------------------------------------------
 # Utility targets
 # -----------------------------------------------------------------------------
@@ -165,6 +194,7 @@ help:
 	@echo "Development:"
 	@echo "  make build-local          Build local development binary"
 	@echo "  make build-lambda         Build all Lambda binaries"
+	@echo "  make build-all            Build all binaries (local + lambda)"
 	@echo "  make build-apigateway     Build API Gateway Lambda binary"
 	@echo "  make build-alb            Build ALB Lambda binary"
 	@echo "  make build-lambdaurl      Build Lambda URL binary"
@@ -189,6 +219,11 @@ help:
 	@echo "Container builds:"
 	@echo "  make ko-build             Build container images locally"
 	@echo "  make ko-publish           Publish container images"
+	@echo "  make ko-publish-all       Publish all container images (alias for ko-publish)"
+	@echo ""
+	@echo "Release:"
+	@echo "  make release              Create release with GoReleaser"
+	@echo "  make release-snapshot     Create snapshot release with GoReleaser"
 	@echo ""
 	@echo "Configuration variables:"
 	@echo "  GOOS                      Go OS target (default: $(GOOS))"

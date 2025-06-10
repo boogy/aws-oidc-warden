@@ -101,8 +101,8 @@ func createGithubToken(privateKey *rsa.PrivateKey, keyID, issuer, audience, repo
 
 func TestNewTokenValidator(t *testing.T) {
 	cfg := &config.Config{
-		Issuer:   "https://example.com",
-		Audience: "test-audience",
+		Issuer:    "https://example.com",
+		Audiences: []string{"test-audience"},
 		Cache: &config.Cache{
 			TTL: 10 * time.Minute,
 		},
@@ -112,7 +112,7 @@ func TestNewTokenValidator(t *testing.T) {
 	validator := validator.NewTokenValidator(cfg, mockCache)
 
 	assert.Equal(t, cfg.Issuer, validator.ExpectedIssuer)
-	assert.Equal(t, cfg.Audience, validator.ExpectedAudience)
+	assert.Equal(t, cfg.Audiences, validator.ExpectedAudiences)
 	assert.Equal(t, mockCache, validator.Cache)
 	assert.Equal(t, cfg, validator.Cfg)
 }
@@ -140,8 +140,8 @@ func TestValidate_Success(t *testing.T) {
 
 	// Create config and validator
 	cfg := &config.Config{
-		Issuer:   issuer,
-		Audience: audience,
+		Issuer:    issuer,
+		Audiences: []string{audience},
 		Cache: &config.Cache{
 			TTL: 10 * time.Minute,
 		},
@@ -184,8 +184,8 @@ func TestValidate_InvalidIssuer(t *testing.T) {
 
 	// Create config and validator
 	cfg := &config.Config{
-		Issuer:   issuer,
-		Audience: audience,
+		Issuer:    issuer,
+		Audiences: []string{audience},
 		Cache: &config.Cache{
 			TTL: 10 * time.Minute,
 		},
@@ -226,8 +226,8 @@ func TestValidate_InvalidAudience(t *testing.T) {
 
 	// Create config and validator
 	cfg := &config.Config{
-		Issuer:   issuer,
-		Audience: audience,
+		Issuer:    issuer,
+		Audiences: []string{audience},
 		Cache: &config.Cache{
 			TTL: 10 * time.Minute,
 		},
@@ -267,8 +267,8 @@ func TestValidate_MissingRepository(t *testing.T) {
 
 	// Create config and validator
 	cfg := &config.Config{
-		Issuer:   issuer,
-		Audience: audience,
+		Issuer:    issuer,
+		Audiences: []string{audience},
 		Cache: &config.Cache{
 			TTL: 10 * time.Minute,
 		},
@@ -569,8 +569,8 @@ func TestParseToken_InvalidToken(t *testing.T) {
 
 	// Create config and validator
 	cfg := &config.Config{
-		Issuer:   "https://example.com",
-		Audience: "test-audience",
+		Issuer:    "https://example.com",
+		Audiences: []string{"test-audience"},
 		Cache: &config.Cache{
 			TTL: 10 * time.Minute,
 		},

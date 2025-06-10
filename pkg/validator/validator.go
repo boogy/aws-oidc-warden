@@ -25,19 +25,21 @@ type TokenValidatorInterface interface {
 }
 
 type TokenValidator struct {
-	Token            string
-	ExpectedIssuer   string
-	ExpectedAudience string
-	Cache            cache.Cache
-	Cfg              *config.Config
+	Token             string
+	ExpectedIssuer    string
+	ExpectedAudience  string   // Deprecated: use ExpectedAudiences instead (kept for backward compatibility)
+	ExpectedAudiences []string // List of expected audiences
+	Cache             cache.Cache
+	Cfg               *config.Config
 }
 
 func NewTokenValidator(cfg *config.Config, cache cache.Cache) *TokenValidator {
 	return &TokenValidator{
-		ExpectedIssuer:   cfg.Issuer,
-		ExpectedAudience: cfg.Audience,
-		Cache:            cache,
-		Cfg:              cfg,
+		ExpectedIssuer:    cfg.Issuer,
+		ExpectedAudience:  cfg.Audience,  // Keep for backward compatibility
+		ExpectedAudiences: cfg.Audiences, // Use multiple audiences
+		Cache:             cache,
+		Cfg:               cfg,
 	}
 }
 
@@ -51,8 +53,22 @@ func (t *TokenValidator) Validate(token string) (*types.GithubClaims, error) {
 		return nil, fmt.Errorf("issuer %s expected", t.ExpectedIssuer)
 	}
 
-	if claims.Audience[0] != t.ExpectedAudience {
-		return nil, fmt.Errorf("audience %s expected", t.ExpectedAudience)
+	// Check if any of the token's audiences match any of the expected audiences
+	var validAudience bool
+	for _, tokenAudience := range claims.Audience {
+		for _, expectedAudience := range t.ExpectedAudiences {
+			if tokenAudience == expectedAudience {
+				validAudience = true
+				break
+			}
+		}
+		if validAudience {
+			break
+		}
+	}
+
+	if !validAudience {
+		return nil, fmt.Errorf("audience must be one of %v, got %v", t.ExpectedAudiences, claims.Audience)
 	}
 
 	if claims.Repository == "" {
@@ -85,8 +101,17 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 	keyFunc := t.GenKeyFunc(jwks)
 
 	// Create token parser with strict validation
+	// For now, we'll only validate with the first audience for JWT library compatibility
+	// The full audience validation will be done in the Validate method
+	var audienceForParser string
+	if len(t.ExpectedAudiences) > 0 {
+		audienceForParser = t.ExpectedAudiences[0]
+	} else {
+		audienceForParser = t.ExpectedAudience
+	}
+
 	parser := jwt.NewParser(
-		jwt.WithAudience(t.ExpectedAudience),
+		jwt.WithAudience(audienceForParser),
 		jwt.WithIssuer(t.ExpectedIssuer),
 		jwt.WithIssuedAt(),
 		jwt.WithExpirationRequired(),

@@ -104,8 +104,8 @@ func TestTokenValidationFlow(t *testing.T) {
 
 	// Create config and validator
 	cfg := &config.Config{
-		Issuer:   issuer,
-		Audience: audience,
+		Issuer:    issuer,
+		Audiences: []string{audience},
 		Cache: &config.Cache{
 			TTL: 10 * time.Minute,
 		},

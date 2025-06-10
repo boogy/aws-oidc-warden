@@ -14,7 +14,20 @@
 issuer: "https://token.actions.githubusercontent.com"
 
 ## Audience for the token validation (for AWS this is typically "sts.amazonaws.com")
+## DEPRECATED: Use 'audiences' array instead for multiple audience support
 audience: "sts.amazonaws.com"
+
+## Multiple audiences for token validation (recommended approach)
+## Supports validating tokens with any of the specified audiences
+## Examples:
+# audiences:
+#   - "sts.amazonaws.com"                    # AWS STS (default)
+#   - "https://my-api.example.com"           # Custom API audience
+#   - "https://vault.example.com"            # HashiCorp Vault
+#   - "https://my-service.company.com"       # Internal service
+audiences:
+  - "sts.amazonaws.com" # Default AWS STS audience
+  - "https://github.com/octo-org" # Custom audience for GitHub OIDC
 
 ## AWS Role Session name for the assumed role
 ## This is used to identify the session in AWS CloudTrail logs
