@@ -63,7 +63,8 @@ type Cache struct {
 
 type Config struct {
 	Issuer                string            `mapstructure:"issuer"`                // Issuer is the expected issuer of the JWT token
-	Audience              string            `mapstructure:"audience"`              // Audience is the expected audience of the JWT token
+	Audience              string            `mapstructure:"audience"`              // Audience is the expected audience of the JWT token (deprecated - use Audiences)
+	Audiences             []string          `mapstructure:"audiences"`             // Audiences is the list of expected audiences of the JWT token
 	S3ConfigBucket        string            `mapstructure:"s3_config_bucket"`      // S3ConfigBucket is the S3 bucket where the configuration file is stored
 	S3ConfigPath          string            `mapstructure:"s3_config_path"`        // S3ConfigPath is the path to the configuration file in the S3 bucket
 	S3SessionPolicyBucket string            `mapstructure:"session_policy_bucket"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
@@ -108,6 +109,7 @@ func (c *Config) LoadConfig() error {
 	// Set default values
 	viper.SetDefault("issuer", issuer)
 	viper.SetDefault("audience", audience)
+	viper.SetDefault("audiences", []string{audience}) // Default to single audience for backwards compatibility
 	viper.SetDefault("role_session_name", role_session_name)
 	viper.SetDefault("cache.type", cacheType)
 	viper.SetDefault("cache.ttl", cacheTTL)
@@ -117,6 +119,7 @@ func (c *Config) LoadConfig() error {
 	// Core settings
 	_ = viper.BindEnv("issuer")                // AOW_ISSUER
 	_ = viper.BindEnv("audience")              // AOW_AUDIENCE
+	_ = viper.BindEnv("audiences")             // AOW_AUDIENCES
 	_ = viper.BindEnv("role_session_name")     // AOW_ROLE_SESSION_NAME
 	_ = viper.BindEnv("s3_config_bucket")      // AOW_S3_CONFIG_BUCKET
 	_ = viper.BindEnv("s3_config_path")        // AOW_S3_CONFIG_PATH
@@ -162,8 +165,19 @@ func (c *Config) Validate() error {
 		return errors.New("issuer is required")
 	}
 
-	if c.Audience == "" {
-		return errors.New("audience is required")
+	// Handle backward compatibility between audience and audiences
+	if len(c.Audiences) == 0 && c.Audience == "" {
+		return errors.New("either audience or audiences is required")
+	}
+
+	// If audiences is empty but audience is set, use audience for backward compatibility
+	if len(c.Audiences) == 0 && c.Audience != "" {
+		c.Audiences = []string{c.Audience}
+	}
+
+	// If audience is empty but audiences is set, set audience to first audience for backward compatibility
+	if c.Audience == "" && len(c.Audiences) > 0 {
+		c.Audience = c.Audiences[0]
 	}
 
 	if c.RoleSessionName == "" {

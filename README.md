@@ -95,7 +95,8 @@ All configuration options can be set using environment variables with the `AOW_`
 ```bash
 # Core configuration
 export AOW_ISSUER=https://token.actions.githubusercontent.com
-export AOW_AUDIENCE=sts.amazonaws.com
+export AOW_AUDIENCE=sts.amazonaws.com                              # Single audience (legacy)
+export AOW_AUDIENCES=sts.amazonaws.com,https://api.mycompany.com   # Multiple audiences (recommended)
 export AOW_ROLE_SESSION_NAME=aws-oidc-warden
 
 # Cache configuration
@@ -117,7 +118,13 @@ Alternatively, you can use a YAML, JSON or TOML configuration file:
 
 ```yaml
 issuer: https://token.actions.githubusercontent.com
+# Single audience (legacy - still supported for backward compatibility)
 audience: sts.amazonaws.com
+# Multiple audiences (recommended)
+audiences:
+  - sts.amazonaws.com
+  - https://api.mycompany.com
+  - internal.mycompany.com
 role_session_name: aws-oidc-warden
 
 cache:
@@ -245,10 +252,80 @@ curl -X POST http://localhost:8080/verify \
 
 #### Using in GitHub Actions Workflows
 
-Here's an example of how to use this service in a GitHub Actions workflow:
+Here are examples of how to use this service in GitHub Actions workflows with different audience configurations:
+
+##### Method 1: Using @actions/core getIDToken (Recommended)
+
+This method uses the `@actions/core` library to request OIDC tokens with specific audiences, which is cleaner and more reliable:
 
 ```yaml
-name: AWS Deployment
+name: AWS Deployment with Specific Audience
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for OIDC token
+      contents: read   # Required to check out repository
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (for @actions/core)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get AWS credentials via OIDC validator
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const core = require('@actions/core');
+
+            // Request OIDC token with specific audience
+            const token = await core.getIDToken('sts.amazonaws.com');
+
+            // Call the validator API to get AWS credentials
+            const response = await fetch('https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/verify', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                token: token,
+                role: 'arn:aws:iam::123456789012:role/github-actions-role'
+              })
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const { data } = await response.json();
+
+            // Mask sensitive data in logs
+            core.setSecret(data.AccessKeyId);
+            core.setSecret(data.SecretAccessKey);
+            core.setSecret(data.SessionToken);
+
+            // Set environment variables for subsequent steps
+            core.exportVariable('AWS_ACCESS_KEY_ID', data.AccessKeyId);
+            core.exportVariable('AWS_SECRET_ACCESS_KEY', data.SecretAccessKey);
+            core.exportVariable('AWS_SESSION_TOKEN', data.SessionToken);
+
+      - name: Deploy with AWS credentials
+        run: |
+          # Now you can use AWS CLI with the obtained credentials
+          aws sts get-caller-identity
+```
+
+##### Method 2: Legacy curl-based approach
+
+For backwards compatibility, here's the original curl-based method:
+
+```yaml
+name: AWS Deployment (Legacy)
 
 jobs:
   deploy:
@@ -264,7 +341,7 @@ jobs:
       - name: Get AWS credentials via custom OIDC validator
         id: aws-creds
         run: |
-          # Get the OIDC token
+          # Get the OIDC token (uses default audience)
           TOKEN=$(curl -H "Authorization: bearer $ACTIONS_ID_TOKEN" \
                  -H "Accept: application/json; api-version=2.0" \
                  -H "Content-Type: application/json" \
@@ -292,7 +369,7 @@ jobs:
       - name: Deploy with AWS credentials
         run: |
           # Now you can use AWS CLI with the obtained credentials
-          aws s3 ls
+          aws sts get-caller-identity
 ```
 
 #### Deploying to AWS Lambda
@@ -305,7 +382,7 @@ API Gateway provides a public API endpoint that can be secured with API keys, re
 
 ```bash
 # Build the API Gateway handler
-GOOS=linux GOARCH=arm64 go build -o bootstrap cmd/apigateway/main.go
+GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -tags=lambda.norpc -o bootstrap cmd/apigateway/main.go
 zip lambda-apigateway.zip bootstrap
 
 # Create Lambda function
@@ -320,7 +397,7 @@ aws lambda create-function \
 **2. Lambda URLs (Recommended for Simple Setups)**
 ```bash
 # Build the Lambda URL handler
-GOOS=linux GOARCH=arm64 go build -o bootstrap cmd/lambdaurl/main.go
+GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -tags=lambda.norpc  -o bootstrap cmd/lambdaurl/main.go
 zip lambda-url.zip bootstrap
 
 # Create Lambda function with Function URL
@@ -341,7 +418,7 @@ aws lambda create-function-url-config \
 **3. Application Load Balancer (High Traffic)**
 ```bash
 # Build the ALB handler
-GOOS=linux GOARCH=arm64 go build -o bootstrap cmd/alb/main.go
+GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -tags=lambda.norpc -o bootstrap cmd/alb/main.go
 zip lambda-alb.zip bootstrap
 
 # Create Lambda function for ALB target group
@@ -355,11 +432,26 @@ aws lambda create-function \
 
 **4. Container-Based Deployment (Recommended Lambda Deployment)**
 ```bash
-# Using pre-built container images
+# Using pre-built container images (default API Gateway)
+# Can also be specific and use: ghcr.io/boogy/aws-oidc-warden:apigateway-latest
 aws lambda create-function \
-  --function-name aws-oidc-warden \
+  --function-name aws-oidc-warden-apigateway \
   --package-type Image \
   --code ImageUri=ghcr.io/boogy/aws-oidc-warden:latest \
+  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
+
+# Using pre-built container images (ALB)
+aws lambda create-function \
+  --function-name aws-oidc-warden-alb \
+  --package-type Image \
+  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:alb-latest \
+  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
+
+# Using pre-built container images (lambda url)
+aws lambda create-function \
+  --function-name aws-oidc-warden-lambdaurl \
+  --package-type Image \
+  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:lambdaurl-latest \
   --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
 ```
 
@@ -422,13 +514,13 @@ To avoid GitHub Container Registry rate limits and improve performance for produ
    aws lambda create-function \
      --function-name aws-oidc-warden \
      --package-type Image \
-     --code ImageUri=123456789012.dkr.ecr.us-east-1.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:latest \
+     --code ImageUri=<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:latest \
      --role arn:aws:iam::123456789012:role/lambda-execution-role
 
    # Update existing Lambda function
    aws lambda update-function-code \
      --function-name aws-oidc-warden \
-     --image-uri 123456789012.dkr.ecr.us-east-1.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:v1.0.0
+     --image-uri <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:v1.1.0
    ```
 
 3. **Configure permissions for pull-through cache**:
@@ -724,5 +816,3 @@ This project is licensed under the Apache License 2.0.
 - Inspired by [AOEpeople/lambda_token_auth](https://github.com/AOEpeople/lambda_token_auth)
 - Thanks to [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for their research on GitHub OIDC claims
 - Thanks to Jonathan for the tool name inspiration
-
-[![Repo Size](https://img.shields.io/github/repo-size/boogy/aws-oidc-warden)](https://github.com/boogy/aws-oidc-warden)

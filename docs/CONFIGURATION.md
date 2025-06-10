@@ -14,14 +14,17 @@ AWS OIDC Warden can be configured using:
 
 ### Core Settings
 
-| Environment Variable        | Config File Key         | Description                    | Default                                       |
-| --------------------------- | ----------------------- | ------------------------------ | --------------------------------------------- |
-| `AOW_ISSUER`                | `issuer`                | OIDC issuer URL                | `https://token.actions.githubusercontent.com` |
-| `AOW_AUDIENCE`              | `audience`              | Expected audience for tokens   | `sts.amazonaws.com`                           |
-| `AOW_ROLE_SESSION_NAME`     | `role_session_name`     | AWS role session name          | `aws-oidc-warden`                             |
-| `AOW_S3_CONFIG_BUCKET`      | `s3_config_bucket`      | S3 bucket for config file      |                                               |
-| `AOW_S3_CONFIG_PATH`        | `s3_config_path`        | Path to config file in S3      |                                               |
-| `AOW_SESSION_POLICY_BUCKET` | `session_policy_bucket` | S3 bucket for session policies |                                               |
+| Environment Variable        | Config File Key         | Description                                 | Default                                       |
+| --------------------------- | ----------------------- | ------------------------------------------- | --------------------------------------------- |
+| `AOW_ISSUER`                | `issuer`                | OIDC issuer URL                             | `https://token.actions.githubusercontent.com` |
+| `AOW_AUDIENCE`              | `audience`              | Expected audience for tokens (legacy)       | `sts.amazonaws.com`                           |
+| `AOW_AUDIENCES`             | `audiences`             | Expected audiences for tokens (recommended) | `["sts.amazonaws.com"]`                       |
+| `AOW_ROLE_SESSION_NAME`     | `role_session_name`     | AWS role session name                       | `aws-oidc-warden`                             |
+| `AOW_S3_CONFIG_BUCKET`      | `s3_config_bucket`      | S3 bucket for config file                   |                                               |
+| `AOW_S3_CONFIG_PATH`        | `s3_config_path`        | Path to config file in S3                   |                                               |
+| `AOW_SESSION_POLICY_BUCKET` | `session_policy_bucket` | S3 bucket for session policies              |                                               |
+
+> **Note**: You can use either `audience` (single) or `audiences` (multiple). If both are specified, `audiences` takes precedence. For new deployments, use `audiences` for better flexibility.
 
 ### Cache Settings
 
@@ -50,6 +53,83 @@ AWS OIDC Warden can be configured using:
 | -------------------- | ---------------------------------------------------- | ------------------------------------ | -------- |
 | `CONFIG_NAME`        | `config`                                             | Config file name (without extension) | `config` |
 | `CONFIG_PATH`        | <ul><li>/etc/aws-oidc-warden/</li><li>$PWD</li></ul> | Config file path                     | `config` |
+
+## Audience Configuration
+
+AWS OIDC Warden supports both single and multiple audience configurations to validate OIDC tokens against different expected audiences.
+
+### Single Audience (Legacy)
+
+```yaml
+# Legacy configuration - single audience
+issuer: https://token.actions.githubusercontent.com
+audience: sts.amazonaws.com
+```
+
+```bash
+# Environment variable
+export AOW_AUDIENCE=sts.amazonaws.com
+```
+
+### Multiple Audiences
+
+```yaml
+# New configuration - multiple audiences
+issuer: https://token.actions.githubusercontent.com
+audiences:
+  - sts.amazonaws.com
+  - https://api.mycompany.com
+  - internal.mycompany.com
+```
+
+```bash
+# Environment variable (comma-separated)
+export AOW_AUDIENCES=sts.amazonaws.com,https://api.mycompany.com,internal.mycompany.com
+```
+
+### Backward Compatibility
+
+- If only `audience` is specified, it will be automatically converted to `audiences: [audience]`
+- If both `audience` and `audiences` are specified, `audiences` takes precedence
+- For new deployments, use `audiences` for better flexibility
+
+### Use Cases
+
+1. **AWS STS Only**: For standard GitHub Actions to AWS integration
+   ```yaml
+   audiences: ["sts.amazonaws.com"]
+   ```
+
+2. **Multiple APIs**: When tokens need to work with various services
+   ```yaml
+   audiences:
+     - sts.amazonaws.com
+     - https://api.company.com
+     - https://vault.company.com
+   ```
+
+3. **Internal Services**: For internal service-to-service authentication
+   ```yaml
+   audiences:
+     - internal.company.com
+     - microservice.company.internal
+   ```
+
+### GitHub Actions Integration
+
+When using multiple audiences, GitHub Actions workflows can request tokens for specific audiences:
+
+```javascript
+const core = require('@actions/core');
+
+// Request token for AWS STS
+const awsToken = await core.getIDToken('sts.amazonaws.com');
+
+// Request token for custom API
+const apiToken = await core.getIDToken('https://api.mycompany.com');
+```
+
+The AWS OIDC Warden will validate tokens against any of the configured audiences. If the token's audience matches any of the expected audiences, validation succeeds.
 
 ## Configuration File Format
 
