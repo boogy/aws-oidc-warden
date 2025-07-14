@@ -5,12 +5,22 @@ import (
 	"github.com/boogy/aws-oidc-warden/pkg/handler"
 )
 
-func main() {
-	// Initialize all components using bootstrap
-	bootstrap, err := handler.NewBootstrap()
+var bootstrap *handler.Bootstrap
+
+func init() {
+	var err error
+	bootstrap, err = handler.NewBootstrap()
 	if err != nil {
 		panic(err)
 	}
+}
+
+func main() {
+	// Initialize all components using bootstrap
+	// bootstrap, err := handler.NewBootstrap()
+	// if err != nil {
+	// 	panic(err)
+	// }
 
 	// Ensure cleanup happens when the function exits
 	defer bootstrap.Cleanup()
