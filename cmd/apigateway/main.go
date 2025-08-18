@@ -16,12 +16,6 @@ func init() {
 }
 
 func main() {
-	// Initialize all components using bootstrap
-	// bootstrap, err := handler.NewBootstrap()
-	// if err != nil {
-	// 	panic(err)
-	// }
-
 	// Ensure cleanup happens when the function exits
 	defer bootstrap.Cleanup()
 
