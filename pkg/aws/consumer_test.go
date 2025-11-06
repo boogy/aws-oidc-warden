@@ -199,7 +199,7 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		// For the first call (with claims), verify tags are present
 		if *input.RoleArn == testRoleArn && *input.RoleSessionName == testSessionName {
 			// If this is a call with claims, we expect tags
-			if input.Tags != nil && len(input.Tags) > 0 {
+			if len(input.Tags) > 0 {
 				// Verify at least some key tags are present
 				tagMap := make(map[string]string)
 				for _, tag := range input.Tags {
