@@ -441,33 +441,33 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 	defer func() {
 		for env, val := range originalEnvVars {
 			if val == "" {
-				os.Unsetenv(env)
+				_ = os.Unsetenv(env)
 			} else {
-				os.Setenv(env, val)
+				_ = os.Setenv(env, val)
 			}
 		}
 	}()
 
 	// Set env vars for testing
-	os.Setenv("AOW_ISSUER", "https://env.test.issuer.com")
-	os.Setenv("AOW_AUDIENCE", "env-test-audience")
-	os.Setenv("AOW_ROLE_SESSION_NAME", "env-test-session")
-	os.Setenv("AOW_S3_CONFIG_BUCKET", "env-config-bucket")
-	os.Setenv("AOW_S3_CONFIG_PATH", "env-config/path.yml")
-	os.Setenv("AOW_SESSION_POLICY_BUCKET", "env-policy-bucket")
-	os.Setenv("AOW_CACHE_TYPE", "dynamodb")
-	os.Setenv("AOW_CACHE_TTL", "2h")
-	os.Setenv("AOW_CACHE_MAX_LOCAL_SIZE", "20")
-	os.Setenv("AOW_CACHE_DYNAMODB_TABLE", "env-dynamo-table")
-	os.Setenv("AOW_CACHE_S3_BUCKET", "env-cache-bucket")
-	os.Setenv("AOW_CACHE_S3_PREFIX", "env-cache/")
-	os.Setenv("AOW_CACHE_S3_CLEANUP", "true")
-	os.Setenv("AOW_LOG_TO_S3", "true")
-	os.Setenv("AOW_LOG_BUCKET", "env-log-bucket")
-	os.Setenv("AOW_LOG_PREFIX", "env-logs/")
+	_ = os.Setenv("AOW_ISSUER", "https://env.test.issuer.com")
+	_ = os.Setenv("AOW_AUDIENCE", "env-test-audience")
+	_ = os.Setenv("AOW_ROLE_SESSION_NAME", "env-test-session")
+	_ = os.Setenv("AOW_S3_CONFIG_BUCKET", "env-config-bucket")
+	_ = os.Setenv("AOW_S3_CONFIG_PATH", "env-config/path.yml")
+	_ = os.Setenv("AOW_SESSION_POLICY_BUCKET", "env-policy-bucket")
+	_ = os.Setenv("AOW_CACHE_TYPE", "dynamodb")
+	_ = os.Setenv("AOW_CACHE_TTL", "2h")
+	_ = os.Setenv("AOW_CACHE_MAX_LOCAL_SIZE", "20")
+	_ = os.Setenv("AOW_CACHE_DYNAMODB_TABLE", "env-dynamo-table")
+	_ = os.Setenv("AOW_CACHE_S3_BUCKET", "env-cache-bucket")
+	_ = os.Setenv("AOW_CACHE_S3_PREFIX", "env-cache/")
+	_ = os.Setenv("AOW_CACHE_S3_CLEANUP", "true")
+	_ = os.Setenv("AOW_LOG_TO_S3", "true")
+	_ = os.Setenv("AOW_LOG_BUCKET", "env-log-bucket")
+	_ = os.Setenv("AOW_LOG_PREFIX", "env-logs/")
 
 	// Point to a non-existent config file to ensure we use env vars
-	os.Setenv("CONFIG_NAME", "nonexistent-config-file")
+	_ = os.Setenv("CONFIG_NAME", "nonexistent-config-file")
 
 	// Load config
 	cfg, err := NewConfig()

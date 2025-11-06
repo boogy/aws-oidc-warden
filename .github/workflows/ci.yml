@@ -109,7 +109,7 @@ jobs:
         continue-on-error: true
 
       - name: Run gosec security scanner
-        uses: securego/gosec@e64d7b3d96b27c213ae7c1d8cfdd4a1fb3e0cca0 # v2.26.0
+        uses: securego/gosec@6be2b51fd78feca86af91f5186b7964d76cb1256 # v2.22.10
         with:
           args: -fmt sarif -out gosec-results.sarif ./...
         continue-on-error: true
