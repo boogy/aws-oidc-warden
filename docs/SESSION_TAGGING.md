@@ -22,7 +22,9 @@ The following session tags are automatically applied when assuming a role:
 ## Security Benefits
 
 ### 1. Enhanced Audit Trail
+
 Session tags provide detailed information about the source of AWS API calls:
+
 ```json
 {
   "awsRegion": "us-east-1",
@@ -47,6 +49,7 @@ Session tags provide detailed information about the source of AWS API calls:
 ```
 
 ### 2. IAM Policy Conditions
+
 You can use session tags in IAM policies to restrict access based on GitHub context:
 
 ```json
@@ -81,7 +84,9 @@ You can use session tags in IAM policies to restrict access based on GitHub cont
 ```
 
 ### 3. Cost Allocation
+
 Session tags can be used for cost allocation and billing:
+
 - Track costs by repository or organization
 - Allocate infrastructure costs to specific projects
 - Monitor resource usage patterns by workflow type
@@ -102,25 +107,25 @@ jobs:
       contents: read
 
     steps:
-    - name: Get AWS credentials
-      run: |
-        # Request credentials from AWS OIDC Warden
-        RESPONSE=$(curl -X POST https://your-warden-endpoint.com/assume-role \
-          -H "Content-Type: application/json" \
-          -d '{
-            "token": "'${{ github.token }}'",
-            "role": "arn:aws:iam::123456789012:role/GitHubActionsRole"
-          }')
+      - name: Get AWS credentials
+        run: |
+          # Request credentials from AWS OIDC Warden
+          RESPONSE=$(curl -X POST https://your-warden-endpoint.com/assume-role \
+            -H "Content-Type: application/json" \
+            -d '{
+              "token": "'${{ github.token }}'",
+              "role": "arn:aws:iam::123456789012:role/GitHubActionsRole"
+            }')
 
-        # Extract credentials and set as environment variables
-        export AWS_ACCESS_KEY_ID=$(echo $RESPONSE | jq -r '.credentials.AccessKeyId')
-        export AWS_SECRET_ACCESS_KEY=$(echo $RESPONSE | jq -r '.credentials.SecretAccessKey')
-        export AWS_SESSION_TOKEN=$(echo $RESPONSE | jq -r '.credentials.SessionToken')
+          # Extract credentials and set as environment variables
+          export AWS_ACCESS_KEY_ID=$(echo $RESPONSE | jq -r '.credentials.AccessKeyId')
+          export AWS_SECRET_ACCESS_KEY=$(echo $RESPONSE | jq -r '.credentials.SecretAccessKey')
+          export AWS_SESSION_TOKEN=$(echo $RESPONSE | jq -r '.credentials.SessionToken')
 
-    - name: Deploy application
-      run: |
-        # Your deployment commands here
-        aws s3 sync ./dist s3://my-app-bucket/
+      - name: Deploy application
+        run: |
+          # Your deployment commands here
+          aws s3 sync ./dist s3://my-app-bucket/
 ```
 
 ## CloudTrail Log Example
@@ -175,7 +180,9 @@ When the above workflow runs, CloudTrail will show detailed session information:
 You can create CloudWatch alarms and alerts based on session tags:
 
 ### Unusual Repository Access
+
 Alert when an unexpected repository tries to access your AWS resources:
+
 ```sql
 SELECT *
 FROM cloudtrail_logs
@@ -186,7 +193,9 @@ WHERE userIdentity.sessionContext.sessionIssuer.tags.repo NOT IN ('repo1', 'repo
 ```
 
 ### Production Access from Non-Main Branch
+
 Alert when production resources are accessed from non-main branches:
+
 ```sql
 SELECT *
 FROM cloudtrail_logs

@@ -62,9 +62,11 @@ graph TB
 The AWS OIDC Warden supports multiple deployment patterns to accommodate different architectural needs:
 
 #### API Gateway + Lambda
-```
+
+```bash
 GitHub Actions → API Gateway → AWS OIDC Warden (Lambda Function Proxy)
 ```
+
 - **Use Case**: Traditional REST API with full API Gateway features
 - **Benefits**: Rate limiting, request transformation, API keys, usage plans
 - **Handler**: `pkg/handler/apigateway.go`

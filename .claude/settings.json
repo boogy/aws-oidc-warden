@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [[ \"$CLAUDE_FILE_PATHS\" =~ \\.go$ ]] && ! [[ \"$CLAUDE_FILE_PATHS\" =~ _test\\.go$ ]]; then gofmt -w \"$CLAUDE_FILE_PATHS\" 2>/dev/null || true; fi"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [[ \"$CLAUDE_TOOL_INPUT\" =~ 'rm -rf /' ]] || [[ \"$CLAUDE_TOOL_INPUT\" =~ 'git push.*--force.*main' ]] || [[ \"$CLAUDE_TOOL_INPUT\" =~ 'git push.*-f.*main' ]]; then echo 'BLOCKED: Dangerous command detected' && exit 2; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
