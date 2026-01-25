@@ -96,11 +96,13 @@ export AOW_AUDIENCES=sts.amazonaws.com,https://api.mycompany.com,internal.mycomp
 ### Use Cases
 
 1. **AWS STS Only**: For standard GitHub Actions to AWS integration
+
    ```yaml
    audiences: ["sts.amazonaws.com"]
    ```
 
 2. **Multiple APIs**: When tokens need to work with various services
+
    ```yaml
    audiences:
      - sts.amazonaws.com
@@ -120,13 +122,13 @@ export AOW_AUDIENCES=sts.amazonaws.com,https://api.mycompany.com,internal.mycomp
 When using multiple audiences, GitHub Actions workflows can request tokens for specific audiences:
 
 ```javascript
-const core = require('@actions/core');
+const core = require("@actions/core");
 
 // Request token for AWS STS
-const awsToken = await core.getIDToken('sts.amazonaws.com');
+const awsToken = await core.getIDToken("sts.amazonaws.com");
 
 // Request token for custom API
-const apiToken = await core.getIDToken('https://api.mycompany.com');
+const apiToken = await core.getIDToken("https://api.mycompany.com");
 ```
 
 The AWS OIDC Warden will validate tokens against any of the configured audiences. If the token's audience matches any of the expected audiences, validation succeeds.
