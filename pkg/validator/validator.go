@@ -80,7 +80,7 @@ func (t *TokenValidator) Validate(token string) (*types.GithubClaims, error) {
 	cfg := t.activeConfig()
 	claims, err := t.ParseToken(token)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 
 	if claims.Issuer != cfg.Issuer {
@@ -125,7 +125,7 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 	cfg := t.activeConfig()
 	jwks, err := t.FetchJWKS(cfg.Issuer)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 
 	if jwks == nil || len(jwks.Keys) == 0 {
@@ -159,7 +159,7 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 	if err != nil && errors.Is(err, ErrKeyNotFound) {
 		slog.Info("Signing key not found in cached JWKS; refetching", slog.String("issuer", cfg.Issuer))
 		if jwks, err = t.fetchJWKS(cfg.Issuer, true); err != nil {
-			return nil, fmt.Errorf("%w", err)
+			return nil, err
 		}
 		if jwks == nil || len(jwks.Keys) == 0 {
 			return nil, errors.New("jwks is nil")
