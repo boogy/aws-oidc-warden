@@ -222,9 +222,17 @@ func reapplyEnvOverrides(c *Config) {
 		}
 	}
 
-	// AOW_AUDIENCES — comma-separated list overrides the slice.
+	// AOW_AUDIENCES — comma-separated list overrides the slice. Elements are
+	// trimmed of whitespace so "a , b" and "a,b" are equivalent.
 	if v := os.Getenv("AOW_AUDIENCES"); v != "" {
-		c.Audiences = strings.Split(v, ",")
+		parts := strings.Split(v, ",")
+		audiences := parts[:0]
+		for _, p := range parts {
+			if s := strings.TrimSpace(p); s != "" {
+				audiences = append(audiences, s)
+			}
+		}
+		c.Audiences = audiences
 	}
 
 	if v := os.Getenv("AOW_LOG_TO_S3"); v != "" {

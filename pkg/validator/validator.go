@@ -26,7 +26,12 @@ import (
 var ErrKeyNotFound = errors.New("key not found")
 
 type TokenValidatorInterface interface {
+	// Validate verifies signature, issuer, expiration AND audience/repository claims.
+	// Always use Validate for end-to-end token authentication.
 	Validate(string) (*types.GithubClaims, error)
+	// ParseToken verifies signature, issuer, and expiration only.
+	// It does NOT check audience or repository — callers must not rely on it
+	// for complete authentication; use Validate instead.
 	ParseToken(tokenString string) (*types.GithubClaims, error)
 	FetchJWKS(issuer string) (*types.JWKS, error)
 	GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc

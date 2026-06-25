@@ -190,15 +190,23 @@ func TestFetchJWKS_RejectsInsecureIssuer(t *testing.T) {
 }
 
 // ecJwkFromKey builds a JWKS JSON web key for an ECDSA public key (P-256).
+// Uses ECDH() to extract X/Y coordinates without the deprecated big.Int fields.
 func ecJwkFromKey(kid string, pub *ecdsa.PublicKey) types.JSONWebKey {
+	ecdhKey, err := pub.ECDH()
+	if err != nil {
+		panic(fmt.Sprintf("ecJwkFromKey: %v", err))
+	}
+	// Uncompressed form: 0x04 || X || Y, each coordinate coordLen bytes.
+	raw := ecdhKey.Bytes()
+	coordLen := (len(raw) - 1) / 2
 	return types.JSONWebKey{
 		KeyID:     kid,
 		KeyType:   "EC",
 		Algorithm: "ES256",
 		Use:       "sig",
 		Crv:       "P-256",
-		X:         base64.RawURLEncoding.EncodeToString(pub.X.Bytes()),
-		Y:         base64.RawURLEncoding.EncodeToString(pub.Y.Bytes()),
+		X:         base64.RawURLEncoding.EncodeToString(raw[1 : 1+coordLen]),
+		Y:         base64.RawURLEncoding.EncodeToString(raw[1+coordLen:]),
 	}
 }
 

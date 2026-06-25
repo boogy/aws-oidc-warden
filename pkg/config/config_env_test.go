@@ -64,6 +64,22 @@ func TestMergeBytes_EnvAudiencesWinsOverS3(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, c.Audiences, "AOW_AUDIENCES must take precedence over S3 value")
 }
 
+func TestMergeBytes_EnvAudiencesTrimsWhitespace(t *testing.T) {
+	t.Setenv("AOW_AUDIENCES", " a , b , ")
+
+	c := &Config{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		Audiences:       []string{"sts.amazonaws.com"},
+		RoleSessionName: "base-session",
+		Cache:           &Cache{Type: "memory", TTL: 3600000000000},
+	}
+	require.NoError(t, c.Validate())
+
+	require.NoError(t, c.MergeBytes([]byte(`audiences: [c]`), "yaml"))
+
+	assert.Equal(t, []string{"a", "b"}, c.Audiences, "AOW_AUDIENCES elements must be whitespace-trimmed")
+}
+
 func TestMergeBytes_EnvCacheTTLWinsOverS3(t *testing.T) {
 	t.Setenv("AOW_CACHE_TTL", "10m")
 
