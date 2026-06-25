@@ -18,15 +18,15 @@ import (
 
 // RequestProcessor contains the core business logic for processing authentication requests
 type RequestProcessor struct {
-	config    *config.Config
+	provider  *config.Provider
 	consumer  aws.AwsConsumerInterface
 	validator validator.TokenValidatorInterface
 }
 
 // NewRequestProcessor creates a new instance of request processor
-func NewRequestProcessor(cfg *config.Config, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *RequestProcessor {
+func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *RequestProcessor {
 	return &RequestProcessor{
-		config:    cfg,
+		provider:  provider,
 		consumer:  consumer,
 		validator: validator,
 	}
@@ -35,6 +35,11 @@ func NewRequestProcessor(cfg *config.Config, consumer aws.AwsConsumerInterface, 
 // ProcessRequest contains the main business logic for processing requests
 func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, requestID string, log *slog.Logger) (*types.Credentials, error) {
 	startTime, _ := ctx.Value(StartTimeContextKey).(time.Time)
+
+	// Pick up any hot-reloaded configuration (no-op unless reload is enabled),
+	// then use a single config snapshot for the whole request.
+	r.provider.MaybeRefresh(ctx)
+	cfg := r.provider.Get()
 
 	// Create a redacted token for logging (first 10 chars and last 10 chars)
 	redactedToken := utils.RedactToken(requestData.Token, 10, 10)
@@ -47,7 +52,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 			slog.String("error", err.Error()),
 			slog.String("token", redactedToken),
 		)
-		return nil, fmt.Errorf("token validation failed: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
 	}
 
 	// Repository from github claims and role from request data
@@ -78,7 +83,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	)
 
 	// Match role to repository with constraints
-	matched, roles := r.config.MatchRolesToRepoWithConstraints(claims.Repository, claimsMap)
+	matched, roles := cfg.MatchRolesToRepoWithConstraints(claims.Repository, claimsMap)
 
 	// If no match or requested role not in allowed roles
 	if !matched || (len(roles) > 0 && !slices.Contains(roles, requestedRole)) {
@@ -93,7 +98,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// Attempting to get session policy
-	sessionPolicy, err := r.getSessionPolicy(claims.Repository)
+	sessionPolicy, err := r.getSessionPolicy(cfg, claims.Repository)
 	if err != nil {
 		log.Error("Failed to read session policy", slog.String("error", err.Error()))
 		return nil, err
@@ -105,7 +110,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		slog.Bool("hasSessionPolicy", sessionPolicy != nil))
 
 	// Assume role
-	credentials, err := r.consumer.AssumeRole(requestedRole, r.config.RoleSessionName, sessionPolicy, nil, claims)
+	credentials, err := r.consumer.AssumeRole(requestedRole, cfg.RoleSessionName, sessionPolicy, nil, claims)
 	if err != nil {
 		log.Error("Failed to assume role",
 			slog.String("error", err.Error()),
@@ -124,7 +129,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 }
 
 // getSessionPolicy retrieves the session policy for a given repository (config inline or S3 file)
-func (r *RequestProcessor) getSessionPolicy(repository string) (*string, error) {
+func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, repository string) (*string, error) {
 	// Start measuring time for this operation
 	opStart := time.Now()
 	defer func() {
@@ -134,14 +139,14 @@ func (r *RequestProcessor) getSessionPolicy(repository string) (*string, error) 
 	}()
 
 	var sessionPolicyString *string
-	sessionPolicy, sessionPolicyFile := r.config.FindSessionPolicyForRepo(repository)
+	sessionPolicy, sessionPolicyFile := cfg.FindSessionPolicyForRepo(repository)
 
 	// Try to get policy from S3 file if specified
 	if sessionPolicyFile != nil {
-		sessionPolicyData, err := r.consumer.GetS3Object(r.config.S3SessionPolicyBucket, *sessionPolicyFile)
+		sessionPolicyData, err := r.consumer.GetS3Object(cfg.S3SessionPolicyBucket, *sessionPolicyFile)
 		if err != nil {
 			slog.Error("Failed to read session policy file",
-				slog.String("bucket", r.config.S3SessionPolicyBucket),
+				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
 			return nil, fmt.Errorf("failed to read session policy file: %w", ErrSessionPolicyAccess)
@@ -158,7 +163,7 @@ func (r *RequestProcessor) getSessionPolicy(repository string) (*string, error) 
 		policyBytes, err := io.ReadAll(io.LimitReader(sessionPolicyData, 1024*1024)) // 1MB limit
 		if err != nil {
 			slog.Error("Failed to read session policy data",
-				slog.String("bucket", r.config.S3SessionPolicyBucket),
+				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
 			return nil, fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
@@ -168,7 +173,7 @@ func (r *RequestProcessor) getSessionPolicy(repository string) (*string, error) 
 		var jsonCheck any
 		if err := json.Unmarshal(policyBytes, &jsonCheck); err != nil {
 			slog.Error("Invalid JSON in session policy file",
-				slog.String("bucket", r.config.S3SessionPolicyBucket),
+				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
 			return nil, fmt.Errorf("invalid JSON in session policy file: %w", ErrSessionPolicyAccess)
@@ -180,7 +185,7 @@ func (r *RequestProcessor) getSessionPolicy(repository string) (*string, error) 
 
 		slog.Debug("Session policy loaded from S3",
 			slog.String("repository", repository),
-			slog.String("bucket", r.config.S3SessionPolicyBucket),
+			slog.String("bucket", cfg.S3SessionPolicyBucket),
 			slog.String("key", *sessionPolicyFile),
 			slog.Int("policySize", len(policy)))
 	}
