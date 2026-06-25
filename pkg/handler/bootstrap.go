@@ -62,10 +62,7 @@ func NewBootstrap() (*Bootstrap, error) {
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
-	// Initialize S3 logger
-	s3log := s3logger.NewS3Logger(cfg)
-
-	// Initialize AWS consumer
+	// Initialize AWS consumer (needed by buildConfigProvider)
 	consumer := aws.NewAwsConsumer(cfg)
 
 	// Build the configuration provider. When an S3 config source is set, the
@@ -76,6 +73,10 @@ func NewBootstrap() (*Bootstrap, error) {
 		logger.Error("Failed to load remote configuration", slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to load remote configuration: %w", err)
 	}
+
+	// Initialize S3Logger from the resolved config so log_bucket/log_prefix
+	// overrides in the S3 config are honored.
+	s3log := s3logger.NewS3Logger(provider.Get())
 
 	// Initialize token validator from the provider so hot-reloaded issuer/audience
 	// changes take effect immediately without a Lambda restart.
