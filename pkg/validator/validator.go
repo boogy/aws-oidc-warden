@@ -169,7 +169,7 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("token validation failed: %w", err)
+		return nil, fmt.Errorf("jwt parse error: %w", err)
 	}
 
 	if !token.Valid {

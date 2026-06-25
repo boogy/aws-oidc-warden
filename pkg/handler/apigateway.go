@@ -124,6 +124,10 @@ func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode 
 		errCode = "invalid_request"
 		errMsg = "Invalid request parameters"
 		statusCode = http.StatusBadRequest
+	case errors.Is(err, ErrTokenValidationFailed):
+		errCode = "token_invalid"
+		errMsg = "Token validation failed"
+		statusCode = http.StatusUnauthorized
 	case errors.Is(err, ErrRoleNotPermitted):
 		errCode = "permission_denied"
 		errMsg = "Permission denied for the requested operation"
