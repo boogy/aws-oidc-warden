@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -219,12 +221,61 @@ func reapplyEnvOverrides(c *Config) {
 			*f.ptr = v
 		}
 	}
+
+	// AOW_AUDIENCES — comma-separated list overrides the slice.
+	if v := os.Getenv("AOW_AUDIENCES"); v != "" {
+		c.Audiences = strings.Split(v, ",")
+	}
+
 	if v := os.Getenv("AOW_LOG_TO_S3"); v != "" {
 		c.LogToS3 = v == "true" || v == "1" || v == "True" || v == "TRUE"
 	}
+
 	if v := os.Getenv("AOW_CONFIG_RELOAD_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_CONFIG_RELOAD_INTERVAL", "value", v, "error", err)
+		} else {
 			c.ConfigReloadInterval = d
+		}
+	}
+
+	// Cache env overrides — ensure Cache is non-nil before writing.
+	if c.Cache == nil {
+		c.Cache = &Cache{}
+	}
+
+	for _, f := range []strField{
+		{"AOW_CACHE_TYPE", &c.Cache.Type},
+		{"AOW_CACHE_DYNAMODB_TABLE", &c.Cache.DynamoDBTable},
+		{"AOW_CACHE_S3_BUCKET", &c.Cache.S3Bucket},
+		{"AOW_CACHE_S3_PREFIX", &c.Cache.S3Prefix},
+	} {
+		if v := os.Getenv(f.env); v != "" {
+			*f.ptr = v
+		}
+	}
+
+	if v := os.Getenv("AOW_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_TTL", "value", v, "error", err)
+		} else {
+			c.Cache.TTL = d
+		}
+	}
+
+	if v := os.Getenv("AOW_CACHE_MAX_LOCAL_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_MAX_LOCAL_SIZE", "value", v, "error", err)
+		} else {
+			c.Cache.MaxLocalSize = n
+		}
+	}
+
+	if v := os.Getenv("AOW_CACHE_S3_CLEANUP"); v != "" {
+		if b, err := strconv.ParseBool(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_S3_CLEANUP", "value", v, "error", err)
+		} else {
+			c.Cache.S3Cleanup = b
 		}
 	}
 }
