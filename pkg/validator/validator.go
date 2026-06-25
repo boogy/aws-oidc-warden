@@ -34,11 +34,12 @@ type TokenValidatorInterface interface {
 
 type TokenValidator struct {
 	Token             string
-	ExpectedIssuer    string
-	ExpectedAudience  string   // Deprecated: use ExpectedAudiences instead (kept for backward compatibility)
-	ExpectedAudiences []string // List of expected audiences
+	ExpectedIssuer    string   // Deprecated: read from provider when set
+	ExpectedAudience  string   // Deprecated: kept for backward compatibility
+	ExpectedAudiences []string // Deprecated: read from provider when set
 	Cache             cache.Cache
-	Cfg               *config.Config
+	Cfg               *config.Config   // used when provider is nil (tests, static)
+	provider          *config.Provider // when set, activeConfig() reads from here
 }
 
 func NewTokenValidator(cfg *config.Config, cache cache.Cache) *TokenValidator {
@@ -51,20 +52,45 @@ func NewTokenValidator(cfg *config.Config, cache cache.Cache) *TokenValidator {
 	}
 }
 
+// NewTokenValidatorFromProvider creates a validator that reads issuer and
+// audiences from the provider on every Validate call, so hot-reloaded config
+// changes take effect immediately without a restart.
+func NewTokenValidatorFromProvider(provider *config.Provider, jwksCache cache.Cache) *TokenValidator {
+	cfg := provider.Get()
+	return &TokenValidator{
+		ExpectedIssuer:    cfg.Issuer,
+		ExpectedAudience:  cfg.Audience,
+		ExpectedAudiences: cfg.Audiences,
+		Cache:             jwksCache,
+		Cfg:               cfg,
+		provider:          provider,
+	}
+}
+
+// activeConfig returns the current effective config: live from the provider
+// when available, otherwise the static Cfg set at construction.
+func (t *TokenValidator) activeConfig() *config.Config {
+	if t.provider != nil {
+		return t.provider.Get()
+	}
+	return t.Cfg
+}
+
 func (t *TokenValidator) Validate(token string) (*types.GithubClaims, error) {
+	cfg := t.activeConfig()
 	claims, err := t.ParseToken(token)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
 
-	if claims.Issuer != t.ExpectedIssuer {
-		return nil, fmt.Errorf("issuer %s expected", t.ExpectedIssuer)
+	if claims.Issuer != cfg.Issuer {
+		return nil, fmt.Errorf("issuer %s expected", cfg.Issuer)
 	}
 
 	// Check if any of the token's audiences match any of the expected audiences
 	var validAudience bool
 	for _, tokenAudience := range claims.Audience {
-		for _, expectedAudience := range t.ExpectedAudiences {
+		for _, expectedAudience := range cfg.Audiences {
 			if tokenAudience == expectedAudience {
 				validAudience = true
 				break
@@ -76,7 +102,7 @@ func (t *TokenValidator) Validate(token string) (*types.GithubClaims, error) {
 	}
 
 	if !validAudience {
-		return nil, fmt.Errorf("audience must be one of %v, got %v", t.ExpectedAudiences, claims.Audience)
+		return nil, fmt.Errorf("audience must be one of %v, got %v", cfg.Audiences, claims.Audience)
 	}
 
 	if claims.Repository == "" {
@@ -96,9 +122,10 @@ func (t *TokenValidator) Unmarshal(data []byte) (*types.GithubClaims, error) {
 }
 
 func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, error) {
-	jwks, err := t.FetchJWKS(t.ExpectedIssuer)
+	cfg := t.activeConfig()
+	jwks, err := t.FetchJWKS(cfg.Issuer)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w", err)
 	}
 
 	if jwks == nil || len(jwks.Keys) == 0 {
@@ -111,7 +138,7 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 	// matches a single expected value, which silently breaks multi-audience
 	// support. The full multi-audience check is done in Validate().
 	parser := jwt.NewParser(
-		jwt.WithIssuer(t.ExpectedIssuer),
+		jwt.WithIssuer(cfg.Issuer),
 		jwt.WithIssuedAt(),
 		jwt.WithExpirationRequired(),
 		jwt.WithValidMethods([]string{
@@ -130,9 +157,9 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 	// If the signing key was not found, the issuer may have rotated its keys.
 	// Force a single cache-bypassing JWKS refetch and retry once.
 	if err != nil && errors.Is(err, ErrKeyNotFound) {
-		slog.Info("Signing key not found in cached JWKS; refetching", slog.String("issuer", t.ExpectedIssuer))
-		if jwks, err = t.fetchJWKS(t.ExpectedIssuer, true); err != nil {
-			return nil, err
+		slog.Info("Signing key not found in cached JWKS; refetching", slog.String("issuer", cfg.Issuer))
+		if jwks, err = t.fetchJWKS(cfg.Issuer, true); err != nil {
+			return nil, fmt.Errorf("%w", err)
 		}
 		if jwks == nil || len(jwks.Keys) == 0 {
 			return nil, errors.New("jwks is nil")
@@ -232,7 +259,7 @@ func (t *TokenValidator) fetchJWKS(issuer string, force bool) (*types.JWKS, erro
 	}
 
 	// Cache the JWKS with TTL
-	t.Cache.Set(issuer, &jwks, time.Duration(t.Cfg.Cache.TTL))
+	t.Cache.Set(issuer, &jwks, time.Duration(t.activeConfig().Cache.TTL))
 
 	return &jwks, nil
 }

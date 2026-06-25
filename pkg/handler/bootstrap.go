@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 // Bootstrap contains all the initialized components needed by handlers
 type Bootstrap struct {
 	Config    *config.Config
+	Provider  *config.Provider
 	Consumer  aws.AwsConsumerInterface
 	Validator validator.TokenValidatorInterface
 	Cache     cache.Cache
@@ -66,19 +68,22 @@ func NewBootstrap() (*Bootstrap, error) {
 	// Initialize AWS consumer
 	consumer := aws.NewAwsConsumer(cfg)
 
-	// Read S3 configuration if provided
-	if cfg.S3ConfigBucket != "" && cfg.S3ConfigPath != "" {
-		if err := consumer.ReadS3Configuration(); err != nil {
-			logger.Error("Failed to read S3 configuration", slog.String("error", err.Error()))
-			return nil, fmt.Errorf("failed to read S3 configuration: %w", err)
-		}
+	// Build the configuration provider. When an S3 config source is set, the
+	// provider fetches+overlays it (optionally hot-reloading on an interval);
+	// otherwise it statically serves the local config.
+	provider, err := buildConfigProvider(cfg, consumer)
+	if err != nil {
+		logger.Error("Failed to load remote configuration", slog.String("error", err.Error()))
+		return nil, fmt.Errorf("failed to load remote configuration: %w", err)
 	}
 
-	// Initialize token validator
-	tokenValidator := validator.NewTokenValidator(cfg, jwksCache)
+	// Initialize token validator from the provider so hot-reloaded issuer/audience
+	// changes take effect immediately without a Lambda restart.
+	tokenValidator := validator.NewTokenValidatorFromProvider(provider, jwksCache)
 
 	return &Bootstrap{
 		Config:    cfg,
+		Provider:  provider,
 		Consumer:  consumer,
 		Validator: tokenValidator,
 		Cache:     jwksCache,
@@ -87,6 +92,49 @@ func NewBootstrap() (*Bootstrap, error) {
 		LogBuffer: logBuffer,
 	}, nil
 }
+
+// buildConfigProvider wires the config provider. With an S3 config source it
+// performs an initial fetch+overlay (failing fast on error) and enables
+// per-request lazy hot-reload when ConfigReloadInterval > 0. Without a source it
+// returns a static provider serving the local config.
+func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
+	if cfg.S3ConfigBucket == "" || cfg.S3ConfigPath == "" {
+		return config.NewStaticProvider(cfg), nil
+	}
+
+	bucket, key := cfg.S3ConfigBucket, cfg.S3ConfigPath
+	fetch := func(ctx context.Context) ([]byte, error) {
+		body, err := consumer.GetS3Object(bucket, key)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if cerr := body.Close(); cerr != nil {
+				slog.Error("Failed to close S3 configuration object", slog.String("error", cerr.Error()))
+			}
+		}()
+		return io.ReadAll(io.LimitReader(body, maxRemoteConfigSize))
+	}
+
+	provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, config.FormatFromPath(key), fetch)
+
+	// Initial load: fail fast if the S3 config can't be fetched/parsed.
+	if err := provider.Refresh(context.Background()); err != nil {
+		return nil, err
+	}
+
+	if cfg.ConfigReloadInterval > 0 {
+		slog.Info("Configuration hot-reload enabled",
+			slog.Duration("interval", cfg.ConfigReloadInterval),
+			slog.String("bucket", bucket),
+			slog.String("key", key))
+	}
+
+	return provider, nil
+}
+
+// maxRemoteConfigSize bounds the bytes read from the S3 config object.
+const maxRemoteConfigSize = 1024 * 1024 // 1MB
 
 // Cleanup handles cleanup operations for the bootstrap components
 func (b *Bootstrap) Cleanup() {
@@ -131,15 +179,15 @@ func initializeLogger() (*bytes.Buffer, *slog.Logger, error) {
 
 // NewAwsApiGatewayFromBootstrap creates a new API Gateway handler using bootstrap
 func NewAwsApiGatewayFromBootstrap(bootstrap *Bootstrap) *AwsApiGateway {
-	return NewAwsApiGateway(bootstrap.Config, bootstrap.Consumer, bootstrap.Validator)
+	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Validator)
 }
 
 // NewAwsLambdaUrlFromBootstrap creates a new Lambda URL handler using bootstrap
 func NewAwsLambdaUrlFromBootstrap(bootstrap *Bootstrap) *AwsLambdaUrl {
-	return NewAwsLambdaUrl(bootstrap.Config, bootstrap.Consumer, bootstrap.Validator)
+	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Validator)
 }
 
 // NewAwsApplicationLoadBalancerFromBootstrap creates a new ALB handler using bootstrap
 func NewAwsApplicationLoadBalancerFromBootstrap(bootstrap *Bootstrap) *AwsApplicationLoadBalancer {
-	return NewAwsApplicationLoadBalancer(bootstrap.Config, bootstrap.Consumer, bootstrap.Validator)
+	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Validator)
 }
