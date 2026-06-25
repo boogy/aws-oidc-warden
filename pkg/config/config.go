@@ -29,66 +29,66 @@ var (
 
 // Constraint defines conditions that must be met for a role to be assumed
 type Constraint struct {
-	Branch       string   `mapstructure:"branch"`        // Branch name (e.g., "main", "dev")
-	Ref          string   `mapstructure:"ref"`           // Git reference (e.g., "refs/heads/main", "refs/tags/v.*")
-	RefType      string   `mapstructure:"ref_type"`      // Reference type (e.g., "branch", "tag")
-	EventName    string   `mapstructure:"event_name"`    // GitHub event name (e.g., "push", "pull_request")
-	WorkflowRef  string   `mapstructure:"workflow_ref"`  // Workflow reference (e.g., "owner/repo/.github/workflows/workflow.yml")
-	Environment  string   `mapstructure:"environment"`   // GitHub environment (e.g., "production")
-	ActorMatches []string `mapstructure:"actor_matches"` // GitHub actors allowed to assume the role
+	Branch       string   `mapstructure:"branch"        json:"branch,omitempty"`        // Branch name (e.g., "main", "dev")
+	Ref          string   `mapstructure:"ref"           json:"ref,omitempty"`           // Git reference (e.g., "refs/heads/main", "refs/tags/v.*")
+	RefType      string   `mapstructure:"ref_type"      json:"ref_type,omitempty"`      // Reference type (e.g., "branch", "tag")
+	EventName    string   `mapstructure:"event_name"    json:"event_name,omitempty"`    // GitHub event name (e.g., "push", "pull_request")
+	WorkflowRef  string   `mapstructure:"workflow_ref"  json:"workflow_ref,omitempty"`  // Workflow reference (e.g., "owner/repo/.github/workflows/workflow.yml")
+	Environment  string   `mapstructure:"environment"   json:"environment,omitempty"`   // GitHub environment (e.g., "production")
+	ActorMatches []string `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // GitHub actors allowed to assume the role
 
 	// Cached compiled patterns (not serialized)
-	branchPattern   *regexp.Regexp   `mapstructure:"-"`
-	refPattern      *regexp.Regexp   `mapstructure:"-"`
-	workflowPattern *regexp.Regexp   `mapstructure:"-"`
-	actorPatterns   []*regexp.Regexp `mapstructure:"-"`
+	branchPattern   *regexp.Regexp   `mapstructure:"-" json:"-"`
+	refPattern      *regexp.Regexp   `mapstructure:"-" json:"-"`
+	workflowPattern *regexp.Regexp   `mapstructure:"-" json:"-"`
+	actorPatterns   []*regexp.Regexp `mapstructure:"-" json:"-"`
 }
 
 type RepoRoleMapping struct {
-	Repo              string      `mapstructure:"repo"`                // Repository name (e.g., "owner/repo")
-	SessionPolicy     string      `mapstructure:"session_policy"`      // Inline session policy (JSON string)
-	SessionPolicyFile string      `mapstructure:"session_policy_file"` // S3 session policy file
-	Roles             []string    `mapstructure:"roles"`               // List of IAM roles that can be assume
-	Constraints       *Constraint `mapstructure:"constraints"`         // Constraints for role assumption
+	Repo              string      `mapstructure:"repo"                json:"repo"`                          // Repository name (e.g., "owner/repo")
+	SessionPolicy     string      `mapstructure:"session_policy"      json:"session_policy,omitempty"`      // Inline session policy (JSON string)
+	SessionPolicyFile string      `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"` // S3 session policy file
+	Roles             []string    `mapstructure:"roles"               json:"roles"`                         // List of IAM roles that can be assume
+	Constraints       *Constraint `mapstructure:"constraints"         json:"constraints,omitempty"`         // Constraints for role assumption
 
 	// Cached compiled pattern (not serialized)
-	compiledPattern *regexp.Regexp `mapstructure:"-"`
+	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
 }
 
 type Cache struct {
-	Type          string        `mapstructure:"type"`           // Cache type (e.g., "memory", "dynamodb")
-	TTL           time.Duration `mapstructure:"ttl"`            // Cache TTL duration (ex: "5m", "1h", "2h30", "24h", "1d", "1w")
-	MaxLocalSize  int           `mapstructure:"max_local_size"` // Maximum size of local cache (if using memory cache)
-	DynamoDBTable string        `mapstructure:"dynamodb_table"` // DynamoDB table name (if using DynamoDB cache)
-	S3Bucket      string        `mapstructure:"s3_bucket"`      // S3 bucket name (if using S3 cache)
-	S3Prefix      string        `mapstructure:"s3_prefix"`      // S3 prefix (if using S3 cache)
-	S3Cleanup     bool          `mapstructure:"s3_cleanup"`     // S3 cleanup flag (if using S3 cache). Will delete old objects in the bucket.
+	Type          string        `mapstructure:"type"           json:"type"`                     // Cache type (e.g., "memory", "dynamodb")
+	TTL           time.Duration `mapstructure:"ttl"            json:"ttl"`                      // Cache TTL duration (ex: "5m", "1h", "2h30", "24h", "1d", "1w")
+	MaxLocalSize  int           `mapstructure:"max_local_size" json:"max_local_size,omitempty"` // Maximum size of local cache (if using memory cache)
+	DynamoDBTable string        `mapstructure:"dynamodb_table" json:"dynamodb_table,omitempty"` // DynamoDB table name (if using DynamoDB cache)
+	S3Bucket      string        `mapstructure:"s3_bucket"      json:"s3_bucket,omitempty"`      // S3 bucket name (if using S3 cache)
+	S3Prefix      string        `mapstructure:"s3_prefix"      json:"s3_prefix,omitempty"`      // S3 prefix (if using S3 cache)
+	S3Cleanup     bool          `mapstructure:"s3_cleanup"     json:"s3_cleanup,omitempty"`     // S3 cleanup flag (if using S3 cache). Will delete old objects in the bucket.
 }
 
 type Config struct {
-	Issuer                string            `mapstructure:"issuer"`                // Issuer is the expected issuer of the JWT token
-	Audience              string            `mapstructure:"audience"`              // Audience is the expected audience of the JWT token (deprecated - use Audiences)
-	Audiences             []string          `mapstructure:"audiences"`             // Audiences is the list of expected audiences of the JWT token
-	S3ConfigBucket        string            `mapstructure:"s3_config_bucket"`      // S3ConfigBucket is the S3 bucket where the configuration file is stored
-	S3ConfigPath          string            `mapstructure:"s3_config_path"`        // S3ConfigPath is the path to the configuration file in the S3 bucket
-	S3SessionPolicyBucket string            `mapstructure:"session_policy_bucket"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
-	RoleSessionName       string            `mapstructure:"role_session_name"`     // RoleSessionName is the name of the role session
-	RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"`    // RepoRoleMappings is a list of repository to role mappings
+	Issuer                string            `mapstructure:"issuer"                json:"issuer"`                          // Issuer is the expected issuer of the JWT token
+	Audience              string            `mapstructure:"audience"              json:"audience,omitempty"`              // Audience is the expected audience of the JWT token (deprecated - use Audiences)
+	Audiences             []string          `mapstructure:"audiences"             json:"audiences,omitempty"`             // Audiences is the list of expected audiences of the JWT token
+	S3ConfigBucket        string            `mapstructure:"s3_config_bucket"      json:"s3_config_bucket,omitempty"`      // S3ConfigBucket is the S3 bucket where the configuration file is stored
+	S3ConfigPath          string            `mapstructure:"s3_config_path"        json:"s3_config_path,omitempty"`        // S3ConfigPath is the path to the configuration file in the S3 bucket
+	S3SessionPolicyBucket string            `mapstructure:"session_policy_bucket" json:"session_policy_bucket,omitempty"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
+	RoleSessionName       string            `mapstructure:"role_session_name"     json:"role_session_name"`               // RoleSessionName is the name of the role session
+	RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"    json:"repo_role_mappings,omitempty"`    // RepoRoleMappings is a list of repository to role mappings
 
 	// ConfigReloadInterval, when > 0, enables periodic hot-reload of the S3
 	// configuration (S3ConfigBucket/S3ConfigPath) without redeploying. The
 	// reload is lazy/per-request: the config is refetched at most once per
 	// interval. 0 (default) disables reloading. Requires an S3 config source.
-	ConfigReloadInterval time.Duration `mapstructure:"config_reload_interval"`
+	ConfigReloadInterval time.Duration `mapstructure:"config_reload_interval" json:"config_reload_interval,omitempty"`
 
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
-	LogToS3   bool   `mapstructure:"log_to_s3"`  // LogToS3 is a flag to enable logging to S3
-	LogBucket string `mapstructure:"log_bucket"` // LogBucket is the S3 bucket to log to
-	LogPrefix string `mapstructure:"log_prefix"` // LogKey is the S3 key to log to
-	Cache     *Cache `mapstructure:"cache"`      // CacheConfig is the cache configuration
+	LogToS3   bool   `mapstructure:"log_to_s3"  json:"log_to_s3,omitempty"`  // LogToS3 is a flag to enable logging to S3
+	LogBucket string `mapstructure:"log_bucket" json:"log_bucket,omitempty"` // LogBucket is the S3 bucket to log to
+	LogPrefix string `mapstructure:"log_prefix" json:"log_prefix,omitempty"` // LogKey is the S3 key to log to
+	Cache     *Cache `mapstructure:"cache"      json:"cache,omitempty"`      // CacheConfig is the cache configuration
 
 	// Performance optimization - not serialized
-	estimatedRolesPerRepo int `mapstructure:"-"` // Calculated during Validate for efficient memory allocation
+	estimatedRolesPerRepo int `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
 }
 
 // NewConfig initializes and returns the configuration. It ensures that the config is loaded only once.
