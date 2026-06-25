@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -71,6 +73,12 @@ type Config struct {
 	RoleSessionName       string            `mapstructure:"role_session_name"`     // RoleSessionName is the name of the role session
 	RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"`    // RepoRoleMappings is a list of repository to role mappings
 
+	// ConfigReloadInterval, when > 0, enables periodic hot-reload of the S3
+	// configuration (S3ConfigBucket/S3ConfigPath) without redeploying. The
+	// reload is lazy/per-request: the config is refetched at most once per
+	// interval. 0 (default) disables reloading. Requires an S3 config source.
+	ConfigReloadInterval time.Duration `mapstructure:"config_reload_interval"`
+
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
 	LogToS3   bool   `mapstructure:"log_to_s3"`  // LogToS3 is a flag to enable logging to S3
 	LogBucket string `mapstructure:"log_bucket"` // LogBucket is the S3 bucket to log to
@@ -117,16 +125,17 @@ func (c *Config) LoadConfig() error {
 
 	// Explicitly bind all config keys to environment variables
 	// Core settings
-	_ = viper.BindEnv("issuer")                // AOW_ISSUER
-	_ = viper.BindEnv("audience")              // AOW_AUDIENCE
-	_ = viper.BindEnv("audiences")             // AOW_AUDIENCES
-	_ = viper.BindEnv("role_session_name")     // AOW_ROLE_SESSION_NAME
-	_ = viper.BindEnv("s3_config_bucket")      // AOW_S3_CONFIG_BUCKET
-	_ = viper.BindEnv("s3_config_path")        // AOW_S3_CONFIG_PATH
-	_ = viper.BindEnv("session_policy_bucket") // AOW_SESSION_POLICY_BUCKET
-	_ = viper.BindEnv("log_to_s3")             // AOW_LOG_TO_S3
-	_ = viper.BindEnv("log_bucket")            // AOW_LOG_BUCKET
-	_ = viper.BindEnv("log_prefix")            // AOW_LOG_PREFIX
+	_ = viper.BindEnv("issuer")                 // AOW_ISSUER
+	_ = viper.BindEnv("audience")               // AOW_AUDIENCE
+	_ = viper.BindEnv("audiences")              // AOW_AUDIENCES
+	_ = viper.BindEnv("role_session_name")      // AOW_ROLE_SESSION_NAME
+	_ = viper.BindEnv("s3_config_bucket")       // AOW_S3_CONFIG_BUCKET
+	_ = viper.BindEnv("s3_config_path")         // AOW_S3_CONFIG_PATH
+	_ = viper.BindEnv("config_reload_interval") // AOW_CONFIG_RELOAD_INTERVAL
+	_ = viper.BindEnv("session_policy_bucket")  // AOW_SESSION_POLICY_BUCKET
+	_ = viper.BindEnv("log_to_s3")              // AOW_LOG_TO_S3
+	_ = viper.BindEnv("log_bucket")             // AOW_LOG_BUCKET
+	_ = viper.BindEnv("log_prefix")             // AOW_LOG_PREFIX
 
 	// Cache settings
 	_ = viper.BindEnv("cache.type")             // AOW_CACHE_TYPE
@@ -157,6 +166,80 @@ func (c *Config) LoadConfig() error {
 	}
 
 	return c.Validate()
+}
+
+// MergeBytes overlays serialized configuration onto c using the same snake_case
+// schema as the config file (see example-config.yaml), then re-validates. Only
+// keys present in data are overwritten. format is a viper config type
+// ("json", "yaml", "toml"); empty defaults to "json".
+//
+// Use this for remote configuration (e.g. an S3 object) instead of
+// encoding/json, which matches Go field names rather than the documented
+// snake_case keys.
+func (c *Config) MergeBytes(data []byte, format string) error {
+	if format == "" {
+		format = "json"
+	}
+
+	v := viper.New()
+	v.SetConfigType(format)
+	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("failed to parse %s configuration: %w", format, err)
+	}
+
+	if err := v.Unmarshal(c); err != nil {
+		return fmt.Errorf("failed to unmarshal configuration: %w", err)
+	}
+
+	reapplyEnvOverrides(c)
+
+	return c.Validate()
+}
+
+// reapplyEnvOverrides re-applies AOW_* environment variables onto c after a
+// remote-config merge, enforcing env > S3 config > file precedence. MergeBytes
+// uses a fresh viper.Viper without the AOW_* bindings set up by LoadConfig, so
+// env-var overrides are otherwise silently clobbered by S3 payload values.
+func reapplyEnvOverrides(c *Config) {
+	type strField struct {
+		env string
+		ptr *string
+	}
+	for _, f := range []strField{
+		{"AOW_ISSUER", &c.Issuer},
+		{"AOW_AUDIENCE", &c.Audience},
+		{"AOW_ROLE_SESSION_NAME", &c.RoleSessionName},
+		{"AOW_S3_CONFIG_BUCKET", &c.S3ConfigBucket},
+		{"AOW_S3_CONFIG_PATH", &c.S3ConfigPath},
+		{"AOW_SESSION_POLICY_BUCKET", &c.S3SessionPolicyBucket},
+		{"AOW_LOG_BUCKET", &c.LogBucket},
+		{"AOW_LOG_PREFIX", &c.LogPrefix},
+	} {
+		if v := os.Getenv(f.env); v != "" {
+			*f.ptr = v
+		}
+	}
+	if v := os.Getenv("AOW_LOG_TO_S3"); v != "" {
+		c.LogToS3 = v == "true" || v == "1" || v == "True" || v == "TRUE"
+	}
+	if v := os.Getenv("AOW_CONFIG_RELOAD_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.ConfigReloadInterval = d
+		}
+	}
+}
+
+// FormatFromPath returns the viper config type implied by a file path's
+// extension, defaulting to "json".
+func FormatFromPath(path string) string {
+	switch {
+	case strings.HasSuffix(path, ".yaml"), strings.HasSuffix(path, ".yml"):
+		return "yaml"
+	case strings.HasSuffix(path, ".toml"):
+		return "toml"
+	default:
+		return "json"
+	}
 }
 
 // Validate checks if the configuration is valid.
