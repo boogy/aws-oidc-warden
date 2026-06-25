@@ -98,7 +98,7 @@ func (t *TokenValidator) Unmarshal(data []byte) (*types.GithubClaims, error) {
 func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, error) {
 	jwks, err := t.FetchJWKS(t.ExpectedIssuer)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, err
 	}
 
 	if jwks == nil || len(jwks.Keys) == 0 {
@@ -110,9 +110,6 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 	// Audience is intentionally NOT enforced here: jwt/v5's WithAudience only
 	// matches a single expected value, which silently breaks multi-audience
 	// support. The full multi-audience check is done in Validate().
-	//
-	// Only RSA methods are allowed because GenKeyFunc constructs RSA keys
-	// (GitHub Actions signs with RS256).
 	parser := jwt.NewParser(
 		jwt.WithIssuer(t.ExpectedIssuer),
 		jwt.WithIssuedAt(),
@@ -135,7 +132,7 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 	if err != nil && errors.Is(err, ErrKeyNotFound) {
 		slog.Info("Signing key not found in cached JWKS; refetching", slog.String("issuer", t.ExpectedIssuer))
 		if jwks, err = t.fetchJWKS(t.ExpectedIssuer, true); err != nil {
-			return nil, fmt.Errorf("%w", err)
+			return nil, err
 		}
 		if jwks == nil || len(jwks.Keys) == 0 {
 			return nil, errors.New("jwks is nil")
