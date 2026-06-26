@@ -185,7 +185,25 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		}
 	}
 
-	result, err := a.AWS.AssumeRole(&assumeRoleInput)
+	// Route cross-account targets through the spoke role; same-account and
+	// tag-auth-disabled paths use the default hub identity (creds == nil).
+	var creds aws.CredentialsProvider
+	if account, _, perr := ParseRoleARN(roleArn); perr == nil {
+		var cerr error
+		if creds, cerr = a.spokeCredsFor(account); cerr != nil {
+			return nil, fmt.Errorf("resolve credentials for %s: %w", roleArn, cerr)
+		}
+	}
+
+	var (
+		result *sts.AssumeRoleOutput
+		err    error
+	)
+	if creds == nil {
+		result, err = a.AWS.AssumeRole(&assumeRoleInput)
+	} else {
+		result, err = a.AWS.AssumeRoleAs(&assumeRoleInput, creds)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("unable to perform sts.AssumeRole: %w", err)
 	}

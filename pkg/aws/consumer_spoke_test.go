@@ -62,3 +62,30 @@ func TestSpokeCredsFor_Disabled_ReturnsNil(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, creds)
 }
+
+func TestAssumeRole_CrossAccount_UsesSpokeCreds(t *testing.T) {
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount").Return("111111111111", nil)
+	spokeExp := time.Now().Add(time.Hour)
+	// hub assumes the spoke role
+	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
+	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
+		SessionToken: aws.String("ST"), Expiration: &spokeExp,
+	}}, nil).Once()
+	// final assume of the target role happens via AssumeRoleAs (spoke creds)
+	targetExp := time.Now().Add(time.Hour)
+	m.On("AssumeRoleAs", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		return *in.RoleArn == "arn:aws:iam::222222222222:role/app"
+	}), mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		AccessKeyId: aws.String("AK2"), SecretAccessKey: aws.String("SK2"),
+		SessionToken: aws.String("ST2"), Expiration: &targetExp,
+	}}, nil).Once()
+
+	c := newTagAuthConsumer(m)
+	creds, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "AK2", *creds.AccessKeyId)
+	m.AssertExpectations(t)
+}
