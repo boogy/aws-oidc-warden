@@ -28,6 +28,7 @@ type AwsConsumerInterface interface {
 	AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.GithubClaims) (*types.Credentials, error)
 	GetS3Object(bucket, key string) (io.ReadCloser, error)
 	GetRole(role string) (*iam.GetRoleOutput, error)
+	GetRoleTags(roleARN string) (map[string]string, error)
 }
 
 // cachedCreds holds spoke credentials for an account until shortly before expiry.
@@ -325,6 +326,57 @@ func (a *AwsConsumer) GetRole(role string) (*iam.GetRoleOutput, error) {
 	return a.AWS.GetRole(&iam.GetRoleInput{
 		RoleName: aws.String(role),
 	})
+}
+
+// roleTagCacheTTL bounds how long role tags are cached to cut IAM calls under
+// burst load while keeping tags reasonably fresh.
+const roleTagCacheTTL = 60 * time.Second
+
+// GetRoleTags returns the IAM tags of the role identified by roleARN as a
+// key→value map. When the role lives in a different account than the warden,
+// the read is performed with spoke credentials assumed in that account.
+func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
+	a.mu.Lock()
+	if c, ok := a.roleTagCache[roleARN]; ok && a.now().Before(c.expires) {
+		a.mu.Unlock()
+		return c.tags, nil
+	}
+	a.mu.Unlock()
+
+	account, roleName, err := ParseRoleARN(roleARN)
+	if err != nil {
+		return nil, err
+	}
+	creds, err := a.spokeCredsFor(account)
+	if err != nil {
+		return nil, err
+	}
+
+	input := &iam.GetRoleInput{RoleName: aws.String(roleName)}
+	var out *iam.GetRoleOutput
+	if creds == nil {
+		out, err = a.AWS.GetRole(input)
+	} else {
+		out, err = a.AWS.GetRoleAs(input, creds)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get role %s: %w", roleName, err)
+	}
+	if out.Role == nil {
+		return nil, errors.New("role information not available")
+	}
+
+	tags := make(map[string]string, len(out.Role.Tags))
+	for _, tag := range out.Role.Tags {
+		if tag.Key != nil && tag.Value != nil {
+			tags[*tag.Key] = *tag.Value
+		}
+	}
+
+	a.mu.Lock()
+	a.roleTagCache[roleARN] = cachedTags{tags: tags, expires: a.now().Add(roleTagCacheTTL)}
+	a.mu.Unlock()
+	return tags, nil
 }
 
 // RoleHasTag checks if an IAM role has a specific tag key and value
