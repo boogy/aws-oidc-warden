@@ -31,13 +31,8 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any) b
 	if !hasRepo && !hasOwner {
 		return false
 	}
-	identityOK := false
-	if hasRepo && valueInList(claim("repository"), repoTag) {
-		identityOK = true
-	}
-	if hasOwner && valueInList(claim("repository_owner"), ownerTag) {
-		identityOK = true
-	}
+	identityOK := (hasRepo && valueInList(claim("repository"), repoTag)) ||
+		(hasOwner && valueInList(claim("repository_owner"), ownerTag))
 	if !identityOK {
 		return false
 	}

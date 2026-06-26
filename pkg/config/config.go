@@ -71,7 +71,7 @@ type Cache struct {
 // per-account spoke role (account ID is parsed from the requested role ARN).
 type TagAuth struct {
 	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
-	TagPrefix            string        `mapstructure:"tag_prefix"             json:"tag_prefix,omitempty"`              // default "aow/"
+	TagPrefix            string        `mapstructure:"tag_prefix"             json:"tag_prefix,omitempty"`             // default "aow/"
 	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
 	ExternalID           string        `mapstructure:"external_id"            json:"external_id,omitempty"`            // optional hub->spoke external ID
 	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m

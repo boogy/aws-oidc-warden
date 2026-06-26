@@ -346,7 +346,7 @@ func TestBatchProcessing(t *testing.T) {
 	// Write logs but don't fill the batch yet
 	for i := 1; i <= 2; i++ {
 		buf := bytes.Buffer{}
-		buf.WriteString(fmt.Sprintf("log message %d\n", i))
+		fmt.Fprintf(&buf, "log message %d\n", i)
 		err := logger.WriteLogToS3(buf)
 		assert.NoError(t, err)
 	}
@@ -506,7 +506,7 @@ func TestConcurrentLogWrites(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
 				buf := bytes.Buffer{}
-				buf.WriteString(fmt.Sprintf("concurrent log %d-%d\n", id, j))
+				fmt.Fprintf(&buf, "concurrent log %d-%d\n", id, j)
 				err := logger.WriteLogToS3(buf)
 				assert.NoError(t, err)
 			}

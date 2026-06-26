@@ -37,8 +37,8 @@ func (f *fakeConsumer) ReadS3Configuration() error { return nil }
 func (f *fakeConsumer) GetS3Object(string, string) (io.ReadCloser, error) {
 	return nil, errors.New("not used")
 }
-func (f *fakeConsumer) GetRole(string) (*awsiam.GetRoleOutput, error)  { return nil, nil }
-func (f *fakeConsumer) GetRoleTags(string) (map[string]string, error)  { return f.tags, f.tagsErr }
+func (f *fakeConsumer) GetRole(string) (*awsiam.GetRoleOutput, error) { return nil, nil }
+func (f *fakeConsumer) GetRoleTags(string) (map[string]string, error) { return f.tags, f.tagsErr }
 func (f *fakeConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, _ *types.GithubClaims) (*ststypes.Credentials, error) {
 	f.assumed = roleARN
 	return f.assumeOut, nil
