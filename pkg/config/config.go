@@ -65,6 +65,18 @@ type Cache struct {
 	S3Cleanup     bool          `mapstructure:"s3_cleanup"     json:"s3_cleanup,omitempty"`     // S3 cleanup flag (if using S3 cache). Will delete old objects in the bucket.
 }
 
+// TagAuth enables tag-based role authorization: a role may be assumed when its
+// IAM tags authorize the request's OIDC claims, without an explicit
+// repo_role_mappings entry. Also enables cross-account role assumption via a
+// per-account spoke role (account ID is parsed from the requested role ARN).
+type TagAuth struct {
+	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
+	TagPrefix            string        `mapstructure:"tag_prefix"             json:"tag_prefix,omitempty"`              // default "aow/"
+	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
+	ExternalID           string        `mapstructure:"external_id"            json:"external_id,omitempty"`            // optional hub->spoke external ID
+	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m
+}
+
 type Config struct {
 	Issuer                string            `mapstructure:"issuer"                json:"issuer"`                          // Issuer is the expected issuer of the JWT token
 	Audience              string            `mapstructure:"audience"              json:"audience,omitempty"`              // Audience is the expected audience of the JWT token (deprecated - use Audiences)
@@ -86,6 +98,9 @@ type Config struct {
 	LogBucket string `mapstructure:"log_bucket" json:"log_bucket,omitempty"` // LogBucket is the S3 bucket to log to
 	LogPrefix string `mapstructure:"log_prefix" json:"log_prefix,omitempty"` // LogKey is the S3 key to log to
 	Cache     *Cache `mapstructure:"cache"      json:"cache,omitempty"`      // CacheConfig is the cache configuration
+
+	// TagAuth enables tag-based authorization and cross-account role assumption.
+	TagAuth *TagAuth `mapstructure:"tag_auth" json:"tag_auth,omitempty"`
 
 	// Performance optimization - not serialized
 	estimatedRolesPerRepo int `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
@@ -124,6 +139,10 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("cache.type", cacheType)
 	viper.SetDefault("cache.ttl", cacheTTL)
 	viper.SetDefault("cache.max_local_size", cacheMaxLocalSize)
+	viper.SetDefault("tag_auth.enabled", false)
+	viper.SetDefault("tag_auth.tag_prefix", "aow/")
+	viper.SetDefault("tag_auth.spoke_role_name", "aow-spoke")
+	viper.SetDefault("tag_auth.spoke_session_duration", "15m")
 
 	// Explicitly bind all config keys to environment variables
 	// Core settings
@@ -149,6 +168,13 @@ func (c *Config) LoadConfig() error {
 	_ = viper.BindEnv("cache.s3_cleanup")       // AOW_CACHE_S3_CLEANUP
 	_ = viper.BindEnv("cache.s3_config_bucket") // AOW_CACHE_S3_CONFIG_BUCKET
 	_ = viper.BindEnv("cache.s3_config_path")   // AOW_CACHE_S3_CONFIG_PATH
+
+	// Tag-based authorization settings
+	_ = viper.BindEnv("tag_auth.enabled")                // AOW_TAG_AUTH_ENABLED
+	_ = viper.BindEnv("tag_auth.tag_prefix")             // AOW_TAG_AUTH_TAG_PREFIX
+	_ = viper.BindEnv("tag_auth.spoke_role_name")        // AOW_TAG_AUTH_SPOKE_ROLE_NAME
+	_ = viper.BindEnv("tag_auth.external_id")            // AOW_TAG_AUTH_EXTERNAL_ID
+	_ = viper.BindEnv("tag_auth.spoke_session_duration") // AOW_TAG_AUTH_SPOKE_SESSION_DURATION
 
 	// Logging settings
 	_ = viper.BindEnv("log_to_s3")
@@ -286,6 +312,32 @@ func reapplyEnvOverrides(c *Config) {
 			c.Cache.S3Cleanup = b
 		}
 	}
+
+	// Tag-based authorization env overrides.
+	if v := os.Getenv("AOW_TAG_AUTH_ENABLED"); v != "" {
+		if c.TagAuth == nil {
+			c.TagAuth = &TagAuth{}
+		}
+		c.TagAuth.Enabled = v == "true" || v == "1" || v == "True" || v == "TRUE"
+	}
+	if c.TagAuth != nil {
+		for _, f := range []strField{
+			{"AOW_TAG_AUTH_TAG_PREFIX", &c.TagAuth.TagPrefix},
+			{"AOW_TAG_AUTH_SPOKE_ROLE_NAME", &c.TagAuth.SpokeRoleName},
+			{"AOW_TAG_AUTH_EXTERNAL_ID", &c.TagAuth.ExternalID},
+		} {
+			if v := os.Getenv(f.env); v != "" {
+				*f.ptr = v
+			}
+		}
+		if v := os.Getenv("AOW_TAG_AUTH_SPOKE_SESSION_DURATION"); v != "" {
+			if d, err := time.ParseDuration(v); err != nil {
+				slog.Warn("invalid env var, skipping", "key", "AOW_TAG_AUTH_SPOKE_SESSION_DURATION", "value", v, "error", err)
+			} else {
+				c.TagAuth.SpokeSessionDuration = d
+			}
+		}
+	}
 }
 
 // FormatFromPath returns the viper config type implied by a file path's
@@ -385,6 +437,20 @@ func (c *Config) Validate() error {
 		c.estimatedRolesPerRepo = (totalRoles / len(c.RepoRoleMappings)) + 1 // Add 1 as safety margin
 	} else {
 		c.estimatedRolesPerRepo = 4 // Default if no mappings
+	}
+
+	// Normalize tag-auth defaults so the feature works even when Config is built
+	// directly (e.g. in tests) without going through viper defaults.
+	if c.TagAuth != nil && c.TagAuth.Enabled {
+		if c.TagAuth.TagPrefix == "" {
+			c.TagAuth.TagPrefix = "aow/"
+		}
+		if c.TagAuth.SpokeRoleName == "" {
+			c.TagAuth.SpokeRoleName = "aow-spoke"
+		}
+		if c.TagAuth.SpokeSessionDuration == 0 {
+			c.TagAuth.SpokeSessionDuration = 15 * time.Minute
+		}
 	}
 
 	return nil
