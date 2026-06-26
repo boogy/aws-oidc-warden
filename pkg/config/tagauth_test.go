@@ -17,6 +17,7 @@ func TestTagAuth_Authorize(t *testing.T) {
 		"event_name":         "push",
 		"actor":              "deploy-bot",
 		"runner_environment": "github-hosted",
+		"workflow_ref":       "acme/api/.github/workflows/deploy.yml@refs/heads/main",
 	}
 	cases := []struct {
 		name string
@@ -33,6 +34,10 @@ func TestTagAuth_Authorize(t *testing.T) {
 		{"repo + wrong branch -> deny", map[string]string{"aow/repo": "acme/api", "aow/branch": "dev"}, false},
 		{"all dims pass", map[string]string{"aow/repo": "acme/api", "aow/ref-type": "branch", "aow/event-name": "push", "aow/actor": "deploy-bot"}, true},
 		{"one dim fails -> deny", map[string]string{"aow/repo": "acme/api", "aow/event-name": "pull_request"}, false},
+		{"repo AND exact ref", map[string]string{"aow/repo": "acme/api", "aow/ref": "refs/heads/main"}, true},
+		{"repo AND wrong ref -> deny", map[string]string{"aow/repo": "acme/api", "aow/ref": "refs/heads/dev"}, false},
+		{"workflow-ref match", map[string]string{"aow/repo": "acme/api", "aow/workflow-ref": "acme/api/.github/workflows/deploy.yml@refs/heads/main"}, true},
+		{"workflow-ref mismatch -> deny", map[string]string{"aow/repo": "acme/api", "aow/workflow-ref": "acme/api/.github/workflows/other.yml@refs/heads/main"}, false},
 		{"non-aow tags ignored", map[string]string{"aow/repo": "acme/api", "Team": "platform"}, true},
 		{"empty tags -> deny", map[string]string{}, false},
 	}

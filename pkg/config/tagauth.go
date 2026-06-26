@@ -11,6 +11,11 @@ import (
 // considered. A role must carry at least a `<prefix>repo` or `<prefix>repo-owner`
 // tag (and match it) to be assumable; every other present dimension tag must
 // also match (AND). Within a single tag, space-separated values mean OR.
+//
+// The supported dimensions mirror repo_role_mappings constraints (repo,
+// repo-owner, branch, ref, ref-type, event-name, workflow-ref, environment,
+// actor) so a role can require, e.g., repo==X AND ref==Y. Unlike constraints,
+// tag matching is exact (AWS tag values cannot hold regex).
 func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any) bool {
 	if t == nil || !t.Enabled {
 		return false
@@ -45,10 +50,14 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any) b
 		}
 	}
 
-	// Remaining single-claim dimensions (AND).
+	// Remaining single-claim dimensions (AND). These mirror the
+	// repo_role_mappings constraints, but match exactly (AWS tag charset has no
+	// regex); a space-separated tag value means OR.
 	dims := []struct{ suffix, claimKey string }{
-		{"ref-type", "ref_type"},
-		{"event-name", "event_name"},
+		{"ref", "ref"},                   // exact full ref, e.g. refs/heads/main
+		{"ref-type", "ref_type"},         // "branch" or "tag"
+		{"event-name", "event_name"},     // e.g. "push", "pull_request"
+		{"workflow-ref", "workflow_ref"}, // e.g. org/repo/.github/workflows/deploy.yml@refs/heads/main
 		{"environment", "runner_environment"},
 		{"actor", "actor"},
 	}

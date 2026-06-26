@@ -30,6 +30,7 @@ type fakeConsumer struct {
 	tags      map[string]string
 	tagsErr   error
 	assumed   string
+	gotClaims *types.GithubClaims // claims passed to AssumeRole → drive session tags (ABAC)
 	assumeOut *ststypes.Credentials
 }
 
@@ -39,8 +40,9 @@ func (f *fakeConsumer) GetS3Object(string, string) (io.ReadCloser, error) {
 }
 func (f *fakeConsumer) GetRole(string) (*awsiam.GetRoleOutput, error) { return nil, nil }
 func (f *fakeConsumer) GetRoleTags(string) (map[string]string, error) { return f.tags, f.tagsErr }
-func (f *fakeConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, _ *types.GithubClaims) (*ststypes.Credentials, error) {
+func (f *fakeConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, claims *types.GithubClaims) (*ststypes.Credentials, error) {
 	f.assumed = roleARN
+	f.gotClaims = claims
 	return f.assumeOut, nil
 }
 
@@ -70,6 +72,9 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "AK", *creds.AccessKeyId)
 	assert.Equal(t, "arn:aws:iam::111111111111:role/app", fc.assumed)
+	// Claims must reach AssumeRole so session tags (repo/ref/...) are attached for ABAC.
+	require.NotNil(t, fc.gotClaims)
+	assert.Equal(t, "acme/api", fc.gotClaims.Repository)
 }
 
 func TestProcessRequest_TagAuthDenies(t *testing.T) {

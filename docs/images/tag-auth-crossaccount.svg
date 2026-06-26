@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="540" viewBox="0 0 900 540" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="call" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#5f6368"/>
+    </marker>
+    <marker id="ret" markerWidth="12" markerHeight="12" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#5f6368" stroke-width="1.2"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="900" height="540" fill="#ffffff"/>
+  <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Cross-account assume (hub → spoke → target)</text>
+
+  <!-- account boundary boxes -->
+  <rect x="248" y="46" width="168" height="476" rx="10" fill="none" stroke="#9aa0a6" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text x="332" y="514" text-anchor="middle" font-size="12" font-weight="600" fill="#5f6368">Hub account</text>
+  <rect x="466" y="46" width="406" height="476" rx="10" fill="none" stroke="#9aa0a6" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text x="669" y="514" text-anchor="middle" font-size="12" font-weight="600" fill="#5f6368">Member account (222…)</text>
+
+  <!-- lifeline heads -->
+  <rect x="40" y="56" width="140" height="40" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
+  <text x="110" y="81" text-anchor="middle" font-size="13" fill="#202124">GitHub Actions</text>
+  <rect x="254" y="56" width="156" height="40" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
+  <text x="332" y="81" text-anchor="middle" font-size="13" fill="#202124">Warden (Hub)</text>
+  <rect x="486" y="56" width="148" height="40" rx="8" fill="#fef7e0" stroke="#f9ab00"/>
+  <text x="560" y="81" text-anchor="middle" font-size="13" fill="#202124">aow-spoke</text>
+  <rect x="696" y="56" width="148" height="40" rx="8" fill="#e6f4ea" stroke="#34a853"/>
+  <text x="770" y="81" text-anchor="middle" font-size="13" fill="#202124">Target role</text>
+
+  <!-- lifelines -->
+  <line x1="110" y1="96" x2="110" y2="500" stroke="#bdc1c6" stroke-width="1" stroke-dasharray="4 4"/>
+  <line x1="332" y1="96" x2="332" y2="500" stroke="#bdc1c6" stroke-width="1" stroke-dasharray="4 4"/>
+  <line x1="560" y1="96" x2="560" y2="500" stroke="#bdc1c6" stroke-width="1" stroke-dasharray="4 4"/>
+  <line x1="770" y1="96" x2="770" y2="500" stroke="#bdc1c6" stroke-width="1" stroke-dasharray="4 4"/>
+
+  <!-- 1 GH -> Hub -->
+  <text x="221" y="122" text-anchor="middle" font-size="12" fill="#202124">1 · OIDC token + role ARN (222…)</text>
+  <line x1="110" y1="132" x2="330" y2="132" stroke="#5f6368" stroke-width="1.5" marker-end="url(#call)"/>
+
+  <!-- note on hub -->
+  <rect x="256" y="150" width="152" height="36" rx="6" fill="#fff8e1" stroke="#f9ab00"/>
+  <text x="332" y="166" text-anchor="middle" font-size="11" fill="#202124">validate token,</text>
+  <text x="332" y="180" text-anchor="middle" font-size="11" fill="#202124">parse account = 222…</text>
+
+  <!-- 2 Hub -> Spoke -->
+  <text x="446" y="216" text-anchor="middle" font-size="12" fill="#202124">2 · AssumeRole aow-spoke (+ExternalId)</text>
+  <line x1="332" y1="226" x2="558" y2="226" stroke="#5f6368" stroke-width="1.5" marker-end="url(#call)"/>
+  <!-- 3 Spoke -> Hub -->
+  <text x="446" y="258" text-anchor="middle" font-size="12" fill="#5f6368">3 · spoke credentials</text>
+  <line x1="560" y1="268" x2="334" y2="268" stroke="#5f6368" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#ret)"/>
+
+  <!-- 4 Hub -> Target (GetRole) -->
+  <text x="551" y="304" text-anchor="middle" font-size="12" fill="#202124">4 · GetRole — read aow/* tags  (spoke creds)</text>
+  <line x1="332" y1="314" x2="768" y2="314" stroke="#5f6368" stroke-width="1.5" marker-end="url(#call)"/>
+  <!-- 5 Target -> Hub (tags) -->
+  <text x="551" y="346" text-anchor="middle" font-size="12" fill="#5f6368">5 · aow/* tags  →  check vs claims</text>
+  <line x1="770" y1="356" x2="334" y2="356" stroke="#5f6368" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#ret)"/>
+
+  <!-- 6 Hub -> Target (AssumeRole) -->
+  <text x="551" y="398" text-anchor="middle" font-size="12" fill="#202124">6 · AssumeRole + session tags (ABAC)  (spoke creds)</text>
+  <line x1="332" y1="408" x2="768" y2="408" stroke="#5f6368" stroke-width="1.5" marker-end="url(#call)"/>
+  <!-- 7 Target -> Hub (creds) -->
+  <text x="551" y="440" text-anchor="middle" font-size="12" fill="#5f6368">7 · temporary credentials</text>
+  <line x1="770" y1="450" x2="334" y2="450" stroke="#5f6368" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#ret)"/>
+
+  <!-- 8 Hub -> GH -->
+  <text x="221" y="478" text-anchor="middle" font-size="12" fill="#5f6368">8 · credentials</text>
+  <line x1="332" y1="488" x2="112" y2="488" stroke="#5f6368" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#ret)"/>
+</svg>

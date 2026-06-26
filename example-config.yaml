@@ -342,15 +342,21 @@ repo_role_mappings:
 # See docs/TAG_BASED_AUTHORIZATION.md for the full tag reference and IAM setup.
 tag_auth:
   enabled: false
-  tag_prefix: "aow/"            # tag key namespace; keys: aow/repo, aow/repo-owner, aow/branch, aow/ref-type, aow/event-name, aow/environment, aow/actor
+  tag_prefix: "aow/"            # tag key namespace; keys: aow/repo, aow/repo-owner, aow/branch, aow/ref, aow/ref-type, aow/event-name, aow/workflow-ref, aow/environment, aow/actor
   spoke_role_name: "aow-spoke"  # role assumed in each member account (must trust the warden's execution role)
   external_id: ""               # optional external ID for the hub->spoke trust
   spoke_session_duration: "15m"
 #
 # Role tag examples (set these on the target IAM role, not here):
-#   aow/repo:        "org/api org/web"   # one repo or a space-separated list (OR)
-#   aow/repo-owner:  "org"               # any repo in the org (OR with aow/repo)
-#   aow/branch:      "main refs/heads/release"  # short branch name or full ref
-#   aow/event-name:  "push"
-# All present aow/* tags must pass (AND). A role with no aow/repo or
-# aow/repo-owner tag is never assumable via tag-auth.
+#   aow/repo:         "org/api org/web"   # one repo or a space-separated list (OR)
+#   aow/repo-owner:   "org"               # any repo in the org (OR with aow/repo)
+#   aow/branch:       "main refs/heads/release"  # short branch name or full ref
+#   aow/ref:          "refs/heads/main"   # exact full ref
+#   aow/ref-type:     "branch"            # "branch" or "tag"
+#   aow/event-name:   "push"
+#   aow/workflow-ref: "org/api/.github/workflows/deploy.yml@refs/heads/main"
+#   aow/environment:  "production"
+#   aow/actor:        "deploy-bot"
+# All present aow/* tags must pass (AND); a space-separated value means OR.
+# A role with no aow/repo or aow/repo-owner tag is never assumable via tag-auth.
+# Matching is EXACT (AWS tag values cannot hold regex), unlike repo_role_mappings.

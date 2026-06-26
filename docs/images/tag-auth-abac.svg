@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="310" viewBox="0 0 860 310" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrowA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#5f6368"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="860" height="310" fill="#ffffff"/>
+  <text x="430" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Session tags → ABAC on downstream resources</text>
+
+  <!-- Box 1: assumed session -->
+  <rect x="40" y="78" width="250" height="176" rx="8" fill="#ffffff" stroke="#4285f4"/>
+  <rect x="40" y="78" width="250" height="28" rx="8" fill="#4285f4"/>
+  <rect x="40" y="92" width="250" height="14" fill="#4285f4"/>
+  <text x="165" y="97" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Assumed session (STS)</text>
+  <text x="58" y="130" font-size="12" fill="#202124" font-family="Consolas, monospace">repo        = "api"</text>
+  <text x="58" y="154" font-size="12" fill="#202124" font-family="Consolas, monospace">repo-owner  = "acme"</text>
+  <text x="58" y="178" font-size="12" fill="#202124" font-family="Consolas, monospace">ref         = "refs/heads/main"</text>
+  <text x="58" y="202" font-size="12" fill="#202124" font-family="Consolas, monospace">event-name  = "push"</text>
+  <text x="58" y="226" font-size="12" fill="#202124" font-family="Consolas, monospace">actor       = "deploy-bot"</text>
+
+  <!-- arrow -->
+  <text x="425" y="150" text-anchor="middle" font-size="12" fill="#5f6368">tags travel with every API call</text>
+  <line x1="290" y1="166" x2="558" y2="166" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrowA)"/>
+
+  <!-- Box 2: resource policy -->
+  <rect x="560" y="78" width="270" height="176" rx="8" fill="#ffffff" stroke="#34a853"/>
+  <rect x="560" y="78" width="270" height="28" rx="8" fill="#34a853"/>
+  <rect x="560" y="92" width="270" height="14" fill="#34a853"/>
+  <text x="695" y="97" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Resource / SCP policy condition</text>
+  <text x="576" y="130" font-size="12" fill="#202124" font-family="Consolas, monospace">"Condition": {</text>
+  <text x="588" y="152" font-size="12" fill="#202124" font-family="Consolas, monospace">"StringEquals": {</text>
+  <text x="600" y="174" font-size="12" fill="#202124" font-family="Consolas, monospace">"aws:PrincipalTag/repo":</text>
+  <text x="612" y="196" font-size="12" fill="#1a73e8" font-family="Consolas, monospace">"api"</text>
+  <text x="588" y="218" font-size="12" fill="#202124" font-family="Consolas, monospace">}</text>
+  <text x="576" y="240" font-size="12" fill="#202124" font-family="Consolas, monospace">}</text>
+
+  <!-- caption -->
+  <text x="430" y="288" text-anchor="middle" font-size="12.5" fill="#5f6368">Downstream access is automatically scoped to the workflow's own repo/ref — no per-repo policy needed.</text>
+</svg>
