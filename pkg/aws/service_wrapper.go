@@ -20,6 +20,9 @@ type AwsServiceWrapperInterface interface {
 	GetS3Object(bucket, key string) (io.ReadCloser, error)
 	AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
 	GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
+	GetCallerAccount() (string, error)
+	AssumeRoleAs(input *sts.AssumeRoleInput, creds aws.CredentialsProvider) (*sts.AssumeRoleOutput, error)
+	GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
 	RefreshClients()
 }
 
@@ -39,6 +42,10 @@ type AwsServiceWrapper struct {
 	// Security settings
 	maxS3ObjectSize int64         // Maximum allowed size for S3 objects
 	defaultTimeout  time.Duration // Default timeout for AWS operations
+
+	// Cached hub identity (from STS GetCallerIdentity)
+	callerAccount string
+	callerOnce    sync.Once
 }
 
 func NewAwsServiceWrapper() *AwsServiceWrapper {
@@ -189,4 +196,40 @@ func (s *AwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput
 
 	slog.Debug("Successfully retrieved role", "roleName", *input.RoleName)
 	return output, nil
+}
+
+// GetCallerAccount returns the account ID of the warden's own (hub) identity,
+// fetched once via STS GetCallerIdentity and cached.
+func (s *AwsServiceWrapper) GetCallerAccount() (string, error) {
+	var err error
+	s.callerOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+		defer cancel()
+		var out *sts.GetCallerIdentityOutput
+		out, err = s.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+		if err == nil && out.Account != nil {
+			s.callerAccount = *out.Account
+		}
+	})
+	if s.callerAccount == "" && err == nil {
+		err = fmt.Errorf("could not resolve caller account")
+	}
+	return s.callerAccount, err
+}
+
+// AssumeRoleAs performs sts:AssumeRole using the supplied credentials provider
+// (e.g. spoke credentials) instead of the default hub identity.
+func (s *AwsServiceWrapper) AssumeRoleAs(input *sts.AssumeRoleInput, creds aws.CredentialsProvider) (*sts.AssumeRoleOutput, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	defer cancel()
+	client := sts.NewFromConfig(s.cfg, func(o *sts.Options) { o.Credentials = creds })
+	return client.AssumeRole(ctx, input)
+}
+
+// GetRoleAs performs iam:GetRole using the supplied credentials provider.
+func (s *AwsServiceWrapper) GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	defer cancel()
+	client := iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
+	return client.GetRole(ctx, input)
 }
