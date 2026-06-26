@@ -75,6 +75,12 @@ session_policy_bucket: "aws-oidc-warden-session-policies"
 # s3_config_bucket: "aws-oidc-warden-config"
 # s3_config_path: "config.yaml"
 
+## Config hot-reload interval (optional)
+## When set with an S3 config source, the running service re-fetches the S3
+## config object at most this often and applies it without redeploying.
+## 0 (default) disables reloading. Example: "5m".
+# config_reload_interval: "5m"
+
 ####################################################################################
 # LOGGING CONFIGURATION
 ####################################################################################
@@ -327,3 +333,24 @@ repo_role_mappings:
     roles:
       - arn:aws:iam::123456789012:role/github-actions-default-fallback
     # No constraints means this applies to all branches/events
+
+# Tag-based authorization (optional, default disabled).
+# When enabled, a repo may assume a role whose IAM tags authorize its OIDC
+# claims, even if the role is not listed in repo_role_mappings above. Roles in
+# other accounts are reached via a per-account spoke role (the account ID is
+# parsed from the requested role ARN); same-account requests skip the hop.
+# See docs/TAG_BASED_AUTHORIZATION.md for the full tag reference and IAM setup.
+tag_auth:
+  enabled: false
+  tag_prefix: "aow/"            # tag key namespace; keys: aow/repo, aow/repo-owner, aow/branch, aow/ref-type, aow/event-name, aow/environment, aow/actor
+  spoke_role_name: "aow-spoke"  # role assumed in each member account (must trust the warden's execution role)
+  external_id: ""               # optional external ID for the hub->spoke trust
+  spoke_session_duration: "15m"
+#
+# Role tag examples (set these on the target IAM role, not here):
+#   aow/repo:        "org/api org/web"   # one repo or a space-separated list (OR)
+#   aow/repo-owner:  "org"               # any repo in the org (OR with aow/repo)
+#   aow/branch:      "main refs/heads/release"  # short branch name or full ref
+#   aow/event-name:  "push"
+# All present aow/* tags must pass (AND). A role with no aow/repo or
+# aow/repo-owner tag is never assumable via tag-auth.

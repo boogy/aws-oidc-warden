@@ -22,9 +22,12 @@ AWS OIDC Warden can be configured using:
 | `AOW_ROLE_SESSION_NAME`     | `role_session_name`     | AWS role session name                       | `aws-oidc-warden`                             |
 | `AOW_S3_CONFIG_BUCKET`      | `s3_config_bucket`      | S3 bucket for config file                   |                                               |
 | `AOW_S3_CONFIG_PATH`        | `s3_config_path`        | Path to config file in S3                   |                                               |
+| `AOW_CONFIG_RELOAD_INTERVAL`| `config_reload_interval`| Hot-reload the S3 config at most this often (e.g. `5m`); `0` disables | `0` (disabled)                   |
 | `AOW_SESSION_POLICY_BUCKET` | `session_policy_bucket` | S3 bucket for session policies              |                                               |
 
 > **Note**: You can use either `audience` (single) or `audiences` (multiple). If both are specified, `audiences` takes precedence. For new deployments, use `audiences` for better flexibility.
+
+> **Hot-reloading config without redeploying**: When `s3_config_bucket`/`s3_config_path` are set and `config_reload_interval` > 0, the running service re-fetches the S3 config object at most once per interval (checked lazily per request) and atomically swaps it in. Update the object and changes take effect within the interval — no redeploy or container recycle needed. The S3 object uses the **same snake_case schema as the config file** (`repo_role_mappings`, `constraints`, etc.) and is re-validated on every reload; an invalid or unreachable config is logged and the previous config is kept. Changes to `issuer`/`audiences` are picked up only at startup (the initial S3 load); reloading is intended for `repo_role_mappings`, session policies, and `role_session_name`.
 
 ### Cache Settings
 
@@ -37,6 +40,18 @@ AWS OIDC Warden can be configured using:
 | `AOW_CACHE_S3_BUCKET`      | `cache.s3_bucket`      | S3 bucket name                    |          |
 | `AOW_CACHE_S3_PREFIX`      | `cache.s3_prefix`      | S3 key prefix                     |          |
 | `AOW_CACHE_S3_CLEANUP`     | `cache.s3_cleanup`     | Clean up old cache objects        | `false`  |
+
+### Tag-Based Authorization Settings
+
+Optional, disabled by default. When enabled, a repo may assume a role whose IAM tags authorize its OIDC claims, even if the role is not listed in `repo_role_mappings`. Roles in other accounts are reached via a per-account spoke role. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the tag reference and IAM setup.
+
+| Environment Variable                  | Config File Key                  | Description                                              | Default     |
+| ------------------------------------- | -------------------------------- | ------------------------------------------------------- | ----------- |
+| `AOW_TAG_AUTH_ENABLED`                | `tag_auth.enabled`               | Enable tag-based authorization + cross-account assume   | `false`     |
+| `AOW_TAG_AUTH_TAG_PREFIX`             | `tag_auth.tag_prefix`            | Namespace prefix for authorization tag keys             | `aow/`      |
+| `AOW_TAG_AUTH_SPOKE_ROLE_NAME`        | `tag_auth.spoke_role_name`       | Role assumed in each member account for cross-account   | `aow-spoke` |
+| `AOW_TAG_AUTH_EXTERNAL_ID`            | `tag_auth.external_id`           | Optional external ID for the hub→spoke trust            |             |
+| `AOW_TAG_AUTH_SPOKE_SESSION_DURATION` | `tag_auth.spoke_session_duration`| Hub→spoke session length                                | `15m`       |
 
 ### Logging Settings
 
