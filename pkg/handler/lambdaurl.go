@@ -23,16 +23,17 @@ type AwsLambdaUrl struct {
 }
 
 // NewAwsLambdaUrl creates a new Lambda URL handler
-func NewAwsLambdaUrl(cfg *config.Config, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *AwsLambdaUrl {
+func NewAwsLambdaUrl(provider *config.Provider, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *AwsLambdaUrl {
 	return &AwsLambdaUrl{
-		processor: NewRequestProcessor(cfg, consumer, validator),
+		processor: NewRequestProcessor(provider, consumer, validator),
 	}
 }
 
 // Handler is the Lambda function interface for Lambda URLs
 func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
 	// Create a request context with tracking information and timeout
-	ctx = h.createRequestContext(ctx, event)
+	ctx, cancel := h.createRequestContext(ctx, event)
+	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
 
 	// Add request ID and additional data to all logs for this request
@@ -57,14 +58,12 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 	if err != nil {
 		statusCode := http.StatusInternalServerError
 		switch {
+		case errors.Is(err, ErrTokenValidationFailed):
+			statusCode = http.StatusUnauthorized
 		case errors.Is(err, ErrRoleNotPermitted):
 			statusCode = http.StatusForbidden
 		case errors.Is(err, ErrSessionPolicyAccess), errors.Is(err, ErrAssumeRoleFailed):
 			statusCode = http.StatusInternalServerError
-		default:
-			if err.Error() == "token validation failed" {
-				statusCode = http.StatusUnauthorized
-			}
 		}
 		return h.respondError(ctx, err, statusCode)
 	}
@@ -73,7 +72,7 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 }
 
 // createRequestContext creates an enhanced context with request tracking information
-func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.LambdaFunctionURLRequest) context.Context {
+func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.LambdaFunctionURLRequest) (context.Context, context.CancelFunc) {
 	// Generate a request ID if not available from the event
 	requestID := event.RequestContext.RequestID
 	if requestID == "" {
@@ -89,16 +88,9 @@ func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.La
 	ctx = context.WithValue(ctx, SourceIPContextKey, event.RequestContext.HTTP.SourceIP)
 	ctx = context.WithValue(ctx, UserAgentContextKey, event.RequestContext.HTTP.UserAgent)
 
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(ctx, DefaultTimeout)
-
-	// Ensure the cancel function is called when the Lambda execution completes
-	go func() {
-		<-ctx.Done()
-		cancel()
-	}()
-
-	return ctx
+	// Create a context with timeout. The caller must invoke the returned cancel
+	// (via defer) to release the timer when the request completes.
+	return context.WithTimeout(ctx, DefaultTimeout)
 }
 
 // unmarshalRequestData parses and validates the request data from a Lambda URL event
@@ -132,6 +124,10 @@ func (h *AwsLambdaUrl) respondError(ctx context.Context, err error, statusCode i
 		errCode = "invalid_request"
 		errMsg = "Invalid request parameters"
 		statusCode = http.StatusBadRequest
+	case errors.Is(err, ErrTokenValidationFailed):
+		errCode = "token_invalid"
+		errMsg = "Token validation failed"
+		statusCode = http.StatusUnauthorized
 	case errors.Is(err, ErrRoleNotPermitted):
 		errCode = "permission_denied"
 		errMsg = "Permission denied for the requested operation"

@@ -582,7 +582,7 @@ func TestParseToken_InvalidToken(t *testing.T) {
 	claims, err := validator.ParseToken("invalid.token.string")
 	assert.Error(t, err)
 	assert.Nil(t, claims)
-	assert.Contains(t, err.Error(), "token validation failed")
+	assert.Contains(t, err.Error(), "jwt parse error")
 
 	mockCache.AssertExpectations(t)
 }

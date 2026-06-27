@@ -1,9 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,60 +29,66 @@ var (
 
 // Constraint defines conditions that must be met for a role to be assumed
 type Constraint struct {
-	Branch       string   `mapstructure:"branch"`        // Branch name (e.g., "main", "dev")
-	Ref          string   `mapstructure:"ref"`           // Git reference (e.g., "refs/heads/main", "refs/tags/v.*")
-	RefType      string   `mapstructure:"ref_type"`      // Reference type (e.g., "branch", "tag")
-	EventName    string   `mapstructure:"event_name"`    // GitHub event name (e.g., "push", "pull_request")
-	WorkflowRef  string   `mapstructure:"workflow_ref"`  // Workflow reference (e.g., "owner/repo/.github/workflows/workflow.yml")
-	Environment  string   `mapstructure:"environment"`   // GitHub environment (e.g., "production")
-	ActorMatches []string `mapstructure:"actor_matches"` // GitHub actors allowed to assume the role
+	Branch       string   `mapstructure:"branch"        json:"branch,omitempty"`        // Branch name (e.g., "main", "dev")
+	Ref          string   `mapstructure:"ref"           json:"ref,omitempty"`           // Git reference (e.g., "refs/heads/main", "refs/tags/v.*")
+	RefType      string   `mapstructure:"ref_type"      json:"ref_type,omitempty"`      // Reference type (e.g., "branch", "tag")
+	EventName    string   `mapstructure:"event_name"    json:"event_name,omitempty"`    // GitHub event name (e.g., "push", "pull_request")
+	WorkflowRef  string   `mapstructure:"workflow_ref"  json:"workflow_ref,omitempty"`  // Workflow reference (e.g., "owner/repo/.github/workflows/workflow.yml")
+	Environment  string   `mapstructure:"environment"   json:"environment,omitempty"`   // GitHub environment (e.g., "production")
+	ActorMatches []string `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // GitHub actors allowed to assume the role
 
 	// Cached compiled patterns (not serialized)
-	branchPattern   *regexp.Regexp   `mapstructure:"-"`
-	refPattern      *regexp.Regexp   `mapstructure:"-"`
-	workflowPattern *regexp.Regexp   `mapstructure:"-"`
-	actorPatterns   []*regexp.Regexp `mapstructure:"-"`
+	branchPattern   *regexp.Regexp   `mapstructure:"-" json:"-"`
+	refPattern      *regexp.Regexp   `mapstructure:"-" json:"-"`
+	workflowPattern *regexp.Regexp   `mapstructure:"-" json:"-"`
+	actorPatterns   []*regexp.Regexp `mapstructure:"-" json:"-"`
 }
 
 type RepoRoleMapping struct {
-	Repo              string      `mapstructure:"repo"`                // Repository name (e.g., "owner/repo")
-	SessionPolicy     string      `mapstructure:"session_policy"`      // Inline session policy (JSON string)
-	SessionPolicyFile string      `mapstructure:"session_policy_file"` // S3 session policy file
-	Roles             []string    `mapstructure:"roles"`               // List of IAM roles that can be assume
-	Constraints       *Constraint `mapstructure:"constraints"`         // Constraints for role assumption
+	Repo              string      `mapstructure:"repo"                json:"repo"`                          // Repository name (e.g., "owner/repo")
+	SessionPolicy     string      `mapstructure:"session_policy"      json:"session_policy,omitempty"`      // Inline session policy (JSON string)
+	SessionPolicyFile string      `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"` // S3 session policy file
+	Roles             []string    `mapstructure:"roles"               json:"roles"`                         // List of IAM roles that can be assume
+	Constraints       *Constraint `mapstructure:"constraints"         json:"constraints,omitempty"`         // Constraints for role assumption
 
 	// Cached compiled pattern (not serialized)
-	compiledPattern *regexp.Regexp `mapstructure:"-"`
+	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
 }
 
 type Cache struct {
-	Type          string        `mapstructure:"type"`           // Cache type (e.g., "memory", "dynamodb")
-	TTL           time.Duration `mapstructure:"ttl"`            // Cache TTL duration (ex: "5m", "1h", "2h30", "24h", "1d", "1w")
-	MaxLocalSize  int           `mapstructure:"max_local_size"` // Maximum size of local cache (if using memory cache)
-	DynamoDBTable string        `mapstructure:"dynamodb_table"` // DynamoDB table name (if using DynamoDB cache)
-	S3Bucket      string        `mapstructure:"s3_bucket"`      // S3 bucket name (if using S3 cache)
-	S3Prefix      string        `mapstructure:"s3_prefix"`      // S3 prefix (if using S3 cache)
-	S3Cleanup     bool          `mapstructure:"s3_cleanup"`     // S3 cleanup flag (if using S3 cache). Will delete old objects in the bucket.
+	Type          string        `mapstructure:"type"           json:"type"`                     // Cache type (e.g., "memory", "dynamodb")
+	TTL           time.Duration `mapstructure:"ttl"            json:"ttl"`                      // Cache TTL duration (ex: "5m", "1h", "2h30", "24h", "1d", "1w")
+	MaxLocalSize  int           `mapstructure:"max_local_size" json:"max_local_size,omitempty"` // Maximum size of local cache (if using memory cache)
+	DynamoDBTable string        `mapstructure:"dynamodb_table" json:"dynamodb_table,omitempty"` // DynamoDB table name (if using DynamoDB cache)
+	S3Bucket      string        `mapstructure:"s3_bucket"      json:"s3_bucket,omitempty"`      // S3 bucket name (if using S3 cache)
+	S3Prefix      string        `mapstructure:"s3_prefix"      json:"s3_prefix,omitempty"`      // S3 prefix (if using S3 cache)
+	S3Cleanup     bool          `mapstructure:"s3_cleanup"     json:"s3_cleanup,omitempty"`     // S3 cleanup flag (if using S3 cache). Will delete old objects in the bucket.
 }
 
 type Config struct {
-	Issuer                string            `mapstructure:"issuer"`                // Issuer is the expected issuer of the JWT token
-	Audience              string            `mapstructure:"audience"`              // Audience is the expected audience of the JWT token (deprecated - use Audiences)
-	Audiences             []string          `mapstructure:"audiences"`             // Audiences is the list of expected audiences of the JWT token
-	S3ConfigBucket        string            `mapstructure:"s3_config_bucket"`      // S3ConfigBucket is the S3 bucket where the configuration file is stored
-	S3ConfigPath          string            `mapstructure:"s3_config_path"`        // S3ConfigPath is the path to the configuration file in the S3 bucket
-	S3SessionPolicyBucket string            `mapstructure:"session_policy_bucket"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
-	RoleSessionName       string            `mapstructure:"role_session_name"`     // RoleSessionName is the name of the role session
-	RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"`    // RepoRoleMappings is a list of repository to role mappings
+	Issuer                string            `mapstructure:"issuer"                json:"issuer"`                          // Issuer is the expected issuer of the JWT token
+	Audience              string            `mapstructure:"audience"              json:"audience,omitempty"`              // Audience is the expected audience of the JWT token (deprecated - use Audiences)
+	Audiences             []string          `mapstructure:"audiences"             json:"audiences,omitempty"`             // Audiences is the list of expected audiences of the JWT token
+	S3ConfigBucket        string            `mapstructure:"s3_config_bucket"      json:"s3_config_bucket,omitempty"`      // S3ConfigBucket is the S3 bucket where the configuration file is stored
+	S3ConfigPath          string            `mapstructure:"s3_config_path"        json:"s3_config_path,omitempty"`        // S3ConfigPath is the path to the configuration file in the S3 bucket
+	S3SessionPolicyBucket string            `mapstructure:"session_policy_bucket" json:"session_policy_bucket,omitempty"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
+	RoleSessionName       string            `mapstructure:"role_session_name"     json:"role_session_name"`               // RoleSessionName is the name of the role session
+	RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"    json:"repo_role_mappings,omitempty"`    // RepoRoleMappings is a list of repository to role mappings
+
+	// ConfigReloadInterval, when > 0, enables periodic hot-reload of the S3
+	// configuration (S3ConfigBucket/S3ConfigPath) without redeploying. The
+	// reload is lazy/per-request: the config is refetched at most once per
+	// interval. 0 (default) disables reloading. Requires an S3 config source.
+	ConfigReloadInterval time.Duration `mapstructure:"config_reload_interval" json:"config_reload_interval,omitempty"`
 
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
-	LogToS3   bool   `mapstructure:"log_to_s3"`  // LogToS3 is a flag to enable logging to S3
-	LogBucket string `mapstructure:"log_bucket"` // LogBucket is the S3 bucket to log to
-	LogPrefix string `mapstructure:"log_prefix"` // LogKey is the S3 key to log to
-	Cache     *Cache `mapstructure:"cache"`      // CacheConfig is the cache configuration
+	LogToS3   bool   `mapstructure:"log_to_s3"  json:"log_to_s3,omitempty"`  // LogToS3 is a flag to enable logging to S3
+	LogBucket string `mapstructure:"log_bucket" json:"log_bucket,omitempty"` // LogBucket is the S3 bucket to log to
+	LogPrefix string `mapstructure:"log_prefix" json:"log_prefix,omitempty"` // LogKey is the S3 key to log to
+	Cache     *Cache `mapstructure:"cache"      json:"cache,omitempty"`      // CacheConfig is the cache configuration
 
 	// Performance optimization - not serialized
-	estimatedRolesPerRepo int `mapstructure:"-"` // Calculated during Validate for efficient memory allocation
+	estimatedRolesPerRepo int `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
 }
 
 // NewConfig initializes and returns the configuration. It ensures that the config is loaded only once.
@@ -117,16 +127,17 @@ func (c *Config) LoadConfig() error {
 
 	// Explicitly bind all config keys to environment variables
 	// Core settings
-	_ = viper.BindEnv("issuer")                // AOW_ISSUER
-	_ = viper.BindEnv("audience")              // AOW_AUDIENCE
-	_ = viper.BindEnv("audiences")             // AOW_AUDIENCES
-	_ = viper.BindEnv("role_session_name")     // AOW_ROLE_SESSION_NAME
-	_ = viper.BindEnv("s3_config_bucket")      // AOW_S3_CONFIG_BUCKET
-	_ = viper.BindEnv("s3_config_path")        // AOW_S3_CONFIG_PATH
-	_ = viper.BindEnv("session_policy_bucket") // AOW_SESSION_POLICY_BUCKET
-	_ = viper.BindEnv("log_to_s3")             // AOW_LOG_TO_S3
-	_ = viper.BindEnv("log_bucket")            // AOW_LOG_BUCKET
-	_ = viper.BindEnv("log_prefix")            // AOW_LOG_PREFIX
+	_ = viper.BindEnv("issuer")                 // AOW_ISSUER
+	_ = viper.BindEnv("audience")               // AOW_AUDIENCE
+	_ = viper.BindEnv("audiences")              // AOW_AUDIENCES
+	_ = viper.BindEnv("role_session_name")      // AOW_ROLE_SESSION_NAME
+	_ = viper.BindEnv("s3_config_bucket")       // AOW_S3_CONFIG_BUCKET
+	_ = viper.BindEnv("s3_config_path")         // AOW_S3_CONFIG_PATH
+	_ = viper.BindEnv("config_reload_interval") // AOW_CONFIG_RELOAD_INTERVAL
+	_ = viper.BindEnv("session_policy_bucket")  // AOW_SESSION_POLICY_BUCKET
+	_ = viper.BindEnv("log_to_s3")              // AOW_LOG_TO_S3
+	_ = viper.BindEnv("log_bucket")             // AOW_LOG_BUCKET
+	_ = viper.BindEnv("log_prefix")             // AOW_LOG_PREFIX
 
 	// Cache settings
 	_ = viper.BindEnv("cache.type")             // AOW_CACHE_TYPE
@@ -157,6 +168,137 @@ func (c *Config) LoadConfig() error {
 	}
 
 	return c.Validate()
+}
+
+// MergeBytes overlays serialized configuration onto c using the same snake_case
+// schema as the config file (see example-config.yaml), then re-validates. Only
+// keys present in data are overwritten. format is a viper config type
+// ("json", "yaml", "toml"); empty defaults to "json".
+//
+// Use this for remote configuration (e.g. an S3 object) instead of
+// encoding/json, which matches Go field names rather than the documented
+// snake_case keys.
+func (c *Config) MergeBytes(data []byte, format string) error {
+	if format == "" {
+		format = "json"
+	}
+
+	v := viper.New()
+	v.SetConfigType(format)
+	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("failed to parse %s configuration: %w", format, err)
+	}
+
+	if err := v.Unmarshal(c); err != nil {
+		return fmt.Errorf("failed to unmarshal configuration: %w", err)
+	}
+
+	reapplyEnvOverrides(c)
+
+	return c.Validate()
+}
+
+// reapplyEnvOverrides re-applies AOW_* environment variables onto c after a
+// remote-config merge, enforcing env > S3 config > file precedence. MergeBytes
+// uses a fresh viper.Viper without the AOW_* bindings set up by LoadConfig, so
+// env-var overrides are otherwise silently clobbered by S3 payload values.
+func reapplyEnvOverrides(c *Config) {
+	type strField struct {
+		env string
+		ptr *string
+	}
+	for _, f := range []strField{
+		{"AOW_ISSUER", &c.Issuer},
+		{"AOW_AUDIENCE", &c.Audience},
+		{"AOW_ROLE_SESSION_NAME", &c.RoleSessionName},
+		{"AOW_S3_CONFIG_BUCKET", &c.S3ConfigBucket},
+		{"AOW_S3_CONFIG_PATH", &c.S3ConfigPath},
+		{"AOW_SESSION_POLICY_BUCKET", &c.S3SessionPolicyBucket},
+		{"AOW_LOG_BUCKET", &c.LogBucket},
+		{"AOW_LOG_PREFIX", &c.LogPrefix},
+	} {
+		if v := os.Getenv(f.env); v != "" {
+			*f.ptr = v
+		}
+	}
+
+	// AOW_AUDIENCES — comma-separated list overrides the slice. Elements are
+	// trimmed of whitespace so "a , b" and "a,b" are equivalent.
+	if v := os.Getenv("AOW_AUDIENCES"); v != "" {
+		parts := strings.Split(v, ",")
+		audiences := parts[:0]
+		for _, p := range parts {
+			if s := strings.TrimSpace(p); s != "" {
+				audiences = append(audiences, s)
+			}
+		}
+		c.Audiences = audiences
+	}
+
+	if v := os.Getenv("AOW_LOG_TO_S3"); v != "" {
+		c.LogToS3 = v == "true" || v == "1" || v == "True" || v == "TRUE"
+	}
+
+	if v := os.Getenv("AOW_CONFIG_RELOAD_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_CONFIG_RELOAD_INTERVAL", "value", v, "error", err)
+		} else {
+			c.ConfigReloadInterval = d
+		}
+	}
+
+	// Cache env overrides — ensure Cache is non-nil before writing.
+	if c.Cache == nil {
+		c.Cache = &Cache{}
+	}
+
+	for _, f := range []strField{
+		{"AOW_CACHE_TYPE", &c.Cache.Type},
+		{"AOW_CACHE_DYNAMODB_TABLE", &c.Cache.DynamoDBTable},
+		{"AOW_CACHE_S3_BUCKET", &c.Cache.S3Bucket},
+		{"AOW_CACHE_S3_PREFIX", &c.Cache.S3Prefix},
+	} {
+		if v := os.Getenv(f.env); v != "" {
+			*f.ptr = v
+		}
+	}
+
+	if v := os.Getenv("AOW_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_TTL", "value", v, "error", err)
+		} else {
+			c.Cache.TTL = d
+		}
+	}
+
+	if v := os.Getenv("AOW_CACHE_MAX_LOCAL_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_MAX_LOCAL_SIZE", "value", v, "error", err)
+		} else {
+			c.Cache.MaxLocalSize = n
+		}
+	}
+
+	if v := os.Getenv("AOW_CACHE_S3_CLEANUP"); v != "" {
+		if b, err := strconv.ParseBool(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_S3_CLEANUP", "value", v, "error", err)
+		} else {
+			c.Cache.S3Cleanup = b
+		}
+	}
+}
+
+// FormatFromPath returns the viper config type implied by a file path's
+// extension, defaulting to "json".
+func FormatFromPath(path string) string {
+	switch {
+	case strings.HasSuffix(path, ".yaml"), strings.HasSuffix(path, ".yml"):
+		return "yaml"
+	case strings.HasSuffix(path, ".toml"):
+		return "toml"
+	default:
+		return "json"
+	}
 }
 
 // Validate checks if the configuration is valid.

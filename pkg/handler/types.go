@@ -29,14 +29,15 @@ const (
 
 // Custom error types for more precise error reporting
 var (
-	ErrEmptyToken          = errors.New("token is empty")
-	ErrTokenTooLarge       = errors.New("token exceeds maximum allowed size")
-	ErrEmptyRole           = errors.New("role is empty")
-	ErrRoleTooLarge        = errors.New("role exceeds maximum allowed size")
-	ErrInvalidJSON         = errors.New("invalid JSON in request body")
-	ErrSessionPolicyAccess = errors.New("failed to access session policy")
-	ErrRoleNotPermitted    = errors.New("role not allowed for repository or doesn't meet constraints")
-	ErrAssumeRoleFailed    = errors.New("failed to assume the requested role")
+	ErrEmptyToken            = errors.New("token is empty")
+	ErrTokenTooLarge         = errors.New("token exceeds maximum allowed size")
+	ErrEmptyRole             = errors.New("role is empty")
+	ErrRoleTooLarge          = errors.New("role exceeds maximum allowed size")
+	ErrInvalidJSON           = errors.New("invalid JSON in request body")
+	ErrTokenValidationFailed = errors.New("token validation failed")
+	ErrSessionPolicyAccess   = errors.New("failed to access session policy")
+	ErrRoleNotPermitted      = errors.New("role not allowed for repository or doesn't meet constraints")
+	ErrAssumeRoleFailed      = errors.New("failed to assume the requested role")
 )
 
 var (
