@@ -62,8 +62,8 @@ func main() {
 	// Initialize the AWS client
 	awsClient := aws.NewAwsConsumer(cfg)
 
-	// Create the handler function
-	handlerFunc := handler.NewAwsApiGateway(cfg, awsClient, validator).Handler
+	// Create the handler function (static config provider — no hot-reload locally)
+	handlerFunc := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), awsClient, validator).Handler
 
 	// Set up HTTP server
 	http.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
