@@ -46,6 +46,19 @@ func TestIsTargetAccountAllowed(t *testing.T) {
 	}
 }
 
+// TestIsTargetAccountAllowed_EmptyListFailsOpen documents (and locks in) the
+// fail-open default: tag-auth enabled with an empty allowed_accounts permits ANY
+// non-hub member account. Config validation only warns; operators must populate
+// allowed_accounts in production. A future change must not silently flip this.
+func TestIsTargetAccountAllowed_EmptyListFailsOpen(t *testing.T) {
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount").Return("111111111111", nil)
+	c := consumerWithAllowed(m, nil) // enabled, empty allow-list
+	ok, err := c.IsTargetAccountAllowed("arn:aws:iam::222222222222:role/anything")
+	require.NoError(t, err)
+	assert.True(t, ok, "empty allowed_accounts must fail open (any account allowed)")
+}
+
 func TestIsTargetAccountAllowed_TagAuthDisabled(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
 	c := NewAwsConsumer(&gtvcfg.Config{}) // TagAuth nil

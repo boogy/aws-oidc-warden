@@ -151,12 +151,12 @@ Rules:
 
 **Token expansion examples** (`default_org: acme`):
 
-| Tag token    | Comparison form | Matches claim `acme/api`? | Matches claim `beta/web`? |
-| ------------ | -------------- | ------------------------- | ------------------------- |
-| `api`        | `acme/api`     | yes                       | no                        |
-| `acme/api`   | `acme/api`     | yes                       | no                        |
-| `beta/web`   | `beta/web`     | no                        | yes                       |
-| `acme/`      | `acme/`        | no (exact, not a repo)    | no                        |
+| Tag token  | Comparison form | Matches claim `acme/api`? | Matches claim `beta/web`? |
+| ---------- | --------------- | ------------------------- | ------------------------- |
+| `api`      | `acme/api`      | yes                       | no                        |
+| `acme/api` | `acme/api`      | yes                       | no                        |
+| `beta/web` | `beta/web`      | no                        | yes                       |
+| `acme/`    | `acme/`         | no (exact, not a repo)    | no                        |
 
 ---
 
@@ -221,6 +221,32 @@ Key consequences:
 - **Cross-account requires the spoke.** With tag-auth enabled, a cross-account
   request fails closed if the `aow-spoke` role is missing or untrusted — see
   below.
+
+---
+
+## Security model & foot-guns
+
+Three behaviors are intentional but easy to misjudge. Review them before enabling
+tag-auth in production:
+
+1. **Tag-auth is an additive fallback, not a tightening.** Enabling it lets a
+   role's `aow/*` tags authorize claims **independently of** `repo_role_mappings`
+   constraints. A role you constrain via a mapping (e.g. `branch: main`) can still
+   be assumed from any branch if its tags match and it carries no matching
+   `aow/branch` tag. **Do not rely on a mapping constraint alone to _deny_ a role
+   that also publishes matching `aow/*` tags.** See
+   [Precedence](#precedence-mappings--tags-together).
+
+2. **Empty `allowed_accounts` fails open.** With tag-auth enabled and
+   `allowed_accounts` empty, the warden may assume into **any** member account
+   reachable via the spoke. Config load only logs a warning. Always populate
+   `allowed_accounts` in production. See
+   [Target account allow-list](#target-account-allow-list).
+
+3. **Tag-authorized roles receive no session policy.** Session policies come only
+   from `repo_role_mappings`; a role authorized via tags is scoped solely by its
+   own IAM permissions. Keep tag-authorized roles least-privilege at the IAM level
+   — there is no session-policy backstop.
 
 ---
 
@@ -483,12 +509,12 @@ Example spoke trust policy (external ID optional):
 tag_auth:
   enabled: true
   tag_prefix: "aow/"
-  default_org: ""    # if set, bare aow/repo tags (e.g. "api") expand to "<default_org>/api"
+  default_org: "" # if set, bare aow/repo tags (e.g. "api") expand to "<default_org>/api"
   spoke_role_name: "aow-spoke"
   external_id: "" # optional
   spoke_session_duration: "15m"
   transitive_session_tags: false # set true to mark repo/ref/actor as immutable through role chaining
-  allowed_accounts: []           # restrict target accounts; hub always allowed; empty = any
+  allowed_accounts: [] # restrict target accounts; hub always allowed; empty = any
 ```
 
 Or via environment variables: `AOW_TAG_AUTH_ENABLED`, `AOW_TAG_AUTH_TAG_PREFIX`,

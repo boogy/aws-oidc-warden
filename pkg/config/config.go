@@ -444,7 +444,10 @@ func (c *Config) Validate() error {
 			}
 
 			if mapping.Constraints.WorkflowRef != "" {
-				mapping.Constraints.workflowPattern, err = regexp.Compile(mapping.Constraints.WorkflowRef)
+				// Auto-anchor like every other regex constraint (repo/branch/ref/
+				// actor) so a workflow_ref pattern matches the full claim, not a
+				// substring.
+				mapping.Constraints.workflowPattern, err = regexp.Compile("^(?:" + mapping.Constraints.WorkflowRef + ")$")
 				if err != nil {
 					return fmt.Errorf("invalid workflow pattern '%s': %w", mapping.Constraints.WorkflowRef, err)
 				}

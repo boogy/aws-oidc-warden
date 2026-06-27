@@ -74,6 +74,11 @@ func NewBootstrap() (*Bootstrap, error) {
 		return nil, fmt.Errorf("failed to load remote configuration: %w", err)
 	}
 
+	// Wire the live config into the consumer so hot-reloaded changes (allowed
+	// accounts, tag-auth enable/disable, spoke role/external ID) take effect on
+	// its enforcement and credential-routing paths, not just the processor's.
+	consumer.SetConfigSource(provider.Get)
+
 	// Initialize S3Logger from the resolved config so log_bucket/log_prefix
 	// overrides in the S3 config are honored.
 	s3log := s3logger.NewS3Logger(provider.Get())

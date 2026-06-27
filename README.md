@@ -9,50 +9,37 @@
 
 ## Overview
 
-The **AWS OIDC Warden** is a secure, lightweight Go service that validates OpenID Connect (OIDC) tokens issued by GitHub Actions and other OIDC providers. It acts as a trusted intermediary between GitHub workflows and AWS resources, providing fine-grained access control based on repository, branch, actor, and other configurable constraints.
-
-This service solves a critical security challenge: securely connecting CI/CD workflows to AWS resources without storing long-lived credentials. By validating OIDC tokens and applying customizable security policies, it enables organizations to implement the principle of least privilege while maintaining operational efficiency at scale.
-
-**Key Capabilities:**
-- **Multi-OIDC Support**: Works with GitHub Actions and any OIDC provider with JWKS endpoints
-- **Multiple Deployment Options**:
-  - **API Gateway + Lambda**: Traditional REST API with API Gateway proxy integration
-  - **Lambda URLs**: Direct Lambda HTTP endpoints with function URLs
-  - **Application Load Balancer**: Integration with ALB target groups for high-traffic scenarios
-  - **Local Development Server**: HTTP server for testing and integration
-- **Advanced Caching**: Multi-tier caching with memory, DynamoDB, and S3 backends
-- **Enterprise-Ready**: Comprehensive logging, monitoring, and security features
-- **Cloud-Native Architecture**: Stateless design with external state management
-
----
+**AWS OIDC Warden** is a secure, lightweight Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS AssumeRole. It acts as a trusted intermediary between CI/CD workflows and AWS resources, enforcing fine-grained access control based on repository, branch, actor, and other configurable constraints — without storing long-lived credentials.
 
 > [!CAUTION]
 > Not all OIDC claims can be trusted. See the great tool and table created [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for a comprehensive list of claims.
 >
 > This lambda allows you to include specific constraints for a repository before it can obtain credentials from a role. Choose wisely based on the table that Palo Alto Networks has provided in the repository linked above.
 
+---
+
+## Documentation
+
+| Document                                                           | What's inside                                                                         |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md)                     | Full config reference — all keys, env vars, remote S3 reload, cache, session policies |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                       | Component diagram, deployment options, full build/deploy commands                     |
+| [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                 | Session tags applied to every STS call, ABAC patterns                                 |
+| [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) | Tag-based authorization, hub/spoke cross-account model                                |
+
+---
+
 ## Features
 
 - **Universal OIDC Validation**: Validates tokens from GitHub Actions and any OIDC provider with JWKS endpoints
-- **Multiple Deployment Options**:
-  - **API Gateway**: Traditional REST API approach with API Gateway proxy integration
-  - **Lambda URLs**: Direct Lambda HTTP endpoints with function URLs (recommended for simple setups)
-  - **Application Load Balancer**: Integration with ALB target groups for high-traffic, multi-region scenarios
-  - **Local Development Server**: HTTP server for testing
- - **AWS Fine-Grained Access Control**: Configure access based on repository, branch, event type, actor, workflow file, and more
-- **Session Policy Support**: Apply custom AWS session policies via inline JSON or S3-stored policy files to reduce AWS Role permissions and reduce the number of required roles
-- **Session Tagging**: Tag AWS sessions with GitHub-specific information for auditability and ABAC (Attribute Based Access Control)
-- **Flexible Constraint System**: Apply regular expression-based matching for dynamic authorization
-- **High-Performance Caching**:
-  - **Memory Cache**: Fast in-memory caching with LRU eviction
-  - **DynamoDB Cache**: Persistent caching across Lambda instances
-  - **S3 Cache**: Large object caching with automatic cleanup
-  - **Configurable TTL**: Custom time-to-live for cached JWKS
-- **Comprehensive Logging**:
-  - Structured JSON logging to CloudWatch
-  - Optional S3 logging for long-term retention
-  - Request tracking with correlation IDs
-- **Multi-Architecture Support**: Native builds for ARM64 and AMD64 architectures with pre-build docker images
+- **Multiple Deployment Options**: API Gateway, Lambda URLs, Application Load Balancer, and a local development server
+- **Fine-Grained Access Control**: Regex-based repo/branch/actor/event/workflow constraints; all constraints are AND-ed
+- **Session Policy Support**: Inline JSON or S3-stored policy files to scope AWS permissions per-repo
+- **Session Tagging & ABAC**: GitHub claims are forwarded as STS session tags for auditability and attribute-based access control — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)
+- **Tag-Based Authorization & Cross-Account (hub/spoke)**: Authorize role assumptions via IAM role tags without enumerating roles in config; extend to other AWS accounts through a spoke role — see [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md)
+- **Hot Config Reload**: Update `repo_role_mappings` and session policies in S3 without redeploying — the Lambda picks up changes within the configured interval (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md))
+- **Multi-Tier Caching**: Memory (LRU), DynamoDB (persistent/shared), and S3 backends for JWKS
+- **Multi-Architecture Support**: Native ARM64 and AMD64 builds; pre-built container images on GHCR
 
 ---
 
@@ -61,12 +48,14 @@ This service solves a critical security challenge: securely connecting CI/CD wor
 ### Installation
 
 1. Clone the repository:
+
    ```bash
    git clone git@github.com:boogy/aws-oidc-warden.git
    cd aws-oidc-warden
    ```
 
 2. Install dependencies:
+
    ```bash
    go mod tidy
    ```
@@ -76,137 +65,45 @@ This service solves a critical security challenge: securely connecting CI/CD wor
    make build
    ```
 
-#### Alternative Installation Methods
+**Alternative methods:**
 
-- **Download pre-built binaries**: Check the [Releases](https://github.com/boogy/aws-oidc-warden/releases) page for pre-built Lambda deployment packages
-- **Use container images**: Pull from GitHub: `ghcr.io/boogy/aws-oidc-warden:latest` (see [Pre-built Images](#using-pre-built-container-images))
-- **Build with ko**: Use `make ko-build` for container-based deployment.
+- **Pre-built binaries**: [Releases](https://github.com/boogy/aws-oidc-warden/releases) page
+- **Container images**: `ghcr.io/boogy/aws-oidc-warden:latest` (see [Deployment](#deploying-to-aws-lambda))
+- **Build with ko**: `make ko-build`
 
 ---
 
 ### Configuration
 
-AWS OIDC Warden can be configured using environment variables, a YAML/JSON/TOML configuration file. For a complete reference of all configuration options, see the [Configuration Documentation](docs/CONFIGURATION.md).
-
-#### Environment Variables
-
-All configuration options can be set using environment variables with the `AOW_` prefix:
-
-```bash
-# Core configuration
-export AOW_ISSUER=https://token.actions.githubusercontent.com
-export AOW_AUDIENCE=sts.amazonaws.com                              # Single audience (legacy)
-export AOW_AUDIENCES=sts.amazonaws.com,https://api.mycompany.com   # Multiple audiences (recommended)
-export AOW_ROLE_SESSION_NAME=aws-oidc-warden
-
-# Cache configuration
-export AOW_CACHE_TYPE=dynamodb
-export AOW_CACHE_TTL=1h
-export AOW_CACHE_MAX_LOCAL_SIZE=20
-export AOW_CACHE_DYNAMODB_TABLE=aws-oidc-warden-cache
-
-# Logging configuration
-export AOW_LOG_TO_S3=true
-export AOW_LOG_BUCKET=your-log-bucket
-export AOW_LOG_PREFIX=logs/
-export LOG_LEVEL=debug # Note: This one doesn't use the AOW_ prefix
-```
-
-#### Configuration File
-
-Alternatively, you can use a YAML, JSON or TOML configuration file:
+AWS OIDC Warden reads config from environment variables (`AOW_` prefix), a YAML/JSON/TOML file, or an S3 object. A minimal example:
 
 ```yaml
 issuer: https://token.actions.githubusercontent.com
-# Single audience (legacy - still supported for backward compatibility)
-audience: sts.amazonaws.com
-# Multiple audiences (recommended)
 audiences:
   - sts.amazonaws.com
-  - https://api.mycompany.com
-  - internal.mycompany.com
-role_session_name: aws-oidc-warden
 
 cache:
   type: dynamodb
   ttl: 1h
-  max_local_size: 20
-  dynamodb_table: jwks-cache
+  dynamodb_table: aws-oidc-warden-cache
 
-log_to_s3: true
-log_bucket: your-log-bucket
-log_prefix: logs/
-```
-
-#### Repository-to-Role Mapping
-
-The most powerful feature of this tool is the ability to map GitHub repositories to AWS IAM roles with specific constraints. Here's an example configuration:
-
-```yaml
 repo_role_mappings:
-  # Simple mapping: Only allow access from the main branch
-  - repo: "org/main-branch-repo"         # Repository pattern (supports regex)
+  - repo: "my-org/my-repo"
     roles:
       - arn:aws:iam::123456789012:role/github-actions-role
     constraints:
-      branch: "refs/heads/main"          # Only allow from main branch
-
-  # Apply a session policy from S3
-  - repo: "org/policy-from-s3"           # Exact repository name
-    session_policy_file: "policies/restrict-to-dev.json"
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-role
-    constraints:
-      branch: "refs/heads/dev.*"         # Regex pattern for dev branches
-
-  # Match multiple repositories with a pattern
-  - repo: "org/project-.*"               # Match all repositories starting with project-
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["iam:*"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-role
+      branch: "refs/heads/main"
 ```
 
-#### Advanced Constraint Configuration
+For the full reference — all keys, constraint fields, session-policy options, remote S3 hot-reload, and tag-auth config — see [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and [`example-config.yaml`](example-config.yaml).
 
-You can apply multiple constraints to control when a role can be assumed. All constraints configured must be satisfied for access to be granted:
-
-```yaml
-repo_role_mappings:
-  - repo: "org/multi-constraint-repo"    # Repository pattern (supports regex)
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-role
-    constraints:
-      # Git reference constraints
-      branch: "refs/heads/main"          # Branch pattern (supports regex)
-      ref: "refs/tags/v.*"               # Reference pattern (supports regex)
-      ref_type: "tag"                    # Reference type (branch, tag)
-
-      # GitHub workflow constraints
-      event_name: "push"                 # GitHub event that triggered the workflow
-      workflow_ref: "deploy\\.ya?ml$"    # Workflow file name pattern (supports regex)
-      environment: "production"          # GitHub environment
-
-      # Actor constraints
-      actor_matches:                     # GitHub actors allowed to assume the role (supports regex)
-        - "admin-user"
-        - "authorized-.*"
-```
+---
 
 ### Usage
 
 #### Request Format
 
-To use the service, send a POST request with the GitHub OIDC token and the desired AWS role ARN:
+Send a POST request with the OIDC token and desired AWS role ARN:
 
 ```json
 {
@@ -216,238 +113,91 @@ To use the service, send a POST request with the GitHub OIDC token and the desir
 ```
 
 #### Running Locally
-The application includes a local development server that simulates AWS Lambda environments:
 
 ```bash
 # Start local development server (default port 8080)
 make run
 
-# Or with custom configuration
-make run-local CONFIG_PATH=example-config.yaml
-
-# Or run directly with Go
-go run cmd/local/main.go
-
 # With custom options
 go run cmd/local/main.go -port 9090 -config example-config.yaml -log-level debug
 ```
 
-The local server provides these endpoints:
-- `POST /verify` - Token validation endpoint (matches Lambda behavior)
-- `GET /health` - Health check endpoint
+The local server loads config at startup from a static provider — there is no live S3 hot-reload locally. Hot-reload is a Lambda deployment feature; see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-You can test the `/verify` endpoint:
-```bash
-curl -X POST http://localhost:8080/verify \
-  -H "Content-Type: application/json" \
-  -d '{"token": "your-github-oidc-token", "role": "your-aws-role-arn"}'
-```
+Endpoints:
 
-**Local Server Features:**
-- Simulates AWS Lambda API Gateway proxy integration
-- Configurable latency simulation for testing
-- Graceful shutdown with SIGTERM/SIGINT
-- Structured JSON logging
-- Hot configuration reloading (restart required)
+- `POST /verify` — token validation (matches Lambda behavior)
+- `GET /health` — health check
 
 #### Using in GitHub Actions Workflows
 
-Here are examples of how to use this service in GitHub Actions workflows with different audience configurations:
-
-##### Method 1: Using @actions/core getIDToken (Recommended)
-
-This method uses the `@actions/core` library to request OIDC tokens with specific audiences, which is cleaner and more reliable:
+The recommended approach uses `@actions/core` to request an OIDC token with a specific audience:
 
 ```yaml
-name: AWS Deployment with Specific Audience
+name: AWS Deployment
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for OIDC token
-      contents: read   # Required to check out repository
+      id-token: write
+      contents: read
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js (for @actions/core)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Get AWS credentials via OIDC validator
+      - name: Get AWS credentials via OIDC warden
         uses: actions/github-script@v7
         with:
           script: |
             const core = require('@actions/core');
-
-            // Request OIDC token with specific audience
             const token = await core.getIDToken('sts.amazonaws.com');
 
-            // Call the validator API to get AWS credentials
             const response = await fetch('https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/verify', {
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
+              headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 token: token,
                 role: 'arn:aws:iam::123456789012:role/github-actions-role'
               })
             });
 
-            if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
             const { data } = await response.json();
-
-            // Mask sensitive data in logs
             core.setSecret(data.AccessKeyId);
             core.setSecret(data.SecretAccessKey);
             core.setSecret(data.SessionToken);
-
-            // Set environment variables for subsequent steps
             core.exportVariable('AWS_ACCESS_KEY_ID', data.AccessKeyId);
             core.exportVariable('AWS_SECRET_ACCESS_KEY', data.SecretAccessKey);
             core.exportVariable('AWS_SESSION_TOKEN', data.SessionToken);
 
-      - name: Deploy with AWS credentials
-        run: |
-          # Now you can use AWS CLI with the obtained credentials
-          aws sts get-caller-identity
+      - name: Use AWS credentials
+        run: aws sts get-caller-identity
 ```
 
-##### Method 2: Legacy curl-based approach
-
-For backwards compatibility, here's the original curl-based method:
-
-```yaml
-name: AWS Deployment (Legacy)
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write  # Required for OIDC token
-      contents: read   # Required to check out repository
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Get AWS credentials via custom OIDC validator
-        id: aws-creds
-        run: |
-          # Get the OIDC token (uses default audience)
-          TOKEN=$(curl -H "Authorization: bearer $ACTIONS_ID_TOKEN" \
-                 -H "Accept: application/json; api-version=2.0" \
-                 -H "Content-Type: application/json" \
-                 -H "User-Agent: actions/oidc-client" \
-                 "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r '.value')
-
-          # Call the validator API to get AWS credentials
-          RESPONSE=$(curl -s -X POST \
-                   -H "Content-Type: application/json" \
-                   -d "{\"token\": \"$TOKEN\", \"role\": \"arn:aws:iam::123456789012:role/github-actions-role\"}" \
-                   "https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/verify")
-
-          # Parse and set AWS credentials
-          echo "::add-mask::$(echo $RESPONSE | jq -r '.data.AccessKeyId')"
-          echo "::add-mask::$(echo $RESPONSE | jq -r '.data.SecretAccessKey')"
-          echo "::add-mask::$(echo $RESPONSE | jq -r '.data.SessionToken')"
-
-          echo "AWS_ACCESS_KEY_ID=$(echo $RESPONSE | jq -r '.data.AccessKeyId')" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=$(echo $RESPONSE | jq -r '.data.SecretAccessKey')" >> $GITHUB_ENV
-          echo "AWS_SESSION_TOKEN=$(echo $RESPONSE | jq -r '.data.SessionToken')" >> $GITHUB_ENV
-        env:
-          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ vars.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          ACTIONS_ID_TOKEN: ${{ vars.ACTIONS_ID_TOKEN }}
-
-      - name: Deploy with AWS credentials
-        run: |
-          # Now you can use AWS CLI with the obtained credentials
-          aws sts get-caller-identity
-```
+> **curl alternative**: You can also call the endpoint directly via `curl` using `$ACTIONS_ID_TOKEN_REQUEST_URL`. The `@actions/core` method above is preferred for cleaner audience control.
 
 #### Deploying to AWS Lambda
 
-The project provides multiple deployment options depending on your AWS infrastructure:
+Three deployment modes are available — API Gateway (recommended for production), Lambda URLs (simple setups), and ALB (high traffic). All share the same core logic; only the entry point differs.
 
-**1. API Gateway + Lambda (Recommended for Production)**
-
-API Gateway provides a public API endpoint that can be secured with API keys, restricting access to authorized repositories only. This approach minimizes endpoint exposure, enhancing security for safer usage.
+**Quickstart with pre-built container images (recommended):**
 
 ```bash
-# Build the API Gateway handler
-GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -tags=lambda.norpc -o bootstrap cmd/apigateway/main.go
-zip lambda-apigateway.zip bootstrap
-
-# Create Lambda function
+# API Gateway variant
 aws lambda create-function \
-  --function-name aws-oidc-warden-apigateway \
-  --runtime provided.al2023 \
-  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role \
-  --handler bootstrap \
-  --zip-file fileb://lambda-apigateway.zip
-```
-
-**2. Lambda URLs (Recommended for Simple Setups)**
-```bash
-# Build the Lambda URL handler
-GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -tags=lambda.norpc  -o bootstrap cmd/lambdaurl/main.go
-zip lambda-url.zip bootstrap
-
-# Create Lambda function with Function URL
-aws lambda create-function \
-  --function-name aws-oidc-warden-url \
-  --runtime provided.al2023 \
-  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role \
-  --handler bootstrap \
-  --zip-file fileb://lambda-url.zip
-
-# Create Function URL
-aws lambda create-function-url-config \
-  --function-name aws-oidc-warden-url \
-  --auth-type NONE \
-  --cors '{"AllowOrigins":["*"],"AllowMethods":["POST"]}'
-```
-
-**3. Application Load Balancer (High Traffic)**
-```bash
-# Build the ALB handler
-GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -tags=lambda.norpc -o bootstrap cmd/alb/main.go
-zip lambda-alb.zip bootstrap
-
-# Create Lambda function for ALB target group
-aws lambda create-function \
-  --function-name aws-oidc-warden-alb \
-  --runtime provided.al2023 \
-  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role \
-  --handler bootstrap \
-  --zip-file fileb://lambda-alb.zip
-```
-
-**4. Container-Based Deployment (Recommended Lambda Deployment)**
-```bash
-# Using pre-built container images (default API Gateway)
-# Can also be specific and use: ghcr.io/boogy/aws-oidc-warden:apigateway-latest
-aws lambda create-function \
-  --function-name aws-oidc-warden-apigateway \
+  --function-name aws-oidc-warden \
   --package-type Image \
   --code ImageUri=ghcr.io/boogy/aws-oidc-warden:latest \
   --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
 
-# Using pre-built container images (ALB)
+# ALB variant
 aws lambda create-function \
   --function-name aws-oidc-warden-alb \
   --package-type Image \
   --code ImageUri=ghcr.io/boogy/aws-oidc-warden:alb-latest \
   --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
 
-# Using pre-built container images (lambda url)
+# Lambda URL variant
 aws lambda create-function \
   --function-name aws-oidc-warden-lambdaurl \
   --package-type Image \
@@ -455,111 +205,23 @@ aws lambda create-function \
   --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
 ```
 
-**Build Automation:**
-```bash
-# Build all Lambda variants locally
-make build-all
+For full build commands, ECR pull-through cache setup, and infrastructure details see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-# Build and publish container images
-make ko-publish-all
+---
 
-# Create release packages with GoReleaser
-make release
-```
+## Tag-Based Authorization (Cross-Account)
 
-#### Using Pre-built Container Images
+Tag-based authorization lets a repository assume an IAM role authorized by **tags on the role itself**, without listing the role in `repo_role_mappings`. This is especially useful when roles are managed across many accounts or teams: add `aow/repo`, `aow/ref`, and similar tags to the IAM role and the warden will evaluate them against the OIDC claims.
 
-**Recommended for Production**: Instead of building your own images, you can use the pre-built container images from GitHub Container Registry (GHCR). These images are automatically built and published for each release.
+For cross-account (hub/spoke) scenarios, the warden reads and assumes roles in member accounts by first assuming a convention-named spoke role (`aow-spoke` by default) in the target account. Explicit `repo_role_mappings` are always evaluated first; tag-auth is a fallback path only.
 
-**Container Registries**:
-- `docker pull ghcr.io/boogy/aws-oidc-warden:latest`
-- `docker pull boogy/aws-oidc-warden:latest`
-
-**Available tags**:
-- `latest` - Latest stable release
-- `v1.x.x` - Specific version tags
-- Multi-architecture support: `linux/amd64` and `linux/arm64`
-
-##### Direct Lambda Deployment
-
-```bash
-# Create Lambda function with pre-built container image
-aws lambda create-function \
-  --function-name aws-oidc-warden \
-  --package-type Image \
-  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:latest \
-  --role arn:aws:iam::123456789012:role/lambda-execution-role
-
-# Update existing Lambda function
-aws lambda update-function-code \
-  --function-name aws-oidc-warden \
-  --image-uri ghcr.io/boogy/aws-oidc-warden:v1.0.0
-```
-
-##### Using ECR Pull-Through Cache (Recommended)
-
-To avoid GitHub Container Registry rate limits and improve performance for production deployments, set up an AWS ECR pull-through cache:
-
-1. **Create ECR pull-through cache rule**:
-   ```bash
-   aws ecr create-pull-through-cache-rule \
-     --ecr-repository-prefix ghcr.io \
-     --upstream-registry-url ghcr.io \
-     --region us-east-1
-   ```
-
-2. **Use the pull-through cache URI in Lambda**:
-   ```bash
-   # Create Lambda function using ECR pull-through cache
-   aws lambda create-function \
-     --function-name aws-oidc-warden \
-     --package-type Image \
-     --code ImageUri=<ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:latest \
-     --role arn:aws:iam::123456789012:role/lambda-execution-role
-
-   # Update existing Lambda function
-   aws lambda update-function-code \
-     --function-name aws-oidc-warden \
-     --image-uri <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:v1.1.0
-   ```
-
-3. **Configure permissions for pull-through cache**:
-
-   Your Lambda execution role needs these additional permissions:
-   ```json
-   {
-     "Version": "2012-10-17",
-     "Statement": [
-       {
-         "Effect": "Allow",
-         "Action": [
-           "ecr:BatchGetImage",
-           "ecr:GetDownloadUrlForLayer",
-           "ecr:GetAuthorizationToken"
-         ],
-         "Resource": "*"
-       }
-     ]
-   }
-   ```
-
-**Benefits of ECR Pull-Through Cache**:
-- **No rate limits**: Avoid GitHub Container Registry throttling
-- **Faster deployments**: Images are cached in your AWS Account and Region
-- **Better reliability**: Reduced dependency on external registries
-- **Cost optimization**: Lower data transfer costs for frequent deployments
-
-**Container Image URI Format**:
-- Direct: `ghcr.io/boogy/aws-oidc-warden:TAG`
-- Via ECR pull-through cache: `ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ghcr.io/boogy/aws-oidc-warden:TAG`
+The feature is opt-in (`tag_auth.enabled: true`, default `false`) and supports transitive session tags, a target-account allow-list, and an external ID for spoke-role trust. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) for setup, tag reference, and IAM examples.
 
 ---
 
 ## API Responses
 
 ### Success Response
-
-When a token is successfully validated and the AWS role is assumed, the service returns temporary AWS credentials:
 
 ```json
 {
@@ -579,8 +241,6 @@ When a token is successfully validated and the AWS role is assumed, the service 
 
 ### Error Response
 
-When validation fails or the role cannot be assumed, the service returns an error response:
-
 ```json
 {
   "success": false,
@@ -595,144 +255,46 @@ When validation fails or the role cannot be assumed, the service returns an erro
 
 ---
 
-## Caching System
-
-The application includes a simple caching system for JWKS (JSON Web Key Sets) to improve performance and reduce load on GitHub's OIDC servers and mostly avoid hitting GitHub API rate limits:
-
-### In-Memory Cache
-- Default option, perfect for low to moderate traffic
-- Fast lookups with configurable maximum size
-- Cache is lost when the Lambda container is recycled
-- Example configuration:
-  ```yaml
-  cache:
-    type: "memory"
-    ttl: "1h"
-    max_local_size: 20
-  ```
-
-### DynamoDB Cache
-- Persistent cache shared across all Lambda instances
-- Ideal for high-traffic environments or when persistence is required
-- Automatic TTL-based item expiration using DynamoDB's built-in TTL feature
-- Example configuration:
-  ```yaml
-  cache:
-    type: "dynamodb"
-    ttl: "4h"
-    dynamodb_table: "aws-oidc-warden-cache"
-  ```
-
-### S3 Cache
-- Suitable for very large cache items or rarely-changing data
-- Optional cleanup of expired objects
-- Example configuration:
-  ```yaml
-  cache:
-    type: "s3"
-    ttl: "24h"
-    s3_bucket: "aws-oidc-warden-cache"
-    s3_prefix: "jwks-cache"
-  ```
-
----
-
 ## Security Considerations
 
-### Token Validation Process
+- Use specific repository patterns; avoid overly broad patterns like `.*`
+- Apply multiple constraints for sensitive roles, and session policies to scope AWS permissions
+- Follow least-privilege when defining IAM roles; review CloudWatch logs regularly
 
-1. **Token Parsing**: The JWT token is parsed to extract claims
-2. **Signature Verification**: The token signature is verified using the GitHub JWKS endpoint
-3. **Claims Validation**: Critical claims are validated (issuer, audience, expiration)
-4. **Repository Mapping**: The repository is matched against configured patterns
-5. **Constraint Validation**: Repository-specific constraints are applied (branch, actor, etc.)
-6. **Role Assumption**: If all validations pass, the requested AWS role is assumed
-
-### Secure Configuration
-
-- Use specific repository patterns in the `repo` field rather than overly broad patterns like `.*`
-- Apply multiple constraints for sensitive roles
-- Use regex patterns carefully, ensuring they're not too permissive
-- Consider using session policies to further restrict AWS permissions
-- Regularly rotate and review logs for suspicious activity
-- Follow the principle of least privilege when defining AWS IAM roles
-
-### Session Tagging
-
-The service automatically applies tags to the AWS sessions it creates. These tags include:
-
-- `repo`: The repository name (without owner)
-- `actor`: The GitHub user or system that triggered the workflow
-- `ref`: The Git reference that triggered the workflow
-- `event-name`: The event that triggered the workflow
-- `repo-owner`: The owner of the repository
-- `ref-type`: The type of Git reference (branch, tag)
-
-These tags can be used for auditing, cost allocation, and for creating condition-based IAM policies.
-
-📖 **For detailed examples and security patterns**, see [Session Tagging](docs/SESSION_TAGGING.md)
+Session tags (`repo`, `actor`, `ref`, `event-name`, `repo-owner`, `ref-type`) are attached to every STS session for auditing, cost allocation, and ABAC — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md).
 
 ---
 
 ## How It Works
 
-The service follows these steps to validate tokens and assume roles:
-
-1. **Receive Request**: A GitHub Actions workflow sends an OIDC token and desired role ARN
-2. **Fetch JWKS**: The service retrieves GitHub's JWKS (from cache if available) to validate the token
-3. **Validate Token**: The token is validated for authenticity and claims
-4. **Check Repository Mapping**: The repository claim is matched against configured patterns
-5. **Apply Constraints**: Branch, actor, and other constraints are evaluated
-6. **Apply Session Policy**: Optional custom session policy is applied
-7. **Assume Role**: If all checks pass, the AWS role is assumed and session tags are set for the role ([AWS Role Session Tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html))
-8. **Return Credentials**: Temporary AWS credentials are returned to the requester
+1. **Receive Request**: GitHub Actions sends OIDC token + role ARN
+2. **Fetch JWKS**: JWKS retrieved (from cache if available) and token signature verified
+3. **Validate Token**: Issuer, audience, and expiration checked
+4. **Check Repository Mapping**: Repository claim matched against configured patterns
+5. **Apply Constraints**: Branch, actor, and other constraints evaluated
+6. **Apply Session Policy**: Optional custom session policy applied
+7. **Assume Role**: AWS role assumed with session tags ([AWS Role Session Tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html))
+8. **Return Credentials**: Temporary AWS credentials returned
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **Token Validation Failures**
-   - Check that your GitHub Actions workflow has the necessary permissions (`id-token: write`)
-   - Verify the token is being properly extracted and passed to the service
-   - Ensure the repository name in the token matches patterns in your configuration
-
-2. **Role Assumption Failures**
-   - Verify that the Lambda execution role can assume the target role
-   - Check for any conflicting constraint configurations
-   - Review session policies for syntax errors or overly restrictive permissions
-
-3. **Cache Issues**
-   - For DynamoDB cache, ensure the table has a TTL field configured
-   - For S3 cache, check bucket permissions and encryption settings
-   - If using in-memory cache with high traffic, consider increasing `max_local_size`
-
-4. **Performance Issues**
-   - If experiencing slow response times, check CloudWatch metrics for Lambda timeouts or throttling
-   - Consider increasing Lambda memory allocation, which also improves CPU performance
-   - Review your caching strategy and TTL settings
-
-5. **API Gateway Issues**
-   - Verify the API Gateway is properly configured to pass all requests to the Lambda function
-   - Check request transformer templates if using API Gateway mapping templates
-   - Ensure the Lambda has the necessary permissions to be invoked by API Gateway
+- **Token validation fails** — ensure the workflow has `id-token: write`; verify the repository name matches your configured patterns and the issuer/audience settings.
+- **Role assumption fails** — confirm the Lambda execution role can assume the target role; check for conflicting constraints or overly restrictive session policies.
+- **Cache issues** — DynamoDB needs a TTL field configured; S3 needs bucket read/write; raise `max_local_size` for high traffic.
+- **Tag-auth / cross-account** — set `tag_auth.enabled: true`, ensure the spoke role (`aow-spoke` by default) exists in each member account and trusts the hub Lambda role, grant `iam:GetRole`, and list the target account in `tag_auth.allowed_accounts` if used. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md).
 
 ---
 
 ## Contributing
 
-We welcome contributions from the community! Here's how you can help:
-
-### Getting Started with Development
-
 1. Fork the repository
 2. Clone your fork: `git clone git@github.com:your-username/aws-oidc-warden.git`
 3. Create a feature branch: `git checkout -b feature/your-feature-name`
-4. Make your changes and write tests
-5. Run tests: `make test`
-6. Build and verify: `make build && make run`
-7. Submit a pull request with a clear description of your changes
+4. Make changes and write tests
+5. Run checks: `make check`
+6. Submit a pull request with a clear description
 
 > [!TIP]
 > If you find a bug please don't just create an issue. Create a pull request with your fix so that everyone can benefit from it.
@@ -741,66 +303,15 @@ We welcome contributions from the community! Here's how you can help:
 
 ## AWS Infrastructure Requirements
 
-For full functionality, the service requires these AWS resources:
-
-- **Lambda Function** - To run the validator service
-- **IAM Role for Lambda** - With permissions to:
-  - Assume the target roles
-  - Access DynamoDB (if using DynamoDB cache)
-  - Write to S3 (if using S3 logging or cache)
-  - Write to CloudWatch Logs
-- **DynamoDB Table** - For persistent caching (optional)
-- **S3 Bucket** - For logs and session policies (optional)
+- **Lambda Function** — runs the validator service
+- **IAM Role for Lambda** — assume target roles (`sts:AssumeRole`, `sts:TagSession`), read role tags for tag-auth (`iam:GetRole`), DynamoDB cache access, S3 read/write (logs/policies), and CloudWatch Logs
+- **DynamoDB Table** — persistent caching (optional)
+- **S3 Bucket** — logs and session policies (optional)
 
 > [!TIP]
-> A generic role can be provided to the lambda with broader privileges and reduce permissions with the session policies for specific repositories. This can reduce the number of roles to be created.
+> A generic role with broader privileges can be given to Lambda, then scoped per-repo with session policies. This reduces the total number of IAM roles needed.
 
-### Required IAM Permissions
-
-Here's a sample policy for the Lambda execution role:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["sts:AssumeRole", "sts:TagSession"],
-      "Resource": ["arn:aws:iam::*:role/github-actions-*"]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:DeleteItem"
-      ],
-      "Resource": ["arn:aws:dynamodb:*:*:table/aws-oidc-warden-cache"]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject"
-      ],
-      "Resource": ["arn:aws:s3:::s3-aws-oidc-warden-session-policies/*"]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": [
-         "arn:${Partition}:logs:${Region}:${Account}:log-group:${LogGroupName}",
-         "arn:${Partition}:logs:${Region}:${Account}:log-group:${LogGroupName}:log-stream:*",
-      ]
-    }
-  ]
-}
-```
+For the complete IAM policy and infrastructure details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#required-iam-permissions).
 
 ---
 
