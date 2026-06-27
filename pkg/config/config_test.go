@@ -503,6 +503,22 @@ func strPtr(s string) *string {
 	return &s
 }
 
+func TestValidate_TagAuthDefaultOrg(t *testing.T) {
+	base := func(org string) *Config {
+		return &Config{
+			Issuer:          "https://token.actions.githubusercontent.com",
+			Audiences:       []string{"sts.amazonaws.com"},
+			RoleSessionName: "aow",
+			TagAuth:         &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: org},
+		}
+	}
+	require.NoError(t, base("acme").Validate())
+	require.NoError(t, base("").Validate())
+	require.Error(t, base("acme/api").Validate())
+	require.Error(t, base("acme org").Validate())
+	require.Error(t, base("acme\torg").Validate())
+}
+
 func TestTagAuthDefaults(t *testing.T) {
 	viper.Reset()
 	once = sync.Once{}

@@ -477,24 +477,29 @@ func (c *Config) Validate() error {
 
 	// Normalize tag-auth defaults so the feature works even when Config is built
 	// directly (e.g. in tests) without going through viper defaults.
-	if c.TagAuth != nil && c.TagAuth.Enabled {
-		if c.TagAuth.TagPrefix == "" {
-			c.TagAuth.TagPrefix = "aow/"
+	if c.TagAuth != nil {
+		if c.TagAuth.DefaultOrg != "" && strings.ContainsAny(c.TagAuth.DefaultOrg, "/ \t\n\r") {
+			return fmt.Errorf("tag_auth.default_org %q must not contain '/' or whitespace", c.TagAuth.DefaultOrg)
 		}
-		if c.TagAuth.SpokeRoleName == "" {
-			c.TagAuth.SpokeRoleName = "aow-spoke"
-		}
-		if c.TagAuth.SpokeSessionDuration == 0 {
-			c.TagAuth.SpokeSessionDuration = 15 * time.Minute
-		}
-		for i, acct := range c.TagAuth.AllowedAccounts {
-			c.TagAuth.AllowedAccounts[i] = strings.TrimSpace(acct)
-			if !accountIDPattern.MatchString(c.TagAuth.AllowedAccounts[i]) {
-				return fmt.Errorf("tag_auth.allowed_accounts entry %q is not a 12-digit AWS account ID", acct)
+		if c.TagAuth.Enabled {
+			if c.TagAuth.TagPrefix == "" {
+				c.TagAuth.TagPrefix = "aow/"
 			}
-		}
-		if len(c.TagAuth.AllowedAccounts) == 0 {
-			slog.Warn("tag_auth enabled with empty allowed_accounts; the warden may assume into ANY member account. Populate tag_auth.allowed_accounts in production.")
+			if c.TagAuth.SpokeRoleName == "" {
+				c.TagAuth.SpokeRoleName = "aow-spoke"
+			}
+			if c.TagAuth.SpokeSessionDuration == 0 {
+				c.TagAuth.SpokeSessionDuration = 15 * time.Minute
+			}
+			for i, acct := range c.TagAuth.AllowedAccounts {
+				c.TagAuth.AllowedAccounts[i] = strings.TrimSpace(acct)
+				if !accountIDPattern.MatchString(c.TagAuth.AllowedAccounts[i]) {
+					return fmt.Errorf("tag_auth.allowed_accounts entry %q is not a 12-digit AWS account ID", acct)
+				}
+			}
+			if len(c.TagAuth.AllowedAccounts) == 0 {
+				slog.Warn("tag_auth enabled with empty allowed_accounts; the warden may assume into ANY member account. Populate tag_auth.allowed_accounts in production.")
+			}
 		}
 	}
 
