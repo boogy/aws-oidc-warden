@@ -3,11 +3,13 @@ Analyze and fix GitHub issue: $ARGUMENTS
 ## Workflow
 
 ### 1. Understand the Issue
+
 ```bash
 gh issue view $ARGUMENTS
 ```
 
 Read the issue description, labels, and comments to understand:
+
 - What is the expected behavior?
 - What is the actual behavior?
 - Are there reproduction steps?
@@ -34,6 +36,7 @@ rg -n "mapstructure:" pkg/config/
 ### 3. Read CLAUDE.md Files
 
 Before making changes, read the relevant package's CLAUDE.md:
+
 - `pkg/handler/CLAUDE.md` for request processing
 - `pkg/validator/CLAUDE.md` for token validation
 - `pkg/config/CLAUDE.md` for configuration
@@ -42,6 +45,7 @@ Before making changes, read the relevant package's CLAUDE.md:
 ### 4. Implement Fix
 
 Following established patterns from the codebase:
+
 - Use interfaces for testability
 - Follow error handling conventions
 - Use structured logging with `slog`
@@ -51,6 +55,7 @@ Following established patterns from the codebase:
 ### 5. Write/Update Tests
 
 Create or update tests for the fix:
+
 - Add test case to existing table-driven tests
 - Create new test file if needed
 - Ensure edge cases are covered
@@ -67,6 +72,7 @@ make build-local  # Verify build
 ### 7. Create Commit
 
 Use Conventional Commits format:
+
 ```
 fix: <brief description of fix>
 
