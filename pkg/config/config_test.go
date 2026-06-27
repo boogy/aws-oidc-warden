@@ -517,6 +517,16 @@ func TestValidate_TagAuthDefaultOrg(t *testing.T) {
 	require.Error(t, base("acme/api").Validate())
 	require.Error(t, base("acme org").Validate())
 	require.Error(t, base("acme\torg").Validate())
+	require.Error(t, base("acme\norg").Validate())
+	require.Error(t, base("acme\rorg").Validate())
+
+	// default_org is validated even when tag-auth is disabled (ungated check).
+	require.Error(t, (&Config{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		Audiences:       []string{"sts.amazonaws.com"},
+		RoleSessionName: "aow",
+		TagAuth:         &TagAuth{Enabled: false, DefaultOrg: "bad/org"},
+	}).Validate())
 }
 
 func TestTagAuthDefaults(t *testing.T) {
