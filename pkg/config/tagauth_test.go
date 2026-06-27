@@ -81,6 +81,9 @@ func TestTagAuth_Authorize_DefaultOrg(t *testing.T) {
 	// ...but the explicit full form for that other org still authorizes (lenient).
 	assert.True(t, ta.Authorize(map[string]string{"aow/repo": "beta/api"}, otherOrgClaims))
 
+	// Empty repository claim never matches, even with default_org set.
+	assert.False(t, ta.Authorize(map[string]string{"aow/repo": "api"}, map[string]any{}))
+
 	// No default_org: bare tokens must not match (current behavior preserved).
 	taNoOrg := &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
 	assert.False(t, taNoOrg.Authorize(map[string]string{"aow/repo": "api"}, claims))
