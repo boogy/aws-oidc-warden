@@ -33,9 +33,11 @@ jobs:
         run: go mod verify
 
       - name: Run tests
+        id: test
+        shell: bash
         run: |
+          set -o pipefail
           go test -v -race -coverprofile=coverage.out -covermode=atomic ./... | tee test-output.txt
-          echo "TEST_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
 
       - name: Generate test summary
         if: always()
@@ -43,7 +45,7 @@ jobs:
           echo "## Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "$TEST_EXIT_CODE" -eq 0 ]; then
+          if [ "${{ steps.test.outcome }}" == "success" ]; then
             echo "✅ **All tests passed!**" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Some tests failed**" >> $GITHUB_STEP_SUMMARY
@@ -51,7 +53,7 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Coverage" >> $GITHUB_STEP_SUMMARY
-          go tool cover -func=coverage.out | tail -1 >> $GITHUB_STEP_SUMMARY
+          [ -f coverage.out ] && go tool cover -func=coverage.out | tail -1 >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           echo "<details>" >> $GITHUB_STEP_SUMMARY
