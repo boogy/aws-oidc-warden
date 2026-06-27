@@ -342,10 +342,17 @@ repo_role_mappings:
 # See docs/TAG_BASED_AUTHORIZATION.md for the full tag reference and IAM setup.
 tag_auth:
   enabled: false
-  tag_prefix: "aow/"            # tag key namespace; keys: aow/repo, aow/repo-owner, aow/branch, aow/ref, aow/ref-type, aow/event-name, aow/workflow-ref, aow/environment, aow/actor
-  spoke_role_name: "aow-spoke"  # role assumed in each member account (must trust the warden's execution role)
-  external_id: ""               # optional external ID for the hub->spoke trust
+  tag_prefix: "aow/" # tag key namespace; keys: aow/repo, aow/repo-owner, aow/branch, aow/ref, aow/ref-type, aow/event-name, aow/workflow-ref, aow/environment, aow/actor
+  spoke_role_name: "aow-spoke" # role assumed in each member account (must trust the warden's execution role)
+  external_id: "" # optional external ID for the hub->spoke trust
   spoke_session_duration: "15m"
+  transitive_session_tags: false # when true, repo/ref/actor session tags are transitive
+  # (immutable + propagated through further role chaining).
+  # Enable ONLY if the target role chains to more roles and the
+  # repo ABAC must hold there too. See docs/TAG_BASED_AUTHORIZATION.md.
+  allowed_accounts: [] # member account IDs the warden may assume into.
+  # [] or unset = ANY account (set this in production!).
+  # The hub account is always allowed.
 #
 # Role tag examples (set these on the target IAM role, not here):
 #   aow/repo:         "org/api org/web"   # one repo or a space-separated list (OR)

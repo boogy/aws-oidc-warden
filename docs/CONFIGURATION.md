@@ -52,6 +52,8 @@ Optional, disabled by default. When enabled, a repo may assume a role whose IAM 
 | `AOW_TAG_AUTH_SPOKE_ROLE_NAME`        | `tag_auth.spoke_role_name`       | Role assumed in each member account for cross-account   | `aow-spoke` |
 | `AOW_TAG_AUTH_EXTERNAL_ID`            | `tag_auth.external_id`           | Optional external ID for the hub→spoke trust            |             |
 | `AOW_TAG_AUTH_SPOKE_SESSION_DURATION` | `tag_auth.spoke_session_duration`| Hub→spoke session length                                | `15m`       |
+| `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` | `tag_auth.transitive_session_tags` | Mark repo/ref/actor session tags transitive (immutable through role chaining) | `false` |
+| `AOW_TAG_AUTH_ALLOWED_ACCOUNTS`        | `tag_auth.allowed_accounts`        | Comma-separated member account IDs allowed as assume targets (hub always allowed; empty = any) | (empty) |
 
 ### Logging Settings
 
