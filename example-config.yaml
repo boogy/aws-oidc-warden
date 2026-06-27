@@ -343,6 +343,7 @@ repo_role_mappings:
 tag_auth:
   enabled: false
   tag_prefix: "aow/" # tag key namespace; keys: aow/repo, aow/repo-owner, aow/branch, aow/ref, aow/ref-type, aow/event-name, aow/workflow-ref, aow/environment, aow/actor
+  default_org: "" # if set, bare aow/repo tags (e.g. "api") expand to "<default_org>/api"
   spoke_role_name: "aow-spoke" # role assumed in each member account (must trust the warden's execution role)
   external_id: "" # optional external ID for the hub->spoke trust
   spoke_session_duration: "15m"

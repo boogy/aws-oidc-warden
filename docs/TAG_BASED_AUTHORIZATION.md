@@ -118,6 +118,46 @@ aow/event-name:  "push"
 is assumable by `acme/api` **or** `acme/web`, only on a `push` whose ref is
 exactly `refs/heads/main`.
 
+### Short-form repo tags (`default_org`)
+
+By default, every token in `aow/repo` must be a full `owner/repo` path — a bare
+name like `api` (no `/`) never matches the `repository` claim (which is always
+`owner/repo`).
+
+Set `tag_auth.default_org` to an org name to enable expansion: bare tokens are
+prefixed with `<default_org>/` before matching. Full `owner/repo` tokens are
+**not** expanded and continue to work as-is — they may name any org (multi-org
+use case).
+
+**Example** — with `tag_auth.default_org: acme`:
+
+```
+aow/repo: "api web"          # expands to acme/api and acme/web
+aow/repo: "beta/service api" # beta/service stays as-is; api expands to acme/api
+```
+
+Rules:
+
+- A token is "bare" if it contains no `/` character.
+- Expansion applies **only** to `aow/repo`. `aow/workflow-ref` always requires
+  the full `owner/repo/.github/workflows/x.yml@ref` form.
+- Matching remains **case-sensitive**. `default_org` must match the `repository`
+  claim's owner casing exactly (GitHub usernames and org names are
+  case-preserving).
+- Without `default_org` (empty string, the default), bare tokens never match —
+  the behavior is unchanged from before this feature was introduced.
+- Benefit: single-org fleets can use short names in role tags, staying well within
+  the AWS 256-character tag-value limit.
+
+**Token expansion examples** (`default_org: acme`):
+
+| Tag token    | Comparison form | Matches claim `acme/api`? | Matches claim `beta/web`? |
+| ------------ | -------------- | ------------------------- | ------------------------- |
+| `api`        | `acme/api`     | yes                       | no                        |
+| `acme/api`   | `acme/api`     | yes                       | no                        |
+| `beta/web`   | `beta/web`     | no                        | yes                       |
+| `acme/`      | `acme/`        | no (exact, not a repo)    | no                        |
+
 ---
 
 ## Precedence: mappings + tags together
@@ -443,6 +483,7 @@ Example spoke trust policy (external ID optional):
 tag_auth:
   enabled: true
   tag_prefix: "aow/"
+  default_org: ""    # if set, bare aow/repo tags (e.g. "api") expand to "<default_org>/api"
   spoke_role_name: "aow-spoke"
   external_id: "" # optional
   spoke_session_duration: "15m"
@@ -451,6 +492,6 @@ tag_auth:
 ```
 
 Or via environment variables: `AOW_TAG_AUTH_ENABLED`, `AOW_TAG_AUTH_TAG_PREFIX`,
-`AOW_TAG_AUTH_SPOKE_ROLE_NAME`, `AOW_TAG_AUTH_EXTERNAL_ID`,
+`AOW_TAG_AUTH_DEFAULT_ORG`, `AOW_TAG_AUTH_SPOKE_ROLE_NAME`, `AOW_TAG_AUTH_EXTERNAL_ID`,
 `AOW_TAG_AUTH_SPOKE_SESSION_DURATION`, `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`,
 `AOW_TAG_AUTH_ALLOWED_ACCOUNTS` (comma-separated account IDs).

@@ -503,6 +503,32 @@ func strPtr(s string) *string {
 	return &s
 }
 
+func TestValidate_TagAuthDefaultOrg(t *testing.T) {
+	base := func(org string) *Config {
+		return &Config{
+			Issuer:          "https://token.actions.githubusercontent.com",
+			Audiences:       []string{"sts.amazonaws.com"},
+			RoleSessionName: "aow",
+			TagAuth:         &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: org},
+		}
+	}
+	require.NoError(t, base("acme").Validate())
+	require.NoError(t, base("").Validate())
+	require.Error(t, base("acme/api").Validate())
+	require.Error(t, base("acme org").Validate())
+	require.Error(t, base("acme\torg").Validate())
+	require.Error(t, base("acme\norg").Validate())
+	require.Error(t, base("acme\rorg").Validate())
+
+	// default_org is validated even when tag-auth is disabled (ungated check).
+	require.Error(t, (&Config{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		Audiences:       []string{"sts.amazonaws.com"},
+		RoleSessionName: "aow",
+		TagAuth:         &TagAuth{Enabled: false, DefaultOrg: "bad/org"},
+	}).Validate())
+}
+
 func TestTagAuthDefaults(t *testing.T) {
 	viper.Reset()
 	once = sync.Once{}
