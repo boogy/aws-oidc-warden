@@ -69,6 +69,21 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		),
 	)
 
+	// Account guardrail: reject target accounts outside the allow-list before
+	// reading role tags or assuming anything. Only relevant when tag-auth (and
+	// thus cross-account) is enabled.
+	if cfg.TagAuth != nil && cfg.TagAuth.Enabled {
+		ok, aerr := r.consumer.IsTargetAccountAllowed(requestedRole)
+		if aerr != nil {
+			log.Error("Account allow-list check failed", slog.String("error", aerr.Error()))
+			return nil, ErrAssumeRoleFailed
+		}
+		if !ok {
+			log.Error("Target account not allowed", slog.String("role", requestedRole))
+			return nil, ErrAccountNotAllowed
+		}
+	}
+
 	// Convert claims to map for constraint checking
 	claimsMap := make(map[string]any)
 	claimsJSON, _ := json.Marshal(claims)

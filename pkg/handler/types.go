@@ -37,6 +37,7 @@ var (
 	ErrTokenValidationFailed = errors.New("token validation failed")
 	ErrSessionPolicyAccess   = errors.New("failed to access session policy")
 	ErrRoleNotPermitted      = errors.New("role not allowed for repository or doesn't meet constraints")
+	ErrAccountNotAllowed     = errors.New("target account is not in the allowed_accounts list")
 	ErrAssumeRoleFailed      = errors.New("failed to assume the requested role")
 )
 

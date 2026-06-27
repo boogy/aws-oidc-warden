@@ -27,11 +27,12 @@ func (v *tagModeValidator) FetchJWKS(string) (*types.JWKS, error)          { ret
 func (v *tagModeValidator) GenKeyFunc(*types.JWKS) jwt.Keyfunc             { return nil }
 
 type fakeConsumer struct {
-	tags      map[string]string
-	tagsErr   error
-	assumed   string
-	gotClaims *types.GithubClaims // claims passed to AssumeRole → drive session tags (ABAC)
-	assumeOut *ststypes.Credentials
+	tags         map[string]string
+	tagsErr      error
+	assumed      string
+	gotClaims    *types.GithubClaims // claims passed to AssumeRole → drive session tags (ABAC)
+	assumeOut    *ststypes.Credentials
+	allowAccount bool
 }
 
 func (f *fakeConsumer) ReadS3Configuration() error { return nil }
@@ -40,6 +41,7 @@ func (f *fakeConsumer) GetS3Object(string, string) (io.ReadCloser, error) {
 }
 func (f *fakeConsumer) GetRole(string) (*awsiam.GetRoleOutput, error) { return nil, nil }
 func (f *fakeConsumer) GetRoleTags(string) (map[string]string, error) { return f.tags, f.tagsErr }
+func (f *fakeConsumer) IsTargetAccountAllowed(string) (bool, error)   { return f.allowAccount, nil }
 func (f *fakeConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, claims *types.GithubClaims) (*ststypes.Credentials, error) {
 	f.assumed = roleARN
 	f.gotClaims = claims
@@ -63,8 +65,9 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
 	exp := time.Now()
 	fc := &fakeConsumer{
-		tags:      map[string]string{"aow/repo": "acme/api"},
-		assumeOut: &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
+		tags:         map[string]string{"aow/repo": "acme/api"},
+		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
+		allowAccount: true,
 	}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
 	creds, err := proc.ProcessRequest(context.Background(),
@@ -80,10 +83,21 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 func TestProcessRequest_TagAuthDenies(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
-	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/other"}}
+	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/other"}, allowAccount: true}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
 	_, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"}, "rid", slog.Default())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted))
+}
+
+func TestProcessRequest_AccountNotAllowed(t *testing.T) {
+	cfg := baseTagCfg(t)
+	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
+	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: false}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"}, "rid", slog.Default())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, handler.ErrAccountNotAllowed))
 }
