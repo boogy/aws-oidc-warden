@@ -490,6 +490,9 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("tag_auth.allowed_accounts entry %q is not a 12-digit AWS account ID", acct)
 			}
 		}
+		if len(c.TagAuth.AllowedAccounts) == 0 {
+			slog.Warn("tag_auth enabled with empty allowed_accounts; the warden may assume into ANY member account. Populate tag_auth.allowed_accounts in production.")
+		}
 	}
 
 	return nil
