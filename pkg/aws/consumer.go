@@ -344,6 +344,9 @@ func sanitizeTagValue(value string, maxLength int) string {
 // accountAllowed reports whether the warden may assume a role in account. The
 // hub account is always allowed; an empty allow-list permits any account.
 func (a *AwsConsumer) accountAllowed(account, hub string) bool {
+	if a.Config == nil {
+		return true
+	}
 	if account == hub {
 		return true
 	}
