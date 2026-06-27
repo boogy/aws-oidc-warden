@@ -25,6 +25,8 @@ var (
 	cacheType         = "memory"                                      // Default cache type
 	cacheTTL          = "1h"                                          // Default cache TTL
 	cacheMaxLocalSize = 10                                            // Default max local size for memory cache
+
+	accountIDPattern = regexp.MustCompile(`^\d{12}$`)
 )
 
 // Constraint defines conditions that must be met for a role to be assumed
@@ -75,6 +77,14 @@ type TagAuth struct {
 	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
 	ExternalID           string        `mapstructure:"external_id"            json:"external_id,omitempty"`            // optional hub->spoke external ID
 	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m
+
+	// TransitiveSessionTags, when true, marks the repo/ref/actor session tags
+	// transitive so they propagate immutably through role chaining. Default off.
+	TransitiveSessionTags bool `mapstructure:"transitive_session_tags" json:"transitive_session_tags,omitempty"`
+
+	// AllowedAccounts restricts which member accounts the warden will assume into.
+	// Empty/undefined = any account. The hub account is always allowed.
+	AllowedAccounts []string `mapstructure:"allowed_accounts" json:"allowed_accounts,omitempty"`
 }
 
 type Config struct {
@@ -143,6 +153,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("tag_auth.tag_prefix", "aow/")
 	viper.SetDefault("tag_auth.spoke_role_name", "aow-spoke")
 	viper.SetDefault("tag_auth.spoke_session_duration", "15m")
+	viper.SetDefault("tag_auth.transitive_session_tags", false)
 
 	// Explicitly bind all config keys to environment variables
 	// Core settings
@@ -170,11 +181,13 @@ func (c *Config) LoadConfig() error {
 	_ = viper.BindEnv("cache.s3_config_path")   // AOW_CACHE_S3_CONFIG_PATH
 
 	// Tag-based authorization settings
-	_ = viper.BindEnv("tag_auth.enabled")                // AOW_TAG_AUTH_ENABLED
-	_ = viper.BindEnv("tag_auth.tag_prefix")             // AOW_TAG_AUTH_TAG_PREFIX
-	_ = viper.BindEnv("tag_auth.spoke_role_name")        // AOW_TAG_AUTH_SPOKE_ROLE_NAME
-	_ = viper.BindEnv("tag_auth.external_id")            // AOW_TAG_AUTH_EXTERNAL_ID
-	_ = viper.BindEnv("tag_auth.spoke_session_duration") // AOW_TAG_AUTH_SPOKE_SESSION_DURATION
+	_ = viper.BindEnv("tag_auth.enabled")                 // AOW_TAG_AUTH_ENABLED
+	_ = viper.BindEnv("tag_auth.tag_prefix")              // AOW_TAG_AUTH_TAG_PREFIX
+	_ = viper.BindEnv("tag_auth.spoke_role_name")         // AOW_TAG_AUTH_SPOKE_ROLE_NAME
+	_ = viper.BindEnv("tag_auth.external_id")             // AOW_TAG_AUTH_EXTERNAL_ID
+	_ = viper.BindEnv("tag_auth.spoke_session_duration")  // AOW_TAG_AUTH_SPOKE_SESSION_DURATION
+	_ = viper.BindEnv("tag_auth.transitive_session_tags") // AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS
+	_ = viper.BindEnv("tag_auth.allowed_accounts")        // AOW_TAG_AUTH_ALLOWED_ACCOUNTS (comma-separated)
 
 	// Logging settings
 	_ = viper.BindEnv("log_to_s3")
@@ -338,6 +351,26 @@ func reapplyEnvOverrides(c *Config) {
 			}
 		}
 	}
+
+	if v := os.Getenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS"); v != "" {
+		if c.TagAuth == nil {
+			c.TagAuth = &TagAuth{}
+		}
+		c.TagAuth.TransitiveSessionTags = v == "true" || v == "1" || v == "True" || v == "TRUE"
+	}
+	if v := os.Getenv("AOW_TAG_AUTH_ALLOWED_ACCOUNTS"); v != "" {
+		if c.TagAuth == nil {
+			c.TagAuth = &TagAuth{}
+		}
+		parts := strings.Split(v, ",")
+		accts := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if s := strings.TrimSpace(p); s != "" {
+				accts = append(accts, s)
+			}
+		}
+		c.TagAuth.AllowedAccounts = accts
+	}
 }
 
 // FormatFromPath returns the viper config type implied by a file path's
@@ -450,6 +483,12 @@ func (c *Config) Validate() error {
 		}
 		if c.TagAuth.SpokeSessionDuration == 0 {
 			c.TagAuth.SpokeSessionDuration = 15 * time.Minute
+		}
+		for i, acct := range c.TagAuth.AllowedAccounts {
+			c.TagAuth.AllowedAccounts[i] = strings.TrimSpace(acct)
+			if !accountIDPattern.MatchString(c.TagAuth.AllowedAccounts[i]) {
+				return fmt.Errorf("tag_auth.allowed_accounts entry %q is not a 12-digit AWS account ID", acct)
+			}
 		}
 	}
 
