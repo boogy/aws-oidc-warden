@@ -49,6 +49,7 @@ Optional, disabled by default. When enabled, a repo may assume a role whose IAM 
 | ------------------------------------- | -------------------------------- | ------------------------------------------------------- | ----------- |
 | `AOW_TAG_AUTH_ENABLED`                | `tag_auth.enabled`               | Enable tag-based authorization + cross-account assume   | `false`     |
 | `AOW_TAG_AUTH_TAG_PREFIX`             | `tag_auth.tag_prefix`            | Namespace prefix for authorization tag keys             | `aow/`      |
+| `AOW_TAG_AUTH_DEFAULT_ORG`            | `tag_auth.default_org`           | Org prefix for bare `aow/repo` tokens (e.g. `"api"` → `"<org>/api"`); empty = no expansion | (empty) |
 | `AOW_TAG_AUTH_SPOKE_ROLE_NAME`        | `tag_auth.spoke_role_name`       | Role assumed in each member account for cross-account   | `aow-spoke` |
 | `AOW_TAG_AUTH_EXTERNAL_ID`            | `tag_auth.external_id`           | Optional external ID for the hub→spoke trust            |             |
 | `AOW_TAG_AUTH_SPOKE_SESSION_DURATION` | `tag_auth.spoke_session_duration`| Hub→spoke session length                                | `15m`       |
