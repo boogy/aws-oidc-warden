@@ -27,12 +27,13 @@ func (v *tagModeValidator) FetchJWKS(string) (*types.JWKS, error)          { ret
 func (v *tagModeValidator) GenKeyFunc(*types.JWKS) jwt.Keyfunc             { return nil }
 
 type fakeConsumer struct {
-	tags         map[string]string
-	tagsErr      error
-	assumed      string
-	gotClaims    *types.GithubClaims // claims passed to AssumeRole → drive session tags (ABAC)
-	assumeOut    *ststypes.Credentials
-	allowAccount bool
+	tags            map[string]string
+	tagsErr         error
+	assumed         string
+	gotClaims       *types.GithubClaims // claims passed to AssumeRole → drive session tags (ABAC)
+	assumeOut       *ststypes.Credentials
+	allowAccount    bool
+	allowAccountErr error
 }
 
 func (f *fakeConsumer) ReadS3Configuration() error { return nil }
@@ -41,7 +42,9 @@ func (f *fakeConsumer) GetS3Object(string, string) (io.ReadCloser, error) {
 }
 func (f *fakeConsumer) GetRole(string) (*awsiam.GetRoleOutput, error) { return nil, nil }
 func (f *fakeConsumer) GetRoleTags(string) (map[string]string, error) { return f.tags, f.tagsErr }
-func (f *fakeConsumer) IsTargetAccountAllowed(string) (bool, error)   { return f.allowAccount, nil }
+func (f *fakeConsumer) IsTargetAccountAllowed(string) (bool, error) {
+	return f.allowAccount, f.allowAccountErr
+}
 func (f *fakeConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, claims *types.GithubClaims) (*ststypes.Credentials, error) {
 	f.assumed = roleARN
 	f.gotClaims = claims
@@ -94,10 +97,25 @@ func TestProcessRequest_TagAuthDenies(t *testing.T) {
 func TestProcessRequest_AccountNotAllowed(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
-	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: false}
+	// allowAccount defaults to false → target account is denied.
+	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
 	_, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"}, "rid", slog.Default())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, handler.ErrAccountNotAllowed))
+}
+
+func TestProcessRequest_AccountCheckError(t *testing.T) {
+	cfg := baseTagCfg(t)
+	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
+	// Infra error must take precedence over the allow/deny bool and map to a 5xx
+	// (ErrAssumeRoleFailed), never a 403 (ErrAccountNotAllowed).
+	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: true, allowAccountErr: errors.New("infra fail")}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"}, "rid", slog.Default())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, handler.ErrAssumeRoleFailed))
+	assert.False(t, errors.Is(err, handler.ErrAccountNotAllowed))
 }
