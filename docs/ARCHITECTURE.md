@@ -132,8 +132,20 @@ sequenceDiagram
     Validator->>Validator: Validate claims
     Validator-->>Processor: Return claims
 
-    Processor->>Processor: Check repository mapping
-    Processor->>Processor: Validate constraints
+    opt tag_auth.enabled
+        Processor->>Consumer: IsTargetAccountAllowed(role)
+        Consumer-->>Processor: allowed / denied
+    end
+
+    Processor->>Processor: MatchRolesToRepoWithConstraints()
+
+    opt tag_auth.enabled and explicit match failed
+        Processor->>Consumer: GetRoleTags(role)
+        Consumer-->>Processor: role IAM tags
+        Processor->>Processor: TagAuth.Authorize(tags, claims)
+    end
+
+    Processor->>Processor: Resolve session policy (inline or S3)
     Processor->>Consumer: AssumeRole()
 
     Consumer->>STS: AssumeRole with session tags
@@ -183,17 +195,17 @@ type TokenValidatorInterface interface {
 
 **Validation Process:**
 1. **JWT Parsing**: Decode and parse the JWT token
-2. **JWKS Retrieval**: Fetch public keys from OIDC provider (with caching)
-3. **Signature Verification**: Verify token signature using RSA public keys
-4. **Claims Validation**: Validate issuer, audience, expiration, and custom claims
-5. **Security Checks**: Ensure token hasn't been tampered with
+2. **JWKS Retrieval**: Fetch public keys from OIDC provider (with caching); forced refresh on key-miss (rotation recovery)
+3. **Signature Verification**: Verify token signature using RSA (`RS256`/`RS384`/`RS512`) or ECDSA (`ES256`/`ES384`/`ES512`) public keys; `GenKeyFunc` switches on the JWKS key `kty` field (`RSA` → `parseRSAKey`, `EC` → `parseECKey`)
+4. **Claims Validation**: Validate issuer, audience (any match from `audiences` list — full multi-audience check in `Validate()`), expiration, and `repository` claim presence
+5. **Provider-Aware**: Created via `NewTokenValidatorFromProvider`; reads issuer/audiences live from the provider on every `Validate()` call so hot-reloaded config changes take effect immediately without a restart
 
 **Security Features:**
-- Token signature verification
-- Issuer and audience validation
-- Token expiration checking
-- Claims extraction and validation
-- Support for multiple OIDC providers
+- Allowed algorithms enforced: ES256/384/512, RS256/384/512 — `none` and all other algorithms rejected
+- Issuer and multi-audience validation (any expected audience match accepted)
+- Token expiration and `iat` required
+- JWKS URI and issuer URL must use HTTPS (loopback hosts excepted for local dev/tests)
+- Claims extraction and validation; `repository` claim required
 
 ### AWS Consumer (`pkg/aws/`)
 
@@ -268,6 +280,8 @@ type Config struct {
     Audience              string            `mapstructure:"audience"`
     RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"`
     Cache                 *Cache            `mapstructure:"cache"`
+    TagAuth               *TagAuth          `mapstructure:"tag_auth"`
+    ConfigReloadInterval  time.Duration     `mapstructure:"config_reload_interval"`
     // ... other fields
 }
 ```
@@ -277,6 +291,17 @@ type Config struct {
 2. Configuration file (YAML/JSON/TOML)
 3. S3-stored configuration
 4. Default values
+
+**Provider (hot-reload):**
+
+`Provider` wraps `Config` behind an `atomic.Pointer` and supports lazy per-request hot-reload from a remote S3 source without redeploying:
+
+- `NewProvider(base, interval, format, fetch)` — reloadable provider; initial config is `base` until the first successful `Refresh`.
+- `NewStaticProvider(cfg)` — no-op provider for local/test use (no S3 source configured).
+- `MaybeRefresh(ctx)` — called at the start of every request; no-op unless `config_reload_interval` has elapsed. Uses double-checked locking so at most one S3 fetch runs per interval under concurrent load. Each refresh clones the pristine base config (env/file/defaults), overlays the fetched bytes via `MergeBytes`, re-validates (recompiling all regex patterns), then atomically swaps the result in. Errors are logged and the previous config is retained.
+- `Get()` — atomic load of the current active config; zero-copy, safe for concurrent reads.
+
+The token validator is constructed via `NewTokenValidatorFromProvider`, which reads issuer and audiences from `provider.Get()` on every `Validate()` call so hot-reloaded issuer/audience changes take effect immediately without a Lambda restart.
 
 **Repository Mapping System:**
 ```yaml
@@ -309,17 +334,20 @@ flowchart TD
     E -->|Invalid| F[Return 401/403 Error]
     E -->|Valid| G[Extract Claims]
 
-    G --> H[Find Repository Mapping]
-    H -->|Not Found| I[Return 403 Error]
-    H -->|Found| J[Validate Constraints]
+    G --> GA{tag_auth enabled?}
+    GA -->|Yes| GB[IsTargetAccountAllowed]
+    GB -->|Denied| GC[Return 403 Error]
+    GB -->|Allowed| H[MatchRolesToRepoWithConstraints]
+    GA -->|No| H
 
-    J -->|Failed| K[Return 403 Error]
-    J -->|Passed| L[Check Role Authorization]
+    H -->|Explicit match| N[Apply Session Policy]
+    H -->|No match| HA{tag_auth enabled?}
+    HA -->|No| I[Return 403 Error]
+    HA -->|Yes| HB[GetRoleTags + TagAuth.Authorize]
+    HB -->|Denied| I[Return 403 Error]
+    HB -->|Authorized| N
 
-    L -->|Unauthorized| M[Return 403 Error]
-    L -->|Authorized| N[Apply Session Policy]
-
-    N --> O[Assume AWS Role]
+    N --> O[Assume AWS Role via STS]
     O -->|Failed| P[Return 500 Error]
     O -->|Success| Q[Return Credentials]
 ```
@@ -421,6 +449,36 @@ flowchart TD
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
 - Automatic credential rotation
+
+### 4. Tag-Based Authorization & Cross-Account
+
+Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `repo_role_mappings` matching fails. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup.
+
+**Hub/Spoke Flow:**
+1. The hub (warden's own AWS account) is the central trust anchor.
+2. For each requested role ARN the account ID is parsed from the ARN.
+3. If the target is a different account, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account.
+4. Using spoke credentials, `GetRoleTags` calls `iam:GetRole` on the target role to read its IAM tags.
+5. `TagAuth.Authorize` evaluates the tags: the role must carry at least an `aow/repo` or `aow/repo-owner` tag that matches the OIDC claims; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
+6. If authorized, `AssumeRole` is called (via spoke credentials for cross-account). When `TransitiveSessionTags` is true, `repo`/`ref`/`actor` session tags are marked transitive so they propagate immutably through subsequent role chaining. Cross-account sessions are clamped to 1 hour.
+
+**Account Allow-List (`IsTargetAccountAllowed`):**
+Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `tag_auth.allowed_accounts`. The hub account is always implicitly allowed. Empty list = any account is allowed (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
+
+**`DefaultOrg` shorthand:**
+When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no `/`) are automatically expanded to `<default_org>/<name>` before comparison, enabling short tag values like `my-service` instead of `org/my-service`.
+
+**Diagrams:**
+
+| Diagram | File |
+|---------|------|
+| Authorization decision flow | [images/tag-auth-decision.svg](images/tag-auth-decision.svg) |
+| Cross-account hub/spoke flow | [images/tag-auth-crossaccount.svg](images/tag-auth-crossaccount.svg) |
+| ABAC session tag flow | [images/tag-auth-abac.svg](images/tag-auth-abac.svg) |
+| Transitive session tags | [images/tag-auth-transitive.svg](images/tag-auth-transitive.svg) |
+| Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg) |
+| Tag matching logic | [images/tag-auth-matching.svg](images/tag-auth-matching.svg) |
+| Authorization precedence | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg) |
 
 ## Performance Architecture
 
@@ -525,6 +583,25 @@ resource "aws_lambda_function" "aws_oidc_warden" {
   }
 }
 ```
+
+### Required IAM Permissions
+
+The Lambda execution role requires the following IAM permissions:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Effect": "Allow", "Action": ["sts:AssumeRole", "sts:TagSession"], "Resource": ["arn:aws:iam::*:role/github-actions-*"] },
+    { "Effect": "Allow", "Action": ["iam:GetRole"], "Resource": ["arn:aws:iam::*:role/*"] },
+    { "Effect": "Allow", "Action": ["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem"], "Resource": ["arn:aws:dynamodb:*:*:table/aws-oidc-warden-cache"] },
+    { "Effect": "Allow", "Action": ["s3:GetObject","s3:PutObject"], "Resource": ["arn:aws:s3:::s3-aws-oidc-warden-session-policies/*"] },
+    { "Effect": "Allow", "Action": ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"], "Resource": ["arn:aws:logs:*:*:log-group:*","arn:aws:logs:*:*:log-group:*:log-stream:*"] }
+  ]
+}
+```
+
+> `iam:GetRole` is only needed when `tag_auth` is enabled (cross-account role-tag reads via `GetRoleTags`).
 
 ## References
 

@@ -10,7 +10,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `validation.go` — input validation helpers.
 - `apigateway.go` / `lambdaurl.go` / `alb.go` — frontend adapters. Identical business logic; only event parse/serialize differs.
 
-Pipeline: token validation → repo matching → constraint check → session policy → role assumption.
+Pipeline: `MaybeRefresh()` config snapshot → token validation → account allow-list guard (if `tag_auth.enabled`) → `MatchRolesToRepoWithConstraints` (explicit) → tag-auth fallback (`GetRoleTags` + `TagAuth.Authorize`, if enabled and explicit match failed) → session policy resolution → role assumption.
 
 ## Conventions
 

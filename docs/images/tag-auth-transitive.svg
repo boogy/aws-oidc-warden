@@ -1,64 +1,64 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="920" height="290" viewBox="0 0 920 290" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="290" viewBox="0 0 1060 290" font-family="Segoe UI, Helvetica, Arial, sans-serif">
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
       <path d="M0,0 L8,3 L0,6 Z" fill="#5f6368"/>
     </marker>
   </defs>
-  <rect x="0" y="0" width="920" height="290" fill="#ffffff"/>
-  <text x="460" y="28" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Role chaining &amp; transitive session tags</text>
+  <rect x="0" y="0" width="1060" height="290" fill="#ffffff"/>
+  <text x="530" y="28" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Role chaining &amp; transitive session tags</text>
 
   <!-- Node 1: Warden (hub) — blue -->
-  <rect x="14" y="58" width="158" height="58" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
-  <text x="93" y="81" text-anchor="middle" font-size="13" fill="#202124">Warden</text>
-  <text x="93" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(hub)</text>
+  <rect x="20" y="58" width="150" height="58" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
+  <text x="95" y="81" text-anchor="middle" font-size="13" fill="#202124">Warden</text>
+  <text x="95" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(hub)</text>
 
   <!-- Arrow 1 Warden → spoke -->
-  <line x1="172" y1="87" x2="216" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="194" y="80" text-anchor="middle" font-size="10" fill="#5f6368">AssumeRole</text>
-  <text x="194" y="91" text-anchor="middle" font-size="10" fill="#5f6368">spoke</text>
+  <line x1="170" y1="87" x2="265" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="215" y="70" text-anchor="middle" font-size="10" fill="#5f6368">AssumeRole</text>
+  <text x="215" y="82" text-anchor="middle" font-size="10" fill="#5f6368">spoke</text>
 
   <!-- Node 2: aow-spoke — amber -->
-  <rect x="218" y="58" width="176" height="58" rx="8" fill="#fef7e0" stroke="#f9ab00"/>
-  <text x="306" y="81" text-anchor="middle" font-size="13" fill="#202124">aow-spoke</text>
-  <text x="306" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(cached, UNTAGGED)</text>
+  <rect x="265" y="58" width="180" height="58" rx="8" fill="#fef7e0" stroke="#f9ab00"/>
+  <text x="355" y="81" text-anchor="middle" font-size="13" fill="#202124">aow-spoke</text>
+  <text x="355" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(cached, UNTAGGED)</text>
 
   <!-- Arrow 2 spoke → target -->
-  <line x1="394" y1="87" x2="438" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="416" y="80" text-anchor="middle" font-size="10" fill="#5f6368">AssumeRole</text>
-  <text x="416" y="91" text-anchor="middle" font-size="10" fill="#5f6368">target + tags</text>
+  <line x1="445" y1="87" x2="540" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="492" y="70" text-anchor="middle" font-size="10" fill="#5f6368">AssumeRole</text>
+  <text x="492" y="82" text-anchor="middle" font-size="10" fill="#5f6368">target + tags</text>
 
   <!-- Node 3: Target role — green -->
-  <rect x="440" y="58" width="186" height="58" rx="8" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="533" y="81" text-anchor="middle" font-size="13" fill="#202124">Target role</text>
-  <text x="533" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(repo/ref/actor tags set)</text>
+  <rect x="540" y="58" width="190" height="58" rx="8" fill="#e6f4ea" stroke="#34a853"/>
+  <text x="635" y="81" text-anchor="middle" font-size="13" fill="#202124">Target role</text>
+  <text x="635" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(repo/ref/actor tags set)</text>
 
   <!-- Arrow 3 target → further -->
-  <line x1="626" y1="87" x2="670" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="648" y="80" text-anchor="middle" font-size="10" fill="#5f6368">further</text>
-  <text x="648" y="91" text-anchor="middle" font-size="10" fill="#5f6368">chaining</text>
+  <line x1="730" y1="87" x2="825" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="777" y="70" text-anchor="middle" font-size="10" fill="#5f6368">further</text>
+  <text x="777" y="82" text-anchor="middle" font-size="10" fill="#5f6368">chaining</text>
 
   <!-- Node 4: Further role — green -->
-  <rect x="672" y="58" width="214" height="58" rx="8" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="779" y="81" text-anchor="middle" font-size="13" fill="#202124">Further role</text>
-  <text x="779" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(tags propagate, immutable)</text>
+  <rect x="825" y="58" width="210" height="58" rx="8" fill="#e6f4ea" stroke="#34a853"/>
+  <text x="930" y="81" text-anchor="middle" font-size="13" fill="#202124">Further role</text>
+  <text x="930" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(tags propagate, immutable)</text>
 
   <!-- Annotation chip under node 2 -->
-  <rect x="218" y="130" width="176" height="40" rx="5" fill="#fff8e1" stroke="#f9ab00"/>
-  <text x="306" y="146" text-anchor="middle" font-size="11" fill="#5f6368">shared/cached per account;</text>
-  <text x="306" y="162" text-anchor="middle" font-size="11" fill="#5f6368">never carries per-repo tags</text>
+  <rect x="265" y="130" width="180" height="40" rx="5" fill="#fff8e1" stroke="#f9ab00"/>
+  <text x="355" y="146" text-anchor="middle" font-size="11" fill="#5f6368">shared/cached per account;</text>
+  <text x="355" y="162" text-anchor="middle" font-size="11" fill="#5f6368">never carries per-repo tags</text>
 
   <!-- Annotation chip under node 3 -->
-  <rect x="440" y="130" width="186" height="40" rx="5" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="533" y="146" text-anchor="middle" font-size="11" fill="#5f6368">transitive keys: repo, ref, actor</text>
-  <text x="533" y="162" text-anchor="middle" font-size="11" fill="#5f6368">set as transitive on this hop</text>
+  <rect x="540" y="130" width="190" height="40" rx="5" fill="#e6f4ea" stroke="#34a853"/>
+  <text x="635" y="146" text-anchor="middle" font-size="11" fill="#5f6368">transitive keys: repo, ref, actor</text>
+  <text x="635" y="162" text-anchor="middle" font-size="11" fill="#5f6368">set as transitive on this hop</text>
 
   <!-- Annotation chip under node 4 -->
-  <rect x="672" y="130" width="214" height="40" rx="5" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="779" y="146" text-anchor="middle" font-size="11" fill="#5f6368">immutable — cannot be</text>
-  <text x="779" y="162" text-anchor="middle" font-size="11" fill="#5f6368">overridden downstream</text>
+  <rect x="825" y="130" width="210" height="40" rx="5" fill="#e6f4ea" stroke="#34a853"/>
+  <text x="930" y="146" text-anchor="middle" font-size="11" fill="#5f6368">immutable — cannot be</text>
+  <text x="930" y="162" text-anchor="middle" font-size="11" fill="#5f6368">overridden downstream</text>
 
   <!-- Bottom note -->
-  <rect x="14" y="204" width="878" height="52" rx="6" fill="#f8f9fa" stroke="#dadce0"/>
-  <text x="460" y="224" text-anchor="middle" font-size="12" fill="#5f6368">Chained session capped at 1 h  ·  Spoke session intentionally untagged (shared/cached per account; per-repo tags would bleed across repos)</text>
-  <text x="460" y="242" text-anchor="middle" font-size="12" fill="#5f6368">Enable only when the target role chains further and repo ABAC must hold at the downstream role  ·  Requires sts:TagSession on target trust</text>
+  <rect x="20" y="204" width="1020" height="52" rx="6" fill="#f8f9fa" stroke="#dadce0"/>
+  <text x="530" y="224" text-anchor="middle" font-size="12" fill="#5f6368">Chained session capped at 1 h  ·  Spoke session intentionally untagged (shared/cached per account; per-repo tags would bleed across repos)</text>
+  <text x="530" y="242" text-anchor="middle" font-size="12" fill="#5f6368">Enable only when the target role chains further and repo ABAC must hold at the downstream role  ·  Requires sts:TagSession on target trust</text>
 </svg>

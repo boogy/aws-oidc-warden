@@ -7,7 +7,7 @@ This document explains how to configure AWS OIDC Warden using environment variab
 AWS OIDC Warden can be configured using:
 
 1. Environment variables (prefixed with `AOW_`)
-2. Configuration file (YAML or JSON)
+2. Configuration file (YAML, JSON, or TOML)
 3. A combination of both (environment variables override config file values)
 
 ## Configuration Options
@@ -27,7 +27,7 @@ AWS OIDC Warden can be configured using:
 
 > **Note**: You can use either `audience` (single) or `audiences` (multiple). If both are specified, `audiences` takes precedence. For new deployments, use `audiences` for better flexibility.
 
-> **Hot-reloading config without redeploying**: When `s3_config_bucket`/`s3_config_path` are set and `config_reload_interval` > 0, the running service re-fetches the S3 config object at most once per interval (checked lazily per request) and atomically swaps it in. Update the object and changes take effect within the interval — no redeploy or container recycle needed. The S3 object uses the **same snake_case schema as the config file** (`repo_role_mappings`, `constraints`, etc.) and is re-validated on every reload; an invalid or unreachable config is logged and the previous config is kept. Changes to `issuer`/`audiences` are picked up only at startup (the initial S3 load); reloading is intended for `repo_role_mappings`, session policies, and `role_session_name`.
+> **Hot-reloading config without redeploying**: When `s3_config_bucket`/`s3_config_path` are set and `config_reload_interval` > 0, the running service re-fetches the S3 config object at most once per interval (checked lazily per request via `MaybeRefresh`) and atomically swaps it in. Update the object and changes take effect within the interval — no redeploy or container recycle needed. The S3 object uses the **same snake_case schema as the config file** (`repo_role_mappings`, `constraints`, etc.) and is re-validated on every reload; an invalid or unreachable config is logged and the previous config is kept. The token validator reads `issuer` and `audiences` live from the provider on every request, so hot-reloaded changes to those fields take effect immediately without a restart.
 
 ### Cache Settings
 
@@ -153,7 +153,7 @@ The AWS OIDC Warden will validate tokens against any of the configured audiences
 
 ## Configuration File Format
 
-AWS OIDC Warden supports both YAML and JSON configuration files. Here's an example YAML configuration:
+AWS OIDC Warden supports YAML, JSON, and TOML configuration files (format auto-detected via `FormatFromPath`). Here's an example YAML configuration:
 
 ```yaml
 issuer: https://token.actions.githubusercontent.com
