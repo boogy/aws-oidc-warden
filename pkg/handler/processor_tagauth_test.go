@@ -94,6 +94,42 @@ func TestProcessRequest_TagAuthDenies(t *testing.T) {
 	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted))
 }
 
+// TestProcessRequest_TagAuthOverridesFailedMapping documents (and locks in) the
+// additive precedence foot-gun: tag-auth is an OR-ed fallback, so a role that an
+// explicit mapping deliberately constrains (here branch=main) is still assumable
+// from a different branch when its aow/* tags match and carry no aow/branch tag.
+// Operators must not rely on a mapping constraint alone to *deny* such a role.
+func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
+	cfg := &config.Config{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		Audiences:       []string{"sts.amazonaws.com"},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 0},
+		TagAuth:         &config.TagAuth{Enabled: true, TagPrefix: "aow/"},
+		RepoRoleMappings: []config.RepoRoleMapping{{
+			Repo:        "acme/api",
+			Roles:       []string{"arn:aws:iam::111111111111:role/app"},
+			Constraints: &config.Constraint{Branch: "main"}, // requires ref == main
+		}},
+	}
+	require.NoError(t, cfg.Validate())
+
+	// Claims are for a feature branch → the explicit mapping's branch constraint
+	// fails, so the explicit path denies.
+	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/feature"}
+	exp := time.Now()
+	fc := &fakeConsumer{
+		tags:         map[string]string{"aow/repo": "acme/api"}, // no aow/branch → branch unchecked
+		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
+		allowAccount: true,
+	}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
+	creds, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"}, "rid", slog.Default())
+	require.NoError(t, err, "tag-auth should authorize despite the failed mapping constraint")
+	assert.Equal(t, "AK", *creds.AccessKeyId)
+}
+
 func TestProcessRequest_AccountNotAllowed(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}

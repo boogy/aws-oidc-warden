@@ -50,11 +50,29 @@ type AwsConsumer struct {
 	AWS    AwsServiceWrapperInterface
 	Config *gtvcfg.Config
 
+	configSource func() *gtvcfg.Config // live-config getter; nil falls back to Config
 	now          func() time.Time
 	mu           sync.Mutex
 	spokeCache   map[string]cachedCreds // keyed by account ID
 	roleTagCache map[string]cachedTags  // keyed by role ARN
 }
+
+// cfg returns the live configuration. When a config source is wired (the
+// hot-reload provider's Get), it is read per-call so reloaded changes take
+// effect on the consumer's enforcement paths; otherwise the construction-time
+// Config is used (static and test setups).
+func (a *AwsConsumer) cfg() *gtvcfg.Config {
+	if a.configSource != nil {
+		if c := a.configSource(); c != nil {
+			return c
+		}
+	}
+	return a.Config
+}
+
+// SetConfigSource wires a live-config getter (e.g. config.Provider.Get) so the
+// consumer always enforces the currently active configuration after hot-reload.
+func (a *AwsConsumer) SetConfigSource(fn func() *gtvcfg.Config) { a.configSource = fn }
 
 // NewAwsConsumer creates a new AwsConsumer
 func NewAwsConsumer(cfg *gtvcfg.Config) *AwsConsumer {
@@ -84,7 +102,8 @@ func (a *AwsConsumer) SessionName(name string) string {
 // account it assumes the convention-named spoke role and caches the result
 // until shortly before expiry.
 func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, error) {
-	if a.Config == nil || a.Config.TagAuth == nil || !a.Config.TagAuth.Enabled {
+	cfg := a.cfg()
+	if cfg == nil || cfg.TagAuth == nil || !cfg.TagAuth.Enabled {
 		return nil, nil
 	}
 	hub, err := a.AWS.GetCallerAccount()
@@ -104,7 +123,7 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 		return c.provider, nil
 	}
 
-	ta := a.Config.TagAuth
+	ta := cfg.TagAuth
 	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ta.SpokeRoleName)
 	sessionName := "aow-broker"
 	dur := int32(ta.SpokeSessionDuration.Seconds())
@@ -192,7 +211,7 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 
 	// Mark identity-bearing session tags transitive so ABAC survives any further
 	// role chaining by the target role (immutable downstream).
-	if a.Config != nil && a.Config.TagAuth != nil && a.Config.TagAuth.TransitiveSessionTags {
+	if cfg := a.cfg(); cfg != nil && cfg.TagAuth != nil && cfg.TagAuth.TransitiveSessionTags {
 		if keys := selectTransitiveKeys(assumeRoleInput.Tags); len(keys) > 0 {
 			assumeRoleInput.TransitiveTagKeys = keys
 		}
@@ -344,13 +363,14 @@ func sanitizeTagValue(value string, maxLength int) string {
 // accountAllowed reports whether the warden may assume a role in account. The
 // hub account is always allowed; an empty allow-list permits any account.
 func (a *AwsConsumer) accountAllowed(account, hub string) bool {
-	if a.Config == nil {
+	cfg := a.cfg()
+	if cfg == nil {
 		return true
 	}
 	if account == hub {
 		return true
 	}
-	ta := a.Config.TagAuth
+	ta := cfg.TagAuth
 	if ta == nil || len(ta.AllowedAccounts) == 0 {
 		return true
 	}
@@ -365,7 +385,7 @@ func (a *AwsConsumer) IsTargetAccountAllowed(roleArn string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if a.Config == nil || a.Config.TagAuth == nil || !a.Config.TagAuth.Enabled {
+	if cfg := a.cfg(); cfg == nil || cfg.TagAuth == nil || !cfg.TagAuth.Enabled {
 		return true, nil
 	}
 	hub, err := a.AWS.GetCallerAccount()
