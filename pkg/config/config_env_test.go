@@ -80,6 +80,24 @@ func TestMergeBytes_EnvAudiencesTrimsWhitespace(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, c.Audiences, "AOW_AUDIENCES elements must be whitespace-trimmed")
 }
 
+func TestMergeBytes_EnvTagAuthDefaultOrgWinsOverS3(t *testing.T) {
+	t.Setenv("AOW_TAG_AUTH_DEFAULT_ORG", "env-org")
+
+	c := &Config{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		Audiences:       []string{"sts.amazonaws.com"},
+		RoleSessionName: "base-session",
+		Cache:           &Cache{Type: "memory", TTL: 5 * time.Minute},
+		TagAuth:         &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "base-org"},
+	}
+	require.NoError(t, c.Validate())
+
+	// S3 payload tries to override default_org; the env var must win.
+	require.NoError(t, c.MergeBytes([]byte("tag_auth:\n  default_org: s3-org\n"), "yaml"))
+
+	assert.Equal(t, "env-org", c.TagAuth.DefaultOrg, "AOW_TAG_AUTH_DEFAULT_ORG must take precedence over S3 value")
+}
+
 func TestMergeBytes_EnvCacheTTLWinsOverS3(t *testing.T) {
 	t.Setenv("AOW_CACHE_TTL", "10m")
 

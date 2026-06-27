@@ -76,6 +76,7 @@ type TagAuth struct {
 	TagPrefix            string        `mapstructure:"tag_prefix"             json:"tag_prefix,omitempty"`             // default "aow/"
 	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
 	ExternalID           string        `mapstructure:"external_id"            json:"external_id,omitempty"`            // optional hub->spoke external ID
+	DefaultOrg           string        `mapstructure:"default_org"            json:"default_org,omitempty"`            // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
 	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m
 
 	// TransitiveSessionTags, when true, marks the repo/ref/actor session tags
@@ -185,6 +186,7 @@ func (c *Config) LoadConfig() error {
 	_ = viper.BindEnv("tag_auth.tag_prefix")              // AOW_TAG_AUTH_TAG_PREFIX
 	_ = viper.BindEnv("tag_auth.spoke_role_name")         // AOW_TAG_AUTH_SPOKE_ROLE_NAME
 	_ = viper.BindEnv("tag_auth.external_id")             // AOW_TAG_AUTH_EXTERNAL_ID
+	_ = viper.BindEnv("tag_auth.default_org")             // AOW_TAG_AUTH_DEFAULT_ORG
 	_ = viper.BindEnv("tag_auth.spoke_session_duration")  // AOW_TAG_AUTH_SPOKE_SESSION_DURATION
 	_ = viper.BindEnv("tag_auth.transitive_session_tags") // AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS
 	_ = viper.BindEnv("tag_auth.allowed_accounts")        // AOW_TAG_AUTH_ALLOWED_ACCOUNTS (comma-separated)
@@ -338,6 +340,7 @@ func reapplyEnvOverrides(c *Config) {
 			{"AOW_TAG_AUTH_TAG_PREFIX", &c.TagAuth.TagPrefix},
 			{"AOW_TAG_AUTH_SPOKE_ROLE_NAME", &c.TagAuth.SpokeRoleName},
 			{"AOW_TAG_AUTH_EXTERNAL_ID", &c.TagAuth.ExternalID},
+			{"AOW_TAG_AUTH_DEFAULT_ORG", &c.TagAuth.DefaultOrg},
 		} {
 			if v := os.Getenv(f.env); v != "" {
 				*f.ptr = v
