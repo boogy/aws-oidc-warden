@@ -17,9 +17,9 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
     ldflags:
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Version}}
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.ShortCommit}}
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Date={{.Date}}
       - -s -w
       - -extldflags "-static"
     goos:
@@ -39,9 +39,9 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
     ldflags:
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Version}}
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.ShortCommit}}
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Date={{.Date}}
       - -s -w
       - -extldflags "-static"
     goos:
@@ -61,9 +61,9 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
     ldflags:
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Version={{.Version}}
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Commit={{.ShortCommit}}
-      - -X github.com/boogy/aws-oidc-warden/pkg/version.Date={{.Date}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Date={{.Date}}
       - -s -w
       - -extldflags "-static"
     goos:

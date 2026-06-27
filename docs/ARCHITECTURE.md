@@ -69,7 +69,7 @@ GitHub Actions → API Gateway → AWS OIDC Warden (Lambda Function Proxy)
 
 - **Use Case**: Traditional REST API with full API Gateway features
 - **Benefits**: Rate limiting, request transformation, API keys, usage plans
-- **Handler**: `pkg/handler/apigateway.go`
+- **Handler**: `internal/handler/apigateway.go`
 - **Entry Point**: `cmd/apigateway/main.go`
 
 #### Lambda URLs
@@ -78,7 +78,7 @@ GitHub Actions → AWS OIDC Warden (Lambda Function URL)
 ```
 - **Use Case**: Simplified setup for direct Lambda invocation
 - **Benefits**: Lower latency, reduced cost, simpler configuration
-- **Handler**: `pkg/handler/lambdaurl.go`
+- **Handler**: `internal/handler/lambdaurl.go`
 - **Entry Point**: `cmd/lambdaurl/main.go`
 
 #### Application Load Balancer
@@ -87,7 +87,7 @@ GitHub Actions → ALB → AWS OIDC Warden (Lambda Function)
 ```
 - **Use Case**: High-traffic scenarios with advanced routing
 - **Benefits**: Multi-region support, advanced health checks, WAF integration
-- **Handler**: `pkg/handler/alb.go`
+- **Handler**: `internal/handler/alb.go`
 - **Entry Point**: `cmd/alb/main.go`
 
 #### Local Development Server
@@ -157,7 +157,7 @@ sequenceDiagram
 
 ## Core Components Deep Dive
 
-### Request Handler (`pkg/handler/`)
+### Request Handler (`internal/handler/`)
 
 The handler layer provides a unified interface across different deployment options:
 
@@ -180,7 +180,7 @@ type RequestProcessor interface {
 - `types.go` - Request/response data structures
 - `validation.go` - Input validation
 
-### Token Validator (`pkg/validator/`)
+### Token Validator (`internal/validator/`)
 
 The validator component handles all OIDC token validation logic:
 
@@ -207,7 +207,7 @@ type TokenValidatorInterface interface {
 - JWKS URI and issuer URL must use HTTPS (loopback hosts excepted for local dev/tests)
 - Claims extraction and validation; `repository` claim required
 
-### AWS Consumer (`pkg/aws/`)
+### AWS Consumer (`internal/aws/`)
 
 The AWS consumer abstracts all AWS service interactions:
 
@@ -239,7 +239,7 @@ tags := []types.Tag{
 }
 ```
 
-### Caching System (`pkg/cache/`)
+### Caching System (`internal/cache/`)
 
 The caching system provides multiple storage backends for JWKS data:
 
@@ -270,7 +270,7 @@ type Cache interface {
 - **Benefits**: Cost-effective, unlimited storage, optional cleanup
 - **Configuration**: Bucket, prefix, and cleanup options
 
-### Configuration Manager (`pkg/config/`)
+### Configuration Manager (`internal/config/`)
 
 The configuration system supports multiple formats and sources:
 

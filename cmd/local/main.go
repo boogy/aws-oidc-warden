@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/boogy/aws-oidc-warden/pkg/aws"
-	"github.com/boogy/aws-oidc-warden/pkg/cache"
-	"github.com/boogy/aws-oidc-warden/pkg/config"
-	"github.com/boogy/aws-oidc-warden/pkg/handler"
-	"github.com/boogy/aws-oidc-warden/pkg/validator"
-	"github.com/boogy/aws-oidc-warden/pkg/version"
+	"github.com/boogy/aws-oidc-warden/internal/aws"
+	"github.com/boogy/aws-oidc-warden/internal/cache"
+	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/handler"
+	"github.com/boogy/aws-oidc-warden/internal/validator"
+	"github.com/boogy/aws-oidc-warden/internal/version"
 )
 
 // Settings for the local server
