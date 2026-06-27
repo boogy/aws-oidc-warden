@@ -21,26 +21,26 @@ Based on issue context, search for relevant files:
 
 ```bash
 # Find files by component
-rg -n "<search term>" pkg/
+rg -n "<search term>" internal/
 
 # Find handler logic
-rg -n "func.*Handle" pkg/handler/
+rg -n "func.*Handle" internal/handler/
 
 # Find validation logic
-rg -n "Validate" pkg/validator/
+rg -n "Validate" internal/validator/
 
 # Find config patterns
-rg -n "mapstructure:" pkg/config/
+rg -n "mapstructure:" internal/config/
 ```
 
 ### 3. Read CLAUDE.md Files
 
 Before making changes, read the relevant package's CLAUDE.md:
 
-- `pkg/handler/CLAUDE.md` for request processing
-- `pkg/validator/CLAUDE.md` for token validation
-- `pkg/config/CLAUDE.md` for configuration
-- `pkg/aws/CLAUDE.md` for AWS operations
+- `internal/handler/CLAUDE.md` for request processing
+- `internal/validator/CLAUDE.md` for token validation
+- `internal/config/CLAUDE.md` for configuration
+- `internal/aws/CLAUDE.md` for AWS operations
 
 ### 4. Implement Fix
 

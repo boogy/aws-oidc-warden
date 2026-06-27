@@ -3,18 +3,18 @@ Run tests for a specific package: $ARGUMENTS
 ## Steps
 
 1. If no package specified, ask which package to test from:
-   - `pkg/handler`
-   - `pkg/validator`
-   - `pkg/config`
-   - `pkg/aws`
-   - `pkg/cache`
-   - `pkg/s3logger`
+   - `internal/handler`
+   - `internal/validator`
+   - `internal/config`
+   - `internal/aws`
+   - `internal/cache`
+   - `internal/s3logger`
    - All packages
 
 2. Run the appropriate test command:
    ```bash
    # Single package
-   go test -v ./pkg/<package>/...
+   go test -v ./internal/<package>/...
 
    # All packages
    go test -v ./...
@@ -33,6 +33,6 @@ Run tests for a specific package: $ARGUMENTS
 
 To generate coverage:
 ```bash
-go test -coverprofile=coverage.out ./pkg/<package>/...
+go test -coverprofile=coverage.out ./internal/<package>/...
 go tool cover -func=coverage.out
 ```

@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/boogy/aws-oidc-warden/pkg/handler"
+	"github.com/boogy/aws-oidc-warden/internal/handler"
 )
 
 var bootstrap *handler.Bootstrap

@@ -8,9 +8,9 @@ BUILD_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
 GOOS ?= linux
 GOARCH ?= arm64
 GO_BUILD_FLAGS := -trimpath -ldflags="-s -w \
-	-X github.com/boogy/aws-oidc-warden/pkg/version.Version=$(VERSION) \
-	-X github.com/boogy/aws-oidc-warden/pkg/version.Commit=$(BUILD_COMMIT) \
-	-X github.com/boogy/aws-oidc-warden/pkg/version.Date=$(BUILD_DATE)" \
+	-X github.com/boogy/aws-oidc-warden/internal/version.Version=$(VERSION) \
+	-X github.com/boogy/aws-oidc-warden/internal/version.Commit=$(BUILD_COMMIT) \
+	-X github.com/boogy/aws-oidc-warden/internal/version.Date=$(BUILD_DATE)" \
 	-tags=lambda.norpc # Use lambda.norpc tag to avoid using RPC in Lambda functions
 
 # Ko configuration
