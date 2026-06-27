@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -29,6 +30,7 @@ type AwsConsumerInterface interface {
 	GetS3Object(bucket, key string) (io.ReadCloser, error)
 	GetRole(role string) (*iam.GetRoleOutput, error)
 	GetRoleTags(roleARN string) (map[string]string, error)
+	IsTargetAccountAllowed(roleArn string) (bool, error)
 }
 
 // cachedCreds holds spoke credentials for an account until shortly before expiry.
@@ -91,6 +93,9 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 	}
 	if account == hub {
 		return nil, nil
+	}
+	if !a.accountAllowed(account, hub) {
+		return nil, fmt.Errorf("target account %s is not in tag_auth.allowed_accounts", account)
 	}
 
 	a.mu.Lock()
@@ -185,6 +190,14 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		}
 	}
 
+	// Mark identity-bearing session tags transitive so ABAC survives any further
+	// role chaining by the target role (immutable downstream).
+	if a.Config != nil && a.Config.TagAuth != nil && a.Config.TagAuth.TransitiveSessionTags {
+		if keys := selectTransitiveKeys(assumeRoleInput.Tags); len(keys) > 0 {
+			assumeRoleInput.TransitiveTagKeys = keys
+		}
+	}
+
 	// Route cross-account targets through the spoke role; same-account and
 	// tag-auth-disabled paths use the default hub identity (creds == nil).
 	var creds aws.CredentialsProvider
@@ -193,6 +206,14 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		if creds, cerr = a.spokeCredsFor(account); cerr != nil {
 			return nil, fmt.Errorf("resolve credentials for %s: %w", roleArn, cerr)
 		}
+	}
+
+	// Cross-account assume is role chaining; AWS caps chained sessions at 1h.
+	if creds != nil && durationSeconds > 3600 {
+		slog.Warn("cross-account role chaining caps the session at 1h; clamping duration",
+			"requestedDuration", durationSeconds)
+		durationSeconds = 3600
+		assumeRoleInput.DurationSeconds = &durationSeconds
 	}
 
 	var (
@@ -213,6 +234,23 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 	}
 
 	return result.Credentials, nil
+}
+
+// transitiveSessionTagKeys are the session-tag keys marked transitive when
+// tag_auth.transitive_session_tags is enabled. Kept minimal on purpose:
+// transitive tags are immutable through the entire role chain.
+var transitiveSessionTagKeys = []string{"repo", "ref", "actor"}
+
+// selectTransitiveKeys returns the subset of tag keys present in tags that are
+// eligible to be transitive.
+func selectTransitiveKeys(tags []types.Tag) []string {
+	keys := make([]string, 0, len(transitiveSessionTagKeys))
+	for _, t := range tags {
+		if t.Key != nil && slices.Contains(transitiveSessionTagKeys, *t.Key) {
+			keys = append(keys, *t.Key)
+		}
+	}
+	return keys
 }
 
 // CreateSessionTags creates session tags from GitHub claims for enhanced security and audit trail
@@ -301,6 +339,40 @@ func sanitizeTagValue(value string, maxLength int) string {
 	}
 
 	return sanitized
+}
+
+// accountAllowed reports whether the warden may assume a role in account. The
+// hub account is always allowed; an empty allow-list permits any account.
+func (a *AwsConsumer) accountAllowed(account, hub string) bool {
+	if a.Config == nil {
+		return true
+	}
+	if account == hub {
+		return true
+	}
+	ta := a.Config.TagAuth
+	if ta == nil || len(ta.AllowedAccounts) == 0 {
+		return true
+	}
+	return slices.Contains(ta.AllowedAccounts, account)
+}
+
+// IsTargetAccountAllowed checks the requested role ARN's account against the
+// tag_auth.allowed_accounts list. Returns true when tag-auth is disabled (no
+// cross-account path exists) or the account is permitted.
+func (a *AwsConsumer) IsTargetAccountAllowed(roleArn string) (bool, error) {
+	account, _, err := ParseRoleARN(roleArn)
+	if err != nil {
+		return false, err
+	}
+	if a.Config == nil || a.Config.TagAuth == nil || !a.Config.TagAuth.Enabled {
+		return true, nil
+	}
+	hub, err := a.AWS.GetCallerAccount()
+	if err != nil {
+		return false, fmt.Errorf("resolve hub account: %w", err)
+	}
+	return a.accountAllowed(account, hub), nil
 }
 
 // ReadS3Configuration reads the configured S3 Bucket and returns Config

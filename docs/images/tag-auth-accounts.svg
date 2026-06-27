@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="480" viewBox="0 0 760 480" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#5f6368"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="760" height="480" fill="#ffffff"/>
+  <text x="380" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Target account allow-list gate</text>
+
+  <!-- R1: Request includes role ARN (blue process) -->
+  <rect x="140" y="58" width="300" height="44" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
+  <text x="290" y="85" text-anchor="middle" font-size="13" fill="#202124">Request includes role ARN</text>
+
+  <!-- Arrow R1 → R2 -->
+  <line x1="290" y1="102" x2="290" y2="138" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- R2: Parse account ID from ARN (blue process) -->
+  <rect x="140" y="140" width="300" height="44" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
+  <text x="290" y="163" text-anchor="middle" font-size="13" fill="#202124">Parse account ID from role ARN</text>
+
+  <!-- Arrow R2 → R3 -->
+  <line x1="290" y1="184" x2="290" y2="224" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- R3: Decision (amber) -->
+  <rect x="140" y="226" width="300" height="78" rx="8" fill="#fef7e0" stroke="#f9ab00"/>
+  <text x="290" y="250" text-anchor="middle" font-size="13" fill="#202124">account == hub account</text>
+  <text x="290" y="268" text-anchor="middle" font-size="13" fill="#202124">OR allowed_accounts is empty</text>
+  <text x="290" y="286" text-anchor="middle" font-size="13" fill="#202124">OR account in allowed_accounts?</text>
+
+  <!-- Arrow R3 → ALLOW (Yes, right branch) -->
+  <line x1="440" y1="265" x2="506" y2="265" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="472" y="257" font-size="12" font-weight="600" fill="#137333">Yes</text>
+
+  <!-- ALLOW box (green) -->
+  <rect x="508" y="236" width="218" height="58" rx="8" fill="#e6f4ea" stroke="#34a853"/>
+  <text x="617" y="261" text-anchor="middle" font-size="13" font-weight="600" fill="#137333">Continue</text>
+  <text x="617" y="279" text-anchor="middle" font-size="12" fill="#137333">tag-auth / mapping</text>
+
+  <!-- Arrow R3 → DENY (No, down) -->
+  <line x1="290" y1="304" x2="290" y2="372" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="300" y="342" font-size="12" font-weight="600" fill="#c5221f">No</text>
+
+  <!-- DENY box (red) -->
+  <rect x="165" y="374" width="250" height="48" rx="8" fill="#fce8e6" stroke="#ea4335"/>
+  <text x="290" y="398" text-anchor="middle" font-size="14" font-weight="600" fill="#c5221f">403 ErrAccountNotAllowed</text>
+  <text x="290" y="414" text-anchor="middle" font-size="11" fill="#c5221f">request rejected</text>
+
+  <!-- Bottom note -->
+  <rect x="30" y="444" width="700" height="26" rx="5" fill="#f8f9fa" stroke="#dadce0"/>
+  <text x="380" y="461" text-anchor="middle" font-size="11" fill="#5f6368">Hub account always allowed  ·  empty allowed_accounts = any account permitted  ·  non-12-digit IDs rejected at config load</text>
+</svg>

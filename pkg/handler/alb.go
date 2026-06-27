@@ -58,7 +58,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		switch {
 		case errors.Is(err, ErrTokenValidationFailed):
 			statusCode = http.StatusUnauthorized
-		case errors.Is(err, ErrRoleNotPermitted):
+		case errors.Is(err, ErrRoleNotPermitted), errors.Is(err, ErrAccountNotAllowed):
 			statusCode = http.StatusForbidden
 		case errors.Is(err, ErrSessionPolicyAccess), errors.Is(err, ErrAssumeRoleFailed):
 			statusCode = http.StatusInternalServerError
@@ -123,7 +123,7 @@ func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error
 		errCode = "token_invalid"
 		errMsg = "Token validation failed"
 		statusCode = http.StatusUnauthorized
-	case errors.Is(err, ErrRoleNotPermitted):
+	case errors.Is(err, ErrRoleNotPermitted), errors.Is(err, ErrAccountNotAllowed):
 		errCode = "permission_denied"
 		errMsg = "Permission denied for the requested operation"
 		statusCode = http.StatusForbidden

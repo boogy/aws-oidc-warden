@@ -15,7 +15,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Viper-based loading, validation, and
 - `Constraint` — `branch`, `ref`, `ref_type`, `event_name`, `workflow_ref`, `environment`, `actor_matches`. All present constraints must match (AND).
 - `Validate()` — compiles all regex patterns once; repo patterns auto-anchored `^(?:pattern)$`.
 - `MatchRolesToRepoWithConstraints(repo, claims)`, `MatchRolesToRepo(repo)`, `FindSessionPolicyForRepo(repo)`.
-- `TagAuth` (opt-in, default off) + `Authorize(roleTags, claims)` in `tagauth.go` — tag-based authorization fallback; exact matching only (AWS tag charset, no regex), space-list = OR, cross-tag = AND, `repo`-OR-`repo-owner` identity gate. See `docs/TAG_BASED_AUTHORIZATION.md`.
+- `TagAuth` (opt-in, default off) + `Authorize(roleTags, claims)` in `tagauth.go` — tag-based authorization fallback; exact matching only (AWS tag charset, no regex), space-list = OR, cross-tag = AND, `repo`-OR-`repo-owner` identity gate. Two new fields: `TransitiveSessionTags bool` (marks `repo`/`ref`/`actor` immutable through role chaining, default false) and `AllowedAccounts []string` (allow-list of member account IDs; hub implicit; empty = any; non-12-digit rejected by `Validate()`). See `docs/TAG_BASED_AUTHORIZATION.md`.
 
 ## Gotchas
 
