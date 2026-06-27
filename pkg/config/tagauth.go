@@ -36,7 +36,7 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any) b
 	if !hasRepo && !hasOwner {
 		return false
 	}
-	identityOK := (hasRepo && valueInList(claim("repository"), repoTag)) ||
+	identityOK := (hasRepo && repoMatches(claim("repository"), repoTag, t.DefaultOrg)) ||
 		(hasOwner && valueInList(claim("repository_owner"), ownerTag))
 	if !identityOK {
 		return false
@@ -79,6 +79,29 @@ func valueInList(claimVal, tagVal string) bool {
 	}
 	for _, want := range strings.Fields(tagVal) {
 		if claimVal == want {
+			return true
+		}
+	}
+	return false
+}
+
+// repoMatches reports whether claimRepo matches the aow/repo tag value.
+// Each space-separated token that contains no "/" is treated as a bare repo
+// name and expanded to "<defaultOrg>/<token>" before comparison; tokens
+// already in org/repo form match as-is. When defaultOrg is empty, bare tokens
+// never match. Matching is exact (AWS tag charset has no regex).
+func repoMatches(claimRepo, tagVal, defaultOrg string) bool {
+	if claimRepo == "" {
+		return false
+	}
+	for _, want := range strings.Fields(tagVal) {
+		if !strings.Contains(want, "/") {
+			if defaultOrg == "" {
+				continue
+			}
+			want = defaultOrg + "/" + want
+		}
+		if claimRepo == want {
 			return true
 		}
 	}
