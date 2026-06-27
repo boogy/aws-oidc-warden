@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -185,6 +186,14 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		}
 	}
 
+	// Mark identity-bearing session tags transitive so ABAC survives any further
+	// role chaining by the target role (immutable downstream).
+	if a.Config != nil && a.Config.TagAuth != nil && a.Config.TagAuth.TransitiveSessionTags {
+		if keys := selectTransitiveKeys(assumeRoleInput.Tags); len(keys) > 0 {
+			assumeRoleInput.TransitiveTagKeys = keys
+		}
+	}
+
 	// Route cross-account targets through the spoke role; same-account and
 	// tag-auth-disabled paths use the default hub identity (creds == nil).
 	var creds aws.CredentialsProvider
@@ -193,6 +202,14 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		if creds, cerr = a.spokeCredsFor(account); cerr != nil {
 			return nil, fmt.Errorf("resolve credentials for %s: %w", roleArn, cerr)
 		}
+	}
+
+	// Cross-account assume is role chaining; AWS caps chained sessions at 1h.
+	if creds != nil && durationSeconds > 3600 {
+		slog.Warn("cross-account role chaining caps the session at 1h; clamping duration",
+			"requestedDuration", durationSeconds)
+		durationSeconds = 3600
+		assumeRoleInput.DurationSeconds = &durationSeconds
 	}
 
 	var (
@@ -213,6 +230,23 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 	}
 
 	return result.Credentials, nil
+}
+
+// transitiveSessionTagKeys are the session-tag keys marked transitive when
+// tag_auth.transitive_session_tags is enabled. Kept minimal on purpose:
+// transitive tags are immutable through the entire role chain.
+var transitiveSessionTagKeys = []string{"repo", "ref", "actor"}
+
+// selectTransitiveKeys returns the subset of tag keys present in tags that are
+// eligible to be transitive.
+func selectTransitiveKeys(tags []types.Tag) []string {
+	keys := make([]string, 0, len(transitiveSessionTagKeys))
+	for _, t := range tags {
+		if t.Key != nil && slices.Contains(transitiveSessionTagKeys, *t.Key) {
+			keys = append(keys, *t.Key)
+		}
+	}
+	return keys
 }
 
 // CreateSessionTags creates session tags from GitHub claims for enhanced security and audit trail
