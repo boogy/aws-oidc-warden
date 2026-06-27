@@ -151,7 +151,7 @@ Rules:
 
 **Token expansion examples** (`default_org: acme`):
 
-| Tag token    | Expanded form  | Matches claim `acme/api`? | Matches claim `beta/web`? |
+| Tag token    | Comparison form | Matches claim `acme/api`? | Matches claim `beta/web`? |
 | ------------ | -------------- | ------------------------- | ------------------------- |
 | `api`        | `acme/api`     | yes                       | no                        |
 | `acme/api`   | `acme/api`     | yes                       | no                        |
