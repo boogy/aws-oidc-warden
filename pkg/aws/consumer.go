@@ -1,14 +1,16 @@
 package aws
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"regexp"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
@@ -16,25 +18,50 @@ import (
 	gtypes "github.com/boogy/aws-oidc-warden/pkg/types"
 )
 
+// maxConfigSize bounds how many bytes are read from a remote configuration
+// object (S3) to guard against an oversized or malicious payload.
+const maxConfigSize = 1024 * 1024 // 1MB
+
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
 type AwsConsumerInterface interface {
 	ReadS3Configuration() error
 	AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.GithubClaims) (*types.Credentials, error)
 	GetS3Object(bucket, key string) (io.ReadCloser, error)
 	GetRole(role string) (*iam.GetRoleOutput, error)
+	GetRoleTags(roleARN string) (map[string]string, error)
+}
+
+// cachedCreds holds spoke credentials for an account until shortly before expiry.
+type cachedCreds struct {
+	provider aws.CredentialsProvider
+	expires  time.Time
+}
+
+// cachedTags holds a role's IAM tags for a short TTL to cut IAM calls.
+type cachedTags struct {
+	tags    map[string]string
+	expires time.Time
 }
 
 // AwsConsumer is the implementation of AwsConsumerInterface
 type AwsConsumer struct {
 	AWS    AwsServiceWrapperInterface
 	Config *gtvcfg.Config
+
+	now          func() time.Time
+	mu           sync.Mutex
+	spokeCache   map[string]cachedCreds // keyed by account ID
+	roleTagCache map[string]cachedTags  // keyed by role ARN
 }
 
 // NewAwsConsumer creates a new AwsConsumer
 func NewAwsConsumer(cfg *gtvcfg.Config) *AwsConsumer {
 	return &AwsConsumer{
-		AWS:    NewAwsServiceWrapper(),
-		Config: cfg,
+		AWS:          NewAwsServiceWrapper(),
+		Config:       cfg,
+		now:          time.Now,
+		spokeCache:   make(map[string]cachedCreds),
+		roleTagCache: make(map[string]cachedTags),
 	}
 }
 
@@ -47,6 +74,61 @@ func (a *AwsConsumer) SessionName(name string) string {
 		return name[len(name)-64:]
 	}
 	return name
+}
+
+// spokeCredsFor resolves credentials for operating in the given account. It
+// returns (nil, nil) when tag-auth is disabled or the account is the warden's
+// own (hub) account — callers then use the default hub clients. For a different
+// account it assumes the convention-named spoke role and caches the result
+// until shortly before expiry.
+func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, error) {
+	if a.Config == nil || a.Config.TagAuth == nil || !a.Config.TagAuth.Enabled {
+		return nil, nil
+	}
+	hub, err := a.AWS.GetCallerAccount()
+	if err != nil {
+		return nil, fmt.Errorf("resolve hub account: %w", err)
+	}
+	if account == hub {
+		return nil, nil
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if c, ok := a.spokeCache[account]; ok && a.now().Before(c.expires) {
+		return c.provider, nil
+	}
+
+	ta := a.Config.TagAuth
+	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ta.SpokeRoleName)
+	sessionName := "aow-broker"
+	dur := int32(ta.SpokeSessionDuration.Seconds())
+	if dur < 900 {
+		dur = 900
+	}
+	input := &sts.AssumeRoleInput{
+		RoleArn:         &spokeArn,
+		RoleSessionName: &sessionName,
+		DurationSeconds: &dur,
+	}
+	if ta.ExternalID != "" {
+		input.ExternalId = &ta.ExternalID
+	}
+	out, err := a.AWS.AssumeRole(input)
+	if err != nil {
+		return nil, fmt.Errorf("assume spoke role %s: %w", spokeArn, err)
+	}
+	if out.Credentials == nil {
+		return nil, fmt.Errorf("spoke role %s returned no credentials", spokeArn)
+	}
+	cr := out.Credentials
+	provider := credentials.NewStaticCredentialsProvider(*cr.AccessKeyId, *cr.SecretAccessKey, *cr.SessionToken)
+	expires := a.now().Add(time.Hour)
+	if cr.Expiration != nil {
+		expires = cr.Expiration.Add(-5 * time.Minute) // refresh margin
+	}
+	a.spokeCache[account] = cachedCreds{provider: provider, expires: expires}
+	return provider, nil
 }
 
 // AssumeRole assumes the specified AWS IAM role and returns temporary credentials
@@ -103,7 +185,25 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		}
 	}
 
-	result, err := a.AWS.AssumeRole(&assumeRoleInput)
+	// Route cross-account targets through the spoke role; same-account and
+	// tag-auth-disabled paths use the default hub identity (creds == nil).
+	var creds aws.CredentialsProvider
+	if account, _, perr := ParseRoleARN(roleArn); perr == nil {
+		var cerr error
+		if creds, cerr = a.spokeCredsFor(account); cerr != nil {
+			return nil, fmt.Errorf("resolve credentials for %s: %w", roleArn, cerr)
+		}
+	}
+
+	var (
+		result *sts.AssumeRoleOutput
+		err    error
+	)
+	if creds == nil {
+		result, err = a.AWS.AssumeRole(&assumeRoleInput)
+	} else {
+		result, err = a.AWS.AssumeRoleAs(&assumeRoleInput, creds)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("unable to perform sts.AssumeRole: %w", err)
 	}
@@ -219,8 +319,15 @@ func (a *AwsConsumer) ReadS3Configuration() error {
 		}
 	}()
 
-	decoder := json.NewDecoder(content)
-	if err := decoder.Decode(a.Config); err != nil {
+	// Bound the read to guard against an oversized object.
+	data, err := io.ReadAll(io.LimitReader(content, maxConfigSize))
+	if err != nil {
+		return fmt.Errorf("unable to read configuration from S3: %w", err)
+	}
+
+	// Overlay using the documented snake_case schema (same as the YAML config)
+	// and re-validate so repo_role_mappings regex patterns get compiled.
+	if err := a.Config.MergeBytes(data, gtvcfg.FormatFromPath(a.Config.S3ConfigPath)); err != nil {
 		return fmt.Errorf("unable to decode configuration from S3: %w", err)
 	}
 
@@ -237,6 +344,57 @@ func (a *AwsConsumer) GetRole(role string) (*iam.GetRoleOutput, error) {
 	return a.AWS.GetRole(&iam.GetRoleInput{
 		RoleName: aws.String(role),
 	})
+}
+
+// roleTagCacheTTL bounds how long role tags are cached to cut IAM calls under
+// burst load while keeping tags reasonably fresh.
+const roleTagCacheTTL = 60 * time.Second
+
+// GetRoleTags returns the IAM tags of the role identified by roleARN as a
+// key→value map. When the role lives in a different account than the warden,
+// the read is performed with spoke credentials assumed in that account.
+func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
+	a.mu.Lock()
+	if c, ok := a.roleTagCache[roleARN]; ok && a.now().Before(c.expires) {
+		a.mu.Unlock()
+		return c.tags, nil
+	}
+	a.mu.Unlock()
+
+	account, roleName, err := ParseRoleARN(roleARN)
+	if err != nil {
+		return nil, err
+	}
+	creds, err := a.spokeCredsFor(account)
+	if err != nil {
+		return nil, err
+	}
+
+	input := &iam.GetRoleInput{RoleName: aws.String(roleName)}
+	var out *iam.GetRoleOutput
+	if creds == nil {
+		out, err = a.AWS.GetRole(input)
+	} else {
+		out, err = a.AWS.GetRoleAs(input, creds)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get role %s: %w", roleName, err)
+	}
+	if out.Role == nil {
+		return nil, errors.New("role information not available")
+	}
+
+	tags := make(map[string]string, len(out.Role.Tags))
+	for _, tag := range out.Role.Tags {
+		if tag.Key != nil && tag.Value != nil {
+			tags[*tag.Key] = *tag.Value
+		}
+	}
+
+	a.mu.Lock()
+	a.roleTagCache[roleARN] = cachedTags{tags: tags, expires: a.now().Add(roleTagCacheTTL)}
+	a.mu.Unlock()
+	return tags, nil
 }
 
 // RoleHasTag checks if an IAM role has a specific tag key and value

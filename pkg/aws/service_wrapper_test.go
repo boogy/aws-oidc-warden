@@ -48,6 +48,27 @@ func (m *MockAwsServiceWrapper) RefreshClients() {
 	m.Called()
 }
 
+func (m *MockAwsServiceWrapper) GetCallerAccount() (string, error) {
+	args := m.Called()
+	return args.String(0), args.Error(1)
+}
+
+func (m *MockAwsServiceWrapper) AssumeRoleAs(input *sts.AssumeRoleInput, creds aws.CredentialsProvider) (*sts.AssumeRoleOutput, error) {
+	args := m.Called(input, creds)
+	if out, ok := args.Get(0).(*sts.AssumeRoleOutput); ok {
+		return out, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockAwsServiceWrapper) GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
+	args := m.Called(input, creds)
+	if out, ok := args.Get(0).(*iam.GetRoleOutput); ok {
+		return out, args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 // MockReadCloser is a mock implementation of io.ReadCloser for testing
 type MockReadCloser struct {
 	*bytes.Reader

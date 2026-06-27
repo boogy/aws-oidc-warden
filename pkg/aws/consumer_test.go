@@ -438,8 +438,11 @@ func TestAwsConsumer_ReadS3Configuration(t *testing.T) {
 		consumer := &AwsConsumer{
 			AWS: mockAWS,
 			Config: &gtvcfg.Config{
-				S3ConfigBucket: "test-bucket",
-				S3ConfigPath:   "test/config.json",
+				// RoleSessionName is normally present from defaults before the
+				// S3 overlay; include it so Validate() passes.
+				RoleSessionName: "aws-oidc-warden",
+				S3ConfigBucket:  "test-bucket",
+				S3ConfigPath:    "test/config.json",
 			},
 		}
 

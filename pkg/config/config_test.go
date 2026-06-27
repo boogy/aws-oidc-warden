@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewConfig(t *testing.T) {
@@ -500,4 +501,34 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 // Helper function to convert string to pointer
 func strPtr(s string) *string {
 	return &s
+}
+
+func TestTagAuthDefaults(t *testing.T) {
+	viper.Reset()
+	once = sync.Once{}
+
+	orig := os.Getenv("AOW_TAG_AUTH_ENABLED")
+	origName := os.Getenv("CONFIG_NAME")
+	defer func() {
+		if orig == "" {
+			_ = os.Unsetenv("AOW_TAG_AUTH_ENABLED")
+		} else {
+			_ = os.Setenv("AOW_TAG_AUTH_ENABLED", orig)
+		}
+		if origName == "" {
+			_ = os.Unsetenv("CONFIG_NAME")
+		} else {
+			_ = os.Setenv("CONFIG_NAME", origName)
+		}
+	}()
+
+	_ = os.Setenv("AOW_TAG_AUTH_ENABLED", "true")
+	_ = os.Setenv("CONFIG_NAME", "nonexistent-config-file")
+
+	c := &Config{}
+	require.NoError(t, c.LoadConfig())
+	require.NotNil(t, c.TagAuth)
+	assert.True(t, c.TagAuth.Enabled)
+	assert.Equal(t, "aow/", c.TagAuth.TagPrefix)
+	assert.Equal(t, "aow-spoke", c.TagAuth.SpokeRoleName)
 }

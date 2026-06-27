@@ -279,7 +279,7 @@ func (l *S3Logger) WriteObject(s3Bucket, key string, body []byte) error {
 		if tags.Len() > 0 {
 			tags.WriteString("&")
 		}
-		tags.WriteString(fmt.Sprintf("%s=%s", k, v))
+		fmt.Fprintf(&tags, "%s=%s", k, v)
 	}
 
 	// Upload to S3 with metadata and tags

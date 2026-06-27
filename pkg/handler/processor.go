@@ -82,11 +82,25 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		slog.Duration("validationTime", time.Since(startTime)),
 	)
 
-	// Match role to repository with constraints
+	// Match role to repository with explicit constraints
 	matched, roles := cfg.MatchRolesToRepoWithConstraints(claims.Repository, claimsMap)
+	explicitlyAllowed := matched && (len(roles) == 0 || slices.Contains(roles, requestedRole))
 
-	// If no match or requested role not in allowed roles
-	if !matched || (len(roles) > 0 && !slices.Contains(roles, requestedRole)) {
+	// Fall back to tag-based authorization: read the requested role's IAM tags
+	// and check they authorize these claims. Cross-account aware via GetRoleTags.
+	allowed := explicitlyAllowed
+	if !allowed && cfg.TagAuth != nil && cfg.TagAuth.Enabled {
+		roleTags, terr := r.consumer.GetRoleTags(requestedRole)
+		if terr != nil {
+			log.Warn("Tag-based authorization: could not read role tags",
+				slog.String("role", requestedRole), slog.String("error", terr.Error()))
+		} else if cfg.TagAuth.Authorize(roleTags, claimsMap) {
+			allowed = true
+			log.Info("Authorized via role tags", slog.String("role", requestedRole))
+		}
+	}
+
+	if !allowed {
 		log.Error("Role not allowed for repository or doesn't meet constraints",
 			slog.String("repository", claims.Repository),
 			slog.String("role", requestedRole),

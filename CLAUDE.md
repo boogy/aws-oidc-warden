@@ -1,411 +1,61 @@
 # AWS OIDC Warden
 
-## Overview
+Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS AssumeRole. Runs as a Lambda behind multiple front-ends, or as a local HTTP server.
 
-- **Type**: Go service for OIDC token validation and AWS credential exchange
-- **Stack**: Go +1.25, AWS Lambda, AWS SDK v2, JWT-go v5, Viper
-- **Architecture**: Multi-deployment Lambda service with shared core logic
-- **Deployments**: API Gateway, Lambda URLs, ALB, Local HTTP server
+Request flow: token validation → repository matching → constraint checking → session policy → role assumption (`pkg/handler/processor.go`).
 
-This CLAUDE.md is the authoritative source for development guidelines.
-Subdirectory-specific CLAUDE.md files extend these rules.
+This file is the map. Each package below has its own `CLAUDE.md` with the detail — open the one for the area you're touching. The conventions, security, and git rules at the bottom are shared by all packages (each subdir file `Extends` this one).
 
----
+## Package guide
 
-## Universal Development Rules
+- **`pkg/handler/`** → [CLAUDE.md](pkg/handler/CLAUDE.md) — core request pipeline shared by every deployment. `NewBootstrap()` wires DI (config, validator, cache, AWS consumer); `ProcessRequest()` runs the pipeline; `RequestData` + sentinel errors live in `types.go`; the per-frontend adapters (`apigateway.go` / `alb.go` / `lambdaurl.go`) differ only in event parse/serialize.
+  _Go here when_ changing request flow, adding a frontend, or touching error→HTTP mapping.
 
-### Code Quality (MUST)
+- **`pkg/validator/`** → [CLAUDE.md](pkg/validator/CLAUDE.md) — JWT parse + JWKS signature/claims verification (`TokenValidatorInterface`). Allowed algorithms only (ES/RS 256–512, never `none`); verifies signature → issuer → audience → expiration → required claims; multi-audience handled in `Validate()`.
+  _Go here when_ touching token verification, JWKS fetching, or audience handling.
 
-- **MUST** follow Go idioms and conventions (effective Go)
-- **MUST** use structured logging with `log/slog` (never `fmt.Print` for logs)
-- **MUST** run `make check` (fmt + lint + test) before committing
-- **MUST** handle all errors explicitly (no ignored returns)
-- **MUST** close all readers/connections with deferred cleanup
-- **MUST NOT** commit AWS credentials, tokens, or secrets
-- **MUST NOT** use `panic` except in truly unrecoverable situations
-- **MUST** sign all commits and tags
-- **MUST NOT** include co-author for claude
+- **`pkg/config/`** → [CLAUDE.md](pkg/config/CLAUDE.md) — Viper config (`AOW_` env prefix > file > defaults), repo/constraint matching, and the remote `Provider` (lazy refresh via injected `FetchFunc`, atomic swap from a pristine base). Key methods: `MatchRolesToRepoWithConstraints`, `FindSessionPolicyForRepo`, `Validate()` (compiles anchored regex once).
+  _Go here when_ adding config keys, constraint logic, or remote-refresh behavior.
 
-### Best Practices (SHOULD)
+- **`pkg/cache/`** → [CLAUDE.md](pkg/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects).
+  _Go here when_ changing cache backends, TTL handling, or eviction.
 
-- **SHOULD** use interfaces for testability (see `AwsConsumerInterface`, `TokenValidatorInterface`)
-- **SHOULD** use table-driven tests for comprehensive coverage
-- **SHOULD** pre-compile regex patterns during initialization (see `config.Validate()`)
-- **SHOULD** limit external data reads (see `io.LimitReader` in `processor.go:158`)
-- **SHOULD** validate JSON before processing external input
-- **SHOULD** use `slog.Group` for structured log context
+- **`pkg/aws/`** → [CLAUDE.md](pkg/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` attaches ABAC session tags from `CreateSessionTags(claims)`; clients are built once in `service_wrapper.go`.
+  _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
 
-### Anti-Patterns (MUST NOT)
+## Other folders (no CLAUDE.md of their own)
 
-- **MUST NOT** use `any` type without explicit type assertions
-- **MUST NOT** ignore error returns from `Close()` methods
-- **MUST NOT** compile regex at runtime in hot paths
-- **MUST NOT** use overly permissive regex patterns like `.*` for security constraints
-- **MUST NOT** log full tokens or credentials (use `utils.RedactToken`)
+- `cmd/` — entry points, one per deployment: `apigateway/`, `alb/`, `lambdaurl/`, `local/`. All share core logic via `pkg/handler`.
+- `pkg/types/` — shared structs: claims, JWKS, credentials, request/response types.
+- `pkg/utils/` — helpers; token/credential redaction (`RedactToken`) used before logging.
+- `pkg/s3logger/` — buffered S3 audit logging, flushed on `bootstrap.Cleanup()`.
+- `pkg/version/` — build/version metadata.
+- `docs/` — `ARCHITECTURE.md`, `CONFIGURATION.md`, `SESSION_TAGGING.md`. `example-config.yaml` is the full config reference.
 
----
+## Commands
 
-## Core Commands
+- `make check` — fmt + lint + test. Run before every commit.
+- `make test` / `make test-coverage` — tests / HTML coverage.
+- `make run` — local server on :8080 with `example-config.yaml`.
+- `make build-lambda` — all Lambda variants (ARM64). Binary must be named `bootstrap`.
+- See `make help` for the full list (ko, release).
 
-### Development
+## Conventions
 
-```bash
-make build-local        # Build local development binary
-make run                # Start local server on :8080 with example-config.yaml
-make test               # Run all tests
-make test-verbose       # Run tests with verbose output
-make test-coverage      # Generate coverage report
-make fmt                # Format code with go fmt
-make lint               # Run golangci-lint
-make check              # Run fmt + lint + test (pre-commit)
-```
+- Go 1.25+. Follow effective-Go idioms; structured logging with `log/slog` (never `fmt.Print`).
+- Handle every error explicitly; defer-close all readers/connections.
+- Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
+- Sentinel errors in `pkg/handler/types.go`, mapped to HTTP status in the frontend adapters.
+- Config precedence: env vars > YAML > defaults.
 
-### Lambda Builds
+## Security
 
-```bash
-make build-lambda       # Build all Lambda variants (ARM64)
-make build-apigateway   # Build API Gateway handler → build/bootstrap-apigateway
-make build-alb          # Build ALB handler → build/bootstrap-alb
-make build-lambdaurl    # Build Lambda URL handler → build/bootstrap-lambdaurl
-```
+- Never log full tokens/credentials — redact via `pkg/utils`.
+- Validate JWT signature, issuer, audience, expiration.
+- Repo constraint regex is auto-anchored `^(?:...)$`; keep patterns specific, never `.*`. All constraints are AND.
+- Validate JSON and bound reads (`io.LimitReader`) before processing external input.
+- Never commit credentials/secrets. Sign commits and tags. Do not add a Claude co-author.
 
-### Container & Release
+## Git
 
-```bash
-make ko-build           # Build container images locally
-make ko-publish         # Publish to ghcr.io
-make release            # Create release with GoReleaser
-make release-snapshot   # Create snapshot release
-```
-
-### Quality Gates (run before PR)
-
-```bash
-make check && make build-lambda
-```
-
----
-
-## Project Structure
-
-### Entry Points (`cmd/`)
-
-- **`cmd/apigateway/`** → API Gateway + Lambda (production with rate limiting)
-- **`cmd/lambdaurl/`** → Lambda Function URLs (simple setup)
-- **`cmd/alb/`** → Application Load Balancer (high traffic)
-- **`cmd/local/`** → Local HTTP server (development)
-
-All handlers share the same core logic via `pkg/handler/bootstrap.go`.
-
-### Core Packages (`pkg/`)
-
-- **`pkg/handler/`** → Request processing pipeline ([see pkg/handler/CLAUDE.md](pkg/handler/CLAUDE.md))
-  - `bootstrap.go` - Dependency injection
-  - `processor.go` - Core business logic
-  - `types.go` - Request/response structures
-  - `validation.go` - Input validation
-
-- **`pkg/validator/`** → OIDC token validation ([see pkg/validator/CLAUDE.md](pkg/validator/CLAUDE.md))
-  - `validator.go` - JWT parsing and verification
-
-- **`pkg/config/`** → Configuration management
-  - `config.go` - Viper-based configuration with `AOW_` env prefix
-
-- **`pkg/cache/`** → Multi-tier caching system
-  - `memory.go` - LRU in-memory cache
-  - `dynamodb.go` - DynamoDB persistence
-  - `s3.go` - S3 large object cache
-
-- **`pkg/aws/`** → AWS service interactions
-  - `consumer.go` - STS AssumeRole, S3, IAM operations
-  - `service_wrapper.go` - AWS client initialization
-
-### Documentation (`docs/`)
-
-- `ARCHITECTURE.md` - System architecture and data flow
-- `CONFIGURATION.md` - Complete configuration reference
-- `SESSION_TAGGING.md` - AWS session tagging patterns
-
-### Configuration
-
-- `example-config.yaml` - Full configuration reference with all options
-- Environment variables: `AOW_` prefix (e.g., `AOW_ISSUER`, `AOW_CACHE_TYPE`)
-
----
-
-## Quick Find Commands
-
-### Code Navigation
-
-```bash
-# Find handler implementations
-rg -n "func.*Handle" pkg/handler/
-
-# Find interface definitions
-rg -n "type.*Interface" pkg/
-
-# Find configuration options
-rg -n "mapstructure:" pkg/config/config.go
-
-# Find error definitions
-rg -n "var Err" pkg/handler/
-
-# Find AWS operations
-rg -n "func.*\(.*AwsConsumer" pkg/aws/
-```
-
-### Test Discovery
-
-```bash
-# Find all tests
-rg -n "func Test" --type go
-
-# Find tests for specific package
-rg -n "func Test" pkg/validator/
-
-# Find test helpers
-rg -n "func.*Helper\|Mock" --type go
-```
-
-### Configuration Search
-
-```bash
-# Find env variable bindings
-rg -n "BindEnv" pkg/config/
-
-# Find default values
-rg -n "SetDefault" pkg/config/
-
-# Find constraint fields
-rg -n "type Constraint struct" -A 20 pkg/config/
-```
-
----
-
-## Architecture Patterns
-
-### Bootstrap Pattern (Critical)
-
-All Lambda handlers use dependency injection via `pkg/handler/bootstrap.go`:
-
-```go
-// Always use this pattern in cmd/* files
-bootstrap, err := handler.NewBootstrap()
-if err != nil {
-    slog.Error("Failed to initialize", "error", err)
-    os.Exit(1)
-}
-defer bootstrap.Cleanup() // Critical for S3 log flushing
-
-handler := handler.NewAwsApiGatewayFromBootstrap(bootstrap)
-lambda.Start(handler.Handle)
-```
-
-### Request Processing Pipeline
-
-```
-Token Validation → Repository Matching → Constraint Checking → Session Policy → Role Assumption
-```
-
-See `pkg/handler/processor.go:ProcessRequest()` for implementation.
-
-### Error Handling Convention
-
-Use wrapped errors with proper HTTP status mapping:
-
-```go
-// Define sentinel errors in pkg/handler/types.go
-var ErrRoleNotPermitted = errors.New("role not permitted")
-var ErrSessionPolicyAccess = errors.New("session policy access error")
-
-// Map to HTTP status in handlers
-switch {
-case errors.Is(err, ErrRoleNotPermitted):
-    statusCode = http.StatusForbidden
-case errors.Is(err, ErrSessionPolicyAccess):
-    statusCode = http.StatusInternalServerError
-}
-```
-
-### Caching Strategy
-
-Three-tier caching (`pkg/cache/`):
-
-| Tier     | Use Case      | TTL           | Implementation         |
-| -------- | ------------- | ------------- | ---------------------- |
-| Memory   | Hot data      | Minutes-hours | LRU with max size      |
-| DynamoDB | Persistence   | Hours         | TTL-based expiration   |
-| S3       | Large objects | Days          | Metadata TTL + cleanup |
-
-### Configuration Pattern
-
-Viper with environment variable overrides (`AOW_` prefix):
-
-```go
-// Environment variables override YAML config
-AOW_ISSUER=https://token.actions.githubusercontent.com
-AOW_AUDIENCES=sts.amazonaws.com,custom.company.com  // Comma-separated
-AOW_CACHE_TYPE=dynamodb
-AOW_CACHE_DYNAMODB_TABLE=my-cache-table
-```
-
----
-
-## Security Guidelines
-
-### Token Handling
-
-- **NEVER** log full tokens (use `utils.RedactToken(token, 10, 10)`)
-- **ALWAYS** validate JWT signature against JWKS
-- **ALWAYS** check issuer, audience, and expiration claims
-- **VALIDATE** repository patterns precisely (avoid overly permissive regex)
-
-### Session Policy Security
-
-```go
-// Always validate JSON before processing
-var jsonCheck any
-if err := json.Unmarshal(policyBytes, &jsonCheck); err != nil {
-    return fmt.Errorf("invalid JSON: %w", ErrSessionPolicyAccess)
-}
-
-// Always limit file reads
-policyBytes, err := io.ReadAll(io.LimitReader(reader, 1024*1024)) // 1MB limit
-```
-
-### Constraint System Security
-
-Use precise regex patterns in `repo_role_mappings`:
-
-```yaml
-# GOOD: Specific repository
-repo: "^myorg/specific-repo$"
-
-# GOOD: Namespaced pattern
-repo: "^myorg/service-.*$"
-
-# BAD: Overly permissive
-repo: ".*"
-```
-
-### Safe Operations
-
-- Review generated bash commands before execution
-- Confirm before: git force push, `rm -rf`, database operations
-- Use staging environment for testing role assumptions
-
----
-
-## Git Workflow
-
-- Branch from `main` for features: `feature/description`
-- Use Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`
-- PRs require: passing CI (tests, lint, security scan)
-- Squash commits on merge
-- Delete branches after merge
-
-### Commit Message Examples
-
-```
-feat: add support for multiple OIDC audiences
-fix: prevent panic on nil JWKS response
-docs: update configuration examples for DynamoDB cache
-refactor: extract constraint validation to separate function
-test: add integration tests for multi-audience validation
-```
-
----
-
-## Testing Requirements
-
-### Unit Tests
-
-- Location: Colocated with source (`*_test.go`)
-- Framework: `testing` + `testify/assert`
-- Pattern: Table-driven tests for comprehensive coverage
-- Example: `pkg/validator/validator_test.go`
-
-### Integration Tests
-
-- Location: `pkg/validator/integration_test.go`
-- Purpose: End-to-end flows with mock JWKS servers
-- Pattern: Start test HTTP server, generate test JWTs
-
-### Running Tests
-
-```bash
-make test               # Run all tests
-make test-verbose       # Verbose output
-make test-coverage      # Generate coverage report → coverage.html
-```
-
-### Test Patterns
-
-```go
-// Use interfaces for mocking (see pkg/aws/consumer.go)
-type AwsConsumerInterface interface {
-    AssumeRole(...) (*types.Credentials, error)
-    GetS3Object(...) (io.ReadCloser, error)
-}
-
-// Table-driven tests
-func TestConstraintValidation(t *testing.T) {
-    tests := []struct {
-        name        string
-        constraint  *Constraint
-        claims      map[string]any
-        wantMatch   bool
-    }{
-        {"branch match", &Constraint{Branch: "refs/heads/main"}, ...},
-        {"branch mismatch", &Constraint{Branch: "refs/heads/main"}, ...},
-    }
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            // test logic
-        })
-    }
-}
-```
-
----
-
-## Available Tools
-
-You have access to:
-
-- Standard bash tools (rg, git, go, make)
-- GitHub CLI (`gh`) for issues, PRs, releases
-- Go tools (`go test`, `go fmt`, `golangci-lint`)
-
-### Tool Permissions
-
-- Read any file
-- Write code files (`.go`, `.yaml`, `.md`)
-- Run tests, linters, formatters
-- Build binaries
-- **ASK FIRST**: Editing `example-config.yaml` with real values
-- **ASK FIRST**: Force push operations
-- **ASK FIRST**: Modifying CI/CD workflows
-
----
-
-## Key Files to Understand First
-
-1. `pkg/handler/processor.go` - Core business logic
-2. `pkg/validator/validator.go` - Token validation
-3. `pkg/config/config.go` - Configuration and constraints
-4. `pkg/aws/consumer.go` - AWS operations
-5. `example-config.yaml` - Configuration reference
-6. `docs/ARCHITECTURE.md` - System design
-
----
-
-## Common Gotchas
-
-- **Lambda Binary Name**: Must be named `bootstrap` for AWS Lambda runtime
-- **Build Tags**: Use `-tags=lambda.norpc` for Lambda builds (performance)
-- **Default Architecture**: ARM64 (`GOOS=linux GOARCH=arm64`) for cost efficiency
-- **Config Priority**: Environment variables > config file > defaults
-- **Audience Validation**: Supports both legacy single and new multi-audience
-- **Regex Anchoring**: Repository patterns auto-anchored with `^(?:pattern)$`
-- **Constraint Logic**: All constraints must match (AND logic, not OR)
+Branch from `main` (`feature/…`, `fix/…`). Conventional Commits. PRs need passing CI (test, lint, security scan). Ask before editing `example-config.yaml` with real values, force-pushing, or changing CI workflows.
