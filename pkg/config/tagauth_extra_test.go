@@ -29,6 +29,28 @@ func TestTagAuth_TransitiveAndAllowedAccounts_Env(t *testing.T) {
 	assert.Equal(t, []string{"111111111111", "222222222222"}, c.TagAuth.AllowedAccounts)
 }
 
+func TestMergeBytes_EnvTagAuthTransitiveAndAllowedAccounts(t *testing.T) {
+	t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "true")
+	t.Setenv("AOW_TAG_AUTH_ALLOWED_ACCOUNTS", "111111111111, 222222222222")
+
+	c := &Config{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		Audiences:       []string{"sts.amazonaws.com"},
+		RoleSessionName: "base-session",
+		Cache:           &Cache{Type: "memory", TTL: 3600000000000},
+	}
+	require.NoError(t, c.Validate())
+
+	// S3 payload enables tag_auth but does not set the new keys; the env vars
+	// must survive the hot-reload via reapplyEnvOverrides.
+	yaml := []byte("tag_auth:\n  enabled: true\n")
+	require.NoError(t, c.MergeBytes(yaml, "yaml"))
+
+	require.NotNil(t, c.TagAuth)
+	assert.True(t, c.TagAuth.TransitiveSessionTags, "AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS must survive S3 hot-reload")
+	assert.Equal(t, []string{"111111111111", "222222222222"}, c.TagAuth.AllowedAccounts, "AOW_TAG_AUTH_ALLOWED_ACCOUNTS must survive S3 hot-reload, whitespace-trimmed")
+}
+
 func TestTagAuth_AllowedAccounts_RejectsMalformed(t *testing.T) {
 	c := &Config{
 		Issuer: "https://x", Audiences: []string{"a"}, RoleSessionName: "s",
