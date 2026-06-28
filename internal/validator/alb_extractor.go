@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
@@ -19,6 +20,39 @@ import (
 )
 
 const defaultALBKeyEndpoint = "https://public-keys.auth.elb.%s.amazonaws.com/%s"
+
+// albKeyCache is a short-lived in-memory cache for ALB EC public keys, keyed by kid.
+// Avoids a per-request HTTPS round-trip to the AWS key endpoint.
+type albKeyCache struct {
+	mu      sync.RWMutex
+	entries map[string]albKeyCacheEntry
+}
+
+type albKeyCacheEntry struct {
+	key       *ecdsa.PublicKey
+	expiresAt time.Time
+}
+
+const albKeyCacheTTL = 5 * time.Minute
+
+func (c *albKeyCache) get(kid string) (*ecdsa.PublicKey, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	e, ok := c.entries[kid]
+	if !ok || time.Now().After(e.expiresAt) {
+		return nil, false
+	}
+	return e.key, true
+}
+
+func (c *albKeyCache) set(kid string, key *ecdsa.PublicKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]albKeyCacheEntry)
+	}
+	c.entries[kid] = albKeyCacheEntry{key: key, expiresAt: time.Now().Add(albKeyCacheTTL)}
+}
 
 // ALBExtractor verifies the ALB-signed x-amzn-oidc-data JWT (ES256) and
 // extracts GitHub OIDC claims. If expectedSigner is non-empty, the JWT
@@ -30,6 +64,7 @@ type ALBExtractor struct {
 	expectedAudiences []string
 	keyEndpointFmt    string // format string with two %s: region, kid
 	httpClient        *http.Client
+	keyCache          albKeyCache
 }
 
 // ALBOption configures ALBExtractor (functional option pattern).
@@ -121,6 +156,10 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 }
 
 func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (*ecdsa.PublicKey, error) {
+	if key, ok := a.keyCache.get(kid); ok {
+		return key, nil
+	}
+
 	placeholderCount := strings.Count(a.keyEndpointFmt, "%s")
 	if region == "" && placeholderCount == 2 {
 		return nil, fmt.Errorf("AWSRegion is required for ALB public key lookup; set AWS_REGION env var")
@@ -173,6 +212,7 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	if ecKey.Curve != elliptic.P256() {
 		return nil, fmt.Errorf("ALB public key uses unexpected curve %s, expected P-256", ecKey.Curve.Params().Name)
 	}
+	a.keyCache.set(kid, ecKey)
 	return ecKey, nil
 }
 

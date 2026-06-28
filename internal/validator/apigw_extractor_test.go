@@ -101,3 +101,21 @@ func TestAPIGWExtractor_AudienceMismatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "aud")
 }
+
+func TestAPIGWExtractor_MinimalClaims(t *testing.T) {
+	ex := validator.NewAPIGWExtractor("https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"})
+	claims, err := ex.Extract(context.Background(), validator.ExtractionInput{
+		AuthorizerClaims: map[string]string{
+			"iss":        "https://token.actions.githubusercontent.com",
+			"aud":        "sts.amazonaws.com",
+			"sub":        "repo:org/repo:ref:refs/heads/main",
+			"repository": "org/repo",
+			"exp":        "9999999999",
+			// no iat, actor, ref, ref_type, etc. — optional claims
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "org/repo", claims.Repository)
+	assert.Empty(t, claims.Actor, "absent optional claims must produce zero values")
+	assert.NotNil(t, claims.ExpiresAt)
+}

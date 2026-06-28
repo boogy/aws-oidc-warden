@@ -125,3 +125,48 @@ func TestALBExtractor_IssuerMismatch(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "iss")
 }
+
+func TestALBExtractor_KeyCache(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	kid := "cache-test-kid"
+	pubDER, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		_, _ = w.Write(pubPEM)
+	}))
+	defer srv.Close()
+
+	token := makeALBJWT(t, priv, kid, "", map[string]any{
+		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
+		"repository": "org/repo",
+		"exp":        time.Now().Add(time.Hour).Unix(),
+	})
+
+	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	input := validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"}
+
+	_, err := ex.Extract(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, 1, callCount)
+
+	// Second call must use cache, not hit HTTP again.
+	_, err = ex.Extract(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, 1, callCount, "expected cache hit; key endpoint called again")
+}
+
+func TestALBExtractor_MissingRegion(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	token := makeALBJWT(t, priv, "valid-kid", "", map[string]any{
+		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
+		"repository": "org/repo",
+		"exp":        time.Now().Add(time.Hour).Unix(),
+	})
+	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"})
+	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: ""})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AWSRegion")
+}
