@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - EC key support restored (ES256/384/512) — EC tokens were incorrectly rejected in prior versions (#230)
 - Hot-reload now propagates to the AWS consumer — `allowed_accounts`, tag-auth enable/disable, spoke role, and external-id changes take effect without a Lambda cold start (#237)
 - Validator reads issuer/audiences from the live config on every call — revoked audiences are enforced immediately after an S3 config reload (#230)
+- `jwt_validation.mode` config option (`"self"` / `"apigw"` / `"alb"`) to delegate JWT verification to API Gateway HTTP API v2 JWT Authorizer or ALB OIDC.
+- `ClaimsExtractorInterface` in `internal/validator/` with `SelfExtractor`, `APIGWExtractor`, and `ALBExtractor` implementations.
+- `AwsApiGatewayV2` Lambda adapter (`internal/handler/apigatewayv2.go`) and `cmd/apigatewayv2/` entry point for HTTP API v2 deployments.
+- `ParseRoleOnlyRequestBody` for delegated-mode requests (only `role` ARN required in body).
+- `AOW_JWT_VALIDATION_MODE` and `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER` environment variables.
+- In-memory ALB public key cache (5-minute TTL) in `ALBExtractor` to avoid per-request HTTP latency.
 
 ### Fixed
 
@@ -31,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Moved `pkg/` to `internal/` — all shared packages are now under `internal/` in line with Go conventions
+- `ProcessRequest` signature now accepts `validator.ExtractionInput` to carry per-request extraction data.
+- `RequestProcessor` holds `ClaimsExtractorInterface` instead of `TokenValidatorInterface` directly.
 
 ### Dependencies
 

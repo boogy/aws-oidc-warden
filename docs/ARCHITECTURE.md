@@ -155,6 +155,24 @@ sequenceDiagram
     Handler-->>Client: HTTP 200 + credentials
 ```
 
+## JWT Validation Modes
+
+Three modes controlled by `jwt_validation.mode`:
+
+| Mode    | Verifier              | Claims source                                | Binary         |
+| ------- | --------------------- | -------------------------------------------- | -------------- |
+| `self`  | This service (JWKS)   | JWT body after full verification             | any            |
+| `apigw` | API Gateway (managed) | `event.requestContext.authorizer.jwt.claims` | `apigatewayv2` |
+| `alb`   | This service (ES256)  | `x-amzn-oidc-data` after ALB key verify      | `alb`          |
+
+**Security invariant:** In delegated modes, if no upstream-injected claims arrive (direct Lambda invocation bypass), `Extract()` returns an error wrapping `ErrTokenValidationFailed` → HTTP 401.
+
+**API Gateway mode** requires an `aws_apigatewayv2_authorizer` JWT resource pointing at `https://token.actions.githubusercontent.com`. Restrict Lambda invocations to the API Gateway execution role via Lambda resource-based policies.
+
+**ALB mode** verifies the ALB-signed ES256 JWT but does not re-verify the original OIDC signature. Set `alb_expected_signer` to the ALB ARN to prevent cross-ALB token injection.
+
+**Hot-reload note:** The extractor implementation is fixed at Lambda cold start. Changing `jwt_validation.mode` requires a redeployment.
+
 ## Core Components Deep Dive
 
 ### Request Handler (`internal/handler/`)
