@@ -14,17 +14,16 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/types"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type tagModeValidator struct{ claims *types.GithubClaims }
+type tagModeExtractor struct{ claims *types.GithubClaims }
 
-func (v *tagModeValidator) Validate(string) (*types.GithubClaims, error)   { return v.claims, nil }
-func (v *tagModeValidator) ParseToken(string) (*types.GithubClaims, error) { return v.claims, nil }
-func (v *tagModeValidator) FetchJWKS(string) (*types.JWKS, error)          { return nil, nil }
-func (v *tagModeValidator) GenKeyFunc(*types.JWKS) jwt.Keyfunc             { return nil }
+func (e *tagModeExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.GithubClaims, error) {
+	return e.claims, nil
+}
 
 type fakeConsumer struct {
 	tags            map[string]string
@@ -72,9 +71,11 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
 		allowAccount: true,
 	}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
 	creds, err := proc.ProcessRequest(context.Background(),
-		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"}, "rid", slog.Default())
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
 	require.NoError(t, err)
 	assert.Equal(t, "AK", *creds.AccessKeyId)
 	assert.Equal(t, "arn:aws:iam::111111111111:role/app", fc.assumed)
@@ -87,9 +88,11 @@ func TestProcessRequest_TagAuthDenies(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/other"}, allowAccount: true}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
 	_, err := proc.ProcessRequest(context.Background(),
-		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"}, "rid", slog.Default())
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted))
 }
@@ -123,9 +126,11 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
 		allowAccount: true,
 	}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
 	creds, err := proc.ProcessRequest(context.Background(),
-		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"}, "rid", slog.Default())
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
 	require.NoError(t, err, "tag-auth should authorize despite the failed mapping constraint")
 	assert.Equal(t, "AK", *creds.AccessKeyId)
 }
@@ -135,9 +140,11 @@ func TestProcessRequest_AccountNotAllowed(t *testing.T) {
 	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
 	// allowAccount defaults to false → target account is denied.
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
 	_, err := proc.ProcessRequest(context.Background(),
-		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"}, "rid", slog.Default())
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, handler.ErrAccountNotAllowed))
 }
@@ -148,9 +155,11 @@ func TestProcessRequest_AccountCheckError(t *testing.T) {
 	// Infra error must take precedence over the allow/deny bool and map to a 5xx
 	// (ErrAssumeRoleFailed), never a 403 (ErrAccountNotAllowed).
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: true, allowAccountErr: errors.New("infra fail")}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeValidator{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
 	_, err := proc.ProcessRequest(context.Background(),
-		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"}, "rid", slog.Default())
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, handler.ErrAssumeRoleFailed))
 	assert.False(t, errors.Is(err, handler.ErrAccountNotAllowed))

@@ -20,20 +20,20 @@ import (
 type RequestProcessor struct {
 	provider  *config.Provider
 	consumer  aws.AwsConsumerInterface
-	validator validator.TokenValidatorInterface
+	extractor validator.ClaimsExtractorInterface
 }
 
 // NewRequestProcessor creates a new instance of request processor
-func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *RequestProcessor {
+func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *RequestProcessor {
 	return &RequestProcessor{
 		provider:  provider,
 		consumer:  consumer,
-		validator: validator,
+		extractor: extractor,
 	}
 }
 
 // ProcessRequest contains the main business logic for processing requests
-func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, requestID string, log *slog.Logger) (*types.Credentials, error) {
+func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error) {
 	startTime, _ := ctx.Value(StartTimeContextKey).(time.Time)
 
 	// Pick up any hot-reloaded configuration (no-op unless reload is enabled),
@@ -41,17 +41,24 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	r.provider.MaybeRefresh(ctx)
 	cfg := r.provider.Get()
 
-	// Create a redacted token for logging (first 10 chars and last 10 chars)
-	redactedToken := utils.RedactToken(requestData.Token, 10, 10)
-	log.Debug("Validating token", slog.String("token", redactedToken))
+	log.Debug("Extracting claims", slog.String("mode", func() string {
+		if input.Token != "" {
+			return "self"
+		}
+		if len(input.AuthorizerClaims) > 0 {
+			return "apigw"
+		}
+		if input.ALBOIDCData != "" {
+			return "alb"
+		}
+		return "unknown"
+	}()))
 
-	// Validate the token and extract claims
-	claims, err := r.validator.Validate(requestData.Token)
+	// Extract claims via the configured extractor (self-validation or delegated mode).
+	// All extraction errors wrap ErrTokenValidationFailed so adapters map them to HTTP 401.
+	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
-		log.Error("Token validation failed",
-			slog.String("error", err.Error()),
-			slog.String("token", redactedToken),
-		)
+		log.Error("Claims extraction failed", slog.String("error", err.Error()))
 		return nil, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err)
 	}
 
