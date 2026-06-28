@@ -56,14 +56,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize the token validator
-	validator := validator.NewTokenValidator(cfg, jwksCache)
+	// Initialize the token validator and wrap it in a SelfExtractor so the local
+	// server always validates JWT signatures itself (no delegated mode).
+	tokenValidator := validator.NewTokenValidator(cfg, jwksCache)
+	extractor := validator.NewSelfExtractor(tokenValidator)
 
 	// Initialize the AWS client
 	awsClient := aws.NewAwsConsumer(cfg)
 
 	// Create the handler function (static config provider — no hot-reload locally)
-	handlerFunc := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), awsClient, validator).Handler
+	handlerFunc := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), awsClient, extractor).Handler
 
 	// Set up HTTP server
 	http.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
