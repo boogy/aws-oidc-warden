@@ -558,3 +558,60 @@ func TestTagAuthDefaults(t *testing.T) {
 	assert.Equal(t, "aow/", c.TagAuth.TagPrefix)
 	assert.Equal(t, "aow-spoke", c.TagAuth.SpokeRoleName)
 }
+
+func TestJWTValidationConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+	}{
+		{"default self", nil, false},
+		{"apigw mode", map[string]string{"AOW_JWT_VALIDATION_MODE": "apigw"}, false},
+		{"invalid mode", map[string]string{"AOW_JWT_VALIDATION_MODE": "bad"}, true},
+		{"alb missing signer", map[string]string{"AOW_JWT_VALIDATION_MODE": "alb"}, true},
+		{"alb with signer", map[string]string{
+			"AOW_JWT_VALIDATION_MODE":                "alb",
+			"AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER": "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y",
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			cfg := &Config{
+				Issuer:          "https://token.actions.githubusercontent.com",
+				Audiences:       []string{"sts.amazonaws.com"},
+				RoleSessionName: "test-session",
+				JWTValidation: JWTValidation{Mode: func() string {
+					if tt.env != nil {
+						if mode, ok := tt.env["AOW_JWT_VALIDATION_MODE"]; ok {
+							return mode
+						}
+					}
+					return "self"
+				}(),
+					ALBExpectedSigner: func() string {
+						if tt.env != nil {
+							if signer, ok := tt.env["AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER"]; ok {
+								return signer
+							}
+						}
+						return ""
+					}(),
+				},
+			}
+			err := cfg.Validate()
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			expectedMode := "self"
+			if tt.env != nil && tt.env["AOW_JWT_VALIDATION_MODE"] != "" {
+				expectedMode = tt.env["AOW_JWT_VALIDATION_MODE"]
+			}
+			assert.Equal(t, expectedMode, cfg.JWTValidation.Mode)
+		})
+	}
+}
