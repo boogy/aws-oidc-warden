@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/golang-jwt/jwt/v5"
@@ -60,13 +59,13 @@ func NewALBExtractor(expectedSigner, expectedIssuer string, expectedAudiences []
 }
 
 // isValidALBKid rejects kid values that could manipulate the key endpoint URL.
-// Only URL-safe alphanumeric, hyphen, and underscore are permitted (max 128 chars).
+// Only ASCII alphanumeric, hyphen, and underscore are permitted (max 128 chars).
 func isValidALBKid(kid string) bool {
 	if len(kid) == 0 || len(kid) > 128 {
 		return false
 	}
 	for _, r := range kid {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_' {
 			return false
 		}
 	}
@@ -110,7 +109,7 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 		func(t *jwt.Token) (any, error) { return ecKey, nil },
 		jwt.WithValidMethods([]string{"ES256"}),
 	)
-	if err != nil || !token.Valid {
+	if err != nil {
 		return nil, fmt.Errorf("ALB OIDC JWT verification failed: %w", err)
 	}
 
@@ -122,19 +121,20 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 }
 
 func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (*ecdsa.PublicKey, error) {
-	if region == "" && strings.Count(a.keyEndpointFmt, "%s") == 2 {
+	placeholderCount := strings.Count(a.keyEndpointFmt, "%s")
+	if region == "" && placeholderCount == 2 {
 		return nil, fmt.Errorf("AWSRegion is required for ALB public key lookup; set AWS_REGION env var")
 	}
 
-	var url string
-	if strings.Count(a.keyEndpointFmt, "%s") == 2 {
-		url = fmt.Sprintf(a.keyEndpointFmt, region, kid)
+	var keyURL string
+	if placeholderCount == 2 {
+		keyURL = fmt.Sprintf(a.keyEndpointFmt, region, kid)
 	} else {
 		// test override with single %s (just kid)
-		url = fmt.Sprintf(a.keyEndpointFmt, kid)
+		keyURL = fmt.Sprintf(a.keyEndpointFmt, kid)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, keyURL, nil)
 	if err != nil {
 		return nil, err
 	}
