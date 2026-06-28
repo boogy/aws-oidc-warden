@@ -65,6 +65,13 @@ Optional, disabled by default. When enabled, a repo may assume a role whose IAM 
 | `AOW_LOG_PREFIX`     | `log_prefix`    | S3 key prefix for logs                   |         |
 | `LOG_LEVEL`          | N/A             | Logging level (debug, info, warn, error) | `info`  |
 
+### JWT Validation Mode Settings
+
+| Environment Variable | Config File Key | Description | Default |
+| -------------------- | --------------- | ----------- | ------- |
+| `AOW_JWT_VALIDATION_MODE` | `jwt_validation.mode` | JWT validation mode (`"self"`, `"apigw"`, or `"alb"`) | `"self"` |
+| `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER` | `jwt_validation.alb_expected_signer` | ARN of the trusted ALB (ALB mode only, recommended) | (empty) |
+
 ### Other Settings
 
 | Environment Variable | Default Value                                        | Description                          | Default  |
@@ -150,6 +157,150 @@ const apiToken = await core.getIDToken("https://api.mycompany.com");
 ```
 
 The AWS OIDC Warden will validate tokens against any of the configured audiences. If the token's audience matches any of the expected audiences, validation succeeds.
+
+## JWT Validation Mode
+
+AWS OIDC Warden supports three JWT validation modes, selectable via the `jwt_validation.mode` configuration option:
+
+### 1. Self Mode (Default)
+
+**Mode**: `"self"`
+
+This is the default and most straightforward mode. The service performs full JWT signature verification locally using JWKS keys fetched from the OIDC provider.
+
+**When to use:**
+- No trusted upstream service pre-validates tokens
+- Full control over validation logic
+- Direct Lambda URL or Lambda function invocations
+
+**Request format:**
+```bash
+curl -X POST https://lambda-url.example.com \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token": "<full-github-actions-oidc-jwt>",
+    "role": "arn:aws:iam::123456789012:role/MyRole"
+  }'
+```
+
+**Configuration:**
+```yaml
+jwt_validation:
+  mode: "self"
+```
+
+### 2. API Gateway HTTP API v2 Mode
+
+**Mode**: `"apigw"`
+
+Trust pre-validated JWT claims from API Gateway HTTP API v2 JWT Authorizer. The Lambda function receives authorizer-validated claims in the request context and skips re-validation.
+
+**When to use:**
+- API Gateway HTTP API v2 JWT Authorizer is configured upstream
+- Avoiding duplicate JWT validation (API Gateway already verifies)
+- Delegating signature verification to API Gateway
+
+**Setup steps:**
+
+1. **Create API Gateway JWT Authorizer:**
+   - Issuer URL: `https://token.actions.githubusercontent.com`
+   - Audience: One of the values in `audiences` config (e.g., `sts.amazonaws.com`)
+   - Token source: `Authorization` header
+
+2. **Deploy using API Gateway v2 binary:**
+   ```bash
+   make build-apigatewayv2
+   # Deploy build/bootstrap-apigatewayv2 as Lambda function
+   ```
+
+3. **Restrict Lambda invocations:**
+   Add a Lambda resource-based policy to allow only API Gateway execution role:
+   ```json
+   {
+     "Effect": "Allow",
+     "Principal": {
+       "Service": "apigateway.amazonaws.com"
+     },
+     "Action": "lambda:InvokeFunction",
+     "Resource": "arn:aws:lambda:region:account:function:function-name"
+   }
+   ```
+
+4. **Configure the service:**
+   ```yaml
+   jwt_validation:
+     mode: "apigw"
+   ```
+
+**Request format:**
+When using API Gateway, the client sends the token in the `Authorization` header and only the role in the request body:
+```bash
+curl -X POST https://api.example.com/assume-role \
+  -H "Authorization: Bearer <github-actions-oidc-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "arn:aws:iam::123456789012:role/MyRole"}'
+```
+
+**Security notes:**
+- API Gateway validates the JWT signature before invoking Lambda
+- Lambda must restrict invocations to API Gateway via resource-based policy (prevent direct invocation bypass)
+- No token re-validation by Lambda; trust API Gateway's validation
+
+### 3. ALB OIDC Mode
+
+**Mode**: `"alb"`
+
+Trust ALB OIDC authentication. The ALB signs OIDC tokens with ES256 and passes them in the `x-amzn-oidc-data` header. This service verifies the signature using the ALB's EC public key.
+
+**When to use:**
+- ALB is configured with GitHub OIDC as the identity provider
+- Load balancer handles OIDC flow and token generation
+- Need to validate ALB-signed tokens
+
+**ALB Setup:**
+
+1. **Configure ALB with GitHub OIDC:**
+   - OIDC provider endpoint: `https://token.actions.githubusercontent.com`
+   - Client ID: Use `sts.amazonaws.com` as the audience
+   - Set ALB listener rule to authenticate via OIDC
+
+2. **Deploy using ALB binary:**
+   ```bash
+   make build-alb
+   # Deploy build/bootstrap-alb as Lambda function behind ALB
+   ```
+
+3. **Configure the service:**
+   ```yaml
+   jwt_validation:
+     mode: "alb"
+     alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"
+   ```
+
+**Request format:**
+ALB automatically injects the `x-amzn-oidc-data` header; clients send only the role:
+```bash
+# Client sends to ALB (no token needed in request)
+curl -X POST https://alb.example.com/assume-role \
+  -H "Content-Type: application/json" \
+  -d '{"role": "arn:aws:iam::123456789012:role/MyRole"}'
+
+# ALB intercepts, authenticates with GitHub OIDC, and injects x-amzn-oidc-data
+# Lambda receives the OIDC token in the header
+```
+
+**Security notes:**
+- ALB performs GitHub OIDC authentication and token generation
+- Lambda verifies ALB-signed ES256 JWT from `x-amzn-oidc-data` header
+- Set `alb_expected_signer` (ALB ARN) to prevent cross-ALB token injection
+- `AWS_REGION` environment variable must be set (used for ALB public key lookup)
+
+**Environment variables:**
+```bash
+export AWS_REGION=us-east-1
+export AOW_JWT_VALIDATION_MODE=alb
+export AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER="arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"
+```
 
 ## Configuration File Format
 
