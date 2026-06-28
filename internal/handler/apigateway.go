@@ -23,9 +23,9 @@ type AwsApiGateway struct {
 }
 
 // NewAwsApiGateway creates a new API Gateway handler
-func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *AwsApiGateway {
+func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApiGateway {
 	return &AwsApiGateway{
-		processor: NewRequestProcessor(provider, consumer, validator),
+		processor: NewRequestProcessor(provider, consumer, extractor),
 	}
 }
 
@@ -53,8 +53,11 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
+	// Build extraction input from the parsed request token.
+	input := validator.ExtractionInput{Token: requestData.Token}
+
 	// Process the request using the request processor
-	credentials, err := h.processor.ProcessRequest(ctx, requestData, requestID, log)
+	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
 		statusCode := http.StatusInternalServerError
 		switch {

@@ -23,9 +23,9 @@ type AwsLambdaUrl struct {
 }
 
 // NewAwsLambdaUrl creates a new Lambda URL handler
-func NewAwsLambdaUrl(provider *config.Provider, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *AwsLambdaUrl {
+func NewAwsLambdaUrl(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsLambdaUrl {
 	return &AwsLambdaUrl{
-		processor: NewRequestProcessor(provider, consumer, validator),
+		processor: NewRequestProcessor(provider, consumer, extractor),
 	}
 }
 
@@ -53,8 +53,11 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
+	// Build extraction input from the parsed request token.
+	input := validator.ExtractionInput{Token: requestData.Token}
+
 	// Process the request using the request processor
-	credentials, err := h.processor.ProcessRequest(ctx, requestData, requestID, log)
+	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
 		statusCode := http.StatusInternalServerError
 		switch {

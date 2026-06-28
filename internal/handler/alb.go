@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -23,9 +24,9 @@ type AwsApplicationLoadBalancer struct {
 }
 
 // NewAwsApplicationLoadBalancer creates a new Application Load Balancer handler
-func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *AwsApplicationLoadBalancer {
+func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApplicationLoadBalancer {
 	return &AwsApplicationLoadBalancer{
-		processor: NewRequestProcessor(provider, consumer, validator),
+		processor: NewRequestProcessor(provider, consumer, extractor),
 	}
 }
 
@@ -51,8 +52,27 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
+	// Build extraction input: prefer ALB OIDC data header when present.
+	oidcData := event.Headers["x-amzn-oidc-data"]
+	region := os.Getenv("AWS_REGION")
+
+	// Bound x-amzn-oidc-data before any parsing.
+	if len(oidcData) > MaxTokenLength {
+		return h.respondError(ctx, fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size"), http.StatusBadRequest)
+	}
+
+	var input validator.ExtractionInput
+	if oidcData != "" {
+		input = validator.ExtractionInput{
+			ALBOIDCData: oidcData,
+			AWSRegion:   region,
+		}
+	} else {
+		input = validator.ExtractionInput{Token: requestData.Token}
+	}
+
 	// Process the request using the request processor
-	credentials, err := h.processor.ProcessRequest(ctx, requestData, requestID, log)
+	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
 		statusCode := http.StatusInternalServerError
 		switch {
@@ -88,8 +108,13 @@ func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, e
 	return context.WithTimeout(ctx, DefaultTimeout)
 }
 
-// unmarshalRequestData parses and validates the request data from an ALB event
+// unmarshalRequestData parses and validates the request data from an ALB event.
+// When x-amzn-oidc-data is present the body only needs to carry the role (token
+// comes from the header), so we use the role-only parser in that case.
 func (h *AwsApplicationLoadBalancer) unmarshalRequestData(event events.ALBTargetGroupRequest) (*RequestData, error) {
+	if event.Headers["x-amzn-oidc-data"] != "" {
+		return ParseRoleOnlyRequestBody(event.Body)
+	}
 	return ParseRequestBody(event.Body)
 }
 

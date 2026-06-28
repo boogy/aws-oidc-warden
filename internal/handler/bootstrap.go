@@ -22,7 +22,8 @@ type Bootstrap struct {
 	Config    *config.Config
 	Provider  *config.Provider
 	Consumer  aws.AwsConsumerInterface
-	Validator validator.TokenValidatorInterface
+	Validator validator.TokenValidatorInterface  // kept for external use / tests
+	Extractor validator.ClaimsExtractorInterface // used by processor
 	Cache     cache.Cache
 	S3Logger  *s3logger.S3Logger
 	Logger    *slog.Logger
@@ -87,16 +88,52 @@ func NewBootstrap() (*Bootstrap, error) {
 	// changes take effect immediately without a Lambda restart.
 	tokenValidator := validator.NewTokenValidatorFromProvider(provider, jwksCache)
 
+	// The extractor is fixed at cold start. Changing jwt_validation.mode at runtime
+	// requires a Lambda redeployment. Hot-reload via Provider only affects fields
+	// read per-request (repo_role_mappings, audiences, etc.).
+	extractor, err := newClaimsExtractor(cfg, tokenValidator)
+	if err != nil {
+		logger.Error("Failed to create claims extractor", slog.String("error", err.Error()))
+		return nil, fmt.Errorf("failed to create claims extractor: %w", err)
+	}
+	if cfg.JWTValidation.Mode != "self" {
+		logger.Warn("JWT validation delegated to upstream",
+			slog.String("mode", cfg.JWTValidation.Mode))
+	}
+
 	return &Bootstrap{
 		Config:    cfg,
 		Provider:  provider,
 		Consumer:  consumer,
 		Validator: tokenValidator,
+		Extractor: extractor,
 		Cache:     jwksCache,
 		S3Logger:  s3log,
 		Logger:    logger,
 		LogBuffer: logBuffer,
 	}, nil
+}
+
+// newClaimsExtractor creates the appropriate ClaimsExtractorInterface based on the configured mode.
+func newClaimsExtractor(cfg *config.Config, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
+	mode := cfg.JWTValidation.Mode
+	// Resolve audiences: prefer the slice, fall back to singular field.
+	audiences := cfg.Audiences
+	if len(audiences) == 0 && cfg.Audience != "" {
+		audiences = []string{cfg.Audience}
+	}
+	switch mode {
+	case "self", "":
+		return validator.NewSelfExtractor(v), nil
+	case "apigw":
+		// Pass issuer/audiences for defense-in-depth re-validation of pre-validated claims.
+		return validator.NewAPIGWExtractor(cfg.Issuer, audiences), nil
+	case "alb":
+		// Pass issuer/audiences for post-signature claim validation.
+		return validator.NewALBExtractor(cfg.JWTValidation.ALBExpectedSigner, cfg.Issuer, audiences), nil
+	default:
+		return nil, fmt.Errorf("unknown jwt_validation.mode: %q", mode)
+	}
 }
 
 // buildConfigProvider wires the config provider. With an S3 config source it
@@ -185,15 +222,15 @@ func initializeLogger() (*bytes.Buffer, *slog.Logger, error) {
 
 // NewAwsApiGatewayFromBootstrap creates a new API Gateway handler using bootstrap
 func NewAwsApiGatewayFromBootstrap(bootstrap *Bootstrap) *AwsApiGateway {
-	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Validator)
+	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
 }
 
 // NewAwsLambdaUrlFromBootstrap creates a new Lambda URL handler using bootstrap
 func NewAwsLambdaUrlFromBootstrap(bootstrap *Bootstrap) *AwsLambdaUrl {
-	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Validator)
+	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
 }
 
 // NewAwsApplicationLoadBalancerFromBootstrap creates a new ALB handler using bootstrap
 func NewAwsApplicationLoadBalancerFromBootstrap(bootstrap *Bootstrap) *AwsApplicationLoadBalancer {
-	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Validator)
+	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
 }
