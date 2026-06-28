@@ -334,27 +334,6 @@ repo_role_mappings:
       - arn:aws:iam::123456789012:role/github-actions-default-fallback
     # No constraints means this applies to all branches/events
 
-# JWT Validation Mode
-# Controls who validates the JWT signature.
-#
-# "self"  (default) - Full signature verification by this service using JWKS.
-#                     Required when no trusted upstream service pre-validates tokens.
-#
-# "apigw" - Trust API Gateway HTTP API v2 JWT Authorizer. Claims are read from
-#           event.requestContext.authorizer.jwt.claims. No re-validation by Lambda.
-#           Use with cmd/apigatewayv2/ binary. Configure API GW JWT Authorizer with
-#           issuerUrl: https://token.actions.githubusercontent.com and the expected audience.
-#           SECURITY: Restrict Lambda invocations to the API Gateway resource via
-#           Lambda resource-based policies to prevent direct invocation bypass.
-#
-# "alb"   - Trust ALB OIDC authentication. The x-amzn-oidc-data header JWT
-#           (ALB-signed with ES256) is verified. Suitable when ALB is configured
-#           with GitHub OIDC as identity provider.
-#           alb_expected_signer should be set to the ALB ARN to prevent spoofing.
-jwt_validation:
-  mode: "self"
-  # alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"
-
 # Tag-based authorization (optional, default disabled).
 # When enabled, a repo may assume a role whose IAM tags authorize its OIDC
 # claims, even if the role is not listed in repo_role_mappings above. Roles in
@@ -389,3 +368,24 @@ tag_auth:
 # All present aow/* tags must pass (AND); a space-separated value means OR.
 # A role with no aow/repo or aow/repo-owner tag is never assumable via tag-auth.
 # Matching is EXACT (AWS tag values cannot hold regex), unlike repo_role_mappings.
+
+# JWT Validation Mode
+# Controls who validates the JWT signature.
+#
+# "self"  (default) - Full signature verification by this service using JWKS.
+#                     Required when no trusted upstream service pre-validates tokens.
+#
+# "apigw" - Trust API Gateway HTTP API v2 JWT Authorizer. Claims are read from
+#           event.requestContext.authorizer.jwt.claims. No re-validation by Lambda.
+#           Use with cmd/apigatewayv2/ binary. Configure API GW JWT Authorizer with
+#           issuerUrl: https://token.actions.githubusercontent.com and the expected audience.
+#           SECURITY: Restrict Lambda invocations to the API Gateway resource via
+#           Lambda resource-based policies to prevent direct invocation bypass.
+#
+# "alb"   - Trust ALB OIDC authentication. The x-amzn-oidc-data header JWT
+#           (ALB-signed with ES256) is verified. Suitable when ALB is configured
+#           with GitHub OIDC as identity provider.
+#           alb_expected_signer should be set to the ALB ARN to prevent spoofing.
+jwt_validation:
+  mode: "self"
+  # alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"
