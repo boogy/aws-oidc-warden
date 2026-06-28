@@ -46,19 +46,19 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		slog.String("userAgent", event.Headers["user-agent"]),
 	)
 
-	// Parse request data
-	requestData, err := h.unmarshalRequestData(event)
-	if err != nil {
-		return h.respondError(ctx, err, http.StatusBadRequest)
-	}
-
 	// Build extraction input: prefer ALB OIDC data header when present.
 	oidcData := event.Headers["x-amzn-oidc-data"]
 	region := os.Getenv("AWS_REGION")
 
-	// Bound x-amzn-oidc-data before any parsing.
+	// Bound before body parsing to reject oversized ALB OIDC headers early.
 	if len(oidcData) > MaxTokenLength {
 		return h.respondError(ctx, fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size"), http.StatusBadRequest)
+	}
+
+	// Parse request data
+	requestData, err := h.unmarshalRequestData(event)
+	if err != nil {
+		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
 	var input validator.ExtractionInput
