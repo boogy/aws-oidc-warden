@@ -70,7 +70,7 @@ Optional, disabled by default. When enabled, a repo may assume a role whose IAM 
 | Environment Variable | Config File Key | Description | Default |
 | -------------------- | --------------- | ----------- | ------- |
 | `AOW_JWT_VALIDATION_MODE` | `jwt_validation.mode` | JWT validation mode (`"self"`, `"apigw"`, or `"alb"`) | `"self"` |
-| `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER` | `jwt_validation.alb_expected_signer` | ARN of the trusted ALB (ALB mode only, recommended) | (empty) |
+| `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER` | `jwt_validation.alb_expected_signer` | ARN of the trusted ALB; **required** in ALB mode to prevent cross-ALB token injection | (empty, startup fails if unset in alb mode) |
 
 ### Other Settings
 

@@ -388,4 +388,4 @@ tag_auth:
 #           alb_expected_signer should be set to the ALB ARN to prevent spoofing.
 jwt_validation:
   mode: "self"
-  # alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"
+  # alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"  # required (not optional) when mode is "alb"
