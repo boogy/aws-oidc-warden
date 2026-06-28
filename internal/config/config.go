@@ -99,7 +99,7 @@ type JWTValidation struct {
 	Mode string `mapstructure:"mode" json:"mode,omitempty"`
 
 	// ALBExpectedSigner is the ARN of the ALB allowed to sign OIDC data.
-	// Optional but recommended in "alb" mode to prevent cross-ALB attacks.
+	// Required in "alb" mode to prevent cross-ALB token injection.
 	ALBExpectedSigner string `mapstructure:"alb_expected_signer" json:"alb_expected_signer,omitempty"`
 }
 

@@ -561,57 +561,62 @@ func TestTagAuthDefaults(t *testing.T) {
 
 func TestJWTValidationConfig(t *testing.T) {
 	tests := []struct {
-		name    string
-		env     map[string]string
-		wantErr bool
+		name       string
+		env        map[string]string
+		wantErr    bool
+		wantMode   string
+		wantSigner string
 	}{
-		{"default self", nil, false},
-		{"apigw mode", map[string]string{"AOW_JWT_VALIDATION_MODE": "apigw"}, false},
-		{"invalid mode", map[string]string{"AOW_JWT_VALIDATION_MODE": "bad"}, true},
-		{"alb missing signer", map[string]string{"AOW_JWT_VALIDATION_MODE": "alb"}, true},
+		{"default self", nil, false, "self", ""},
+		{"apigw mode", map[string]string{"AOW_JWT_VALIDATION_MODE": "apigw"}, false, "apigw", ""},
+		{"invalid mode", map[string]string{"AOW_JWT_VALIDATION_MODE": "bad"}, true, "", ""},
+		{"alb missing signer", map[string]string{"AOW_JWT_VALIDATION_MODE": "alb"}, true, "", ""},
 		{"alb with signer", map[string]string{
 			"AOW_JWT_VALIDATION_MODE":                "alb",
 			"AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER": "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y",
-		}, false},
+		}, false, "alb", "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Reset viper and singleton to ensure clean state for this test
+			viper.Reset()
+			once = sync.Once{}
+
+			// Save and restore CONFIG_NAME to avoid config file lookups
+			origConfigName := os.Getenv("CONFIG_NAME")
+			defer func() {
+				if origConfigName == "" {
+					_ = os.Unsetenv("CONFIG_NAME")
+				} else {
+					_ = os.Setenv("CONFIG_NAME", origConfigName)
+				}
+			}()
+
+			// Point to nonexistent config file to force defaults
+			t.Setenv("CONFIG_NAME", "nonexistent-config-file")
+
+			// Set required fields and JWT validation env vars
+			t.Setenv("AOW_ISSUER", "https://token.actions.githubusercontent.com")
+			t.Setenv("AOW_AUDIENCES", "sts.amazonaws.com")
+			t.Setenv("AOW_ROLE_SESSION_NAME", "test-session")
+
+			// Set test-specific JWT validation env vars
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
-			cfg := &Config{
-				Issuer:          "https://token.actions.githubusercontent.com",
-				Audiences:       []string{"sts.amazonaws.com"},
-				RoleSessionName: "test-session",
-				JWTValidation: JWTValidation{Mode: func() string {
-					if tt.env != nil {
-						if mode, ok := tt.env["AOW_JWT_VALIDATION_MODE"]; ok {
-							return mode
-						}
-					}
-					return "self"
-				}(),
-					ALBExpectedSigner: func() string {
-						if tt.env != nil {
-							if signer, ok := tt.env["AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER"]; ok {
-								return signer
-							}
-						}
-						return ""
-					}(),
-				},
-			}
-			err := cfg.Validate()
+
+			// Load config through viper so env vars flow through the binding path.
+			// LoadConfig() calls Validate() internally, so validation errors occur here.
+			cfg := &Config{}
+			err := cfg.LoadConfig()
+
 			if tt.wantErr {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			expectedMode := "self"
-			if tt.env != nil && tt.env["AOW_JWT_VALIDATION_MODE"] != "" {
-				expectedMode = tt.env["AOW_JWT_VALIDATION_MODE"]
-			}
-			assert.Equal(t, expectedMode, cfg.JWTValidation.Mode)
+			assert.Equal(t, tt.wantMode, cfg.JWTValidation.Mode)
+			assert.Equal(t, tt.wantSigner, cfg.JWTValidation.ALBExpectedSigner)
 		})
 	}
 }
