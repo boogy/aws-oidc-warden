@@ -398,6 +398,15 @@ func reapplyEnvOverrides(c *Config) {
 		}
 		c.TagAuth.AllowedAccounts = accts
 	}
+
+	// JWT validation env overrides — must be re-applied after hot-reload so
+	// that AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER is never silently dropped.
+	if v := os.Getenv("AOW_JWT_VALIDATION_MODE"); v != "" {
+		c.JWTValidation.Mode = v
+	}
+	if v := os.Getenv("AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER"); v != "" {
+		c.JWTValidation.ALBExpectedSigner = v
+	}
 }
 
 // FormatFromPath returns the viper config type implied by a file path's

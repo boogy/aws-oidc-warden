@@ -28,6 +28,28 @@ builds:
       - amd64
       - arm64
 
+  - id: apigatewayv2
+    dir: .
+    main: ./cmd/apigatewayv2/main.go
+    binary: "bootstrap"
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -tags=lambda.norpc
+      - -trimpath
+    ldflags:
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Date={{.Date}}
+      - -s -w
+      - -extldflags "-static"
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
   - id: alb
     dir: .
     main: ./cmd/alb/main.go
@@ -80,6 +102,15 @@ archives:
     name_template: "{{ .ProjectName }}_apigateway_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - src: dist/apigateway_{{ .Os }}_{{ .Arch }}*/bootstrap
+        dst: bootstrap
+
+  - id: apigatewayv2
+    ids:
+      - apigatewayv2
+    formats: ["zip"]
+    name_template: "{{ .ProjectName }}_apigatewayv2_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: dist/apigatewayv2_{{ .Os }}_{{ .Arch }}*/bootstrap
         dst: bootstrap
 
   - id: alb

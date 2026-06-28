@@ -32,6 +32,7 @@ var (
 	ErrEmptyToken            = errors.New("token is empty")
 	ErrTokenTooLarge         = errors.New("token exceeds maximum allowed size")
 	ErrEmptyRole             = errors.New("role is empty")
+	ErrInvalidRoleFormat     = errors.New("role is not a valid AWS IAM role ARN")
 	ErrRoleTooLarge          = errors.New("role exceeds maximum allowed size")
 	ErrInvalidJSON           = errors.New("invalid JSON in request body")
 	ErrTokenValidationFailed = errors.New("token validation failed")

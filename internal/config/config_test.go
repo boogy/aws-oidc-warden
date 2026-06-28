@@ -559,6 +559,36 @@ func TestTagAuthDefaults(t *testing.T) {
 	assert.Equal(t, "aow-spoke", c.TagAuth.SpokeRoleName)
 }
 
+func TestReapplyEnvOverrides_JWTValidation(t *testing.T) {
+	// AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER must survive a MergeBytes hot-reload.
+	// Without the fix, MergeBytes would silently drop env-var overrides for these
+	// fields, potentially removing the cross-ALB signer guard.
+	const signer = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc123"
+
+	t.Setenv("AOW_JWT_VALIDATION_MODE", "alb")
+	t.Setenv("AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER", signer)
+
+	cfg := &Config{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		Audiences:       []string{"sts.amazonaws.com"},
+		RoleSessionName: "test-session",
+		JWTValidation: JWTValidation{
+			Mode:              "alb",
+			ALBExpectedSigner: signer,
+		},
+	}
+
+	// Simulate a remote config reload that omits jwt_validation entirely
+	// (the S3 document doesn't include it, so it would revert to zero values
+	// without reapplyEnvOverrides).
+	payload := []byte(`{"issuer":"https://token.actions.githubusercontent.com","audiences":["sts.amazonaws.com"],"role_session_name":"test-session"}`)
+	err := cfg.MergeBytes(payload, "json")
+	require.NoError(t, err)
+
+	assert.Equal(t, "alb", cfg.JWTValidation.Mode)
+	assert.Equal(t, signer, cfg.JWTValidation.ALBExpectedSigner)
+}
+
 func TestJWTValidationConfig(t *testing.T) {
 	tests := []struct {
 		name       string

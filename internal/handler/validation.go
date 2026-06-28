@@ -24,7 +24,7 @@ func validateRole(role string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("role does not appear to be a valid AWS IAM role ARN: %w", ErrEmptyRole)
+	return fmt.Errorf("role %q does not have a recognized AWS partition prefix: %w", role, ErrInvalidRoleFormat)
 }
 
 // ValidateRequestData validates common request data fields

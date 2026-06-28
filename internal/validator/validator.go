@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -88,6 +89,9 @@ func (t *TokenValidator) Validate(token string) (*types.GithubClaims, error) {
 		return nil, err
 	}
 
+	// ParseToken already enforced the issuer via jwt.WithIssuer, but it reads a
+	// separate activeConfig() snapshot. Re-check against this call's snapshot so a
+	// hot-reloaded issuer change can't slip through the gap between the two reads.
 	if claims.Issuer != cfg.Issuer {
 		return nil, fmt.Errorf("issuer %s expected", cfg.Issuer)
 	}
@@ -135,6 +139,10 @@ func (t *TokenValidator) ParseToken(tokenString string) (*types.GithubClaims, er
 
 	if jwks == nil || len(jwks.Keys) == 0 {
 		return nil, errors.New("jwks is nil")
+	}
+	const maxJWKSKeys = 20
+	if len(jwks.Keys) > maxJWKSKeys {
+		return nil, fmt.Errorf("jwks contains too many keys (%d > %d)", len(jwks.Keys), maxJWKSKeys)
 	}
 
 	// Create token parser with strict validation.
@@ -231,7 +239,7 @@ func (t *TokenValidator) fetchJWKS(issuer string, force bool) (*types.JWKS, erro
 	var config struct {
 		JwksURI string `json:"jwks_uri"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&config); err != nil {
 		slog.Error("Failed to parse OIDC configuration", "error", err)
 		return nil, fmt.Errorf("failed to parse OIDC configuration: %w", err)
 	}
@@ -258,7 +266,7 @@ func (t *TokenValidator) fetchJWKS(issuer string, force bool) (*types.JWKS, erro
 	}
 
 	var jwks types.JWKS
-	if err := json.NewDecoder(jwksResp.Body).Decode(&jwks); err != nil {
+	if err := json.NewDecoder(io.LimitReader(jwksResp.Body, 1<<20)).Decode(&jwks); err != nil {
 		slog.Error("Failed to parse JWKS", "error", err)
 		return nil, fmt.Errorf("failed to parse JWKS: %w", err)
 	}
@@ -307,10 +315,16 @@ func parseRSAKey(key types.JSONWebKey) (*rsa.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode RSA exponent: %w", err)
 	}
-	return &rsa.PublicKey{
+	pub := &rsa.PublicKey{
 		N: new(big.Int).SetBytes(nBytes),
 		E: int(new(big.Int).SetBytes(eBytes).Int64()),
-	}, nil
+	}
+	// Defense-in-depth: reject undersized keys that could be served by a
+	// compromised JWKS source to enable offline signature forgery.
+	if pub.N.BitLen() < 2048 {
+		return nil, fmt.Errorf("RSA key too short: %d bits (minimum 2048)", pub.N.BitLen())
+	}
+	return pub, nil
 }
 
 func parseECKey(key types.JSONWebKey) (*ecdsa.PublicKey, error) {
@@ -329,11 +343,18 @@ func parseECKey(key types.JSONWebKey) (*ecdsa.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode EC y coordinate: %w", err)
 	}
-	return &ecdsa.PublicKey{
+	pub := &ecdsa.PublicKey{
 		Curve: curve,
 		X:     new(big.Int).SetBytes(xBytes),
 		Y:     new(big.Int).SetBytes(yBytes),
-	}, nil
+	}
+	// Validate the point lies on the declared curve (and is not the identity).
+	// ECDH() round-trips through crypto/ecdh, which rejects off-curve points —
+	// a non-deprecated alternative to elliptic.Curve.IsOnCurve.
+	if _, err := pub.ECDH(); err != nil {
+		return nil, fmt.Errorf("EC key point is not valid for curve %s: %w", key.Crv, err)
+	}
+	return pub, nil
 }
 
 func ecCurve(crv string) (elliptic.Curve, error) {

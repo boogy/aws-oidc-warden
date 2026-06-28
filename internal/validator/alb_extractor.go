@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +21,11 @@ import (
 )
 
 const defaultALBKeyEndpoint = "https://public-keys.auth.elb.%s.amazonaws.com/%s"
+
+// albRegionRe constrains AWS_REGION before it is interpolated into the key
+// endpoint URL. AWS_REGION is operator-set (trusted), so this is an explicit,
+// testable guard rather than a fix for an exploit.
+var albRegionRe = regexp.MustCompile(`^[a-z]{2}-[a-z]+-\d+$`)
 
 // albKeyCache is a short-lived in-memory cache for ALB EC public keys, keyed by kid.
 // Avoids a per-request HTTPS round-trip to the AWS key endpoint.
@@ -138,11 +144,14 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 	}
 
 	// Verify JWT with the EC key; ES256 enforced via WithValidMethods.
+	// Match self-mode strictness: require exp and validate iat at the library level.
 	token, err := jwt.ParseWithClaims(
 		input.ALBOIDCData,
 		jwt.MapClaims{},
 		func(t *jwt.Token) (any, error) { return ecKey, nil },
 		jwt.WithValidMethods([]string{"ES256"}),
+		jwt.WithExpirationRequired(),
+		jwt.WithIssuedAt(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("ALB OIDC JWT verification failed: %w", err)
@@ -161,8 +170,13 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	}
 
 	placeholderCount := strings.Count(a.keyEndpointFmt, "%s")
-	if region == "" && placeholderCount == 2 {
-		return nil, fmt.Errorf("AWSRegion is required for ALB public key lookup; set AWS_REGION env var")
+	if placeholderCount == 2 {
+		if region == "" {
+			return nil, fmt.Errorf("AWSRegion is required for ALB public key lookup; set AWS_REGION env var")
+		}
+		if !albRegionRe.MatchString(region) {
+			return nil, fmt.Errorf("AWSRegion %q is not a valid AWS region", region)
+		}
 	}
 
 	var keyURL string

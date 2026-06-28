@@ -202,7 +202,7 @@ func initializeLogger() (*bytes.Buffer, *slog.Logger, error) {
 		if level, err := utils.ParseLogLevel(logLevel); err == nil {
 			programLevel.Set(level)
 		} else {
-			slog.Info("Invalid LOG_LEVEL %q, defaulting to Info: %v", logLevel, err)
+			slog.Warn("invalid LOG_LEVEL, defaulting to Info", "level", logLevel, "error", err)
 		}
 	}
 

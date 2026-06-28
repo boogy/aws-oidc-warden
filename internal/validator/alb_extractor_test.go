@@ -158,6 +158,63 @@ func TestALBExtractor_KeyCache(t *testing.T) {
 	assert.Equal(t, 1, callCount, "expected cache hit; key endpoint called again")
 }
 
+func TestALBExtractor_ExpiredToken(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	kid := "test-kid-expired"
+	pubDER, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(pubPEM) }))
+	defer srv.Close()
+
+	token := makeALBJWT(t, priv, kid, "", map[string]any{
+		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
+		"repository": "org/repo",
+		"exp":        time.Now().Add(-time.Hour).Unix(),
+		"iat":        time.Now().Add(-2 * time.Hour).Unix(),
+	})
+	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "expired")
+}
+
+func TestALBExtractor_MissingExp(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	kid := "test-kid-noexp"
+	pubDER, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(pubPEM) }))
+	defer srv.Close()
+
+	// No exp claim — WithExpirationRequired() must reject at the library level.
+	token := makeALBJWT(t, priv, kid, "", map[string]any{
+		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
+		"repository": "org/repo",
+	})
+	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
+	require.Error(t, err)
+}
+
+func TestALBExtractor_FutureIssuedAt(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	kid := "test-kid-futureiat"
+	pubDER, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(pubPEM) }))
+	defer srv.Close()
+
+	token := makeALBJWT(t, priv, kid, "", map[string]any{
+		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
+		"repository": "org/repo",
+		"exp":        time.Now().Add(2 * time.Hour).Unix(),
+		"iat":        time.Now().Add(time.Hour).Unix(),
+	})
+	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
+	require.Error(t, err)
+}
+
 func TestALBExtractor_MissingRegion(t *testing.T) {
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	token := makeALBJWT(t, priv, "valid-kid", "", map[string]any{

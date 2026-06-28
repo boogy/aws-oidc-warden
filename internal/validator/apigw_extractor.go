@@ -106,6 +106,10 @@ func (a *APIGWExtractor) mapAPIGWClaims(raw map[string]string) (*types.GithubCla
 	}
 	c.ExpiresAt = jwt.NewNumericDate(time.Unix(expUnix, 0))
 	if iat, err := strconv.ParseInt(raw["iat"], 10, 64); err == nil {
+		// Reject a future iat, matching self-mode's jwt.WithIssuedAt() check.
+		if time.Now().Unix() < iat {
+			return nil, fmt.Errorf("token iat is in the future (%d)", iat)
+		}
 		c.IssuedAt = jwt.NewNumericDate(time.Unix(iat, 0))
 	}
 

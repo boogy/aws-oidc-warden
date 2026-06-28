@@ -93,16 +93,21 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 
 	// Convert claims to map for constraint checking
 	claimsMap := make(map[string]any)
-	claimsJSON, _ := json.Marshal(claims)
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		log.Error("Failed to marshal claims", slog.String("error", err.Error()))
+		return nil, fmt.Errorf("failed to marshal claims: %w", err)
+	}
 	if err := json.Unmarshal(claimsJSON, &claimsMap); err != nil {
 		log.Error("Failed to process claims", slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to process claims: %w", err)
 	}
 
+	// Concise success line at Info; full claims only at Debug to keep audit-log volume down.
 	log.Info("Token validation successful",
-		slog.Any("claims", claims),
 		slog.Duration("validationTime", time.Since(startTime)),
 	)
+	log.Debug("Validated claims", slog.Any("claims", claims))
 
 	// Match role to repository with explicit constraints
 	matched, roles := cfg.MatchRolesToRepoWithConstraints(claims.Repository, claimsMap)

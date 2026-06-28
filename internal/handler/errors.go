@@ -13,8 +13,8 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 	errMsg = "An internal error occurred"
 	switch {
 	case errors.Is(err, ErrEmptyToken), errors.Is(err, ErrTokenTooLarge),
-		errors.Is(err, ErrEmptyRole), errors.Is(err, ErrRoleTooLarge),
-		errors.Is(err, ErrInvalidJSON):
+		errors.Is(err, ErrEmptyRole), errors.Is(err, ErrInvalidRoleFormat),
+		errors.Is(err, ErrRoleTooLarge), errors.Is(err, ErrInvalidJSON):
 		errCode = "invalid_request"
 		errMsg = "Invalid request parameters"
 		*statusCode = http.StatusBadRequest
