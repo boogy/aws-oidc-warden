@@ -14,16 +14,16 @@ AWS OIDC Warden can be configured using:
 
 ### Core Settings
 
-| Environment Variable        | Config File Key         | Description                                 | Default                                       |
-| --------------------------- | ----------------------- | ------------------------------------------- | --------------------------------------------- |
-| `AOW_ISSUER`                | `issuer`                | OIDC issuer URL                             | `https://token.actions.githubusercontent.com` |
-| `AOW_AUDIENCE`              | `audience`              | Expected audience for tokens (legacy)       | `sts.amazonaws.com`                           |
-| `AOW_AUDIENCES`             | `audiences`             | Expected audiences for tokens (recommended) | `["sts.amazonaws.com"]`                       |
-| `AOW_ROLE_SESSION_NAME`     | `role_session_name`     | AWS role session name                       | `aws-oidc-warden`                             |
-| `AOW_S3_CONFIG_BUCKET`      | `s3_config_bucket`      | S3 bucket for config file                   |                                               |
-| `AOW_S3_CONFIG_PATH`        | `s3_config_path`        | Path to config file in S3                   |                                               |
-| `AOW_CONFIG_RELOAD_INTERVAL`| `config_reload_interval`| Hot-reload the S3 config at most this often (e.g. `5m`); `0` disables | `0` (disabled)                   |
-| `AOW_SESSION_POLICY_BUCKET` | `session_policy_bucket` | S3 bucket for session policies              |                                               |
+| Environment Variable         | Config File Key          | Description                                                           | Default                                       |
+| ---------------------------- | ------------------------ | --------------------------------------------------------------------- | --------------------------------------------- |
+| `AOW_ISSUER`                 | `issuer`                 | OIDC issuer URL                                                       | `https://token.actions.githubusercontent.com` |
+| `AOW_AUDIENCE`               | `audience`               | Expected audience for tokens (legacy)                                 | `sts.amazonaws.com`                           |
+| `AOW_AUDIENCES`              | `audiences`              | Expected audiences for tokens (recommended)                           | `["sts.amazonaws.com"]`                       |
+| `AOW_ROLE_SESSION_NAME`      | `role_session_name`      | AWS role session name                                                 | `aws-oidc-warden`                             |
+| `AOW_S3_CONFIG_BUCKET`       | `s3_config_bucket`       | S3 bucket for config file                                             |                                               |
+| `AOW_S3_CONFIG_PATH`         | `s3_config_path`         | Path to config file in S3                                             |                                               |
+| `AOW_CONFIG_RELOAD_INTERVAL` | `config_reload_interval` | Hot-reload the S3 config at most this often (e.g. `5m`); `0` disables | `0` (disabled)                                |
+| `AOW_SESSION_POLICY_BUCKET`  | `session_policy_bucket`  | S3 bucket for session policies                                        |                                               |
 
 > **Note**: You can use either `audience` (single) or `audiences` (multiple). If both are specified, `audiences` takes precedence. For new deployments, use `audiences` for better flexibility.
 
@@ -45,16 +45,16 @@ AWS OIDC Warden can be configured using:
 
 Optional, disabled by default. When enabled, a repo may assume a role whose IAM tags authorize its OIDC claims, even if the role is not listed in `repo_role_mappings`. Roles in other accounts are reached via a per-account spoke role. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the tag reference and IAM setup.
 
-| Environment Variable                  | Config File Key                  | Description                                              | Default     |
-| ------------------------------------- | -------------------------------- | ------------------------------------------------------- | ----------- |
-| `AOW_TAG_AUTH_ENABLED`                | `tag_auth.enabled`               | Enable tag-based authorization + cross-account assume   | `false`     |
-| `AOW_TAG_AUTH_TAG_PREFIX`             | `tag_auth.tag_prefix`            | Namespace prefix for authorization tag keys             | `aow/`      |
-| `AOW_TAG_AUTH_DEFAULT_ORG`            | `tag_auth.default_org`           | Org prefix for bare `aow/repo` tokens (e.g. `"api"` → `"<org>/api"`); empty = no expansion | (empty) |
-| `AOW_TAG_AUTH_SPOKE_ROLE_NAME`        | `tag_auth.spoke_role_name`       | Role assumed in each member account for cross-account   | `aow-spoke` |
-| `AOW_TAG_AUTH_EXTERNAL_ID`            | `tag_auth.external_id`           | Optional external ID for the hub→spoke trust            |             |
-| `AOW_TAG_AUTH_SPOKE_SESSION_DURATION` | `tag_auth.spoke_session_duration`| Hub→spoke session length                                | `15m`       |
-| `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` | `tag_auth.transitive_session_tags` | Mark repo/ref/actor session tags transitive (immutable through role chaining) | `false` |
-| `AOW_TAG_AUTH_ALLOWED_ACCOUNTS`        | `tag_auth.allowed_accounts`        | Comma-separated member account IDs allowed as assume targets (hub always allowed; empty = any) | (empty) |
+| Environment Variable                   | Config File Key                    | Description                                                                                    | Default     |
+| -------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------- | ----------- |
+| `AOW_TAG_AUTH_ENABLED`                 | `tag_auth.enabled`                 | Enable tag-based authorization + cross-account assume                                          | `false`     |
+| `AOW_TAG_AUTH_TAG_PREFIX`              | `tag_auth.tag_prefix`              | Namespace prefix for authorization tag keys                                                    | `aow/`      |
+| `AOW_TAG_AUTH_DEFAULT_ORG`             | `tag_auth.default_org`             | Org prefix for bare `aow/repo` tokens (e.g. `"api"` → `"<org>/api"`); empty = no expansion     | (empty)     |
+| `AOW_TAG_AUTH_SPOKE_ROLE_NAME`         | `tag_auth.spoke_role_name`         | Role assumed in each member account for cross-account                                          | `aow-spoke` |
+| `AOW_TAG_AUTH_EXTERNAL_ID`             | `tag_auth.external_id`             | Optional external ID for the hub→spoke trust                                                   |             |
+| `AOW_TAG_AUTH_SPOKE_SESSION_DURATION`  | `tag_auth.spoke_session_duration`  | Hub→spoke session length                                                                       | `15m`       |
+| `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` | `tag_auth.transitive_session_tags` | Mark repo/ref/actor session tags transitive (immutable through role chaining)                  | `false`     |
+| `AOW_TAG_AUTH_ALLOWED_ACCOUNTS`        | `tag_auth.allowed_accounts`        | Comma-separated member account IDs allowed as assume targets (hub always allowed; empty = any) | (empty)     |
 
 ### Logging Settings
 
@@ -67,9 +67,9 @@ Optional, disabled by default. When enabled, a repo may assume a role whose IAM 
 
 ### JWT Validation Mode Settings
 
-| Environment Variable | Config File Key | Description | Default |
-| -------------------- | --------------- | ----------- | ------- |
-| `AOW_JWT_VALIDATION_MODE` | `jwt_validation.mode` | JWT validation mode (`"self"`, `"apigw"`, or `"alb"`) | `"self"` |
+| Environment Variable                     | Config File Key                      | Description                                                                           | Default                                     |
+| ---------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `AOW_JWT_VALIDATION_MODE`                | `jwt_validation.mode`                | JWT validation mode (`"self"`, `"apigw"`, or `"alb"`)                                 | `"self"`                                    |
 | `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER` | `jwt_validation.alb_expected_signer` | ARN of the trusted ALB; **required** in ALB mode to prevent cross-ALB token injection | (empty, startup fails if unset in alb mode) |
 
 ### Other Settings
@@ -169,11 +169,13 @@ AWS OIDC Warden supports three JWT validation modes, selectable via the `jwt_val
 This is the default and most straightforward mode. The service performs full JWT signature verification locally using JWKS keys fetched from the OIDC provider.
 
 **When to use:**
+
 - No trusted upstream service pre-validates tokens
 - Full control over validation logic
 - Direct Lambda URL or Lambda function invocations
 
 **Request format:**
+
 ```bash
 curl -X POST https://lambda-url.example.com \
   -H "Content-Type: application/json" \
@@ -184,6 +186,7 @@ curl -X POST https://lambda-url.example.com \
 ```
 
 **Configuration:**
+
 ```yaml
 jwt_validation:
   mode: "self"
@@ -196,6 +199,7 @@ jwt_validation:
 Trust pre-validated JWT claims from API Gateway HTTP API v2 JWT Authorizer. The Lambda function receives authorizer-validated claims in the request context and skips re-validation.
 
 **When to use:**
+
 - API Gateway HTTP API v2 JWT Authorizer is configured upstream
 - Avoiding duplicate JWT validation (API Gateway already verifies)
 - Delegating signature verification to API Gateway
@@ -208,6 +212,7 @@ Trust pre-validated JWT claims from API Gateway HTTP API v2 JWT Authorizer. The 
    - Token source: `Authorization` header
 
 2. **Deploy using API Gateway v2 binary:**
+
    ```bash
    make build-apigatewayv2
    # Deploy build/bootstrap-apigatewayv2 as Lambda function
@@ -215,6 +220,7 @@ Trust pre-validated JWT claims from API Gateway HTTP API v2 JWT Authorizer. The 
 
 3. **Restrict Lambda invocations:**
    Add a Lambda resource-based policy to allow only API Gateway execution role:
+
    ```json
    {
      "Effect": "Allow",
@@ -234,6 +240,7 @@ Trust pre-validated JWT claims from API Gateway HTTP API v2 JWT Authorizer. The 
 
 **Request format:**
 When using API Gateway, the client sends the token in the `Authorization` header and only the role in the request body:
+
 ```bash
 curl -X POST https://api.example.com/assume-role \
   -H "Authorization: Bearer <github-actions-oidc-jwt>" \
@@ -242,6 +249,7 @@ curl -X POST https://api.example.com/assume-role \
 ```
 
 **Security notes:**
+
 - API Gateway validates the JWT signature before invoking Lambda
 - Lambda must restrict invocations to API Gateway via resource-based policy (prevent direct invocation bypass)
 - No token re-validation by Lambda; trust API Gateway's validation
@@ -253,6 +261,7 @@ curl -X POST https://api.example.com/assume-role \
 Trust ALB OIDC authentication. The ALB signs OIDC tokens with ES256 and passes them in the `x-amzn-oidc-data` header. This service verifies the signature using the ALB's EC public key.
 
 **When to use:**
+
 - ALB is configured with GitHub OIDC as the identity provider
 - Load balancer handles OIDC flow and token generation
 - Need to validate ALB-signed tokens
@@ -265,6 +274,7 @@ Trust ALB OIDC authentication. The ALB signs OIDC tokens with ES256 and passes t
    - Set ALB listener rule to authenticate via OIDC
 
 2. **Deploy using ALB binary:**
+
    ```bash
    make build-alb
    # Deploy build/bootstrap-alb as Lambda function behind ALB
@@ -279,6 +289,7 @@ Trust ALB OIDC authentication. The ALB signs OIDC tokens with ES256 and passes t
 
 **Request format:**
 ALB automatically injects the `x-amzn-oidc-data` header; clients send only the role:
+
 ```bash
 # Client sends to ALB (no token needed in request)
 curl -X POST https://alb.example.com/assume-role \
@@ -290,12 +301,14 @@ curl -X POST https://alb.example.com/assume-role \
 ```
 
 **Security notes:**
+
 - ALB performs GitHub OIDC authentication and token generation
 - Lambda verifies ALB-signed ES256 JWT from `x-amzn-oidc-data` header
 - Set `alb_expected_signer` (ALB ARN) to prevent cross-ALB token injection
 - `AWS_REGION` environment variable must be set (used for ALB public key lookup)
 
 **Environment variables:**
+
 ```bash
 export AWS_REGION=us-east-1
 export AOW_JWT_VALIDATION_MODE=alb

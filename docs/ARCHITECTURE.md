@@ -73,27 +73,33 @@ GitHub Actions → API Gateway → AWS OIDC Warden (Lambda Function Proxy)
 - **Entry Point**: `cmd/apigateway/main.go`
 
 #### Lambda URLs
+
 ```
 GitHub Actions → AWS OIDC Warden (Lambda Function URL)
 ```
+
 - **Use Case**: Simplified setup for direct Lambda invocation
 - **Benefits**: Lower latency, reduced cost, simpler configuration
 - **Handler**: `internal/handler/lambdaurl.go`
 - **Entry Point**: `cmd/lambdaurl/main.go`
 
 #### Application Load Balancer
+
 ```
 GitHub Actions → ALB → AWS OIDC Warden (Lambda Function)
 ```
+
 - **Use Case**: High-traffic scenarios with advanced routing
 - **Benefits**: Multi-region support, advanced health checks, WAF integration
 - **Handler**: `internal/handler/alb.go`
 - **Entry Point**: `cmd/alb/main.go`
 
 #### Local Development Server
+
 ```
 GitHub Actions → HTTP Server → AWS OIDC Warden
 ```
+
 - **Use Case**: Local development and testing
 - **Benefits**: Fast iteration, debugging capabilities, local testing
 - **Handler**: Built into local server
@@ -186,6 +192,7 @@ type RequestProcessor interface {
 ```
 
 **Key Responsibilities:**
+
 - HTTP request parsing and validation
 - Response formatting and error handling
 - Request ID generation and correlation
@@ -193,6 +200,7 @@ type RequestProcessor interface {
 - Context management and timeouts
 
 **Files:**
+
 - `bootstrap.go` - Common initialization logic
 - `processor.go` - Core business logic
 - `types.go` - Request/response data structures
@@ -212,6 +220,7 @@ type TokenValidatorInterface interface {
 ```
 
 **Validation Process:**
+
 1. **JWT Parsing**: Decode and parse the JWT token
 2. **JWKS Retrieval**: Fetch public keys from OIDC provider (with caching); forced refresh on key-miss (rotation recovery)
 3. **Signature Verification**: Verify token signature using RSA (`RS256`/`RS384`/`RS512`) or ECDSA (`ES256`/`ES384`/`ES512`) public keys; `GenKeyFunc` switches on the JWKS key `kty` field (`RSA` → `parseRSAKey`, `EC` → `parseECKey`)
@@ -219,6 +228,7 @@ type TokenValidatorInterface interface {
 5. **Provider-Aware**: Created via `NewTokenValidatorFromProvider`; reads issuer/audiences live from the provider on every `Validate()` call so hot-reloaded config changes take effect immediately without a restart
 
 **Security Features:**
+
 - Allowed algorithms enforced: ES256/384/512, RS256/384/512 — `none` and all other algorithms rejected
 - Issuer and multi-audience validation (any expected audience match accepted)
 - Token expiration and `iat` required
@@ -239,6 +249,7 @@ type AwsConsumerInterface interface {
 ```
 
 **AWS Operations:**
+
 - **Role Assumption**: Use AWS STS to assume target IAM roles
 - **Session Tagging**: Apply GitHub-specific tags to AWS sessions
 - **Session Policies**: Apply custom IAM policies to limit permissions
@@ -246,6 +257,7 @@ type AwsConsumerInterface interface {
 - **IAM Integration**: Validate role existence and trust relationships
 
 **Session Tags Applied:**
+
 ```go
 tags := []types.Tag{
     {Key: aws.String("repo"), Value: aws.String(claims.Repository)},
@@ -271,18 +283,21 @@ type Cache interface {
 ```
 
 #### Memory Cache
+
 - **Implementation**: LRU-based in-memory cache
 - **Use Case**: Low-latency access for frequently accessed JWKS
 - **Limitations**: Lost on Lambda container recycling
 - **Configuration**: Maximum size and TTL configurable
 
 #### DynamoDB Cache
+
 - **Implementation**: AWS DynamoDB with automatic TTL
 - **Use Case**: Persistent cache shared across Lambda instances
 - **Benefits**: High availability, automatic scaling, built-in TTL
 - **Configuration**: Table name and TTL configurable
 
 #### S3 Cache
+
 - **Implementation**: S3 objects with metadata-based TTL
 - **Use Case**: Large objects and long-term caching
 - **Benefits**: Cost-effective, unlimited storage, optional cleanup
@@ -305,6 +320,7 @@ type Config struct {
 ```
 
 **Configuration Sources** (in order of precedence):
+
 1. Environment variables (with `AOW_` prefix)
 2. Configuration file (YAML/JSON/TOML)
 3. S3-stored configuration
@@ -322,16 +338,17 @@ type Config struct {
 The token validator is constructed via `NewTokenValidatorFromProvider`, which reads issuer and audiences from `provider.Get()` on every `Validate()` call so hot-reloaded issuer/audience changes take effect immediately without a Lambda restart.
 
 **Repository Mapping System:**
+
 ```yaml
 repo_role_mappings:
-  - repo: "org/project-.*"              # Regex pattern matching
+  - repo: "org/project-.*" # Regex pattern matching
     roles:
       - "arn:aws:iam::123456789012:role/github-actions-role"
     constraints:
-      branch: "refs/heads/main"         # Branch constraints
-      actor_matches: ["admin-.*"]      # Actor constraints
-      event_name: "push"               # Event type constraints
-    session_policy: |                  # Inline session policy
+      branch: "refs/heads/main" # Branch constraints
+      actor_matches: ["admin-.*"] # Actor constraints
+      event_name: "push" # Event type constraints
+    session_policy: | # Inline session policy
       {
         "Version": "2012-10-17",
         "Statement": [...]
@@ -387,6 +404,7 @@ type Constraint struct {
 ```
 
 **Validation Logic:**
+
 - All specified constraints must be satisfied (AND logic)
 - Regular expressions supported for pattern matching
 - Claims are extracted from the validated JWT token
@@ -410,6 +428,7 @@ flowchart LR
 ```
 
 **Cache TTL Strategy:**
+
 - **Memory Cache**: Short TTL (minutes to hours) for hot data
 - **DynamoDB Cache**: Medium TTL (hours) for persistence
 - **S3 Cache**: Long TTL (days) for cold data
@@ -457,12 +476,14 @@ flowchart TD
 ### 3. AWS Integration Security
 
 **Role Assumption:**
+
 - Uses AWS STS AssumeRole with session tags
 - Applies custom session policies for additional restrictions
 - Validates role trust relationships
 - Implements principle of least privilege
 
 **Session Security:**
+
 - Session duration limits (default: 1 hour, max: 12 hours)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
@@ -473,6 +494,7 @@ flowchart TD
 Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `repo_role_mappings` matching fails. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup.
 
 **Hub/Spoke Flow:**
+
 1. The hub (warden's own AWS account) is the central trust anchor.
 2. For each requested role ARN the account ID is parsed from the ARN.
 3. If the target is a different account, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account.
@@ -488,27 +510,29 @@ When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no
 
 **Diagrams:**
 
-| Diagram | File |
-|---------|------|
-| Authorization decision flow | [images/tag-auth-decision.svg](images/tag-auth-decision.svg) |
-| Cross-account hub/spoke flow | [images/tag-auth-crossaccount.svg](images/tag-auth-crossaccount.svg) |
-| ABAC session tag flow | [images/tag-auth-abac.svg](images/tag-auth-abac.svg) |
-| Transitive session tags | [images/tag-auth-transitive.svg](images/tag-auth-transitive.svg) |
-| Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg) |
-| Tag matching logic | [images/tag-auth-matching.svg](images/tag-auth-matching.svg) |
-| Authorization precedence | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg) |
+| Diagram                        | File                                                                 |
+| ------------------------------ | -------------------------------------------------------------------- |
+| Authorization decision flow    | [images/tag-auth-decision.svg](images/tag-auth-decision.svg)         |
+| Cross-account hub/spoke flow   | [images/tag-auth-crossaccount.svg](images/tag-auth-crossaccount.svg) |
+| ABAC session tag flow          | [images/tag-auth-abac.svg](images/tag-auth-abac.svg)                 |
+| Transitive session tags        | [images/tag-auth-transitive.svg](images/tag-auth-transitive.svg)     |
+| Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg)         |
+| Tag matching logic             | [images/tag-auth-matching.svg](images/tag-auth-matching.svg)         |
+| Authorization precedence       | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg)     |
 
 ## Performance Architecture
 
 ### 1. Caching Performance
 
 **Cache Hit Rates:**
+
 - Memory Cache: >95% for active repositories
 - DynamoDB Cache: >85% for warm data
 - S3 Cache: >70% for cold data
 - Overall System: >98% cache hit rate
 
 **Performance Metrics:**
+
 - Memory Cache Lookup: <1ms
 - DynamoDB Cache Lookup: <10ms
 - S3 Cache Lookup: <50ms
@@ -517,12 +541,14 @@ When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no
 ### 2. Lambda Performance Optimizations
 
 **Cold Start Mitigation:**
+
 - Minimal dependencies and imports
 - Connection pooling for AWS services
 - Lazy initialization of non-critical components
 - Provisioned concurrency for high-traffic scenarios
 
 **Memory and CPU Optimization:**
+
 - Configurable Lambda memory allocation
 - ARM64 support for better price/performance
 - Efficient JWT parsing and validation
@@ -556,6 +582,7 @@ graph LR
 ```
 
 **Scaling Strategies:**
+
 - **Lambda Auto-scaling**: Automatic scaling based on incoming requests
 - **DynamoDB On-Demand**: Pay-per-request with automatic scaling
 - **S3 Unlimited Scale**: No capacity planning required
@@ -579,6 +606,7 @@ CMD ["bootstrap"]
 ```
 
 **Container Registry Options:**
+
 - GitHub Container Registry (GHCR): `ghcr.io/boogy/aws-oidc-warden`
 - Docker Hub: `boogy/aws-oidc-warden`
 - AWS ECR: Private registry with pull-through cache
@@ -586,6 +614,7 @@ CMD ["bootstrap"]
 ### 2. Infrastructure as Code
 
 **Terraform Example:**
+
 ```hcl
 resource "aws_lambda_function" "aws_oidc_warden" {
   function_name = "aws-oidc-warden"
@@ -610,11 +639,43 @@ The Lambda execution role requires the following IAM permissions:
 {
   "Version": "2012-10-17",
   "Statement": [
-    { "Effect": "Allow", "Action": ["sts:AssumeRole", "sts:TagSession"], "Resource": ["arn:aws:iam::*:role/github-actions-*"] },
-    { "Effect": "Allow", "Action": ["iam:GetRole"], "Resource": ["arn:aws:iam::*:role/*"] },
-    { "Effect": "Allow", "Action": ["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem"], "Resource": ["arn:aws:dynamodb:*:*:table/aws-oidc-warden-cache"] },
-    { "Effect": "Allow", "Action": ["s3:GetObject","s3:PutObject"], "Resource": ["arn:aws:s3:::s3-aws-oidc-warden-session-policies/*"] },
-    { "Effect": "Allow", "Action": ["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents"], "Resource": ["arn:aws:logs:*:*:log-group:*","arn:aws:logs:*:*:log-group:*:log-stream:*"] }
+    {
+      "Effect": "Allow",
+      "Action": ["sts:AssumeRole", "sts:TagSession"],
+      "Resource": ["arn:aws:iam::*:role/github-actions-*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["iam:GetRole"],
+      "Resource": ["arn:aws:iam::*:role/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": ["arn:aws:dynamodb:*:*:table/aws-oidc-warden-cache"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": ["arn:aws:s3:::s3-aws-oidc-warden-session-policies/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:*",
+        "arn:aws:logs:*:*:log-group:*:log-stream:*"
+      ]
+    }
   ]
 }
 ```
