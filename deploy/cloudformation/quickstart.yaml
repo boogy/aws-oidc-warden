@@ -1,0 +1,213 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AWS OIDC Warden - quick-start (API Gateway + Lambda, optional DynamoDB cache)
+
+Parameters:
+  FunctionName:
+    Type: String
+    Default: aws-oidc-warden
+  LambdaCodeBucket:
+    Type: String
+    Description: S3 bucket holding the bootstrap zip (binary named 'bootstrap').
+  LambdaCodeKey:
+    Type: String
+    Description: S3 key of the bootstrap zip.
+  Architecture:
+    Type: String
+    Default: arm64
+    AllowedValues: [arm64, x86_64]
+  MemorySize:
+    Type: Number
+    Default: 256
+  Timeout:
+    Type: Number
+    Default: 15
+  Issuer:
+    Type: String
+    Default: https://token.actions.githubusercontent.com
+  Audiences:
+    Type: String
+    Default: sts.amazonaws.com
+    Description: Comma-separated audiences.
+  ConfigBucket:
+    Type: String
+    Default: ""
+    Description: S3 bucket holding config.yaml (repo_role_mappings etc). Leave blank to rely on env only.
+  ConfigKey:
+    Type: String
+    Default: config.yaml
+  EnableDynamoDBCache:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+  AssumableRoleArns:
+    Type: CommaDelimitedList
+    Description: Role ARNs the Lambda may assume.
+  LogLevel:
+    Type: String
+    Default: info
+  JWTValidationMode:
+    Type: String
+    Default: self
+    AllowedValues: [self, apigw, alb]
+    Description: "self = Lambda validates JWT; apigw = delegate to API GW JWT Authorizer (use apigatewayv2 binary); alb = trust ALB OIDC header."
+  JWTAuthorizer_Issuer:
+    Type: String
+    Default: "https://token.actions.githubusercontent.com"
+    Description: JWT Authorizer issuer URL (used only when JWTValidationMode = apigw).
+  JWTAuthorizer_Audience:
+    Type: String
+    Default: sts.amazonaws.com
+    Description: JWT Authorizer audience (used only when JWTValidationMode = apigw).
+
+Conditions:
+  UseDynamoDB: !Equals [!Ref EnableDynamoDBCache, "true"]
+  HasConfigBucket: !Not [!Equals [!Ref ConfigBucket, ""]]
+  UseJWTAuthorizer: !Equals [!Ref JWTValidationMode, "apigw"]
+
+Resources:
+  CacheTable:
+    Type: AWS::DynamoDB::Table
+    Condition: UseDynamoDB
+    Properties:
+      TableName: !Sub "${FunctionName}-cache"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: Key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: Key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: TTL
+        Enabled: true
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${FunctionName}"
+      RetentionInDays: 14
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${FunctionName}-exec"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: warden-perms
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AssumeTargetRoles
+                Effect: Allow
+                Action: [sts:AssumeRole, sts:TagSession]
+                Resource: !Ref AssumableRoleArns
+              - !If
+                - UseDynamoDB
+                - Sid: CacheDynamoDB
+                  Effect: Allow
+                  Action:
+                    [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
+                  Resource: !GetAtt CacheTable.Arn
+                - !Ref AWS::NoValue
+              - !If
+                - HasConfigBucket
+                - Sid: ReadConfig
+                  Effect: Allow
+                  Action: s3:GetObject
+                  Resource: !Sub "arn:aws:s3:::${ConfigBucket}/*"
+                - !Ref AWS::NoValue
+
+  Function:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref FunctionName
+      Runtime: provided.al2023
+      Handler: bootstrap
+      Architectures: [!Ref Architecture]
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref Timeout
+      Role: !GetAtt ExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      Environment:
+        Variables:
+          AOW_ISSUER: !Ref Issuer
+          AOW_AUDIENCES: !Ref Audiences
+          AOW_CACHE_TYPE: !If [UseDynamoDB, dynamodb, memory]
+          AOW_CACHE_DYNAMODB_TABLE:
+            !If [UseDynamoDB, !Sub "${FunctionName}-cache", !Ref "AWS::NoValue"]
+          AOW_S3_CONFIG_BUCKET:
+            !If [HasConfigBucket, !Ref ConfigBucket, !Ref "AWS::NoValue"]
+          AOW_S3_CONFIG_PATH:
+            !If [HasConfigBucket, !Ref ConfigKey, !Ref "AWS::NoValue"]
+          AOW_JWT_VALIDATION_MODE: !Ref JWTValidationMode
+          LOG_LEVEL: !Ref LogLevel
+    DependsOn: LogGroup
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Ref FunctionName
+      ProtocolType: HTTP
+
+  JWTAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Condition: UseJWTAuthorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      AuthorizerType: JWT
+      IdentitySource:
+        - $request.header.Authorization
+      Name: !Sub "${FunctionName}-jwt"
+      JwtConfiguration:
+        Audience:
+          - !Ref JWTAuthorizer_Audience
+        Issuer: !Ref JWTAuthorizer_Issuer
+
+  Integration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt Function.Arn
+      # "2.0" when JWT Authorizer is used (apigatewayv2 binary); "1.0" otherwise.
+      PayloadFormatVersion: !If [UseJWTAuthorizer, "2.0", "1.0"]
+
+  Route:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: POST /verify
+      Target: !Sub "integrations/${Integration}"
+      AuthorizationType: !If [UseJWTAuthorizer, JWT, NONE]
+      AuthorizerId: !If [UseJWTAuthorizer, !Ref JWTAuthorizer, !Ref "AWS::NoValue"]
+
+  Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref Function
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+
+Outputs:
+  ApiEndpoint:
+    Description: Verify endpoint URL.
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/verify"
+  FunctionArn:
+    Value: !GetAtt Function.Arn
