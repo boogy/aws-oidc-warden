@@ -106,14 +106,18 @@ Resources:
             Statement:
               - Sid: AssumeTargetRoles
                 Effect: Allow
-                Action: [sts:AssumeRole, sts:TagSession]
+                Action:
+                  - "sts:AssumeRole"
+                  - "sts:TagSession"
                 Resource: !Ref AssumableRoleArns
               - !If
                 - UseDynamoDB
                 - Sid: CacheDynamoDB
                   Effect: Allow
                   Action:
-                    [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
+                    - "dynamodb:GetItem"
+                    - "dynamodb:PutItem"
+                    - "dynamodb:DeleteItem"
                   Resource: !GetAtt CacheTable.Arn
                 - !Ref AWS::NoValue
               - !If
