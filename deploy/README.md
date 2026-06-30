@@ -44,13 +44,13 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 
 ## Toggle Reference
 
-| Variable | Default | Provisions | IAM granted |
-|---|---|---|---|
-| `enable_dynamodb_cache` | `false` | DynamoDB table `<prefix>-cache` | `dynamodb:GetItem/PutItem/DeleteItem` |
-| `enable_s3_cache` | `false` | S3 bucket `<prefix>-cache-<suffix>` | `s3:GetObject/PutObject/DeleteObject/ListBucket` |
-| `enable_s3_logs` | `false` | S3 bucket `<prefix>-logs-<suffix>` (90-day lifecycle) | `s3:PutObject` |
-| `enable_session_policy_bucket` | `false` | S3 bucket `<prefix>-session-policies-<suffix>` | `s3:GetObject` |
-| `tag_auth.enabled` | `false` | No new resources | `iam:GetRole`, `iam:ListRoleTags` |
+| Variable                       | Default | Provisions                                            | IAM granted                                      |
+| ------------------------------ | ------- | ----------------------------------------------------- | ------------------------------------------------ |
+| `enable_dynamodb_cache`        | `false` | DynamoDB table `<prefix>-cache`                       | `dynamodb:GetItem/PutItem/DeleteItem`            |
+| `enable_s3_cache`              | `false` | S3 bucket `<prefix>-cache-<suffix>`                   | `s3:GetObject/PutObject/DeleteObject/ListBucket` |
+| `enable_s3_logs`               | `false` | S3 bucket `<prefix>-logs-<suffix>` (90-day lifecycle) | `s3:PutObject`                                   |
+| `enable_session_policy_bucket` | `false` | S3 bucket `<prefix>-session-policies-<suffix>`        | `s3:GetObject`                                   |
+| `tag_auth.enabled`             | `false` | No new resources                                      | `iam:GetRole`, `iam:ListRoleTags`                |
 
 **Cache backends are mutually exclusive.** `enable_dynamodb_cache` and `enable_s3_cache` cannot both be `true`; a `precondition` enforces this at plan time. Leaving both `false` uses in-memory cache (suitable for low traffic; cache lost on cold start).
 
@@ -69,11 +69,11 @@ On startup the Lambda fetches and parses this file. All complex configuration (r
 
 ## JWT Validation Mode
 
-| Mode | `jwt_validation_mode` | Binary | Infra provisioned | Request format |
-|---|---|---|---|---|
-| **Self** (default) | `"self"` | `apigateway` | No extra infra | `POST /verify` body: `{"token":"<jwt>","role":"<arn>"}` |
-| **API GW delegate** | `"apigw"` | `apigatewayv2` | JWT Authorizer on HTTP API | `POST /verify` with `Authorization: Bearer <jwt>` header; body: `{"role":"<arn>"}` |
-| **ALB OIDC** | `"alb"` | `apigateway` | External ALB (not managed here) | ALB injects `x-amzn-oidc-data` header; body: `{"role":"<arn>"}` |
+| Mode                | `jwt_validation_mode` | Binary         | Infra provisioned               | Request format                                                                     |
+| ------------------- | --------------------- | -------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
+| **Self** (default)  | `"self"`              | `apigateway`   | No extra infra                  | `POST /verify` body: `{"token":"<jwt>","role":"<arn>"}`                            |
+| **API GW delegate** | `"apigw"`             | `apigatewayv2` | JWT Authorizer on HTTP API      | `POST /verify` with `Authorization: Bearer <jwt>` header; body: `{"role":"<arn>"}` |
+| **ALB OIDC**        | `"alb"`               | `apigateway`   | External ALB (not managed here) | ALB injects `x-amzn-oidc-data` header; body: `{"role":"<arn>"}`                    |
 
 Build the correct binary before running `tofu apply`:
 
