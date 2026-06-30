@@ -20,12 +20,14 @@ import (
 // AwsApplicationLoadBalancer handles AWS Application Load Balancer requests
 type AwsApplicationLoadBalancer struct {
 	processor *RequestProcessor
+	region    string
 }
 
 // NewAwsApplicationLoadBalancer creates a new Application Load Balancer handler
 func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApplicationLoadBalancer {
 	return &AwsApplicationLoadBalancer{
 		processor: NewRequestProcessor(provider, consumer, extractor),
+		region:    os.Getenv("AWS_REGION"),
 	}
 }
 
@@ -47,7 +49,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 
 	// Build extraction input: prefer ALB OIDC data header when present.
 	oidcData := event.Headers["x-amzn-oidc-data"]
-	region := os.Getenv("AWS_REGION")
+	region := h.region
 
 	// Bound before body parsing to reject oversized ALB OIDC headers early.
 	if len(oidcData) > MaxTokenLength {

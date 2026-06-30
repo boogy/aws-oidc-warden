@@ -121,7 +121,7 @@ func (h *AwsApiGatewayV2) respondJSON(ctx context.Context, credentials *types.Cr
 	response := Response{
 		Success:      true,
 		StatusCode:   http.StatusOK,
-		Message:      "Claims extracted and role assumed",
+		Message:      "Token validation successful and role assumed",
 		RequestID:    requestID,
 		ProcessingMS: processingMS,
 		Data:         credentials,

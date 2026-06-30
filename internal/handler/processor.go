@@ -41,18 +41,20 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	r.provider.MaybeRefresh(ctx)
 	cfg := r.provider.Get()
 
-	log.Debug("Extracting claims", slog.String("mode", func() string {
-		if input.Token != "" {
-			return "self"
+	if log.Enabled(ctx, slog.LevelDebug) {
+		var mode string
+		switch {
+		case input.Token != "":
+			mode = "self"
+		case len(input.AuthorizerClaims) > 0:
+			mode = "apigw"
+		case input.ALBOIDCData != "":
+			mode = "alb"
+		default:
+			mode = "unknown"
 		}
-		if len(input.AuthorizerClaims) > 0 {
-			return "apigw"
-		}
-		if input.ALBOIDCData != "" {
-			return "alb"
-		}
-		return "unknown"
-	}()))
+		log.Debug("Extracting claims", slog.String("mode", mode))
+	}
 
 	// Extract claims via the configured extractor (self-validation or delegated mode).
 	// All extraction errors wrap ErrTokenValidationFailed so adapters map them to HTTP 401.

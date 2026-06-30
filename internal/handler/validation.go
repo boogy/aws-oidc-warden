@@ -9,6 +9,8 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
+const maxBodyBytes = 1024 * 1024
+
 // validateRole validates that a role ARN is non-empty, within size bounds, and
 // has a recognized AWS partition prefix. Extracted for reuse by both
 // ValidateRequestData and ParseRoleOnlyRequestBody.
@@ -45,7 +47,7 @@ func ParseRoleOnlyRequestBody(body string) (*RequestData, error) {
 	if strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("request body is empty: %w", ErrInvalidJSON)
 	}
-	if len(body) > 1024*1024 {
+	if len(body) > maxBodyBytes {
 		return nil, fmt.Errorf("request body too large: %w", ErrInvalidJSON)
 	}
 	var data RequestData
@@ -66,7 +68,7 @@ func ParseRequestBody(body string) (*RequestData, error) {
 	}
 
 	// Check if body exceeds maximum allowed size (sanity check)
-	if len(body) > 1024*1024 { // 1MB limit
+	if len(body) > maxBodyBytes { // 1MB limit
 		return nil, fmt.Errorf("request body too large: %w", ErrInvalidJSON)
 	}
 

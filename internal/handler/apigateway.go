@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -59,16 +58,7 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 	// Process the request using the request processor
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		switch {
-		case errors.Is(err, ErrTokenValidationFailed):
-			statusCode = http.StatusUnauthorized
-		case errors.Is(err, ErrRoleNotPermitted), errors.Is(err, ErrAccountNotAllowed):
-			statusCode = http.StatusForbidden
-		case errors.Is(err, ErrSessionPolicyAccess), errors.Is(err, ErrAssumeRoleFailed):
-			statusCode = http.StatusInternalServerError
-		}
-		return h.respondError(ctx, err, statusCode)
+		return h.respondError(ctx, err, http.StatusInternalServerError)
 	}
 
 	return h.respondJSON(ctx, credentials)
