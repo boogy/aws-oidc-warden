@@ -88,6 +88,21 @@ type TagAuth struct {
 	AllowedAccounts []string `mapstructure:"allowed_accounts" json:"allowed_accounts,omitempty"`
 }
 
+// JWTValidation controls whether the service validates JWT signatures itself
+// or trusts pre-validation by an upstream AWS service.
+type JWTValidation struct {
+	// Mode is one of "self" (default), "apigw", or "alb".
+	// "self"  — full signature + claims verification by this service.
+	// "apigw" — trust API Gateway HTTP API v2 JWT Authorizer; extract claims
+	//            from event.requestContext.authorizer.jwt.claims.
+	// "alb"   — trust ALB OIDC; verify ALB-signed x-amzn-oidc-data JWT (ES256).
+	Mode string `mapstructure:"mode" json:"mode,omitempty"`
+
+	// ALBExpectedSigner is the ARN of the ALB allowed to sign OIDC data.
+	// Required in "alb" mode to prevent cross-ALB token injection.
+	ALBExpectedSigner string `mapstructure:"alb_expected_signer" json:"alb_expected_signer,omitempty"`
+}
+
 type Config struct {
 	Issuer                string            `mapstructure:"issuer"                json:"issuer"`                          // Issuer is the expected issuer of the JWT token
 	Audience              string            `mapstructure:"audience"              json:"audience,omitempty"`              // Audience is the expected audience of the JWT token (deprecated - use Audiences)
@@ -112,6 +127,10 @@ type Config struct {
 
 	// TagAuth enables tag-based authorization and cross-account role assumption.
 	TagAuth *TagAuth `mapstructure:"tag_auth" json:"tag_auth,omitempty"`
+
+	// JWTValidation controls whether the service validates JWT signatures itself
+	// or trusts pre-validation by an upstream AWS service.
+	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation,omitempty"`
 
 	// Performance optimization - not serialized
 	estimatedRolesPerRepo int `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
@@ -155,6 +174,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("tag_auth.spoke_role_name", "aow-spoke")
 	viper.SetDefault("tag_auth.spoke_session_duration", "15m")
 	viper.SetDefault("tag_auth.transitive_session_tags", false)
+	viper.SetDefault("jwt_validation.mode", "self")
 
 	// Explicitly bind all config keys to environment variables
 	// Core settings
@@ -190,6 +210,10 @@ func (c *Config) LoadConfig() error {
 	_ = viper.BindEnv("tag_auth.spoke_session_duration")  // AOW_TAG_AUTH_SPOKE_SESSION_DURATION
 	_ = viper.BindEnv("tag_auth.transitive_session_tags") // AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS
 	_ = viper.BindEnv("tag_auth.allowed_accounts")        // AOW_TAG_AUTH_ALLOWED_ACCOUNTS (comma-separated)
+
+	// JWT validation settings
+	_ = viper.BindEnv("jwt_validation.mode")                // AOW_JWT_VALIDATION_MODE
+	_ = viper.BindEnv("jwt_validation.alb_expected_signer") // AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER
 
 	// Logging settings
 	_ = viper.BindEnv("log_to_s3")
@@ -374,6 +398,15 @@ func reapplyEnvOverrides(c *Config) {
 		}
 		c.TagAuth.AllowedAccounts = accts
 	}
+
+	// JWT validation env overrides — must be re-applied after hot-reload so
+	// that AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER is never silently dropped.
+	if v := os.Getenv("AOW_JWT_VALIDATION_MODE"); v != "" {
+		c.JWTValidation.Mode = v
+	}
+	if v := os.Getenv("AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER"); v != "" {
+		c.JWTValidation.ALBExpectedSigner = v
+	}
 }
 
 // FormatFromPath returns the viper config type implied by a file path's
@@ -504,6 +537,20 @@ func (c *Config) Validate() error {
 				slog.Warn("tag_auth enabled with empty allowed_accounts; the warden may assume into ANY member account. Populate tag_auth.allowed_accounts in production.")
 			}
 		}
+	}
+
+	// Validate jwt_validation.mode, defaulting to "self" if not set.
+	if c.JWTValidation.Mode == "" {
+		c.JWTValidation.Mode = "self"
+	}
+	validModes := map[string]bool{"self": true, "apigw": true, "alb": true}
+	if !validModes[c.JWTValidation.Mode] {
+		return fmt.Errorf("jwt_validation.mode must be one of 'self', 'apigw', 'alb'; got %q", c.JWTValidation.Mode)
+	}
+	// alb_expected_signer is required in alb mode — without it any ALB can inject
+	// a signed OIDC header and impersonate any GitHub repository (cross-ALB spoofing).
+	if c.JWTValidation.Mode == "alb" && c.JWTValidation.ALBExpectedSigner == "" {
+		return fmt.Errorf("jwt_validation.alb_expected_signer is required in alb mode to prevent cross-ALB token injection")
 	}
 
 	return nil

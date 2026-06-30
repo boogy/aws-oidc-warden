@@ -9,18 +9,17 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/types"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// stubValidator always returns an error to simulate JWT validation failure.
-type stubValidator struct{ err error }
+// stubExtractor always returns an error to simulate extraction failure.
+type stubExtractor struct{ err error }
 
-func (s *stubValidator) Validate(string) (*types.GithubClaims, error)   { return nil, s.err }
-func (s *stubValidator) ParseToken(string) (*types.GithubClaims, error) { return nil, s.err }
-func (s *stubValidator) FetchJWKS(string) (*types.JWKS, error)          { return nil, nil }
-func (s *stubValidator) GenKeyFunc(*types.JWKS) jwt.Keyfunc             { return nil }
+func (s *stubExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.GithubClaims, error) {
+	return nil, s.err
+}
 
 func TestProcessRequest_TokenValidationErrorIsSentinel(t *testing.T) {
 	cfg := &config.Config{
@@ -32,12 +31,13 @@ func TestProcessRequest_TokenValidationErrorIsSentinel(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 
 	provider := config.NewStaticProvider(cfg)
-	v := &stubValidator{err: errors.New("token is expired")}
-	proc := handler.NewRequestProcessor(provider, nil, v)
+	ex := &stubExtractor{err: errors.New("token is expired")}
+	proc := handler.NewRequestProcessor(provider, nil, ex)
 
 	_, err := proc.ProcessRequest(
 		context.Background(),
 		&handler.RequestData{Token: "t", Role: "r"},
+		validator.ExtractionInput{Token: "t"},
 		"req-id",
 		slog.Default(),
 	)

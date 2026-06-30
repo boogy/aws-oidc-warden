@@ -18,6 +18,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockCache is a mock implementation of the Cache interface
@@ -422,6 +423,23 @@ func TestGenKeyFunc(t *testing.T) {
 	assert.True(t, parsedToken.Valid)
 }
 
+func TestGenKeyFunc_RejectsShortRSAKey(t *testing.T) {
+	// A 1024-bit RSA key must be rejected by the minimum-key-size guard.
+	shortKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	assert.NoError(t, err)
+
+	keyID := "short-rsa-key"
+	jwks := createJWKS(keyID, &shortKey.PublicKey)
+
+	v := validator.NewTokenValidator(&config.Config{}, nil)
+	token := jwt.New(jwt.SigningMethodRS256)
+	token.Header["kid"] = keyID
+
+	_, err = v.GenKeyFunc(jwks)(token)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RSA key too short")
+}
+
 func TestGenKeyFunc_MissingKID(t *testing.T) {
 	// Create a test JWKS
 	_, publicKey, err := generateRSAKey()
@@ -551,6 +569,98 @@ func TestParseToken_EmptyJWKS(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, claims)
 	assert.Contains(t, err.Error(), "jwks is nil")
+
+	mockCache.AssertExpectations(t)
+}
+
+func TestFetchJWKS_LargeOIDCDiscoveryRejected(t *testing.T) {
+	// A discovery document larger than 1 MB must be rejected cleanly (not OOM).
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Write a syntactically valid JSON object padded well past 1 MB.
+		w.Write([]byte(`{"jwks_uri":"` + "https://example.com/jwks" + `","padding":"`)) //nolint:errcheck
+		padding := make([]byte, 2<<20)                                                  // 2 MB of zeros
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		w.Write(padding)       //nolint:errcheck
+		w.Write([]byte(`"}}`)) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	mockCache := new(MockCache)
+	mockCache.On("Get", server.URL).Return(nil, false)
+
+	cfg := &config.Config{
+		Issuer: server.URL,
+		Cache:  &config.Cache{TTL: 10 * time.Minute},
+	}
+	v := validator.NewTokenValidator(cfg, mockCache)
+
+	_, err := v.FetchJWKS(server.URL)
+	assert.Error(t, err)
+}
+
+func TestFetchJWKS_LargeJWKSRejected(t *testing.T) {
+	// A JWKS payload larger than 1 MB must be rejected cleanly.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/.well-known/openid-configuration" {
+			cfg := struct {
+				JwksURI string `json:"jwks_uri"`
+			}{JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)}
+			json.NewEncoder(w).Encode(cfg) //nolint:errcheck
+			return
+		}
+		// Return a JWKS body padded well past 1 MB.
+		w.Write([]byte(`{"keys":[{"kty":"RSA","padding":"`)) //nolint:errcheck
+		padding := make([]byte, 2<<20)
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		w.Write(padding)        //nolint:errcheck
+		w.Write([]byte(`"}]}`)) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	mockCache := new(MockCache)
+	mockCache.On("Get", server.URL).Return(nil, false)
+
+	cfg := &config.Config{
+		Issuer: server.URL,
+		Cache:  &config.Cache{TTL: 10 * time.Minute},
+	}
+	v := validator.NewTokenValidator(cfg, mockCache)
+
+	_, err := v.FetchJWKS(server.URL)
+	assert.Error(t, err)
+}
+
+func TestParseToken_TooManyJWKSKeys(t *testing.T) {
+	// A JWKS with more than 20 keys must be rejected.
+	_, publicKey, err := generateRSAKey()
+	assert.NoError(t, err)
+	n := base64.RawURLEncoding.EncodeToString(publicKey.N.Bytes())
+	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes())
+
+	keys := make([]types.JSONWebKey, 21)
+	for i := range keys {
+		keys[i] = types.JSONWebKey{KeyID: fmt.Sprintf("key-%d", i), KeyType: "RSA", Algorithm: "RS256", Use: "sig", N: n, E: e}
+	}
+	oversizedJWKS := &types.JWKS{Keys: keys}
+
+	mockCache := new(MockCache)
+	mockCache.On("Get", "https://example.com").Return(oversizedJWKS, true)
+
+	cfg := &config.Config{
+		Issuer: "https://example.com",
+		Cache:  &config.Cache{TTL: 10 * time.Minute},
+	}
+	v := validator.NewTokenValidator(cfg, mockCache)
+
+	_, err = v.ParseToken("invalid.token.string")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "too many keys")
 
 	mockCache.AssertExpectations(t)
 }

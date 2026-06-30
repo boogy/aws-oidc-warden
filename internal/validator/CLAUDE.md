@@ -28,3 +28,30 @@ Flow: parse header → fetch JWKS (cached) → verify signature → validate iss
 - Token `kid` must match a JWKS key.
 
 Tests: `validator_test.go`, `multi_audience_test.go`, `integration_test.go` (mock JWKS server + generated JWTs).
+
+## Extractors
+
+`ClaimsExtractorInterface` abstracts how GitHub OIDC claims enter the pipeline:
+
+```go
+type ClaimsExtractorInterface interface {
+    Extract(ctx context.Context, input ExtractionInput) (*types.GithubClaims, error)
+}
+```
+
+Populate only the `ExtractionInput` fields relevant to the configured mode:
+
+| Field              | Used by        |
+| ------------------ | -------------- |
+| `Token`            | SelfExtractor  |
+| `AuthorizerClaims` | APIGWExtractor |
+| `ALBOIDCData`      | ALBExtractor   |
+| `AWSRegion`        | ALBExtractor   |
+
+**Implementations:**
+
+- `SelfExtractor` — default; wraps `TokenValidatorInterface.Validate()`. Full JWKS signature + claims verification.
+- `APIGWExtractor` — reads pre-validated `map[string]string` claims from API Gateway HTTP API v2 JWT Authorizer. Rejects if `AuthorizerClaims` is nil (bypass guard). No signature verification.
+- `ALBExtractor` — fetches ALB EC public key via HTTPS, verifies ES256 JWT from `x-amzn-oidc-data`. Validates optional `ALBExpectedSigner` ARN. Use `WithALBKeyEndpoint` to override in tests. Caches keys for 5 minutes to avoid per-request latency.
+
+The factory `newClaimsExtractor(mode, albExpectedSigner, validator)` in `bootstrap.go` selects the implementation from `cfg.JWTValidation.Mode`.

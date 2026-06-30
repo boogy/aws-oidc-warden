@@ -47,6 +47,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 - Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
 - Sentinel errors in `internal/handler/types.go`, mapped to HTTP status in the frontend adapters.
 - Config precedence: env vars > YAML > defaults.
+- Maintain a clean, up-to-date `CHANGELOG.md`.
 
 ## Security
 

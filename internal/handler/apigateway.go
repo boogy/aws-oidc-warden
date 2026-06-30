@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -23,9 +22,9 @@ type AwsApiGateway struct {
 }
 
 // NewAwsApiGateway creates a new API Gateway handler
-func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *AwsApiGateway {
+func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApiGateway {
 	return &AwsApiGateway{
-		processor: NewRequestProcessor(provider, consumer, validator),
+		processor: NewRequestProcessor(provider, consumer, extractor),
 	}
 }
 
@@ -53,19 +52,13 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
+	// Build extraction input from the parsed request token.
+	input := validator.ExtractionInput{Token: requestData.Token}
+
 	// Process the request using the request processor
-	credentials, err := h.processor.ProcessRequest(ctx, requestData, requestID, log)
+	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		switch {
-		case errors.Is(err, ErrTokenValidationFailed):
-			statusCode = http.StatusUnauthorized
-		case errors.Is(err, ErrRoleNotPermitted), errors.Is(err, ErrAccountNotAllowed):
-			statusCode = http.StatusForbidden
-		case errors.Is(err, ErrSessionPolicyAccess), errors.Is(err, ErrAssumeRoleFailed):
-			statusCode = http.StatusInternalServerError
-		}
-		return h.respondError(ctx, err, statusCode)
+		return h.respondError(ctx, err, http.StatusInternalServerError)
 	}
 
 	return h.respondJSON(ctx, credentials)
@@ -112,35 +105,8 @@ func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode 
 		processingMS = time.Since(startTime).Milliseconds()
 	}
 
-	// Create structured error
-	errCode := "internal_error"
-	errMsg := "An internal error occurred"
-
-	// Map common errors to specific error codes and messages
-	switch {
-	case errors.Is(err, ErrEmptyToken), errors.Is(err, ErrTokenTooLarge),
-		errors.Is(err, ErrEmptyRole), errors.Is(err, ErrRoleTooLarge),
-		errors.Is(err, ErrInvalidJSON):
-		errCode = "invalid_request"
-		errMsg = "Invalid request parameters"
-		statusCode = http.StatusBadRequest
-	case errors.Is(err, ErrTokenValidationFailed):
-		errCode = "token_invalid"
-		errMsg = "Token validation failed"
-		statusCode = http.StatusUnauthorized
-	case errors.Is(err, ErrRoleNotPermitted), errors.Is(err, ErrAccountNotAllowed):
-		errCode = "permission_denied"
-		errMsg = "Permission denied for the requested operation"
-		statusCode = http.StatusForbidden
-	case errors.Is(err, ErrSessionPolicyAccess):
-		errCode = "policy_error"
-		errMsg = "Error accessing policy information"
-		statusCode = http.StatusInternalServerError
-	case errors.Is(err, ErrAssumeRoleFailed):
-		errCode = "assume_role_failed"
-		errMsg = "Failed to assume the requested role"
-		statusCode = http.StatusInternalServerError
-	}
+	// Map common errors to specific error codes and messages (shared classifier).
+	errCode, errMsg := classifyError(err, &statusCode)
 
 	// Log the error with context
 	slog.Error("Request error",

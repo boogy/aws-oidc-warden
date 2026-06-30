@@ -34,7 +34,7 @@ build-local:
 	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/$(APP_NAME)-local ./cmd/local
 
 .PHONY: build-lambda
-build-lambda: build-apigateway build-alb build-lambdaurl
+build-lambda: build-apigateway build-apigatewayv2 build-alb build-lambdaurl
 
 .PHONY: build-all
 build-all: build-local build-lambda
@@ -44,6 +44,12 @@ build-apigateway:
 	@echo "Building API Gateway Lambda binary..."
 	@mkdir -p $(BUILD_DIR)
 	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/bootstrap-apigateway ./cmd/apigateway
+
+.PHONY: build-apigatewayv2
+build-apigatewayv2:
+	@echo "Building API Gateway v2 Lambda binary..."
+	@mkdir -p $(BUILD_DIR)
+	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/bootstrap-apigatewayv2 ./cmd/apigatewayv2
 
 .PHONY: build-alb
 build-alb:
@@ -144,12 +150,12 @@ test-coverage:
 .PHONY: ko-build
 ko-build: verify-ko
 	@echo "Building container images with ko locally..."
-	@KO_DOCKER_REPO=ko.local ko build ./cmd/apigateway ./cmd/alb ./cmd/lambdaurl --tags=$(VERSION),latest
+	@KO_DOCKER_REPO=ko.local ko build ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --tags=$(VERSION),latest
 
 .PHONY: ko-publish
 ko-publish: verify-ko
 	@echo "Publishing container images to $(KO_DOCKER_REPO)..."
-	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway ./cmd/alb ./cmd/lambdaurl --bare --tags=$(VERSION),latest
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --bare --tags=$(VERSION),latest
 
 .PHONY: ko-publish-all
 ko-publish-all: ko-publish
@@ -196,6 +202,7 @@ help:
 	@echo "  make build-lambda         Build all Lambda binaries"
 	@echo "  make build-all            Build all binaries (local + lambda)"
 	@echo "  make build-apigateway     Build API Gateway Lambda binary"
+	@echo "  make build-apigatewayv2   Build API Gateway v2 Lambda binary"
 	@echo "  make build-alb            Build ALB Lambda binary"
 	@echo "  make build-lambdaurl      Build Lambda URL binary"
 	@echo "  make run                  Run local development server"

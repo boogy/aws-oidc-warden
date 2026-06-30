@@ -558,3 +558,95 @@ func TestTagAuthDefaults(t *testing.T) {
 	assert.Equal(t, "aow/", c.TagAuth.TagPrefix)
 	assert.Equal(t, "aow-spoke", c.TagAuth.SpokeRoleName)
 }
+
+func TestReapplyEnvOverrides_JWTValidation(t *testing.T) {
+	// AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER must survive a MergeBytes hot-reload.
+	// Without the fix, MergeBytes would silently drop env-var overrides for these
+	// fields, potentially removing the cross-ALB signer guard.
+	const signer = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc123"
+
+	t.Setenv("AOW_JWT_VALIDATION_MODE", "alb")
+	t.Setenv("AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER", signer)
+
+	cfg := &Config{
+		Issuer:          "https://token.actions.githubusercontent.com",
+		Audiences:       []string{"sts.amazonaws.com"},
+		RoleSessionName: "test-session",
+		JWTValidation: JWTValidation{
+			Mode:              "alb",
+			ALBExpectedSigner: signer,
+		},
+	}
+
+	// Simulate a remote config reload that omits jwt_validation entirely
+	// (the S3 document doesn't include it, so it would revert to zero values
+	// without reapplyEnvOverrides).
+	payload := []byte(`{"issuer":"https://token.actions.githubusercontent.com","audiences":["sts.amazonaws.com"],"role_session_name":"test-session"}`)
+	err := cfg.MergeBytes(payload, "json")
+	require.NoError(t, err)
+
+	assert.Equal(t, "alb", cfg.JWTValidation.Mode)
+	assert.Equal(t, signer, cfg.JWTValidation.ALBExpectedSigner)
+}
+
+func TestJWTValidationConfig(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        map[string]string
+		wantErr    bool
+		wantMode   string
+		wantSigner string
+	}{
+		{"default self", nil, false, "self", ""},
+		{"apigw mode", map[string]string{"AOW_JWT_VALIDATION_MODE": "apigw"}, false, "apigw", ""},
+		{"invalid mode", map[string]string{"AOW_JWT_VALIDATION_MODE": "bad"}, true, "", ""},
+		{"alb missing signer", map[string]string{"AOW_JWT_VALIDATION_MODE": "alb"}, true, "", ""},
+		{"alb with signer", map[string]string{
+			"AOW_JWT_VALIDATION_MODE":                "alb",
+			"AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER": "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y",
+		}, false, "alb", "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Reset viper and singleton to ensure clean state for this test
+			viper.Reset()
+			once = sync.Once{}
+
+			// Save and restore CONFIG_NAME to avoid config file lookups
+			origConfigName := os.Getenv("CONFIG_NAME")
+			defer func() {
+				if origConfigName == "" {
+					_ = os.Unsetenv("CONFIG_NAME")
+				} else {
+					_ = os.Setenv("CONFIG_NAME", origConfigName)
+				}
+			}()
+
+			// Point to nonexistent config file to force defaults
+			t.Setenv("CONFIG_NAME", "nonexistent-config-file")
+
+			// Set required fields and JWT validation env vars
+			t.Setenv("AOW_ISSUER", "https://token.actions.githubusercontent.com")
+			t.Setenv("AOW_AUDIENCES", "sts.amazonaws.com")
+			t.Setenv("AOW_ROLE_SESSION_NAME", "test-session")
+
+			// Set test-specific JWT validation env vars
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+
+			// Load config through viper so env vars flow through the binding path.
+			// LoadConfig() calls Validate() internally, so validation errors occur here.
+			cfg := &Config{}
+			err := cfg.LoadConfig()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMode, cfg.JWTValidation.Mode)
+			assert.Equal(t, tt.wantSigner, cfg.JWTValidation.ALBExpectedSigner)
+		})
+	}
+}

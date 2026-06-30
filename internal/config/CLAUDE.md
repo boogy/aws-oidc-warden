@@ -10,7 +10,8 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Viper-based loading, validation, and
 
 ## Key structures & methods
 
-- `Config` — issuer, `audiences` (plus deprecated `audience`), S3 config/policy buckets, `repo_role_mappings`, logging, `cache`.
+- `Config` — issuer, `audiences` (plus deprecated `audience`), S3 config/policy buckets, `repo_role_mappings`, logging, `cache`, `JWTValidation`.
+- `JWTValidation` — `Mode` (`"self"` default, `"apigw"`, `"alb"`) and `ALBExpectedSigner` (ARN of the trusted ALB; optional but strongly recommended in `alb` mode). Env: `AOW_JWT_VALIDATION_MODE`, `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER`. `Validate()` rejects unknown modes.
 - `RepoRoleMapping` — `repo` pattern, `roles`, optional `session_policy`/`session_policy_file`, optional `constraints`.
 - `Constraint` — `branch`, `ref`, `ref_type`, `event_name`, `workflow_ref`, `environment`, `actor_matches`. All present constraints must match (AND).
 - `Validate()` — compiles all regex patterns once; repo patterns auto-anchored `^(?:pattern)$`.

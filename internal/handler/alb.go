@@ -3,10 +3,10 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -20,12 +20,14 @@ import (
 // AwsApplicationLoadBalancer handles AWS Application Load Balancer requests
 type AwsApplicationLoadBalancer struct {
 	processor *RequestProcessor
+	region    string
 }
 
 // NewAwsApplicationLoadBalancer creates a new Application Load Balancer handler
-func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, validator validator.TokenValidatorInterface) *AwsApplicationLoadBalancer {
+func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApplicationLoadBalancer {
 	return &AwsApplicationLoadBalancer{
-		processor: NewRequestProcessor(provider, consumer, validator),
+		processor: NewRequestProcessor(provider, consumer, extractor),
+		region:    os.Getenv("AWS_REGION"),
 	}
 }
 
@@ -45,25 +47,36 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		slog.String("userAgent", event.Headers["user-agent"]),
 	)
 
+	// Build extraction input: prefer ALB OIDC data header when present.
+	oidcData := event.Headers["x-amzn-oidc-data"]
+	region := h.region
+
+	// Bound before body parsing to reject oversized ALB OIDC headers early.
+	if len(oidcData) > MaxTokenLength {
+		return h.respondError(ctx, fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size"), http.StatusBadRequest)
+	}
+
 	// Parse request data
 	requestData, err := h.unmarshalRequestData(event)
 	if err != nil {
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
-	// Process the request using the request processor
-	credentials, err := h.processor.ProcessRequest(ctx, requestData, requestID, log)
-	if err != nil {
-		statusCode := http.StatusInternalServerError
-		switch {
-		case errors.Is(err, ErrTokenValidationFailed):
-			statusCode = http.StatusUnauthorized
-		case errors.Is(err, ErrRoleNotPermitted), errors.Is(err, ErrAccountNotAllowed):
-			statusCode = http.StatusForbidden
-		case errors.Is(err, ErrSessionPolicyAccess), errors.Is(err, ErrAssumeRoleFailed):
-			statusCode = http.StatusInternalServerError
+	var input validator.ExtractionInput
+	if oidcData != "" {
+		input = validator.ExtractionInput{
+			ALBOIDCData: oidcData,
+			AWSRegion:   region,
 		}
-		return h.respondError(ctx, err, statusCode)
+	} else {
+		input = validator.ExtractionInput{Token: requestData.Token}
+	}
+
+	// Process the request using the request processor.
+	// respondError classifies the error and sets the final status code.
+	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
+	if err != nil {
+		return h.respondError(ctx, err, http.StatusInternalServerError)
 	}
 
 	return h.respondJSON(ctx, credentials)
@@ -88,8 +101,13 @@ func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, e
 	return context.WithTimeout(ctx, DefaultTimeout)
 }
 
-// unmarshalRequestData parses and validates the request data from an ALB event
+// unmarshalRequestData parses and validates the request data from an ALB event.
+// When x-amzn-oidc-data is present the body only needs to carry the role (token
+// comes from the header), so we use the role-only parser in that case.
 func (h *AwsApplicationLoadBalancer) unmarshalRequestData(event events.ALBTargetGroupRequest) (*RequestData, error) {
+	if event.Headers["x-amzn-oidc-data"] != "" {
+		return ParseRoleOnlyRequestBody(event.Body)
+	}
 	return ParseRequestBody(event.Body)
 }
 
@@ -107,35 +125,8 @@ func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error
 		processingMS = time.Since(startTime).Milliseconds()
 	}
 
-	// Create structured error
-	errCode := "internal_error"
-	errMsg := "An internal error occurred"
-
-	// Map common errors to specific error codes and messages
-	switch {
-	case errors.Is(err, ErrEmptyToken), errors.Is(err, ErrTokenTooLarge),
-		errors.Is(err, ErrEmptyRole), errors.Is(err, ErrRoleTooLarge),
-		errors.Is(err, ErrInvalidJSON):
-		errCode = "invalid_request"
-		errMsg = "Invalid request parameters"
-		statusCode = http.StatusBadRequest
-	case errors.Is(err, ErrTokenValidationFailed):
-		errCode = "token_invalid"
-		errMsg = "Token validation failed"
-		statusCode = http.StatusUnauthorized
-	case errors.Is(err, ErrRoleNotPermitted), errors.Is(err, ErrAccountNotAllowed):
-		errCode = "permission_denied"
-		errMsg = "Permission denied for the requested operation"
-		statusCode = http.StatusForbidden
-	case errors.Is(err, ErrSessionPolicyAccess):
-		errCode = "policy_error"
-		errMsg = "Error accessing policy information"
-		statusCode = http.StatusInternalServerError
-	case errors.Is(err, ErrAssumeRoleFailed):
-		errCode = "assume_role_failed"
-		errMsg = "Failed to assume the requested role"
-		statusCode = http.StatusInternalServerError
-	}
+	// Map common errors to specific error codes and messages (shared classifier).
+	errCode, errMsg := classifyError(err, &statusCode)
 
 	// Log the error with context
 	slog.Error("Request error",
