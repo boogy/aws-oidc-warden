@@ -42,10 +42,11 @@ type albKeyCacheEntry struct {
 const albKeyCacheTTL = 5 * time.Minute
 
 func (c *albKeyCache) get(kid string) (*ecdsa.PublicKey, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	e, ok := c.entries[kid]
 	if !ok || time.Now().After(e.expiresAt) {
+		delete(c.entries, kid)
 		return nil, false
 	}
 	return e.key, true
@@ -68,7 +69,8 @@ type ALBExtractor struct {
 	expectedSigner    string
 	expectedIssuer    string
 	expectedAudiences []string
-	keyEndpointFmt    string // format string with two %s: region, kid
+	keyEndpointFmt    string // format string for the public key URL
+	testEndpoint      bool   // true when keyEndpointFmt uses a single %s (test override)
 	httpClient        *http.Client
 	keyCache          albKeyCache
 }
@@ -96,6 +98,7 @@ func NewALBExtractor(expectedSigner, expectedIssuer string, expectedAudiences []
 	for _, o := range opts {
 		o(a)
 	}
+	a.testEndpoint = strings.Count(a.keyEndpointFmt, "%s") == 1
 	return a
 }
 
@@ -169,8 +172,7 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 		return key, nil
 	}
 
-	placeholderCount := strings.Count(a.keyEndpointFmt, "%s")
-	if placeholderCount == 2 {
+	if !a.testEndpoint {
 		if region == "" {
 			return nil, fmt.Errorf("AWSRegion is required for ALB public key lookup; set AWS_REGION env var")
 		}
@@ -180,10 +182,9 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	}
 
 	var keyURL string
-	if placeholderCount == 2 {
+	if !a.testEndpoint {
 		keyURL = fmt.Sprintf(a.keyEndpointFmt, region, kid)
 	} else {
-		// test override with single %s (just kid)
 		keyURL = fmt.Sprintf(a.keyEndpointFmt, kid)
 	}
 
@@ -244,24 +245,6 @@ func (a *ALBExtractor) mapALBClaims(mc jwt.MapClaims) (*types.GithubClaims, erro
 		default:
 			raw[k] = fmt.Sprintf("%v", val)
 		}
-	}
-
-	// Defense-in-depth: re-validate issuer and audience after signature verification.
-	// Guards against an ALB misconfigured with a different OIDC provider.
-	iss := raw["iss"]
-	if iss != a.expectedIssuer {
-		return nil, fmt.Errorf("ALB JWT iss mismatch: got %q, want %q", iss, a.expectedIssuer)
-	}
-	aud := raw["aud"]
-	matched := false
-	for _, want := range a.expectedAudiences {
-		if aud == want {
-			matched = true
-			break
-		}
-	}
-	if !matched {
-		return nil, fmt.Errorf("ALB JWT aud mismatch: got %q, not in allowed set %v", aud, a.expectedAudiences)
 	}
 
 	return (&APIGWExtractor{

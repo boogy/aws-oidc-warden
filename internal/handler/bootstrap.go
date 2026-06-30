@@ -220,22 +220,44 @@ func initializeLogger() (*bytes.Buffer, *slog.Logger, error) {
 	return logBuffer, logger, nil
 }
 
+// validateAdapterMode panics at startup when the configured jwt_validation.mode
+// is incompatible with the deployed adapter binary. Prevents silent per-request
+// failures caused by a mismatched extractor (e.g. mode=apigw deployed as apigateway).
+func validateAdapterMode(adapterName, mode string, allowed ...string) {
+	if mode == "" {
+		mode = "self"
+	}
+	for _, m := range allowed {
+		if mode == m {
+			return
+		}
+	}
+	panic(fmt.Sprintf(
+		"adapter %q requires jwt_validation.mode in %v, got %q; deploy the correct binary or update the config",
+		adapterName, allowed, mode,
+	))
+}
+
 // NewAwsApiGatewayFromBootstrap creates a new API Gateway handler using bootstrap
 func NewAwsApiGatewayFromBootstrap(bootstrap *Bootstrap) *AwsApiGateway {
+	validateAdapterMode("apigateway", bootstrap.Config.JWTValidation.Mode, "self")
 	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
 }
 
 // NewAwsLambdaUrlFromBootstrap creates a new Lambda URL handler using bootstrap
 func NewAwsLambdaUrlFromBootstrap(bootstrap *Bootstrap) *AwsLambdaUrl {
+	validateAdapterMode("lambdaurl", bootstrap.Config.JWTValidation.Mode, "self")
 	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
 }
 
 // NewAwsApplicationLoadBalancerFromBootstrap creates a new ALB handler using bootstrap
 func NewAwsApplicationLoadBalancerFromBootstrap(bootstrap *Bootstrap) *AwsApplicationLoadBalancer {
+	validateAdapterMode("alb", bootstrap.Config.JWTValidation.Mode, "alb", "self")
 	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
 }
 
 // NewAwsApiGatewayV2FromBootstrap creates a new HTTP API v2 handler using bootstrap
 func NewAwsApiGatewayV2FromBootstrap(bootstrap *Bootstrap) *AwsApiGatewayV2 {
+	validateAdapterMode("apigatewayv2", bootstrap.Config.JWTValidation.Mode, "apigw")
 	return NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
 }
