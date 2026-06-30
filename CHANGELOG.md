@@ -26,8 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ParseRoleOnlyRequestBody` for delegated-mode requests (only `role` ARN required in body).
 - `AOW_JWT_VALIDATION_MODE` and `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER` environment variables.
 - In-memory ALB public key cache (5-minute TTL) in `ALBExtractor` to avoid per-request HTTP latency.
+- OpenTofu deployment (`deploy/opentofu/`) — modular root wiring reusable `s3`, `dynamodb` (JWKS cache), `iam` (least-privilege Lambda role), `lambda` (zip packaging + log group), and `apigateway` (HTTP API verify route) modules, with config rendered from `terraform.tfvars` (#243)
+- CloudFormation quick-start template (`deploy/cloudformation/quickstart.yaml`) and deployment guide (`deploy/README.md`) (#243)
 
 ### Fixed
+
+- Adapter binaries now fail fast at startup when `jwt_validation.mode` is incompatible with the deployed adapter (panic with a clear message) instead of failing silently per request.
+- ALB public-key cache no longer has a read/write data race and now evicts expired entries on read, preventing unbounded growth of stale keys.
 
 - ALB and API Gateway delegated modes now enforce token expiration (`exp` required) and reject future-`iat` tokens, matching self-mode strictness.
 - RSA JWKS keys shorter than 2048 bits are now rejected, and EC JWKS keys are validated to lie on their declared curve (defense-in-depth against a compromised JWKS source).

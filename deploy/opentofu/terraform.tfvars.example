@@ -1,0 +1,65 @@
+region      = "eu-west-1"
+name_prefix = "aws-oidc-warden"
+
+tags = {
+  environment = "prod"
+  owner       = "platform-team"
+}
+
+# --- Token validation ---
+issuer    = "https://token.actions.githubusercontent.com"
+audiences = ["sts.amazonaws.com"]
+
+# --- Cache: choose at most one backend (memory if both false) ---
+enable_dynamodb_cache = true
+enable_s3_cache       = false
+cache_ttl             = "1h"
+
+# --- Optional features ---
+enable_s3_logs               = false
+enable_session_policy_bucket = false
+
+# --- Lambda sizing ---
+lambda_memory_size = 256
+lambda_timeout     = 15
+log_level          = "info"
+
+# --- Roles the warden may assume on behalf of repos ---
+assumable_role_arns = [
+  "arn:aws:iam::111122223333:role/github-actions-example",
+]
+
+# --- Repository -> role mappings ---
+repo_role_mappings = [
+  {
+    repo  = "my-org/my-repo"
+    roles = ["arn:aws:iam::111122223333:role/github-actions-example"]
+    constraints = {
+      branch     = "refs/heads/main"
+      event_name = "push"
+    }
+  },
+]
+
+# --- Optional tag-based / cross-account authorization ---
+# When enabled with cross-account hub/spoke, add the spoke role to
+# assumable_role_arns above, e.g. "arn:aws:iam::*:role/aow-spoke".
+# tag_auth = {
+#   enabled          = true
+#   default_org      = "my-org"
+#   allowed_accounts = ["111122223333", "444455556666"]
+# }
+
+# --- JWT Validation Mode ---
+# "self"  (default) — Lambda validates JWT signature itself using JWKS.
+# "apigw" — API Gateway JWT Authorizer validates; Lambda reads pre-validated claims
+#            from event.requestContext.authorizer.jwt.claims. Build with:
+#            ./deploy/opentofu/build.sh apigatewayv2
+#            SECURITY: Lambda resource policy restricts invocations to the API GW
+#            (source_arn = execution_arn/*/*) — direct invocations are blocked.
+# "alb"   — ALB OIDC validates; Lambda verifies ALB-signed x-amzn-oidc-data (ES256).
+#            Build with the default: ./deploy/opentofu/build.sh
+jwt_validation_mode = "self"
+# jwt_authorizer_issuer    = "https://token.actions.githubusercontent.com"
+# jwt_authorizer_audiences = ["sts.amazonaws.com"]
+# alb_expected_signer      = "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/my-alb/abc123"
