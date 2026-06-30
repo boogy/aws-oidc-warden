@@ -46,7 +46,6 @@ module "config_bucket" {
   source        = "./modules/s3"
   bucket_name   = local.config_bucket_name
   force_destroy = var.force_destroy_buckets
-  tags          = var.tags
 }
 
 module "cache_bucket" {
@@ -54,7 +53,6 @@ module "cache_bucket" {
   source        = "./modules/s3"
   bucket_name   = local.cache_bucket_name
   force_destroy = var.force_destroy_buckets
-  tags          = var.tags
 }
 
 module "log_bucket" {
@@ -63,7 +61,6 @@ module "log_bucket" {
   bucket_name               = local.log_bucket_name
   force_destroy             = var.force_destroy_buckets
   lifecycle_expiration_days = 90
-  tags                      = var.tags
 }
 
 module "session_policy_bucket" {
@@ -71,7 +68,6 @@ module "session_policy_bucket" {
   source        = "./modules/s3"
   bucket_name   = local.session_policy_bucket_name
   force_destroy = var.force_destroy_buckets
-  tags          = var.tags
 }
 
 # ---- Cache table ----
@@ -79,7 +75,6 @@ module "dynamodb" {
   count      = var.enable_dynamodb_cache ? 1 : 0
   source     = "./modules/dynamodb"
   table_name = local.cache_table_name
-  tags       = var.tags
 }
 
 # ---- Rendered config object ----
@@ -108,7 +103,6 @@ module "iam" {
   config_bucket_arn         = module.config_bucket.bucket_arn
   session_policy_bucket_arn = var.enable_session_policy_bucket ? module.session_policy_bucket[0].bucket_arn : null
   log_bucket_arn            = var.enable_s3_logs ? module.log_bucket[0].bucket_arn : null
-  tags                      = var.tags
 }
 
 # ---- Lambda ----
@@ -126,7 +120,6 @@ module "lambda" {
     AOW_S3_CONFIG_PATH   = local.config_key
     LOG_LEVEL            = var.log_level
   }
-  tags = var.tags
 
   depends_on = [aws_s3_object.config]
 }
@@ -143,5 +136,4 @@ module "apigateway" {
   enable_jwt_authorizer    = var.jwt_validation_mode == "apigw"
   jwt_authorizer_issuer    = var.jwt_authorizer_issuer
   jwt_authorizer_audiences = var.jwt_authorizer_audiences
-  tags                     = var.tags
 }

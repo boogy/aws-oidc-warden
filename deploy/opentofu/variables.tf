@@ -71,23 +71,27 @@ variable "tag_auth" {
 
 # ---- Lambda sizing ----
 variable "lambda_memory_size" {
-  type    = number
-  default = 256
+  type        = number
+  description = "Lambda memory (MB)."
+  default     = 256
 }
 
 variable "lambda_timeout" {
-  type    = number
-  default = 15
+  type        = number
+  description = "Lambda timeout (seconds)."
+  default     = 15
 }
 
 variable "lambda_architecture" {
-  type    = string
-  default = "arm64"
+  type        = string
+  description = "Lambda architecture: arm64 or x86_64."
+  default     = "arm64"
 }
 
 variable "log_retention_days" {
-  type    = number
-  default = 14
+  type        = number
+  description = "CloudWatch log retention (days)."
+  default     = 14
 }
 
 variable "log_level" {
@@ -175,6 +179,6 @@ variable "jwt_authorizer_audiences" {
 
 variable "alb_expected_signer" {
   type        = string
-  description = "Expected ALB ARN for x-amzn-oidc-data signer validation. Only used when jwt_validation_mode = 'alb'. Recommended to prevent cross-ALB spoofing."
+  description = "Expected ALB ARN for x-amzn-oidc-data signer validation. Required when jwt_validation_mode = 'alb' to prevent cross-ALB spoofing."
   default     = ""
 }
