@@ -1,5 +1,9 @@
 name: Build
 
+# Tag-triggered container publish. Division of responsibility on a `v*` tag:
+#   - build.yml (this file): ko — container images to GHCR/Docker Hub, cosign, provenance.
+#   - release.yml:           GoReleaser — zip archives + checksums + provenance.
+
 on:
   push:
     tags:
@@ -9,6 +13,11 @@ env:
   REPO_NAME: aws-oidc-warden
   GHCR_REGISTRY: ghcr.io
   DOCKERHUB_REGISTRY: docker.io
+
+# Tag-triggered publish: never cancel a partial push/sign/attest run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-and-push:
@@ -123,7 +132,7 @@ jobs:
     needs: build-and-push
     strategy:
       matrix:
-        module: [apigateway, alb, lambdaurl]
+        module: [apigateway, apigatewayv2, alb, lambdaurl]
     steps:
       - name: Extract tag name
         id: extract_tag
@@ -134,16 +143,17 @@ jobs:
           IMAGE_REF: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:${{ matrix.module }}-${{ steps.extract_tag.outputs.tag }}
         run: |
           echo "Pulling image for scanning: $IMAGE_REF"
-          for attempt in {1..3}; do
+          max_attempts=5
+          for attempt in $(seq 1 $max_attempts); do
             if docker pull $IMAGE_REF; then
               break
             fi
-            echo "Retry $attempt: Image not yet available, waiting..."
-            sleep 10
-            if [ $attempt -eq 5 ]; then
-              echo "Failed to pull image after 5 attempts"
+            if [ $attempt -eq $max_attempts ]; then
+              echo "Failed to pull image after $max_attempts attempts"
               exit 1
             fi
+            echo "Retry $attempt/$max_attempts: Image not yet available, waiting..."
+            sleep 10
           done
 
       - name: Scan container image
@@ -177,6 +187,10 @@ jobs:
             echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigateway-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigateway-latest\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**API Gateway v2 module:**" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigatewayv2-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigatewayv2-latest\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
             echo "**ALB module:**" >> $GITHUB_STEP_SUMMARY
             echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:alb-${{ steps.extract_tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
             echo "- \`$registry/${{ github.repository_owner }}/${{ env.REPO_NAME }}:alb-latest\`" >> $GITHUB_STEP_SUMMARY
@@ -197,6 +211,11 @@ jobs:
           echo "**API Gateway:**" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigateway-${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**API Gateway v2:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}:apigatewayv2-${{ steps.extract_tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Application Load Balancer:**" >> $GITHUB_STEP_SUMMARY

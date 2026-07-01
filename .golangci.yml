@@ -1,0 +1,15 @@
+# golangci-lint configuration (schema v2).
+# Shared by `make lint` and the CI lint job so local and CI results match.
+# Enabled set mirrors the Makefile `lint-all` target: the standard linters
+# (errcheck, govet, ineffassign, staticcheck, unused) plus bodyclose and misspell.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - misspell
+
+formatters:
+  enable:
+    - gofmt

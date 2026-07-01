@@ -143,8 +143,14 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - A required-audit write failure is classified before the wrapped deny sentinel, so it surfaces as `audit_write_failed`/500 instead of being masked as a plain deny.
 - An explicit `jwt_leeway: 0` is honored instead of being coerced back to the 30s default.
 - `FindSessionPolicy` runs once per allow decision instead of twice.
+- CI: `build.yml` image-pull retry loop now fails loudly after the last attempt (previously the failure branch checked `attempt -eq 5` inside a 3-iteration loop and never fired).
+- CI: `apigatewayv2` container image is now vulnerability-scanned and listed in the release summary — it was built, signed, and attested but skipped by both.
 
 ### Changed
+
+- CI: lint is now a blocking check (removed `continue-on-error`) and `golangci-lint` is pinned to `v2.12.2`; a shared `.golangci.yml` makes `make lint` and CI use the same linter set.
+- CI: added a blocking `govulncheck` job (and a `make vuln` target) for Go-native vulnerability scanning; Trivy/gosec remain advisory.
+- CI: added `concurrency` groups to all workflows — PR/branch runs auto-cancel superseded runs; tag-triggered publish/release runs do not.
 
 - Moved `pkg/` to `internal/` — all shared packages are now under `internal/` in line with Go conventions
 - `ProcessRequest` signature now accepts `validator.ExtractionInput` to carry per-request extraction data.

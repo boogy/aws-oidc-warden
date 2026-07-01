@@ -12,6 +12,10 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test
@@ -88,9 +92,8 @@ jobs:
         id: golangci-lint
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
-          version: latest
+          version: v2.12.2
           args: --timeout=5m
-        continue-on-error: true
 
       - name: Generate lint summary
         if: always()
@@ -105,6 +108,24 @@ jobs:
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Please check the golangci-lint output above for details." >> $GITHUB_STEP_SUMMARY
           fi
+
+  govulncheck:
+    name: Vulnerability Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
 
   build:
     name: Build
@@ -182,21 +203,11 @@ jobs:
           severity: CRITICAL,HIGH
         continue-on-error: true
 
-      - name: Run Trivy for SARIF
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-        continue-on-error: true
-
       - name: Run gosec security scanner
         id: gosec
         uses: securego/gosec@9e6a9843d7a4a6e3e9a8539b02612c8a4aa3f889 # v2.27.1
         with:
-          args: -fmt sarif -out gosec-results.sarif ./...
+          args: -fmt text ./...
         continue-on-error: true
 
       - name: Generate security summary

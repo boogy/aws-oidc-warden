@@ -1,9 +1,20 @@
 name: Release
 
+# Tag-triggered release. Division of responsibility on a `v*` tag:
+#   - release.yml (this file): GoReleaser — zip archives + checksums + provenance.
+#   - build.yml:               ko — container images to GHCR/Docker Hub, cosign, provenance.
+# TODO: consider consolidating both into a single tag-release workflow to reduce
+# duplicated checkout/setup-go/attest wiring.
+
 on:
   push:
     tags:
       - "v*"
+
+# Tag-triggered release: never cancel a partial release run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   goreleaser:

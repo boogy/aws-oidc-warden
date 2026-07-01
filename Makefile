@@ -86,7 +86,13 @@ fmt:
 lint:
 	@echo "Running linter..."
 	@command -v golangci-lint >/dev/null 2>&1 || { echo >&2 "golangci-lint not installed"; exit 1; }
-	@golangci-lint run --no-config ./...
+	@golangci-lint run ./...
+
+.PHONY: vuln
+vuln:
+	@echo "Running govulncheck..."
+	@command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
+	@govulncheck ./...
 
 .PHONY: lint-no-tests
 lint-no-tests:
