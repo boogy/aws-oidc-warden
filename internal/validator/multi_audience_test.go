@@ -108,7 +108,8 @@ func TestValidate_EmptyAudiencesConfiguredDeniesEverything(t *testing.T) {
 		Issuers: []config.IssuerConfig{
 			{Issuer: srv.URL, Provider: "github", RequiredClaims: []string{"repository"}},
 		},
-		Cache: &config.Cache{TTL: 10 * time.Minute},
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
 	}
 
 	v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())

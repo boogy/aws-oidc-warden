@@ -81,10 +81,14 @@ func createGithubToken(privateKey *rsa.PrivateKey, keyID, issuer, audience, repo
 	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
+			Subject:   repository,
 			Audience:  jwt.ClaimStrings{audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
+		// Sub (depth-0) is what actually marshals to "sub" -- it shadows
+		// RegisteredClaims.Subject above for JSON purposes.
+		Sub:                  repository,
 		Actor:                "testuser",
 		ActorID:              "12345",
 		Repository:           repository,
@@ -259,8 +263,9 @@ func TestValidate_TwoIssuerAudienceIsolation(t *testing.T) {
 			{Issuer: srvA.URL, Provider: "github", Audiences: []string{"aud-a"}, RequiredClaims: []string{"repository"}},
 			{Issuer: srvB.URL, Provider: "github", Audiences: []string{"aud-b"}, RequiredClaims: []string{"repository"}},
 		},
-		RoleSessionName: "test",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
+		RoleSessionName:      "test",
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
 	}
 	require.NoError(t, cfg.Validate())
 	v := staticValidator(cfg, cache.NewMemoryCache())
@@ -338,14 +343,16 @@ func TestValidate_GenericProvider_SubjectMappingIgnoresRogueClaim(t *testing.T) 
 				RequiredClaims: []string{"project_path"},
 			},
 		},
-		RoleSessionName: "test",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
+		RoleSessionName:      "test",
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
 	}
 	require.NoError(t, cfg.Validate())
 	v := staticValidator(cfg, cache.NewMemoryCache())
 
 	token := signRawToken(t, key, "k1", jwt.MapClaims{
 		"iss":          srv.URL,
+		"sub":          "group/project",
 		"aud":          "aud",
 		"exp":          time.Now().Add(10 * time.Minute).Unix(),
 		"iat":          time.Now().Unix(),
@@ -443,11 +450,14 @@ func TestFetchJWKS_CacheMiss(t *testing.T) {
 	require.NoError(t, err)
 	jwks := createJWKS("test-key-id", publicKey)
 
+	var srvURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			config := struct {
+				Issuer  string `json:"issuer"`
 				JwksURI string `json:"jwks_uri"`
 			}{
+				Issuer:  srvURL,
 				JwksURI: fmt.Sprintf("http://%s/jwks", r.Host),
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -470,12 +480,13 @@ func TestFetchJWKS_CacheMiss(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer server.Close()
+	srvURL = server.URL
 
 	mockCache := new(MockCache)
 	mockCache.On("Get", server.URL).Return(nil, false)
 	mockCache.On("Set", server.URL, mock.AnythingOfType("*types.JWKS"), mock.AnythingOfType("time.Duration")).Return()
 
-	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
 	result, err := v.FetchJWKS(server.URL)
@@ -487,22 +498,25 @@ func TestFetchJWKS_CacheMiss(t *testing.T) {
 }
 
 func TestFetchJWKS_EmptyJWKSRejected(t *testing.T) {
+	var srvURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			json.NewEncoder(w).Encode(struct { //nolint:errcheck
+				Issuer  string `json:"issuer"`
 				JwksURI string `json:"jwks_uri"`
-			}{JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+			}{Issuer: srvURL, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
 			return
 		}
 		json.NewEncoder(w).Encode(&types.JWKS{Keys: []types.JSONWebKey{}}) //nolint:errcheck
 	}))
 	defer server.Close()
+	srvURL = server.URL
 
 	mockCache := new(MockCache)
 	mockCache.On("Get", server.URL).Return(nil, false)
 
-	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
 	_, err := v.FetchJWKS(server.URL)
@@ -524,22 +538,25 @@ func TestFetchJWKS_TooManyKeysRejected(t *testing.T) {
 	}
 	oversizedJWKS := &types.JWKS{Keys: keys}
 
+	var srvURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			json.NewEncoder(w).Encode(struct { //nolint:errcheck
+				Issuer  string `json:"issuer"`
 				JwksURI string `json:"jwks_uri"`
-			}{JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+			}{Issuer: srvURL, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
 			return
 		}
 		json.NewEncoder(w).Encode(oversizedJWKS) //nolint:errcheck
 	}))
 	defer server.Close()
+	srvURL = server.URL
 
 	mockCache := new(MockCache)
 	mockCache.On("Get", server.URL).Return(nil, false)
 
-	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
 	_, err = v.FetchJWKS(server.URL)
@@ -567,7 +584,7 @@ func TestFetchJWKS_LargeOIDCDiscoveryRejected(t *testing.T) {
 	mockCache := new(MockCache)
 	mockCache.On("Get", server.URL).Return(nil, false)
 
-	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
 	_, err := v.FetchJWKS(server.URL)
@@ -576,12 +593,14 @@ func TestFetchJWKS_LargeOIDCDiscoveryRejected(t *testing.T) {
 
 func TestFetchJWKS_LargeJWKSRejected(t *testing.T) {
 	// A JWKS payload larger than 1 MB must be rejected cleanly.
+	var srvURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			cfg := struct {
+				Issuer  string `json:"issuer"`
 				JwksURI string `json:"jwks_uri"`
-			}{JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)}
+			}{Issuer: srvURL, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)}
 			json.NewEncoder(w).Encode(cfg) //nolint:errcheck
 			return
 		}
@@ -595,11 +614,12 @@ func TestFetchJWKS_LargeJWKSRejected(t *testing.T) {
 		w.Write([]byte(`"}]}`)) //nolint:errcheck
 	}))
 	defer server.Close()
+	srvURL = server.URL
 
 	mockCache := new(MockCache)
 	mockCache.On("Get", server.URL).Return(nil, false)
 
-	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
 	_, err := v.FetchJWKS(server.URL)

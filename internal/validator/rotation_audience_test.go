@@ -44,10 +44,16 @@ func signToken(t *testing.T, key *rsa.PrivateKey, kid, issuer, audience string) 
 	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
+			Subject:   "owner/repo",
 			Audience:  jwt.ClaimStrings{audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
+		// Sub (depth-0) is what actually marshals to the "sub" JWT claim --
+		// it shadows RegisteredClaims.Subject for JSON purposes (see
+		// types.Claims doc comment). Set both so intent is clear even though
+		// only Sub round-trips.
+		Sub:        "owner/repo",
 		Repository: "owner/repo",
 		Ref:        "refs/heads/main",
 	}
@@ -66,8 +72,9 @@ func oidcServer(t *testing.T, getJWKS func() *types.JWKS) *httptest.Server {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
 			_ = json.NewEncoder(w).Encode(struct {
+				Issuer  string `json:"issuer"`
 				JwksURI string `json:"jwks_uri"`
-			}{JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+			}{Issuer: "http://" + r.Host, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
 		case "/jwks":
 			_ = json.NewEncoder(w).Encode(getJWKS())
 		default:
@@ -80,13 +87,16 @@ func oidcServer(t *testing.T, getJWKS func() *types.JWKS) *httptest.Server {
 
 // githubIssuer builds a single-issuer config trusting issuer for the given
 // audiences with provider "github" and the "repository" claim required.
+// AllowInsecureIssuers is set so the loopback httptest servers used
+// throughout this package's tests aren't rejected by the HTTPS-only default.
 func githubIssuer(issuer string, audiences ...string) *config.Config {
 	return &config.Config{
 		Issuers: []config.IssuerConfig{
 			{Issuer: issuer, Provider: "github", Audiences: audiences, RequiredClaims: []string{"repository"}},
 		},
-		RoleSessionName: "aws-oidc-warden",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
+		RoleSessionName:      "aws-oidc-warden",
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
 	}
 }
 
@@ -212,10 +222,13 @@ func signTokenEC(t *testing.T, key *ecdsa.PrivateKey, kid, issuer, audience stri
 	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
+			Subject:   "owner/repo",
 			Audience:  jwt.ClaimStrings{audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
+		// Sub (depth-0) is what actually marshals to "sub" -- see signToken.
+		Sub:        "owner/repo",
 		Repository: "owner/repo",
 		Ref:        "refs/heads/main",
 	}

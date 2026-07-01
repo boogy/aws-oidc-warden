@@ -47,12 +47,15 @@ func TestTokenValidationFlow(t *testing.T) {
 	}
 
 	// Create a mock OIDC server
+	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
 			config := struct {
+				Issuer  string `json:"issuer"`
 				JwksURI string `json:"jwks_uri"`
 			}{
+				Issuer:  serverURL,
 				JwksURI: fmt.Sprintf("http://%s/jwks", r.Host),
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -69,6 +72,7 @@ func TestTokenValidationFlow(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	serverURL = server.URL
 
 	// Create a valid GitHub token
 	issuer := server.URL
@@ -79,10 +83,14 @@ func TestTokenValidationFlow(t *testing.T) {
 	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
+			Subject:   repository,
 			Audience:  jwt.ClaimStrings{audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
+		// Sub (depth-0) is what actually marshals to "sub" -- it shadows
+		// RegisteredClaims.Subject above for JSON purposes.
+		Sub:                  repository,
 		Actor:                "testuser",
 		ActorID:              "12345",
 		Repository:           repository,
@@ -107,8 +115,9 @@ func TestTokenValidationFlow(t *testing.T) {
 		Issuers: []config.IssuerConfig{
 			{Issuer: issuer, Provider: "github", Audiences: []string{audience}, RequiredClaims: []string{"repository"}},
 		},
-		RoleSessionName: "aws-oidc-warden",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
+		RoleSessionName:      "aws-oidc-warden",
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
 	}
 	require.NoError(t, cfg.Validate())
 

@@ -9,11 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
-	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +21,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 // defaultMaxTokenBytes is used only if a TokenValidator is built from a
@@ -47,6 +48,11 @@ var (
 	// ErrMissingRequiredClaim is returned when one of the issuer's
 	// required_claims is absent or empty in the verified token.
 	ErrMissingRequiredClaim = errors.New("required claim missing or empty")
+	// ErrTokenLifetimeExceeded is returned when exp-iat exceeds the configured
+	// MaxTokenLifetime.
+	ErrTokenLifetimeExceeded = errors.New("token lifetime exceeds maximum allowed")
+	// ErrTokenTooOld is returned when now-iat exceeds the configured MaxTokenAge.
+	ErrTokenTooOld = errors.New("token age exceeds maximum allowed")
 )
 
 // TokenValidatorInterface is the contract for validating an OIDC token end to
@@ -108,21 +114,50 @@ type TokenValidator struct {
 	snap     atomic.Pointer[snapshot]
 	cache    cache.Cache
 	provider *config.Provider
-	httpc    *http.Client // built once at init (Group C hardens: SSRF/TLS)
+	httpc    *http.Client // built once at init, SSRF/TLS-hardened (ssrf.go)
 
 	// leeway/maxLifetime/maxAge/maxTokenBytes are read once from the config in
 	// effect at construction time. Unlike the registry, they are not re-derived
-	// on hot reload (see CLAUDE.md); Group C's per-(issuer,kid) refetch limiter
-	// is added here too.
-	leeway        time.Duration
-	maxLifetime   time.Duration
-	maxAge        time.Duration
-	maxTokenBytes int
+	// on hot reload (see CLAUDE.md).
+	leeway               time.Duration
+	maxLifetime          time.Duration
+	maxAge               time.Duration
+	maxTokenBytes        int
+	allowInsecureIssuers bool
+
+	// timeNow is the clock used for lifetime/age checks and the refetch
+	// limiter's cooldown windows. Defaults to time.Now; overridable via
+	// WithTimeNow for deterministic tests.
+	timeNow func() time.Time
+
+	// refetch rate-limits forced (cache-bypassing) JWKS refetches per
+	// (issuer, kid), with a per-issuer backstop. keyMemo caches parsed,
+	// re-validated public keys per (issuer, kid, key material) so repeated
+	// requests for the same key skip re-parsing. jwksURICache memoizes a
+	// discovery-resolved jwks_uri per issuer so steady-state requests skip
+	// re-discovery. sfGroup collapses concurrent cold JWKS fetches for the
+	// same issuer into a single upstream call.
+	refetch      *refetchLimiter
+	keyMemo      *keyMemo
+	jwksURICache sync.Map
+	sfGroup      singleflight.Group
 
 	// builtFrom records which config pointer snap was built from, so
 	// currentSnapshot can detect a hot reload with a cheap pointer compare
 	// instead of rebuilding on every call.
 	builtFrom atomic.Pointer[config.Config]
+}
+
+// TokenValidatorOption customizes a TokenValidator at construction time.
+type TokenValidatorOption func(*TokenValidator)
+
+// WithTimeNow overrides the clock TokenValidator uses for lifetime/age checks
+// and the refetch limiter's cooldown windows. For tests only; production
+// callers should rely on the time.Now default.
+func WithTimeNow(now func() time.Time) TokenValidatorOption {
+	return func(t *TokenValidator) {
+		t.timeNow = now
+	}
 }
 
 // NewTokenValidator creates a TokenValidator that reads its issuer registry
@@ -131,7 +166,7 @@ type TokenValidator struct {
 // All expensive setup (the shared http.Client, the initial registry
 // snapshot) happens once here — call this once during bootstrap, never per
 // request.
-func NewTokenValidator(provider *config.Provider, jwksCache cache.Cache) *TokenValidator {
+func NewTokenValidator(provider *config.Provider, jwksCache cache.Cache, opts ...TokenValidatorOption) *TokenValidator {
 	cfg := provider.Get()
 
 	maxTokenBytes := cfg.MaxTokenBytes
@@ -140,14 +175,23 @@ func NewTokenValidator(provider *config.Provider, jwksCache cache.Cache) *TokenV
 	}
 
 	t := &TokenValidator{
-		cache:         jwksCache,
-		provider:      provider,
-		httpc:         &http.Client{Timeout: 5 * time.Second},
-		leeway:        cfg.JWTLeeway,
-		maxLifetime:   cfg.MaxTokenLifetime,
-		maxAge:        cfg.MaxTokenAge,
-		maxTokenBytes: maxTokenBytes,
+		cache:                jwksCache,
+		provider:             provider,
+		leeway:               cfg.JWTLeeway,
+		maxLifetime:          cfg.MaxTokenLifetime,
+		maxAge:               cfg.MaxTokenAge,
+		maxTokenBytes:        maxTokenBytes,
+		allowInsecureIssuers: cfg.AllowInsecureIssuers,
+		timeNow:              time.Now,
 	}
+	t.httpc = newSecureHTTPClient(t.allowInsecureIssuers, 5*time.Second)
+
+	for _, opt := range opts {
+		opt(t)
+	}
+
+	t.refetch = newRefetchLimiter(t.timeNow, cfg.JWKSRefetchCooldown)
+	t.keyMemo = newKeyMemo()
 	t.rebuildSnapshot(cfg)
 	return t
 }
@@ -252,17 +296,27 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 	}
 
 	raw := jwt.MapClaims{}
-	token, err := parser.ParseWithClaims(tokenString, raw, t.GenKeyFunc(jwks))
+	token, err := parser.ParseWithClaims(tokenString, raw, t.genKeyFuncForIssuer(spec.Issuer, jwks))
 
 	// If the signing key was not found, the issuer may have rotated its keys.
-	// Force a single cache-bypassing JWKS refetch and retry once.
+	// Force a single cache-bypassing JWKS refetch and retry once, subject to
+	// the per-(issuer,kid) refetch limiter (a genuinely new kid always passes
+	// on its first miss; repeated misses for the same bogus kid, or a flood
+	// of distinct bogus kids for one issuer, are throttled).
 	if err != nil && errors.Is(err, ErrKeyNotFound) {
-		slog.Info("signing key not found in cached JWKS; refetching", slog.String("issuer", spec.Issuer))
-		if jwks, err = t.fetchJWKS(spec, true); err != nil {
-			return nil, err
+		kid, _ := token.Header["kid"].(string)
+		if t.refetch.allow(spec.Issuer, kid) {
+			slog.Info("signing key not found in cached JWKS; refetching",
+				slog.String("issuer", spec.Issuer), slog.String("kid", kid))
+			if jwks, err = t.fetchJWKS(spec, true); err != nil {
+				return nil, err
+			}
+			raw = jwt.MapClaims{}
+			token, err = parser.ParseWithClaims(tokenString, raw, t.genKeyFuncForIssuer(spec.Issuer, jwks))
+		} else {
+			slog.Warn("forced JWKS refetch rate-limited; denying token",
+				slog.String("issuer", spec.Issuer), slog.String("kid", kid))
 		}
-		raw = jwt.MapClaims{}
-		token, err = parser.ParseWithClaims(tokenString, raw, t.GenKeyFunc(jwks))
 	}
 
 	if err != nil {
@@ -278,6 +332,34 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 	verifiedIssuer, err := raw.GetIssuer()
 	if err != nil || verifiedIssuer != spec.Issuer {
 		return nil, fmt.Errorf("%w: verified issuer changed during validation", ErrUnknownIssuer)
+	}
+
+	// Step 6: sub non-empty. nbf, if present, is already enforced by the
+	// parser (jwt/v5 checks nbf unconditionally when the claim exists).
+	sub, err := raw.GetSubject()
+	if err != nil || sub == "" {
+		return nil, fmt.Errorf("%w: sub", ErrMissingRequiredClaim)
+	}
+	// iat is required for the max-age check below; WithIssuedAt() does not
+	// itself make it mandatory, so it is enforced explicitly here.
+	iat, err := raw.GetIssuedAt()
+	if err != nil || iat == nil {
+		return nil, fmt.Errorf("%w: iat", ErrMissingRequiredClaim)
+	}
+
+	// Step 7: bound token lifetime and age (both opt-in; zero value disables
+	// the check). WithExpirationRequired() above already guarantees exp is
+	// present.
+	exp, err := raw.GetExpirationTime()
+	if err != nil || exp == nil {
+		return nil, fmt.Errorf("%w: exp", ErrMissingRequiredClaim)
+	}
+	now := t.timeNow()
+	if t.maxLifetime > 0 && exp.Sub(iat.Time) > t.maxLifetime {
+		return nil, fmt.Errorf("%w: %s > %s", ErrTokenLifetimeExceeded, exp.Sub(iat.Time), t.maxLifetime)
+	}
+	if t.maxAge > 0 && now.Sub(iat.Time) > t.maxAge {
+		return nil, fmt.Errorf("%w: %s > %s", ErrTokenTooOld, now.Sub(iat.Time), t.maxAge)
 	}
 
 	// Step 8: audience ANY-match against this issuer's configured audiences.
@@ -469,141 +551,60 @@ func normalizeClaims(raw jwt.MapClaims, provider string, mappings map[string]str
 	return claims, nil
 }
 
-// FetchJWKS fetches the JWKS for the given issuer, using the cache when
-// available. Exposed standalone (no jwks_uri override) for testing and
-// warm-prefetch of issuers outside the registry; Validate uses the issuer's
-// registered spec instead, which may carry a jwks_uri override.
-func (t *TokenValidator) FetchJWKS(issuer string) (*types.JWKS, error) {
-	return t.fetchJWKS(&issuerSpec{Issuer: issuer}, false)
-}
-
-// fetchJWKS fetches (or serves from cache) the JWKS for spec.Issuer. When
-// spec.JWKSURI is set, OIDC discovery is skipped and that URL is fetched
-// directly (still required to be a secure URL). When force is true the cache
-// is bypassed and the freshly fetched JWKS replaces any cached entry — used
-// to recover from signing-key rotation.
-func (t *TokenValidator) fetchJWKS(spec *issuerSpec, force bool) (*types.JWKS, error) {
-	if !force {
-		if cachedJWKS, found := t.cache.Get(spec.Issuer); found && cachedJWKS != nil {
-			return cachedJWKS, nil
-		}
-	}
-
-	jwksURI := spec.JWKSURI
-	if jwksURI == "" {
-		var err error
-		jwksURI, err = t.discoverJWKSURI(spec.Issuer)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// The (discovered or configured) JWKS URI must also use a secure transport.
-	if err := requireSecureURL(jwksURI); err != nil {
-		return nil, fmt.Errorf("invalid jwks_uri: %w", err)
-	}
-
-	jwks, err := t.getJWKS(jwksURI)
-	if err != nil {
-		return nil, err
-	}
-
-	t.cache.Set(spec.Issuer, jwks, cache.GetConfiguredTTL(t.currentConfig()))
-	return jwks, nil
-}
-
-// discoverJWKSURI fetches issuer's OIDC discovery document
-// (issuer + /.well-known/openid-configuration) and returns its jwks_uri.
-func (t *TokenValidator) discoverJWKSURI(issuer string) (string, error) {
-	// Enforce a secure transport for the issuer (loopback hosts excepted for
-	// tests/local).
-	if err := requireSecureURL(issuer); err != nil {
-		return "", fmt.Errorf("invalid issuer URL: %w", err)
-	}
-
-	resp, err := t.httpc.Get(issuer + "/.well-known/openid-configuration")
-	if err != nil {
-		slog.Error("Failed to fetch OIDC configuration", "error", err)
-		return "", fmt.Errorf("failed to fetch OIDC configuration: %w", err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			slog.Error("Failed to close OIDC configuration response body", "error", err)
-		}
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		slog.Error("Received non-200 status code when fetching OIDC configuration", "status", resp.StatusCode)
-		return "", fmt.Errorf("received non-200 status code when fetching OIDC configuration: %d", resp.StatusCode)
-	}
-
-	var discovery struct {
-		JwksURI string `json:"jwks_uri"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&discovery); err != nil {
-		slog.Error("Failed to parse OIDC configuration", "error", err)
-		return "", fmt.Errorf("failed to parse OIDC configuration: %w", err)
-	}
-	return discovery.JwksURI, nil
-}
-
-// getJWKS fetches and decodes the JWKS document at jwksURI.
-func (t *TokenValidator) getJWKS(jwksURI string) (*types.JWKS, error) {
-	resp, err := t.httpc.Get(jwksURI)
-	if err != nil {
-		slog.Error("Failed to fetch JWKS", "error", err)
-		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			slog.Error("Failed to close JWKS response body", "error", err)
-		}
-	}()
-
-	if resp.StatusCode != http.StatusOK {
-		slog.Error("Received non-200 status code when fetching JWKS", "status", resp.StatusCode)
-		return nil, fmt.Errorf("received non-200 status code when fetching JWKS: %d", resp.StatusCode)
-	}
-
-	var jwks types.JWKS
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&jwks); err != nil {
-		slog.Error("Failed to parse JWKS", "error", err)
-		return nil, fmt.Errorf("failed to parse JWKS: %w", err)
-	}
-	if len(jwks.Keys) == 0 {
-		return nil, errors.New("jwks contains no keys")
-	}
-	const maxJWKSKeys = 20
-	if len(jwks.Keys) > maxJWKSKeys {
-		return nil, fmt.Errorf("jwks contains too many keys (%d > %d)", len(jwks.Keys), maxJWKSKeys)
-	}
-	return &jwks, nil
-}
-
-// GenKeyFunc generates a jwt.Keyfunc that validates JWT tokens using JWKS keys.
-// Supports RSA (RS256/384/512) and ECDSA (ES256/384/512) key types.
-func (t *TokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc {
+// genKeyFuncForIssuer generates a jwt.Keyfunc scoped to issuer that validates
+// JWT tokens using jwks keys. Supports RSA (RS256/384/512) and ECDSA
+// (ES256/384/512) key types. Beyond a kid match, a candidate key must also
+// satisfy: use is "sig" or unset; alg, if the JWKS entry sets one, matches
+// the token's alg; and the key's type matches the token alg's family (RSA
+// keys only for RS*, EC keys only for ES*). This blocks an alg-confusion or
+// duplicate-kid-different-type attack from having a mismatched key selected
+// for a kid it doesn't actually belong to. Scanning continues past a kid
+// match that fails these checks (rather than stopping), so a duplicate kid
+// with one matching and one non-matching key still resolves to the correct
+// key. issuer scopes the key memo (keymemo.go) so the same kid string from
+// different issuers is never conflated.
+func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jwt.Keyfunc {
 	return func(token *jwt.Token) (any, error) {
 		kid, ok := token.Header["kid"].(string)
 		if !ok {
 			return nil, errors.New("missing or invalid kid in token header")
 		}
+		tokenAlg, _ := token.Header["alg"].(string)
 
+		kidPresent := false
 		for _, key := range jwks.Keys {
 			if key.KeyID != kid {
 				continue
 			}
-			switch key.KeyType {
-			case "RSA":
-				return parseRSAKey(key)
-			case "EC":
-				return parseECKey(key)
-			default:
-				return nil, fmt.Errorf("unsupported key type %q for kid %q", key.KeyType, kid)
+			kidPresent = true
+			if key.Use != "" && key.Use != "sig" {
+				continue
 			}
+			if key.Algorithm != "" && key.Algorithm != tokenAlg {
+				continue
+			}
+			switch {
+			case key.KeyType == "RSA" && strings.HasPrefix(tokenAlg, "RS"):
+				return t.resolveKey(issuer, key)
+			case key.KeyType == "EC" && strings.HasPrefix(tokenAlg, "ES"):
+				return t.resolveKey(issuer, key)
+			}
+			// Key-type/alg-family mismatch (or unsupported kty) — keep
+			// scanning in case another key shares this kid.
+		}
+		if kidPresent {
+			return nil, fmt.Errorf("kid %q present but no key matches required use/alg/key-type", kid)
 		}
 		return nil, ErrKeyNotFound
 	}
+}
+
+// GenKeyFunc generates a jwt.Keyfunc using JWKS keys, with no issuer scoping
+// for the key memo. Kept for the TokenValidatorInterface/test call sites that
+// predate multi-issuer key memoization; Validate itself calls
+// genKeyFuncForIssuer with the matched issuer.
+func (t *TokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc {
+	return t.genKeyFuncForIssuer("", jwks)
 }
 
 func parseRSAKey(key types.JSONWebKey) (*rsa.PublicKey, error) {
@@ -670,25 +671,4 @@ func ecCurve(crv string) (elliptic.Curve, error) {
 		return elliptic.P521(), nil
 	}
 	return nil, fmt.Errorf("unsupported EC curve %q", crv)
-}
-
-// requireSecureURL ensures u uses HTTPS. Plain HTTP is permitted only for
-// loopback hosts (127.0.0.1, ::1, localhost) to support local servers and tests.
-func requireSecureURL(u string) error {
-	parsed, err := url.Parse(u)
-	if err != nil {
-		return fmt.Errorf("malformed URL %q: %w", u, err)
-	}
-
-	switch parsed.Scheme {
-	case "https":
-		return nil
-	case "http":
-		switch parsed.Hostname() {
-		case "127.0.0.1", "::1", "localhost":
-			return nil
-		}
-	}
-
-	return fmt.Errorf("insecure scheme %q for host %q (https required)", parsed.Scheme, parsed.Hostname())
 }
