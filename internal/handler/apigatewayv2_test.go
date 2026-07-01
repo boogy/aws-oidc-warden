@@ -33,7 +33,7 @@ func TestAwsApiGatewayV2_Handler_ExtractsClaims(t *testing.T) {
 
 	// Use a fixed extractor so claims are returned directly without token validation.
 	// This isolates the adapter's routing logic from the extractor implementation.
-	ex := &fixedExtractor{claims: &types.GithubClaims{
+	ex := &fixedExtractor{claims: &types.Claims{
 		Repository: "org/repo",
 		Ref:        "refs/heads/main",
 		Actor:      "octocat",

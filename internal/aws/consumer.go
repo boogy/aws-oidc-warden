@@ -26,7 +26,7 @@ const maxConfigSize = 1024 * 1024 // 1MB
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
 type AwsConsumerInterface interface {
 	ReadS3Configuration() error
-	AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.GithubClaims) (*types.Credentials, error)
+	AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims) (*types.Credentials, error)
 	GetS3Object(bucket, key string) (io.ReadCloser, error)
 	GetRole(role string) (*iam.GetRoleOutput, error)
 	GetRoleTags(roleARN string) (map[string]string, error)
@@ -157,7 +157,7 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 
 // AssumeRole assumes the specified AWS IAM role and returns temporary credentials
 // It also applies session tags based on GitHub claims for better traceability and security
-func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.GithubClaims) (*types.Credentials, error) {
+func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims) (*types.Credentials, error) {
 	if roleArn == "" {
 		return nil, errors.New("roleArn cannot be empty")
 	}
@@ -274,7 +274,7 @@ func selectTransitiveKeys(tags []types.Tag) []string {
 
 // CreateSessionTags creates session tags from GitHub claims for enhanced security and audit trail
 // Session tags are limited to 50 tags with a combined size limit of 2048 characters
-func CreateSessionTags(claims *gtypes.GithubClaims) []types.Tag {
+func CreateSessionTags(claims *gtypes.Claims) []types.Tag {
 	if claims == nil {
 		return nil
 	}

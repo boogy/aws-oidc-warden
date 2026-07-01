@@ -17,9 +17,9 @@ import (
 )
 
 // fixedExtractor returns a fixed set of claims without touching any token.
-type fixedExtractor struct{ claims *types.GithubClaims }
+type fixedExtractor struct{ claims *types.Claims }
 
-func (f *fixedExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.GithubClaims, error) {
+func (f *fixedExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.Claims, error) {
 	return f.claims, nil
 }
 
@@ -57,7 +57,7 @@ func mockConsumer(t *testing.T) *fakeConsumer {
 
 func TestProcessRequest_DelegatedMode(t *testing.T) {
 	// extractor returns fixed claims without touching a token (delegated/apigw mode)
-	ex := &fixedExtractor{claims: &types.GithubClaims{
+	ex := &fixedExtractor{claims: &types.Claims{
 		Repository: "org/repo",
 		Ref:        "refs/heads/main",
 		Actor:      "octocat",

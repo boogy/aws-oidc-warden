@@ -29,5 +29,5 @@ type ExtractionInput struct {
 // Implementations either validate the JWT themselves ("self") or decode
 // pre-validated claims provided by a trusted upstream ("apigw", "alb").
 type ClaimsExtractorInterface interface {
-	Extract(ctx context.Context, input ExtractionInput) (*types.GithubClaims, error)
+	Extract(ctx context.Context, input ExtractionInput) (*types.Claims, error)
 }

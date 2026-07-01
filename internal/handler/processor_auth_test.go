@@ -17,7 +17,7 @@ import (
 // stubExtractor always returns an error to simulate extraction failure.
 type stubExtractor struct{ err error }
 
-func (s *stubExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.GithubClaims, error) {
+func (s *stubExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.Claims, error) {
 	return nil, s.err
 }
 

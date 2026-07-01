@@ -19,7 +19,7 @@ func NewSelfExtractor(v TokenValidatorInterface) *SelfExtractor {
 }
 
 // Extract validates the JWT in input.Token and returns the verified claims.
-func (s *SelfExtractor) Extract(_ context.Context, input ExtractionInput) (*types.GithubClaims, error) {
+func (s *SelfExtractor) Extract(_ context.Context, input ExtractionInput) (*types.Claims, error) {
 	if input.Token == "" {
 		return nil, fmt.Errorf("token is required in self-validation mode")
 	}

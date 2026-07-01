@@ -117,7 +117,7 @@ func isValidALBKid(kid string) bool {
 }
 
 // Extract verifies the ALB-signed JWT and returns the embedded OIDC claims.
-func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*types.GithubClaims, error) {
+func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*types.Claims, error) {
 	if input.ALBOIDCData == "" {
 		return nil, fmt.Errorf("x-amzn-oidc-data header is absent: request may have bypassed ALB OIDC")
 	}
@@ -231,7 +231,7 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	return ecKey, nil
 }
 
-func (a *ALBExtractor) mapALBClaims(mc jwt.MapClaims) (*types.GithubClaims, error) {
+func (a *ALBExtractor) mapALBClaims(mc jwt.MapClaims) (*types.Claims, error) {
 	// Convert MapClaims to map[string]string for reuse with mapAPIGWClaims.
 	// jwt.MapClaims stores numeric values as float64; use FormatInt to avoid
 	// scientific notation (e.g. "1.75e+09") that breaks ParseInt.

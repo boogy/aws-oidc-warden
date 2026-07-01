@@ -18,6 +18,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // This is an integration test to ensure our refactoring of JWKS and JSONWebKey types
@@ -25,7 +26,7 @@ import (
 func TestTokenValidationFlow(t *testing.T) {
 	// Generate a test key pair
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	publicKey := &privateKey.PublicKey
 
 	// Create a key ID
@@ -75,10 +76,9 @@ func TestTokenValidationFlow(t *testing.T) {
 	repository := "owner/repo"
 
 	// Create claims
-	claims := &types.GithubClaims{
+	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
-			Subject:   "repo:" + repository + ":ref:refs/heads/main",
 			Audience:  jwt.ClaimStrings{audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -100,25 +100,26 @@ func TestTokenValidationFlow(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = keyID
 	tokenString, err := token.SignedString(privateKey)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	// Create config and validator
 	cfg := &config.Config{
-		Issuer:    issuer,
-		Audiences: []string{audience},
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: []string{audience}, RequiredClaims: []string{"repository"}},
 		},
+		RoleSessionName: "aws-oidc-warden",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
 	}
+	require.NoError(t, cfg.Validate())
 
-	memoryCache := cache.NewMemoryCache()
-	tokenValidator := validator.NewTokenValidator(cfg, memoryCache)
+	tokenValidator := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
 
 	// Validate the token
 	resultClaims, err := tokenValidator.Validate(tokenString)
-	assert.NoError(t, err)
-	assert.NotNil(t, resultClaims)
+	require.NoError(t, err)
+	require.NotNil(t, resultClaims)
 	assert.Equal(t, repository, resultClaims.Repository)
+	assert.Equal(t, repository, resultClaims.Subject)
 	assert.Equal(t, issuer, resultClaims.Issuer)
 	assert.Equal(t, audience, resultClaims.Audience[0])
 }

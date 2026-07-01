@@ -181,7 +181,7 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 	testDuration := int32(3600)
 
 	// Create test GitHub claims
-	testClaims := &gtypes.GithubClaims{
+	testClaims := &gtypes.Claims{
 		Repository:      "owner/repo",
 		Actor:           "testuser",
 		Ref:             "refs/heads/main",
@@ -256,7 +256,7 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 
 func TestCreateSessionTags(t *testing.T) {
 	// Test case: Valid claims
-	claims := &gtypes.GithubClaims{
+	claims := &gtypes.Claims{
 		Repository:      "owner/repo",
 		Actor:           "testuser",
 		Ref:             "refs/heads/main",
@@ -290,12 +290,12 @@ func TestCreateSessionTags(t *testing.T) {
 	assert.Nil(t, tags)
 
 	// Test case: Empty claims
-	emptyClaims := &gtypes.GithubClaims{}
+	emptyClaims := &gtypes.Claims{}
 	tags = CreateSessionTags(emptyClaims)
 	assert.Equal(t, 0, len(tags)) // Should have no tags since all fields are empty
 
 	// Test case: Repository name extraction
-	claimsWithDifferentRepo := &gtypes.GithubClaims{
+	claimsWithDifferentRepo := &gtypes.Claims{
 		Repository:      "my-org/my-awesome-repo",
 		Actor:           "developer",
 		RepositoryOwner: "my-org",
@@ -312,7 +312,7 @@ func TestCreateSessionTags(t *testing.T) {
 	assert.Equal(t, "developer", tagMap["actor"])      // should have actor
 
 	// Test case: Repository without slash (edge case)
-	claimsNoSlash := &gtypes.GithubClaims{
+	claimsNoSlash := &gtypes.Claims{
 		Repository: "standalone-repo",
 		Actor:      "user",
 	}

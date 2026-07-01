@@ -28,7 +28,7 @@ func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/", TransitiveSessionTags: true}}
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
-	claims := &gtypes.GithubClaims{Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main", EventName: "push"}
+	claims := &gtypes.Claims{Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main", EventName: "push"}
 
 	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims)
 	require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
 	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}} // transitive off
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
-	claims := &gtypes.GithubClaims{Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main"}
+	claims := &gtypes.Claims{Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main"}
 
 	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims)
 	require.NoError(t, err)

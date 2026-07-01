@@ -2,11 +2,23 @@ package types
 
 import "github.com/golang-jwt/jwt/v5"
 
-type GithubClaims struct {
-	// Iss                  string `json:"iss"`
-	// Aud                  string `json:"aud"`
-	// Exp                  int64  `json:"exp"`
-	// Iat                  int64  `json:"iat"`
+// Claims is the canonical verified-claims structure produced by the validator
+// for every provider. GitHub-specific fields are populated only when the
+// token's issuer is configured with provider: "github" (native unmarshal);
+// for any other provider only the embedded RegisteredClaims, Subject, and Raw
+// are populated.
+//
+// Subject is the canonical authorization identity (repository, project path,
+// etc.) and is the field authz/session-tag code must read. It is deliberately
+// NOT populated by JSON unmarshal: the embedded jwt.RegisteredClaims.Subject
+// field (json:"sub") is shadowed for JSON purposes by the depth-0 Sub field
+// below, which retains the raw "sub" JWT claim. Claims.Subject is instead set
+// exclusively by normalizeClaims (internal/validator) from the issuer's
+// configured claim_mappings.subject — never directly from token JSON — so a
+// token can never self-assert its own canonical identity (see SHARED.md
+// invariant #4). Do not read Subject on a value that hasn't gone through
+// Validate()/normalizeClaims.
+type Claims struct {
 	jwt.RegisteredClaims
 	Actor                string `json:"actor"`
 	ActorID              string `json:"actor_id"`
@@ -32,4 +44,11 @@ type GithubClaims struct {
 	Workflow             string `json:"workflow"`
 	WorkflowRef          string `json:"workflow_ref"`
 	WorkflowSha          string `json:"workflow_sha"`
+
+	// Raw holds every verified claim from the token, keyed by raw claim name.
+	// Used by generic (non-github) subject/condition/session-tag mapping and
+	// by required_claims checks, since those reference provider-native claim
+	// names that have no corresponding struct field. Excluded from JSON so it
+	// never round-trips through the config-clone / audit-log JSON paths.
+	Raw map[string]any `json:"-"`
 }

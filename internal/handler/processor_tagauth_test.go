@@ -19,9 +19,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type tagModeExtractor struct{ claims *types.GithubClaims }
+type tagModeExtractor struct{ claims *types.Claims }
 
-func (e *tagModeExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.GithubClaims, error) {
+func (e *tagModeExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.Claims, error) {
 	return e.claims, nil
 }
 
@@ -29,7 +29,7 @@ type fakeConsumer struct {
 	tags            map[string]string
 	tagsErr         error
 	assumed         string
-	gotClaims       *types.GithubClaims // claims passed to AssumeRole → drive session tags (ABAC)
+	gotClaims       *types.Claims // claims passed to AssumeRole → drive session tags (ABAC)
 	assumeOut       *ststypes.Credentials
 	allowAccount    bool
 	allowAccountErr error
@@ -44,7 +44,7 @@ func (f *fakeConsumer) GetRoleTags(string) (map[string]string, error) { return f
 func (f *fakeConsumer) IsTargetAccountAllowed(string) (bool, error) {
 	return f.allowAccount, f.allowAccountErr
 }
-func (f *fakeConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, claims *types.GithubClaims) (*ststypes.Credentials, error) {
+func (f *fakeConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, claims *types.Claims) (*ststypes.Credentials, error) {
 	f.assumed = roleARN
 	f.gotClaims = claims
 	return f.assumeOut, nil
@@ -64,7 +64,7 @@ func baseTagCfg(t *testing.T) *config.Config {
 
 func TestProcessRequest_TagAuthAllows(t *testing.T) {
 	cfg := baseTagCfg(t)
-	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
+	claims := &types.Claims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
 	exp := time.Now()
 	fc := &fakeConsumer{
 		tags:         map[string]string{"aow/repo": "acme/api"},
@@ -86,7 +86,7 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 
 func TestProcessRequest_TagAuthDenies(t *testing.T) {
 	cfg := baseTagCfg(t)
-	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
+	claims := &types.Claims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/other"}, allowAccount: true}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
 	_, err := proc.ProcessRequest(context.Background(),
@@ -119,7 +119,7 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 
 	// Claims are for a feature branch → the explicit mapping's branch constraint
 	// fails, so the explicit path denies.
-	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/feature"}
+	claims := &types.Claims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/feature"}
 	exp := time.Now()
 	fc := &fakeConsumer{
 		tags:         map[string]string{"aow/repo": "acme/api"}, // no aow/branch → branch unchecked
@@ -137,7 +137,7 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 
 func TestProcessRequest_AccountNotAllowed(t *testing.T) {
 	cfg := baseTagCfg(t)
-	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
+	claims := &types.Claims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
 	// allowAccount defaults to false → target account is denied.
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
@@ -151,7 +151,7 @@ func TestProcessRequest_AccountNotAllowed(t *testing.T) {
 
 func TestProcessRequest_AccountCheckError(t *testing.T) {
 	cfg := baseTagCfg(t)
-	claims := &types.GithubClaims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
+	claims := &types.Claims{Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main"}
 	// Infra error must take precedence over the allow/deny bool and map to a 5xx
 	// (ErrAssumeRoleFailed), never a 403 (ErrAccountNotAllowed).
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: true, allowAccountErr: errors.New("infra fail")}

@@ -5,13 +5,17 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
@@ -36,6 +40,12 @@ func (m *MockCache) Get(key string) (*types.JWKS, bool) {
 
 func (m *MockCache) Set(key string, value *types.JWKS, ttl time.Duration) {
 	m.Called(key, value, ttl)
+}
+
+// staticValidator builds a TokenValidator from a config that never hot-reloads,
+// mirroring how most tests only care about a single fixed configuration.
+func staticValidator(cfg *config.Config, c cache.Cache) *validator.TokenValidator {
+	return validator.NewTokenValidator(config.NewStaticProvider(cfg), c)
 }
 
 // generateRSAKey creates an RSA key pair for testing
@@ -68,10 +78,9 @@ func createJWKS(keyID string, publicKey *rsa.PublicKey) *types.JWKS {
 
 // createGithubToken creates a test token signed with the given private key
 func createGithubToken(privateKey *rsa.PrivateKey, keyID, issuer, audience, repository string) (string, error) {
-	claims := &types.GithubClaims{
+	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
-			Subject:   "repo:" + repository + ":refs/heads/main",
 			Audience:  jwt.ClaimStrings{audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -100,22 +109,32 @@ func createGithubToken(privateKey *rsa.PrivateKey, keyID, issuer, audience, repo
 	return tokenString, nil
 }
 
-func TestNewTokenValidator(t *testing.T) {
-	cfg := &config.Config{
-		Issuer:    "https://example.com",
-		Audiences: []string{"test-audience"},
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
-		},
-	}
+// signRawToken signs an arbitrary raw claim set, used to exercise non-github
+// (generic) providers whose claims have no dedicated Go struct.
+func signRawToken(t *testing.T, key *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
+	signed, err := token.SignedString(key)
+	require.NoError(t, err)
+	return signed
+}
 
-	mockCache := new(MockCache)
-	validator := validator.NewTokenValidator(cfg, mockCache)
+func TestNewTokenValidator_UnknownIssuerDenied(t *testing.T) {
+	// A validator built from a config with no registered issuers must deny
+	// every token — fail closed, not fail open.
+	cfg := &config.Config{Cache: &config.Cache{TTL: time.Minute}}
+	v := staticValidator(cfg, new(MockCache))
+	require.NotNil(t, v)
 
-	assert.Equal(t, cfg.Issuer, validator.ExpectedIssuer)
-	assert.Equal(t, cfg.Audiences, validator.ExpectedAudiences)
-	assert.Equal(t, mockCache, validator.Cache)
-	assert.Equal(t, cfg, validator.Cfg)
+	privateKey, _, err := generateRSAKey()
+	require.NoError(t, err)
+	token, err := createGithubToken(privateKey, "kid", "https://untrusted.example.com", "aud", "owner/repo")
+	require.NoError(t, err)
+
+	_, err = v.Validate(token)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, validator.ErrUnknownIssuer))
 }
 
 func TestValidate_Success(t *testing.T) {
@@ -124,83 +143,67 @@ func TestValidate_Success(t *testing.T) {
 	audience := "test-audience"
 	repository := "owner/repo"
 
-	// Generate RSA keys for signing
 	privateKey, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// Create JWKS with the public key
 	jwks := createJWKS(keyID, publicKey)
 
-	// Create a valid GitHub token
 	token, err := createGithubToken(privateKey, keyID, issuer, audience, repository)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// Setup mock cache
 	mockCache := new(MockCache)
 	mockCache.On("Get", issuer).Return(jwks, true)
 
-	// Create config and validator
 	cfg := &config.Config{
-		Issuer:    issuer,
-		Audiences: []string{audience},
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: []string{audience}, RequiredClaims: []string{"repository"}},
 		},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
 	}
+	require.NoError(t, cfg.Validate())
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
+	v := staticValidator(cfg, mockCache)
 
-	// Test the Validate function
-	claims, err := validator.Validate(token)
-	assert.NoError(t, err)
-	assert.NotNil(t, claims)
+	claims, err := v.Validate(token)
+	require.NoError(t, err)
+	require.NotNil(t, claims)
 	assert.Equal(t, repository, claims.Repository)
+	assert.Equal(t, repository, claims.Subject, "canonical subject defaults to the repository claim for provider github")
 	assert.Equal(t, issuer, claims.Issuer)
 	assert.Equal(t, audience, claims.Audience[0])
 
 	mockCache.AssertExpectations(t)
 }
 
-func TestValidate_InvalidIssuer(t *testing.T) {
-	keyID := "test-key-id"
-	issuer := "https://example.com"
-	wrongIssuer := "https://wrong-issuer.com"
-	audience := "test-audience"
-	repository := "owner/repo"
+func TestValidate_UnknownIssuer_JWKSNeverFetched(t *testing.T) {
+	var fetchCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&fetchCount, 1)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
 
-	// Generate RSA keys for signing
-	privateKey, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
-
-	// Create JWKS with the public key
-	jwks := createJWKS(keyID, publicKey)
-
-	// Create a token with an invalid issuer
-	token, err := createGithubToken(privateKey, keyID, wrongIssuer, audience, repository)
-	assert.NoError(t, err)
-
-	// Setup mock cache
-	mockCache := new(MockCache)
-	mockCache.On("Get", issuer).Return(jwks, true)
-
-	// Create config and validator
+	// The registry trusts a different issuer entirely; srv.URL is never
+	// registered, so no discovery/JWKS request should ever reach it.
 	cfg := &config.Config{
-		Issuer:    issuer,
-		Audiences: []string{audience},
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
+		Issuers: []config.IssuerConfig{
+			{Issuer: "https://trusted.example.com", Provider: "github", Audiences: []string{"aud"}, RequiredClaims: []string{"repository"}},
 		},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
 	}
+	require.NoError(t, cfg.Validate())
+	v := staticValidator(cfg, cache.NewMemoryCache())
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	token := signToken(t, key, "k1", srv.URL, "aud")
 
-	// Test the Validate function with invalid issuer
-	claims, err := validator.Validate(token)
-	assert.Error(t, err)
-	assert.Nil(t, claims)
-	assert.Contains(t, err.Error(), "issuer")
-
-	mockCache.AssertExpectations(t)
+	_, err = v.Validate(token)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, validator.ErrUnknownIssuer))
+	assert.Equal(t, int32(0), atomic.LoadInt32(&fetchCount), "discovery/JWKS endpoint must never be hit for an unknown issuer")
 }
 
 func TestValidate_InvalidAudience(t *testing.T) {
@@ -210,78 +213,207 @@ func TestValidate_InvalidAudience(t *testing.T) {
 	wrongAudience := "wrong-audience"
 	repository := "owner/repo"
 
-	// Generate RSA keys for signing
 	privateKey, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// Create JWKS with the public key
 	jwks := createJWKS(keyID, publicKey)
 
-	// Create a token with an invalid audience
 	token, err := createGithubToken(privateKey, keyID, issuer, wrongAudience, repository)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// Setup mock cache
 	mockCache := new(MockCache)
 	mockCache.On("Get", issuer).Return(jwks, true)
 
-	// Create config and validator
 	cfg := &config.Config{
-		Issuer:    issuer,
-		Audiences: []string{audience},
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: []string{audience}, RequiredClaims: []string{"repository"}},
 		},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
 	}
+	require.NoError(t, cfg.Validate())
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
+	v := staticValidator(cfg, mockCache)
 
-	// Test the Validate function with invalid audience
-	claims, err := validator.Validate(token)
-	assert.Error(t, err)
+	claims, err := v.Validate(token)
+	require.Error(t, err)
 	assert.Nil(t, claims)
-	assert.Contains(t, err.Error(), "audience")
+	assert.True(t, errors.Is(err, validator.ErrInvalidAudience))
 
 	mockCache.AssertExpectations(t)
 }
 
-func TestValidate_MissingRepository(t *testing.T) {
+func TestValidate_TwoIssuerAudienceIsolation(t *testing.T) {
+	keyA, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwksA := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("ka", &keyA.PublicKey)}}
+	srvA := oidcServer(t, func() *types.JWKS { return jwksA })
+
+	keyB, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwksB := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("kb", &keyB.PublicKey)}}
+	srvB := oidcServer(t, func() *types.JWKS { return jwksB })
+
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{
+			{Issuer: srvA.URL, Provider: "github", Audiences: []string{"aud-a"}, RequiredClaims: []string{"repository"}},
+			{Issuer: srvB.URL, Provider: "github", Audiences: []string{"aud-b"}, RequiredClaims: []string{"repository"}},
+		},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
+	}
+	require.NoError(t, cfg.Validate())
+	v := staticValidator(cfg, cache.NewMemoryCache())
+
+	// Issuer A accepts its own audience.
+	tokenAOK := signToken(t, keyA, "ka", srvA.URL, "aud-a")
+	claims, err := v.Validate(tokenAOK)
+	require.NoError(t, err)
+	assert.Equal(t, "owner/repo", claims.Repository)
+
+	// "aud-b" is valid for issuer B, but must NOT leak into issuer A's
+	// acceptance just because the string matches — each issuer's audience
+	// set is isolated.
+	tokenAWrongAud := signToken(t, keyA, "ka", srvA.URL, "aud-b")
+	_, err = v.Validate(tokenAWrongAud)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, validator.ErrInvalidAudience))
+
+	// Issuer B accepts its own audience via its own JWKS/key.
+	tokenBOK := signToken(t, keyB, "kb", srvB.URL, "aud-b")
+	claims, err = v.Validate(tokenBOK)
+	require.NoError(t, err)
+	assert.Equal(t, "owner/repo", claims.Repository)
+}
+
+func TestValidate_MissingRequiredClaims(t *testing.T) {
 	keyID := "test-key-id"
 	issuer := "https://example.com"
 	audience := "test-audience"
 	emptyRepository := ""
 
-	// Generate RSA keys for signing
 	privateKey, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// Create JWKS with the public key
 	jwks := createJWKS(keyID, publicKey)
 
-	// Create a token with an empty repository
 	token, err := createGithubToken(privateKey, keyID, issuer, audience, emptyRepository)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// Setup mock cache
 	mockCache := new(MockCache)
 	mockCache.On("Get", issuer).Return(jwks, true)
 
-	// Create config and validator
 	cfg := &config.Config{
-		Issuer:    issuer,
-		Audiences: []string{audience},
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: []string{audience}, RequiredClaims: []string{"repository"}},
 		},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
 	}
+	require.NoError(t, cfg.Validate())
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
+	v := staticValidator(cfg, mockCache)
 
-	// Test the Validate function with missing repository
-	claims, err := validator.Validate(token)
-	assert.Error(t, err)
+	claims, err := v.Validate(token)
+	require.Error(t, err)
 	assert.Nil(t, claims)
-	assert.Contains(t, err.Error(), "repository is required")
+	assert.True(t, errors.Is(err, validator.ErrMissingRequiredClaim))
+
+	mockCache.AssertExpectations(t)
+}
+
+func TestValidate_GenericProvider_SubjectMappingIgnoresRogueClaim(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwks := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k1", &key.PublicKey)}}
+	srv := oidcServer(t, func() *types.JWKS { return jwks })
+
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{
+			{
+				Issuer:         srv.URL,
+				Provider:       "generic",
+				Audiences:      []string{"aud"},
+				ClaimMappings:  map[string]string{"subject": "project_path"},
+				RequiredClaims: []string{"project_path"},
+			},
+		},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
+	}
+	require.NoError(t, cfg.Validate())
+	v := staticValidator(cfg, cache.NewMemoryCache())
+
+	token := signRawToken(t, key, "k1", jwt.MapClaims{
+		"iss":          srv.URL,
+		"aud":          "aud",
+		"exp":          time.Now().Add(10 * time.Minute).Unix(),
+		"iat":          time.Now().Unix(),
+		"project_path": "group/project",
+		"repository":   "attacker/repo", // rogue claim; must never become the canonical subject
+	})
+
+	claims, err := v.Validate(token)
+	require.NoError(t, err)
+	assert.Equal(t, "group/project", claims.Subject, "canonical subject must come from claim_mappings.subject, not a same-named GitHub claim")
+	assert.Empty(t, claims.Repository, "generic provider must not populate GitHub-specific struct fields")
+	assert.Equal(t, "attacker/repo", claims.Raw["repository"], "raw claim is preserved for inspection but never trusted as canonical identity")
+}
+
+func TestValidate_TokenTooLarge(t *testing.T) {
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{
+			{Issuer: "https://example.com", Provider: "github", Audiences: []string{"aud"}, RequiredClaims: []string{"repository"}},
+		},
+		RoleSessionName: "test",
+		MaxTokenBytes:   10,
+		Cache:           &config.Cache{TTL: time.Minute},
+	}
+	require.NoError(t, cfg.Validate())
+
+	v := staticValidator(cfg, new(MockCache))
+
+	_, err := v.Validate(strings.Repeat("a", 100))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, validator.ErrTokenTooLarge))
+}
+
+func TestValidate_SignatureInvalid(t *testing.T) {
+	keyID := "test-key-id"
+	issuer := "https://example.com"
+	audience := "test-audience"
+
+	// The JWKS advertises signingKey's public key...
+	signingKey, publicKey, err := generateRSAKey()
+	require.NoError(t, err)
+	jwks := createJWKS(keyID, publicKey)
+
+	// ...but the token is actually signed with a different key under the same
+	// kid, so the kid lookup succeeds yet signature verification must fail.
+	wrongKey, _, err := generateRSAKey()
+	require.NoError(t, err)
+	token, err := createGithubToken(wrongKey, keyID, issuer, audience, "owner/repo")
+	require.NoError(t, err)
+	_ = signingKey
+
+	mockCache := new(MockCache)
+	mockCache.On("Get", issuer).Return(jwks, true)
+
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: []string{audience}, RequiredClaims: []string{"repository"}},
+		},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
+	}
+	require.NoError(t, cfg.Validate())
+
+	v := staticValidator(cfg, mockCache)
+
+	claims, err := v.Validate(token)
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.Contains(t, err.Error(), "jwt parse error")
 
 	mockCache.AssertExpectations(t)
 }
@@ -289,49 +421,33 @@ func TestValidate_MissingRepository(t *testing.T) {
 func TestFetchJWKS_CacheHit(t *testing.T) {
 	issuer := "https://example.com"
 
-	// Create a test JWKS
 	_, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	jwks := createJWKS("test-key-id", publicKey)
 
-	// Setup mock cache with a cache hit
 	mockCache := new(MockCache)
 	mockCache.On("Get", issuer).Return(jwks, true)
 
-	// Create config and validator
-	cfg := &config.Config{
-		Issuer: issuer,
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
-		},
-	}
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	v := staticValidator(cfg, mockCache)
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
-
-	// Test FetchJWKS with a cache hit
-	result, err := validator.FetchJWKS(issuer)
-	assert.NoError(t, err)
+	result, err := v.FetchJWKS(issuer)
+	require.NoError(t, err)
 	assert.Equal(t, jwks, result)
 
 	mockCache.AssertExpectations(t)
 }
 
 func TestFetchJWKS_CacheMiss(t *testing.T) {
-	// Generate RSA keys for signing
 	_, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
-
-	// Create a test JWKS
+	require.NoError(t, err)
 	jwks := createJWKS("test-key-id", publicKey)
 
-	// Setup a direct test server with fixed responses
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
-			// Return a fixed JWKS URI pointing to our test server
 			config := struct {
 				JwksURI string `json:"jwks_uri"`
 			}{
-				// Important: Use the full URL including http:// and hostname
 				JwksURI: fmt.Sprintf("http://%s/jwks", r.Host),
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -343,7 +459,6 @@ func TestFetchJWKS_CacheMiss(t *testing.T) {
 		}
 
 		if r.URL.Path == "/jwks" {
-			// Return our test JWKS
 			w.Header().Set("Content-Type", "application/json")
 			if err := json.NewEncoder(w).Encode(jwks); err != nil {
 				http.Error(w, fmt.Sprintf("Failed to encode JWKS: %v", err), http.StatusInternalServerError)
@@ -352,223 +467,84 @@ func TestFetchJWKS_CacheMiss(t *testing.T) {
 			return
 		}
 
-		// Default response for any other path
 		http.NotFound(w, r)
 	}))
 	defer server.Close()
 
-	// Setup mock cache with a cache miss
 	mockCache := new(MockCache)
 	mockCache.On("Get", server.URL).Return(nil, false)
 	mockCache.On("Set", server.URL, mock.AnythingOfType("*types.JWKS"), mock.AnythingOfType("time.Duration")).Return()
 
-	// Create config and validator with the test server URL as issuer
-	cfg := &config.Config{
-		Issuer: server.URL,
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
-		},
-	}
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	v := staticValidator(cfg, mockCache)
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
-
-	// Test FetchJWKS with a cache miss
-	result, err := validator.FetchJWKS(server.URL)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
+	result, err := v.FetchJWKS(server.URL)
+	require.NoError(t, err)
+	require.NotNil(t, result)
 	assert.Len(t, result.Keys, 1)
 
 	mockCache.AssertExpectations(t)
 }
 
-func TestGenKeyFunc(t *testing.T) {
-	// Generate RSA keys for signing
-	privateKey, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
-
-	// Create a test JWKS
-	keyID := "test-key-id"
-	jwks := createJWKS(keyID, publicKey)
-
-	// Create validator
-	validator := validator.NewTokenValidator(&config.Config{}, nil)
-
-	// Create a token with the key ID
-	token := jwt.New(jwt.SigningMethodRS256)
-	token.Header["kid"] = keyID
-
-	// Test GenKeyFunc
-	keyFunc := validator.GenKeyFunc(jwks)
-	key, err := keyFunc(token)
-	assert.NoError(t, err)
-	assert.NotNil(t, key)
-
-	// Test that the key can verify a signature
-	testToken := jwt.New(jwt.SigningMethodRS256)
-	testToken.Header["kid"] = keyID
-	claims := jwt.RegisteredClaims{
-		Subject: "test",
-	}
-	testToken = jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	testToken.Header["kid"] = keyID
-
-	signedString, err := testToken.SignedString(privateKey)
-	assert.NoError(t, err)
-
-	parsedToken, err := jwt.Parse(signedString, func(t *jwt.Token) (interface{}, error) {
-		return key, nil
-	})
-
-	assert.NoError(t, err)
-	assert.True(t, parsedToken.Valid)
-}
-
-func TestGenKeyFunc_RejectsShortRSAKey(t *testing.T) {
-	// A 1024-bit RSA key must be rejected by the minimum-key-size guard.
-	shortKey, err := rsa.GenerateKey(rand.Reader, 1024)
-	assert.NoError(t, err)
-
-	keyID := "short-rsa-key"
-	jwks := createJWKS(keyID, &shortKey.PublicKey)
-
-	v := validator.NewTokenValidator(&config.Config{}, nil)
-	token := jwt.New(jwt.SigningMethodRS256)
-	token.Header["kid"] = keyID
-
-	_, err = v.GenKeyFunc(jwks)(token)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "RSA key too short")
-}
-
-func TestGenKeyFunc_MissingKID(t *testing.T) {
-	// Create a test JWKS
-	_, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
-	jwks := createJWKS("test-key-id", publicKey)
-
-	// Create validator
-	validator := validator.NewTokenValidator(&config.Config{}, nil)
-
-	// Create a token without a key ID
-	token := jwt.New(jwt.SigningMethodRS256)
-
-	// Test GenKeyFunc with a missing KID
-	keyFunc := validator.GenKeyFunc(jwks)
-	key, err := keyFunc(token)
-	assert.Error(t, err)
-	assert.Nil(t, key)
-	assert.Contains(t, err.Error(), "missing or invalid kid")
-}
-
-func TestGenKeyFunc_KeyNotFound(t *testing.T) {
-	// Create a test JWKS
-	_, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
-	jwks := createJWKS("test-key-id", publicKey)
-
-	// Create validator
-	validator := validator.NewTokenValidator(&config.Config{}, nil)
-
-	// Create a token with a different key ID
-	token := jwt.New(jwt.SigningMethodRS256)
-	token.Header["kid"] = "wrong-key-id"
-
-	// Test GenKeyFunc with a key that doesn't exist in the JWKS
-	keyFunc := validator.GenKeyFunc(jwks)
-	key, err := keyFunc(token)
-	assert.Error(t, err)
-	assert.Nil(t, key)
-	assert.Contains(t, err.Error(), "key not found")
-}
-
-func TestUnmarshal_SimpleFields(t *testing.T) {
-	// Create simple JSON data with basic fields
-	jsonData := []byte(`{
-		"actor": "testuser",
-		"repository": "owner/repo",
-		"repository_owner": "owner"
-	}`)
-
-	// Create validator
-	validator := validator.NewTokenValidator(&config.Config{}, nil)
-
-	// Test Unmarshal with simple fields
-	parsedClaims, err := validator.Unmarshal(jsonData)
-	assert.NoError(t, err)
-	assert.NotNil(t, parsedClaims)
-
-	// Verify only the simple fields we provided
-	assert.Equal(t, "testuser", parsedClaims.Actor)
-	assert.Equal(t, "owner/repo", parsedClaims.Repository)
-	assert.Equal(t, "owner", parsedClaims.RepositoryOwner)
-}
-
-func TestUnmarshal_InvalidJSON(t *testing.T) {
-	// Create invalid JSON
-	invalidJSON := []byte(`{invalid json}`)
-
-	// Create validator
-	validator := validator.NewTokenValidator(&config.Config{}, nil)
-
-	// Test Unmarshal with invalid JSON
-	parsedClaims, err := validator.Unmarshal(invalidJSON)
-	assert.Error(t, err)
-	assert.Nil(t, parsedClaims)
-}
-
-func TestParseToken_JWKSError(t *testing.T) {
-	// Setup mock cache
-	mockCache := new(MockCache)
-	mockCache.On("Get", "https://example.com").Return(nil, false)
-
-	// Create a test server that returns an error
+func TestFetchJWKS_EmptyJWKSRejected(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/.well-known/openid-configuration" {
+			json.NewEncoder(w).Encode(struct { //nolint:errcheck
+				JwksURI string `json:"jwks_uri"`
+			}{JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+			return
+		}
+		json.NewEncoder(w).Encode(&types.JWKS{Keys: []types.JSONWebKey{}}) //nolint:errcheck
 	}))
 	defer server.Close()
 
-	// Create config and validator
-	cfg := &config.Config{
-		Issuer: "https://example.com",
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
-		},
-	}
+	mockCache := new(MockCache)
+	mockCache.On("Get", server.URL).Return(nil, false)
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	v := staticValidator(cfg, mockCache)
 
-	// Test ParseToken with a JWKS fetch error
-	claims, err := validator.ParseToken("invalid.token.string")
-	assert.Error(t, err)
-	assert.Nil(t, claims)
+	_, err := v.FetchJWKS(server.URL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no keys")
 
 	mockCache.AssertExpectations(t)
 }
 
-func TestParseToken_EmptyJWKS(t *testing.T) {
-	// Setup mock cache with an empty JWKS
-	emptyJWKS := &types.JWKS{
-		Keys: []types.JSONWebKey{},
+func TestFetchJWKS_TooManyKeysRejected(t *testing.T) {
+	_, publicKey, err := generateRSAKey()
+	require.NoError(t, err)
+	n := base64.RawURLEncoding.EncodeToString(publicKey.N.Bytes())
+	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes())
+
+	keys := make([]types.JSONWebKey, 21)
+	for i := range keys {
+		keys[i] = types.JSONWebKey{KeyID: fmt.Sprintf("key-%d", i), KeyType: "RSA", Algorithm: "RS256", Use: "sig", N: n, E: e}
 	}
+	oversizedJWKS := &types.JWKS{Keys: keys}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/.well-known/openid-configuration" {
+			json.NewEncoder(w).Encode(struct { //nolint:errcheck
+				JwksURI string `json:"jwks_uri"`
+			}{JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+			return
+		}
+		json.NewEncoder(w).Encode(oversizedJWKS) //nolint:errcheck
+	}))
+	defer server.Close()
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", "https://example.com").Return(emptyJWKS, true)
+	mockCache.On("Get", server.URL).Return(nil, false)
 
-	// Create config and validator
-	cfg := &config.Config{
-		Issuer: "https://example.com",
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
-		},
-	}
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	v := staticValidator(cfg, mockCache)
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
-
-	// Test ParseToken with an empty JWKS
-	claims, err := validator.ParseToken("invalid.token.string")
-	assert.Error(t, err)
-	assert.Nil(t, claims)
-	assert.Contains(t, err.Error(), "jwks is nil")
+	_, err = v.FetchJWKS(server.URL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "too many keys")
 
 	mockCache.AssertExpectations(t)
 }
@@ -591,11 +567,8 @@ func TestFetchJWKS_LargeOIDCDiscoveryRejected(t *testing.T) {
 	mockCache := new(MockCache)
 	mockCache.On("Get", server.URL).Return(nil, false)
 
-	cfg := &config.Config{
-		Issuer: server.URL,
-		Cache:  &config.Cache{TTL: 10 * time.Minute},
-	}
-	v := validator.NewTokenValidator(cfg, mockCache)
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	v := staticValidator(cfg, mockCache)
 
 	_, err := v.FetchJWKS(server.URL)
 	assert.Error(t, err)
@@ -626,73 +599,95 @@ func TestFetchJWKS_LargeJWKSRejected(t *testing.T) {
 	mockCache := new(MockCache)
 	mockCache.On("Get", server.URL).Return(nil, false)
 
-	cfg := &config.Config{
-		Issuer: server.URL,
-		Cache:  &config.Cache{TTL: 10 * time.Minute},
-	}
-	v := validator.NewTokenValidator(cfg, mockCache)
+	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
+	v := staticValidator(cfg, mockCache)
 
 	_, err := v.FetchJWKS(server.URL)
 	assert.Error(t, err)
 }
 
-func TestParseToken_TooManyJWKSKeys(t *testing.T) {
-	// A JWKS with more than 20 keys must be rejected.
-	_, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
-	n := base64.RawURLEncoding.EncodeToString(publicKey.N.Bytes())
-	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes())
+func TestGenKeyFunc(t *testing.T) {
+	privateKey, publicKey, err := generateRSAKey()
+	require.NoError(t, err)
 
-	keys := make([]types.JSONWebKey, 21)
-	for i := range keys {
-		keys[i] = types.JSONWebKey{KeyID: fmt.Sprintf("key-%d", i), KeyType: "RSA", Algorithm: "RS256", Use: "sig", N: n, E: e}
+	keyID := "test-key-id"
+	jwks := createJWKS(keyID, publicKey)
+
+	v := staticValidator(&config.Config{}, nil)
+
+	token := jwt.New(jwt.SigningMethodRS256)
+	token.Header["kid"] = keyID
+
+	keyFunc := v.GenKeyFunc(jwks)
+	key, err := keyFunc(token)
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	testToken := jwt.New(jwt.SigningMethodRS256)
+	testToken.Header["kid"] = keyID
+	claims := jwt.RegisteredClaims{
+		Subject: "test",
 	}
-	oversizedJWKS := &types.JWKS{Keys: keys}
+	testToken = jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	testToken.Header["kid"] = keyID
 
-	mockCache := new(MockCache)
-	mockCache.On("Get", "https://example.com").Return(oversizedJWKS, true)
+	signedString, err := testToken.SignedString(privateKey)
+	require.NoError(t, err)
 
-	cfg := &config.Config{
-		Issuer: "https://example.com",
-		Cache:  &config.Cache{TTL: 10 * time.Minute},
-	}
-	v := validator.NewTokenValidator(cfg, mockCache)
+	parsedToken, err := jwt.Parse(signedString, func(t *jwt.Token) (interface{}, error) {
+		return key, nil
+	})
 
-	_, err = v.ParseToken("invalid.token.string")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "too many keys")
-
-	mockCache.AssertExpectations(t)
+	require.NoError(t, err)
+	assert.True(t, parsedToken.Valid)
 }
 
-func TestParseToken_InvalidToken(t *testing.T) {
-	// Generate RSA keys for signing
-	_, publicKey, err := generateRSAKey()
-	assert.NoError(t, err)
+func TestGenKeyFunc_RejectsShortRSAKey(t *testing.T) {
+	// A 1024-bit RSA key must be rejected by the minimum-key-size guard.
+	shortKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	require.NoError(t, err)
 
-	// Create JWKS with the public key
+	keyID := "short-rsa-key"
+	jwks := createJWKS(keyID, &shortKey.PublicKey)
+
+	v := staticValidator(&config.Config{}, nil)
+	token := jwt.New(jwt.SigningMethodRS256)
+	token.Header["kid"] = keyID
+
+	_, err = v.GenKeyFunc(jwks)(token)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RSA key too short")
+}
+
+func TestGenKeyFunc_MissingKID(t *testing.T) {
+	_, publicKey, err := generateRSAKey()
+	require.NoError(t, err)
 	jwks := createJWKS("test-key-id", publicKey)
 
-	// Setup mock cache
-	mockCache := new(MockCache)
-	mockCache.On("Get", "https://example.com").Return(jwks, true)
+	v := staticValidator(&config.Config{}, nil)
 
-	// Create config and validator
-	cfg := &config.Config{
-		Issuer:    "https://example.com",
-		Audiences: []string{"test-audience"},
-		Cache: &config.Cache{
-			TTL: 10 * time.Minute,
-		},
-	}
+	token := jwt.New(jwt.SigningMethodRS256)
 
-	validator := validator.NewTokenValidator(cfg, mockCache)
+	keyFunc := v.GenKeyFunc(jwks)
+	key, err := keyFunc(token)
+	require.Error(t, err)
+	assert.Nil(t, key)
+	assert.Contains(t, err.Error(), "missing or invalid kid")
+}
 
-	// Test ParseToken with an invalid token
-	claims, err := validator.ParseToken("invalid.token.string")
-	assert.Error(t, err)
-	assert.Nil(t, claims)
-	assert.Contains(t, err.Error(), "jwt parse error")
+func TestGenKeyFunc_KeyNotFound(t *testing.T) {
+	_, publicKey, err := generateRSAKey()
+	require.NoError(t, err)
+	jwks := createJWKS("test-key-id", publicKey)
 
-	mockCache.AssertExpectations(t)
+	v := staticValidator(&config.Config{}, nil)
+
+	token := jwt.New(jwt.SigningMethodRS256)
+	token.Header["kid"] = "wrong-key-id"
+
+	keyFunc := v.GenKeyFunc(jwks)
+	key, err := keyFunc(token)
+	require.Error(t, err)
+	assert.Nil(t, key)
+	assert.Contains(t, err.Error(), "key not found")
 }

@@ -29,16 +29,16 @@ func NewAPIGWExtractor(issuer string, audiences []string) *APIGWExtractor {
 	return &APIGWExtractor{expectedIssuer: issuer, expectedAudiences: audiences}
 }
 
-// Extract maps the API Gateway authorizer claims to GithubClaims, re-validating
+// Extract maps the API Gateway authorizer claims to types.Claims, re-validating
 // issuer, audience, and expiry for defense in depth.
-func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*types.GithubClaims, error) {
+func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*types.Claims, error) {
 	if len(input.AuthorizerClaims) == 0 {
 		return nil, fmt.Errorf("no authorizer claims present: request may have bypassed API Gateway JWT Authorizer")
 	}
 	return a.mapAPIGWClaims(input.AuthorizerClaims)
 }
 
-func (a *APIGWExtractor) mapAPIGWClaims(raw map[string]string) (*types.GithubClaims, error) {
+func (a *APIGWExtractor) mapAPIGWClaims(raw map[string]string) (*types.Claims, error) {
 	repo := raw["repository"]
 	if repo == "" {
 		return nil, fmt.Errorf("missing required claim: repository")
@@ -73,7 +73,7 @@ func (a *APIGWExtractor) mapAPIGWClaims(raw map[string]string) (*types.GithubCla
 		return nil, fmt.Errorf("token has expired (exp=%d)", expUnix)
 	}
 
-	c := &types.GithubClaims{
+	c := &types.Claims{
 		Sub:                  raw["sub"],
 		Actor:                raw["actor"],
 		ActorID:              raw["actor_id"],
