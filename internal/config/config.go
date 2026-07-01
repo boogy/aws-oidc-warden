@@ -26,7 +26,20 @@ var (
 	cacheTTL          = "1h"                                          // Default cache TTL
 	cacheMaxLocalSize = 10                                            // Default max local size for memory cache
 
-	accountIDPattern = regexp.MustCompile(`^\d{12}$`)
+	defaultJWTLeeway           = 30 * time.Second  // Default clock-skew leeway for exp/iat/nbf checks
+	maxJWTLeeway               = 120 * time.Second // Hard ceiling for jwt_leeway
+	defaultMaxTokenBytes       = 8192              // Default token length cap (8 KB) before any parsing
+	defaultJWKSRefetchCooldown = 60 * time.Second  // Default minimum interval between forced JWKS refetches per (issuer,kid)
+
+	accountIDPattern     = regexp.MustCompile(`^\d{12}$`)
+	sessionTagKeyPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]{1,128}$`)
+
+	// reservedClaims are JWT-standard claim names that claim_mappings may never
+	// target, since doing so could shadow a verified claim used for security
+	// decisions (issuer, audience, timing, canonical sub).
+	reservedClaims = map[string]bool{
+		"iss": true, "aud": true, "exp": true, "nbf": true, "iat": true, "sub": true,
+	}
 )
 
 // Constraint defines conditions that must be met for a role to be assumed
@@ -55,6 +68,51 @@ type RepoRoleMapping struct {
 
 	// Cached compiled pattern (not serialized)
 	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
+}
+
+// IssuerConfig describes one trusted OIDC issuer: where its keys live, what
+// audiences it may present, how its raw claims map to the canonical
+// authorization surface (subject/conditions/session tags), and which claims
+// must be present. The engine is provider-neutral; only `provider: github`
+// gets native struct unmarshal, everything else is mapped-only.
+type IssuerConfig struct {
+	Issuer   string `mapstructure:"issuer"   json:"issuer"`             // Issuer is the exact `iss` claim value trusted for this entry
+	Provider string `mapstructure:"provider" json:"provider,omitempty"` // "github" (native unmarshal) or "generic" (mapped-only, default)
+
+	Audiences []string `mapstructure:"audiences" json:"audiences,omitempty"` // Audiences accepted for this issuer (ANY-match)
+	JWKSURI   string   `mapstructure:"jwks_uri"  json:"jwks_uri,omitempty"`  // Optional explicit JWKS URI; skips OIDC discovery when set
+
+	// ClaimMappings projects raw provider claims onto canonical fields.
+	// Keys are canonical field names (e.g. "subject"); values are the raw
+	// verified claim name to read. Non-github issuers must define "subject".
+	ClaimMappings map[string]string `mapstructure:"claim_mappings" json:"claim_mappings,omitempty"`
+
+	// RequiredClaims lists raw verified claim names that must be present and
+	// non-empty for a token from this issuer to be accepted.
+	RequiredClaims []string `mapstructure:"required_claims" json:"required_claims,omitempty"`
+
+	// SessionTags maps an STS session tag key to the raw verified claim name
+	// whose value populates it.
+	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
+}
+
+// defaultGitHubIssuer returns the zero-config GitHub Actions issuer seeded
+// when no configuration source is found at all (see Config.LoadConfig).
+func defaultGitHubIssuer() IssuerConfig {
+	return IssuerConfig{
+		Issuer:         issuer,
+		Provider:       "github",
+		Audiences:      []string{audience},
+		RequiredClaims: []string{"repository"},
+		SessionTags: map[string]string{
+			"repo":       "repository",
+			"repo-owner": "repository_owner",
+			"ref":        "ref",
+			"ref-type":   "ref_type",
+			"actor":      "actor",
+			"event-name": "event_name",
+		},
+	}
 }
 
 type Cache struct {
@@ -104,9 +162,10 @@ type JWTValidation struct {
 }
 
 type Config struct {
-	Issuer                string            `mapstructure:"issuer"                json:"issuer"`                          // Issuer is the expected issuer of the JWT token
-	Audience              string            `mapstructure:"audience"              json:"audience,omitempty"`              // Audience is the expected audience of the JWT token (deprecated - use Audiences)
-	Audiences             []string          `mapstructure:"audiences"             json:"audiences,omitempty"`             // Audiences is the list of expected audiences of the JWT token
+	// Issuers is the list of trusted OIDC issuers. At least one is required;
+	// there is no single-issuer field anymore (v2.0.0 breaking change).
+	Issuers []IssuerConfig `mapstructure:"issuers" json:"issuers"`
+
 	S3ConfigBucket        string            `mapstructure:"s3_config_bucket"      json:"s3_config_bucket,omitempty"`      // S3ConfigBucket is the S3 bucket where the configuration file is stored
 	S3ConfigPath          string            `mapstructure:"s3_config_path"        json:"s3_config_path,omitempty"`        // S3ConfigPath is the path to the configuration file in the S3 bucket
 	S3SessionPolicyBucket string            `mapstructure:"session_policy_bucket" json:"session_policy_bucket,omitempty"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
@@ -131,6 +190,14 @@ type Config struct {
 	// JWTValidation controls whether the service validates JWT signatures itself
 	// or trusts pre-validation by an upstream AWS service.
 	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation,omitempty"`
+
+	// Hardening knobs (top-level, apply across all issuers and modes).
+	JWTLeeway            time.Duration `mapstructure:"jwt_leeway"             json:"jwt_leeway,omitempty"`             // Clock-skew leeway for exp/iat/nbf; default 30s, hard max 120s
+	MaxTokenLifetime     time.Duration `mapstructure:"max_token_lifetime"     json:"max_token_lifetime,omitempty"`     // Reject if exp-iat exceeds this; 0 = no cap
+	MaxTokenAge          time.Duration `mapstructure:"max_token_age"          json:"max_token_age,omitempty"`          // Reject if now-iat exceeds this; 0 = no cap
+	MaxTokenBytes        int           `mapstructure:"max_token_bytes"        json:"max_token_bytes,omitempty"`        // Token length cap before any parsing; default 8192 (8 KB)
+	JWKSRefetchCooldown  time.Duration `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
+	AllowInsecureIssuers bool          `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
 
 	// Performance optimization - not serialized
 	estimatedRolesPerRepo int `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
@@ -162,9 +229,6 @@ func (c *Config) LoadConfig() error {
 	viper.SetConfigName(configName)
 
 	// Set default values
-	viper.SetDefault("issuer", issuer)
-	viper.SetDefault("audience", audience)
-	viper.SetDefault("audiences", []string{audience}) // Default to single audience for backwards compatibility
 	viper.SetDefault("role_session_name", role_session_name)
 	viper.SetDefault("cache.type", cacheType)
 	viper.SetDefault("cache.ttl", cacheTTL)
@@ -175,12 +239,13 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("tag_auth.spoke_session_duration", "15m")
 	viper.SetDefault("tag_auth.transitive_session_tags", false)
 	viper.SetDefault("jwt_validation.mode", "self")
+	viper.SetDefault("jwt_leeway", defaultJWTLeeway)
+	viper.SetDefault("max_token_bytes", defaultMaxTokenBytes)
+	viper.SetDefault("jwks_refetch_cooldown", defaultJWKSRefetchCooldown)
+	viper.SetDefault("allow_insecure_issuers", false)
 
 	// Explicitly bind all config keys to environment variables
 	// Core settings
-	_ = viper.BindEnv("issuer")                 // AOW_ISSUER
-	_ = viper.BindEnv("audience")               // AOW_AUDIENCE
-	_ = viper.BindEnv("audiences")              // AOW_AUDIENCES
 	_ = viper.BindEnv("role_session_name")      // AOW_ROLE_SESSION_NAME
 	_ = viper.BindEnv("s3_config_bucket")       // AOW_S3_CONFIG_BUCKET
 	_ = viper.BindEnv("s3_config_path")         // AOW_S3_CONFIG_PATH
@@ -215,14 +280,23 @@ func (c *Config) LoadConfig() error {
 	_ = viper.BindEnv("jwt_validation.mode")                // AOW_JWT_VALIDATION_MODE
 	_ = viper.BindEnv("jwt_validation.alb_expected_signer") // AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER
 
+	// Hardening knobs
+	_ = viper.BindEnv("jwt_leeway")             // AOW_JWT_LEEWAY
+	_ = viper.BindEnv("max_token_lifetime")     // AOW_MAX_TOKEN_LIFETIME
+	_ = viper.BindEnv("max_token_age")          // AOW_MAX_TOKEN_AGE
+	_ = viper.BindEnv("max_token_bytes")        // AOW_MAX_TOKEN_BYTES
+	_ = viper.BindEnv("jwks_refetch_cooldown")  // AOW_JWKS_REFETCH_COOLDOWN
+	_ = viper.BindEnv("allow_insecure_issuers") // AOW_ALLOW_INSECURE_ISSUERS
+
 	// Logging settings
 	_ = viper.BindEnv("log_to_s3")
 	_ = viper.BindEnv("log_bucket")
 	_ = viper.BindEnv("log_prefix")
 
+	configFileFound := true
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			// Config file not found; rely on defaults
+			configFileFound = false // No config file; rely on defaults/env
 		} else {
 			return fmt.Errorf("problem reading config file: %w", err)
 		}
@@ -230,6 +304,14 @@ func (c *Config) LoadConfig() error {
 
 	if err := viper.Unmarshal(c); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	// Zero-config GitHub seed: only when there is truly no configuration
+	// source at all. If a config source IS present (file found) but declares
+	// no issuers, that is a hard error below in Validate() — we never
+	// silently fall back to trusting GitHub in that case.
+	if !configFileFound && len(c.Issuers) == 0 {
+		c.Issuers = []IssuerConfig{defaultGitHubIssuer()}
 	}
 
 	return c.Validate()
@@ -273,8 +355,6 @@ func reapplyEnvOverrides(c *Config) {
 		ptr *string
 	}
 	for _, f := range []strField{
-		{"AOW_ISSUER", &c.Issuer},
-		{"AOW_AUDIENCE", &c.Audience},
 		{"AOW_ROLE_SESSION_NAME", &c.RoleSessionName},
 		{"AOW_S3_CONFIG_BUCKET", &c.S3ConfigBucket},
 		{"AOW_S3_CONFIG_PATH", &c.S3ConfigPath},
@@ -285,19 +365,6 @@ func reapplyEnvOverrides(c *Config) {
 		if v := os.Getenv(f.env); v != "" {
 			*f.ptr = v
 		}
-	}
-
-	// AOW_AUDIENCES — comma-separated list overrides the slice. Elements are
-	// trimmed of whitespace so "a , b" and "a,b" are equivalent.
-	if v := os.Getenv("AOW_AUDIENCES"); v != "" {
-		parts := strings.Split(v, ",")
-		audiences := parts[:0]
-		for _, p := range parts {
-			if s := strings.TrimSpace(p); s != "" {
-				audiences = append(audiences, s)
-			}
-		}
-		c.Audiences = audiences
 	}
 
 	if v := os.Getenv("AOW_LOG_TO_S3"); v != "" {
@@ -407,6 +474,46 @@ func reapplyEnvOverrides(c *Config) {
 	if v := os.Getenv("AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER"); v != "" {
 		c.JWTValidation.ALBExpectedSigner = v
 	}
+
+	// Hardening knob env overrides.
+	if v := os.Getenv("AOW_JWT_LEEWAY"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_JWT_LEEWAY", "value", v, "error", err)
+		} else {
+			c.JWTLeeway = d
+		}
+	}
+	if v := os.Getenv("AOW_MAX_TOKEN_LIFETIME"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_MAX_TOKEN_LIFETIME", "value", v, "error", err)
+		} else {
+			c.MaxTokenLifetime = d
+		}
+	}
+	if v := os.Getenv("AOW_MAX_TOKEN_AGE"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_MAX_TOKEN_AGE", "value", v, "error", err)
+		} else {
+			c.MaxTokenAge = d
+		}
+	}
+	if v := os.Getenv("AOW_MAX_TOKEN_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_MAX_TOKEN_BYTES", "value", v, "error", err)
+		} else {
+			c.MaxTokenBytes = n
+		}
+	}
+	if v := os.Getenv("AOW_JWKS_REFETCH_COOLDOWN"); v != "" {
+		if d, err := time.ParseDuration(v); err != nil {
+			slog.Warn("invalid env var, skipping", "key", "AOW_JWKS_REFETCH_COOLDOWN", "value", v, "error", err)
+		} else {
+			c.JWKSRefetchCooldown = d
+		}
+	}
+	if v := os.Getenv("AOW_ALLOW_INSECURE_ISSUERS"); v != "" {
+		c.AllowInsecureIssuers = v == "true" || v == "1" || v == "True" || v == "TRUE"
+	}
 }
 
 // FormatFromPath returns the viper config type implied by a file path's
@@ -424,27 +531,89 @@ func FormatFromPath(path string) string {
 
 // Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
-	if c.Issuer == "" {
-		return errors.New("issuer is required")
+	if len(c.Issuers) == 0 {
+		return errors.New("at least one issuer is required (issuers)")
 	}
 
-	// Handle backward compatibility between audience and audiences
-	if len(c.Audiences) == 0 && c.Audience == "" {
-		return errors.New("either audience or audiences is required")
-	}
+	seenIssuers := make(map[string]bool, len(c.Issuers))
+	for i := range c.Issuers {
+		iss := &c.Issuers[i]
 
-	// If audiences is empty but audience is set, use audience for backward compatibility
-	if len(c.Audiences) == 0 && c.Audience != "" {
-		c.Audiences = []string{c.Audience}
-	}
+		if iss.Issuer == "" {
+			return fmt.Errorf("issuers[%d]: issuer is required", i)
+		}
+		// Exact-match policy: no trailing-slash or case normalization, so a
+		// duplicate check here must mirror what the validator does at runtime.
+		if seenIssuers[iss.Issuer] {
+			return fmt.Errorf("issuers[%d]: duplicate issuer %q", i, iss.Issuer)
+		}
+		seenIssuers[iss.Issuer] = true
 
-	// If audience is empty but audiences is set, set audience to first audience for backward compatibility
-	if c.Audience == "" && len(c.Audiences) > 0 {
-		c.Audience = c.Audiences[0]
+		if len(iss.Audiences) == 0 {
+			return fmt.Errorf("issuers[%d] (%s): at least one audience is required", i, iss.Issuer)
+		}
+
+		switch iss.Provider {
+		case "":
+			iss.Provider = "generic"
+		case "github", "generic":
+			// ok
+		default:
+			return fmt.Errorf("issuers[%d] (%s): provider must be 'github' or 'generic', got %q", i, iss.Issuer, iss.Provider)
+		}
+
+		// Non-github issuers cannot derive a canonical subject from a native
+		// struct, so they must explicitly say which raw claim carries it.
+		if iss.Provider != "github" && iss.ClaimMappings["subject"] == "" {
+			return fmt.Errorf("issuers[%d] (%s): non-github issuers must define claim_mappings.subject", i, iss.Issuer)
+		}
+
+		// Reject claim_mappings that target a JWT-reserved claim name; doing
+		// so could shadow a verified claim used for security decisions.
+		for target := range iss.ClaimMappings {
+			if reservedClaims[target] {
+				return fmt.Errorf("issuers[%d] (%s): claim_mappings cannot target reserved claim %q", i, iss.Issuer, target)
+			}
+		}
+
+		for tagKey := range iss.SessionTags {
+			if !sessionTagKeyPattern.MatchString(tagKey) {
+				return fmt.Errorf("issuers[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", i, iss.Issuer, tagKey)
+			}
+		}
 	}
 
 	if c.RoleSessionName == "" {
 		return errors.New("role session name is required")
+	}
+
+	// Hardening knobs: apply defaults, then enforce bounds.
+	if c.JWTLeeway == 0 {
+		c.JWTLeeway = defaultJWTLeeway
+	}
+	if c.JWTLeeway > maxJWTLeeway {
+		return fmt.Errorf("jwt_leeway must be <= %s, got %s", maxJWTLeeway, c.JWTLeeway)
+	}
+	if c.JWTLeeway < 0 {
+		return fmt.Errorf("jwt_leeway must not be negative, got %s", c.JWTLeeway)
+	}
+	if c.MaxTokenBytes == 0 {
+		c.MaxTokenBytes = defaultMaxTokenBytes
+	}
+	if c.MaxTokenBytes < 0 {
+		return fmt.Errorf("max_token_bytes must not be negative, got %d", c.MaxTokenBytes)
+	}
+	if c.JWKSRefetchCooldown == 0 {
+		c.JWKSRefetchCooldown = defaultJWKSRefetchCooldown
+	}
+	if c.JWKSRefetchCooldown < 0 {
+		return fmt.Errorf("jwks_refetch_cooldown must not be negative, got %s", c.JWKSRefetchCooldown)
+	}
+	if c.MaxTokenLifetime < 0 {
+		return fmt.Errorf("max_token_lifetime must not be negative, got %s", c.MaxTokenLifetime)
+	}
+	if c.MaxTokenAge < 0 {
+		return fmt.Errorf("max_token_age must not be negative, got %s", c.MaxTokenAge)
 	}
 
 	for i := range c.RepoRoleMappings {

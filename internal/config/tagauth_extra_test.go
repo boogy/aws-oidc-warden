@@ -34,8 +34,7 @@ func TestMergeBytes_EnvTagAuthTransitiveAndAllowedAccounts(t *testing.T) {
 	t.Setenv("AOW_TAG_AUTH_ALLOWED_ACCOUNTS", "111111111111, 222222222222")
 
 	c := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "base-session",
 		Cache:           &Cache{Type: "memory", TTL: 3600000000000},
 	}
@@ -53,7 +52,7 @@ func TestMergeBytes_EnvTagAuthTransitiveAndAllowedAccounts(t *testing.T) {
 
 func TestTagAuth_AllowedAccounts_RejectsMalformed(t *testing.T) {
 	c := &Config{
-		Issuer: "https://x", Audiences: []string{"a"}, RoleSessionName: "s",
+		Issuers: singleIssuer("https://x", "a"), RoleSessionName: "s",
 		TagAuth: &TagAuth{Enabled: true, AllowedAccounts: []string{"123"}},
 	}
 	err := c.Validate()

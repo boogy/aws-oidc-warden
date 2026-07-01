@@ -26,8 +26,7 @@ func TestWorkflowRefConstraint_Anchored(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &Config{
-				Issuer:          "https://token.actions.githubusercontent.com",
-				Audiences:       []string{"sts.amazonaws.com"},
+				Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 				RoleSessionName: "test",
 				RepoRoleMappings: []RepoRoleMapping{{
 					Repo:        "org/repo",

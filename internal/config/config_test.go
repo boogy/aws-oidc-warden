@@ -39,8 +39,9 @@ func TestLoadConfig(t *testing.T) {
 	}()
 
 	// Write test config content
-	configContent := `issuer: "https://test.issuer.com"
-audience: "test-audience"
+	configContent := `issuers:
+  - issuer: "https://test.issuer.com"
+    audiences: ["test-audience"]
 role_session_name: "test-session"
 repo_role_mappings:
   - repo: "org/repo1"
@@ -86,12 +87,13 @@ cache_type: "memory"
 	assert.NoError(t, err)
 
 	// Print debug info to see what's actually in the config
-	t.Logf("Loaded config: issuer=%s, audience=%s, roleSessionName=%s, mappings=%d",
-		cfg.Issuer, cfg.Audience, cfg.RoleSessionName, len(cfg.RepoRoleMappings))
+	t.Logf("Loaded config: issuers=%d, roleSessionName=%s, mappings=%d",
+		len(cfg.Issuers), cfg.RoleSessionName, len(cfg.RepoRoleMappings))
 
 	// Now we should have the test values, not defaults
-	assert.Equal(t, "https://test.issuer.com", cfg.Issuer)
-	assert.Equal(t, "test-audience", cfg.Audience)
+	require.Len(t, cfg.Issuers, 1)
+	assert.Equal(t, "https://test.issuer.com", cfg.Issuers[0].Issuer)
+	assert.Equal(t, []string{"test-audience"}, cfg.Issuers[0].Audiences)
 	assert.Equal(t, "test-session", cfg.RoleSessionName)
 	assert.Equal(t, 2, len(cfg.RepoRoleMappings))
 	assert.Equal(t, "org/repo1", cfg.RepoRoleMappings[0].Repo)
@@ -112,9 +114,12 @@ func TestLoadConfigDefaults(t *testing.T) {
 	err := cfg.LoadConfig()
 	assert.NoError(t, err)
 
-	// Verify default values
-	assert.Equal(t, "https://token.actions.githubusercontent.com", cfg.Issuer)
-	assert.Equal(t, "sts.amazonaws.com", cfg.Audience)
+	// Verify default values, including the zero-config GitHub issuer seed.
+	require.Len(t, cfg.Issuers, 1)
+	assert.Equal(t, "https://token.actions.githubusercontent.com", cfg.Issuers[0].Issuer)
+	assert.Equal(t, "github", cfg.Issuers[0].Provider)
+	assert.Equal(t, []string{"sts.amazonaws.com"}, cfg.Issuers[0].Audiences)
+	assert.Equal(t, []string{"repository"}, cfg.Issuers[0].RequiredClaims)
 	assert.Equal(t, "aws-oidc-warden", cfg.RoleSessionName)
 	assert.Equal(t, "memory", cfg.Cache.Type)
 }
@@ -128,24 +133,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid config",
 			config: Config{
-				Issuer:          "https://issuer.com",
-				Audiences:       []string{"audience"},
-				RoleSessionName: "session",
-				RepoRoleMappings: []RepoRoleMapping{
-					{
-						Repo:          "org/repo",
-						SessionPolicy: "policy",
-						Roles:         []string{"role1"},
-					},
-				},
-			},
-			expectErr: false,
-		},
-		{
-			name: "valid config with legacy audience field",
-			config: Config{
-				Issuer:          "https://issuer.com",
-				Audience:        "audience",
+				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{
@@ -160,8 +148,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid config with multiple audiences",
 			config: Config{
-				Issuer:          "https://issuer.com",
-				Audiences:       []string{"audience1", "audience2"},
+				Issuers:         singleIssuer("https://issuer.com", "audience1", "audience2"),
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{
@@ -174,17 +161,36 @@ func TestValidate(t *testing.T) {
 			expectErr: false,
 		},
 		{
-			name: "missing issuer",
+			name: "valid config with multiple issuers",
 			config: Config{
-				Audience:        "audience",
+				Issuers: []IssuerConfig{
+					{Issuer: "https://issuer-a.com", Provider: "github", Audiences: []string{"audience"}},
+					{Issuer: "https://issuer-b.com", Provider: "github", Audiences: []string{"audience"}},
+				},
+				RoleSessionName: "session",
+			},
+			expectErr: false,
+		},
+		{
+			name:      "missing issuers",
+			config:    Config{RoleSessionName: "session"},
+			expectErr: true,
+		},
+		{
+			name: "duplicate issuer",
+			config: Config{
+				Issuers: []IssuerConfig{
+					{Issuer: "https://issuer.com", Audiences: []string{"audience"}},
+					{Issuer: "https://issuer.com", Audiences: []string{"other"}},
+				},
 				RoleSessionName: "session",
 			},
 			expectErr: true,
 		},
 		{
-			name: "missing audience and audiences",
+			name: "missing audience",
 			config: Config{
-				Issuer:          "https://issuer.com",
+				Issuers:         []IssuerConfig{{Issuer: "https://issuer.com"}},
 				RoleSessionName: "session",
 			},
 			expectErr: true,
@@ -192,16 +198,74 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing role session name",
 			config: Config{
-				Issuer:    "https://issuer.com",
-				Audiences: []string{"audience"},
+				Issuers: singleIssuer("https://issuer.com", "audience"),
+			},
+			expectErr: true,
+		},
+		{
+			name: "claim_mappings targets reserved claim",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:        "https://issuer.com",
+					Provider:      "github",
+					Audiences:     []string{"audience"},
+					ClaimMappings: map[string]string{"sub": "some_claim"},
+				}},
+				RoleSessionName: "session",
+			},
+			expectErr: true,
+		},
+		{
+			name: "non-github provider without claim_mappings.subject",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:    "https://gitlab.example.com",
+					Provider:  "gitlab",
+					Audiences: []string{"audience"},
+				}},
+				RoleSessionName: "session",
+			},
+			expectErr: true,
+		},
+		{
+			name: "generic provider with claim_mappings.subject is valid",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:        "https://issuer.com",
+					Provider:      "generic",
+					Audiences:     []string{"audience"},
+					ClaimMappings: map[string]string{"subject": "project_path"},
+				}},
+				RoleSessionName: "session",
+			},
+			expectErr: false,
+		},
+		{
+			name: "invalid session_tags key charset",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:      "https://issuer.com",
+					Provider:    "github",
+					Audiences:   []string{"audience"},
+					SessionTags: map[string]string{"bad key!": "actor"},
+				}},
+				RoleSessionName: "session",
+			},
+			expectErr: true,
+		},
+		{
+			name: "jwt_leeway over 120s is rejected",
+			config: Config{
+				Issuers:         singleIssuer("https://issuer.com", "audience"),
+				RoleSessionName: "session",
+				JWTLeeway:       200 * time.Second,
 			},
 			expectErr: true,
 		},
 		{
 			name: "invalid mapping - missing repo",
 			config: Config{
-				Issuer:          "https://issuer.com",
-				Audiences:       []string{"audience"},
+				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{
@@ -215,8 +279,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid config - missing session policy",
 			config: Config{
-				Issuer:          "https://issuer.com",
-				Audiences:       []string{"audience"},
+				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{
@@ -230,8 +293,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "invalid mapping - empty roles",
 			config: Config{
-				Issuer:          "https://issuer.com",
-				Audiences:       []string{"audience"},
+				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
 				RepoRoleMappings: []RepoRoleMapping{
 					{
@@ -416,8 +478,6 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 	// Save original env vars to restore later
 	originalEnvVars := make(map[string]string)
 	envVarsToSet := []string{
-		"AOW_ISSUER",
-		"AOW_AUDIENCE",
 		"AOW_ROLE_SESSION_NAME",
 		"AOW_S3_CONFIG_BUCKET",
 		"AOW_S3_CONFIG_PATH",
@@ -450,8 +510,6 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 	}()
 
 	// Set env vars for testing
-	_ = os.Setenv("AOW_ISSUER", "https://env.test.issuer.com")
-	_ = os.Setenv("AOW_AUDIENCE", "env-test-audience")
 	_ = os.Setenv("AOW_ROLE_SESSION_NAME", "env-test-session")
 	_ = os.Setenv("AOW_S3_CONFIG_BUCKET", "env-config-bucket")
 	_ = os.Setenv("AOW_S3_CONFIG_PATH", "env-config/path.yml")
@@ -476,8 +534,10 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 	assert.NotNil(t, cfg)
 
 	// Verify config values match environment variables
-	assert.Equal(t, "https://env.test.issuer.com", cfg.Issuer, "Issuer should match env var")
-	assert.Equal(t, "env-test-audience", cfg.Audience, "Audience should match env var")
+	// No config file and no issuer-related env vars: the zero-config GitHub
+	// issuer seed applies (issuers are not settable via flat env vars).
+	require.Len(t, cfg.Issuers, 1)
+	assert.Equal(t, "https://token.actions.githubusercontent.com", cfg.Issuers[0].Issuer, "Issuer should be the zero-config GitHub seed")
 	assert.Equal(t, "env-test-session", cfg.RoleSessionName, "RoleSessionName should match env var")
 	assert.Equal(t, "env-config-bucket", cfg.S3ConfigBucket, "S3ConfigBucket should match env var")
 	assert.Equal(t, "env-config/path.yml", cfg.S3ConfigPath, "S3ConfigPath should match env var")
@@ -503,11 +563,18 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// singleIssuer builds a one-entry Issuers slice for tests that only care
+// about a single trusted issuer, mirroring the pre-v2 single-issuer shape
+// (which always did native GitHub claim unmarshal, i.e. provider: github —
+// no claim_mappings.subject needed).
+func singleIssuer(issuer string, audiences ...string) []IssuerConfig {
+	return []IssuerConfig{{Issuer: issuer, Provider: "github", Audiences: audiences}}
+}
+
 func TestValidate_TagAuthDefaultOrg(t *testing.T) {
 	base := func(org string) *Config {
 		return &Config{
-			Issuer:          "https://token.actions.githubusercontent.com",
-			Audiences:       []string{"sts.amazonaws.com"},
+			Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 			RoleSessionName: "aow",
 			TagAuth:         &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: org},
 		}
@@ -522,8 +589,7 @@ func TestValidate_TagAuthDefaultOrg(t *testing.T) {
 
 	// default_org is validated even when tag-auth is disabled (ungated check).
 	require.Error(t, (&Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "aow",
 		TagAuth:         &TagAuth{Enabled: false, DefaultOrg: "bad/org"},
 	}).Validate())
@@ -569,8 +635,7 @@ func TestReapplyEnvOverrides_JWTValidation(t *testing.T) {
 	t.Setenv("AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER", signer)
 
 	cfg := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "test-session",
 		JWTValidation: JWTValidation{
 			Mode:              "alb",
@@ -581,7 +646,7 @@ func TestReapplyEnvOverrides_JWTValidation(t *testing.T) {
 	// Simulate a remote config reload that omits jwt_validation entirely
 	// (the S3 document doesn't include it, so it would revert to zero values
 	// without reapplyEnvOverrides).
-	payload := []byte(`{"issuer":"https://token.actions.githubusercontent.com","audiences":["sts.amazonaws.com"],"role_session_name":"test-session"}`)
+	payload := []byte(`{"role_session_name":"test-session"}`)
 	err := cfg.MergeBytes(payload, "json")
 	require.NoError(t, err)
 
@@ -625,9 +690,8 @@ func TestJWTValidationConfig(t *testing.T) {
 			// Point to nonexistent config file to force defaults
 			t.Setenv("CONFIG_NAME", "nonexistent-config-file")
 
-			// Set required fields and JWT validation env vars
-			t.Setenv("AOW_ISSUER", "https://token.actions.githubusercontent.com")
-			t.Setenv("AOW_AUDIENCES", "sts.amazonaws.com")
+			// Set required fields and JWT validation env vars. No config file and
+			// no issuer overrides means the zero-config GitHub issuer is seeded.
 			t.Setenv("AOW_ROLE_SESSION_NAME", "test-session")
 
 			// Set test-specific JWT validation env vars

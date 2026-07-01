@@ -16,8 +16,7 @@ import (
 func baseConfig(t *testing.T) *Config {
 	t.Helper()
 	c := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "aws-oidc-warden",
 		Cache:           &Cache{Type: "memory", TTL: time.Hour},
 	}
@@ -62,7 +61,7 @@ repo_role_mappings:
 	assert.Equal(t, []string{"arn:aws:iam::123456789012:role/ci"}, roles)
 
 	// Base scalars not present in the overlay are preserved.
-	assert.Equal(t, base.Issuer, cfg.Issuer)
+	assert.Equal(t, base.Issuers, cfg.Issuers)
 	assert.Equal(t, "aws-oidc-warden", cfg.RoleSessionName)
 }
 
