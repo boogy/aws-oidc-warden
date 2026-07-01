@@ -12,9 +12,12 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const testIssuer = "https://token.actions.githubusercontent.com"
 
 // fixedExtractor returns a fixed set of claims without touching any token.
 type fixedExtractor struct{ claims *types.Claims }
@@ -27,13 +30,16 @@ func (f *fixedExtractor) Extract(_ context.Context, _ validator.ExtractionInput)
 func staticProvider(t *testing.T) *config.Provider {
 	t.Helper()
 	cfg := &config.Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers: []config.IssuerConfig{{
+			Issuer:    testIssuer,
+			Provider:  "github",
+			Audiences: []string{"sts.amazonaws.com"},
+		}},
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
-		RepoRoleMappings: []config.RepoRoleMapping{{
-			Repo:  "org/repo",
-			Roles: []string{"arn:aws:iam::123456789012:role/MyRole"},
+		RoleMappings: []config.RoleMapping{{
+			Subject: "org/repo",
+			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
 	}
 	require.NoError(t, cfg.Validate())
@@ -58,9 +64,10 @@ func mockConsumer(t *testing.T) *fakeConsumer {
 func TestProcessRequest_DelegatedMode(t *testing.T) {
 	// extractor returns fixed claims without touching a token (delegated/apigw mode)
 	ex := &fixedExtractor{claims: &types.Claims{
-		Repository: "org/repo",
-		Ref:        "refs/heads/main",
-		Actor:      "octocat",
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "org/repo"},
+		Repository:       "org/repo",
+		Ref:              "refs/heads/main",
+		Actor:            "octocat",
 	}}
 	proc := handler.NewRequestProcessor(staticProvider(t), mockConsumer(t), ex)
 	creds, err := proc.ProcessRequest(

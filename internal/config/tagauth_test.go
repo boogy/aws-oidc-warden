@@ -41,19 +41,21 @@ func TestTagAuth_Authorize(t *testing.T) {
 		{"non-aow tags ignored", map[string]string{"aow/repo": "acme/api", "Team": "platform"}, true},
 		{"empty tags -> deny", map[string]string{}, false},
 	}
+	const iss = "https://issuer.example"
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, ta.Authorize(c.tags, claims))
+			assert.Equal(t, c.want, ta.Authorize(c.tags, claims, iss, "acme/api"))
 		})
 	}
 }
 
 func TestTagAuth_Authorize_Disabled(t *testing.T) {
 	ta := &config.TagAuth{Enabled: false, TagPrefix: "aow/"}
-	assert.False(t, ta.Authorize(map[string]string{"aow/repo": "acme/api"}, map[string]any{"repository": "acme/api"}))
+	assert.False(t, ta.Authorize(map[string]string{"aow/repo": "acme/api"}, map[string]any{"repository": "acme/api"}, "https://issuer.example", "acme/api"))
 }
 
 func TestTagAuth_Authorize_DefaultOrg(t *testing.T) {
+	const iss = "https://issuer.example"
 	ta := &config.TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "acme"}
 	claims := map[string]any{"repository": "acme/api", "repository_owner": "acme"}
 	cases := []struct {
@@ -70,22 +72,22 @@ func TestTagAuth_Authorize_DefaultOrg(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, ta.Authorize(c.tags, claims))
+			assert.Equal(t, c.want, ta.Authorize(c.tags, claims, iss, "acme/api"))
 		})
 	}
 
 	// Security property: a bare token is org-scoped and must NOT match a repo of
 	// the same name in a different org. claim org (beta) != default_org (acme).
 	otherOrgClaims := map[string]any{"repository": "beta/api", "repository_owner": "beta"}
-	assert.False(t, ta.Authorize(map[string]string{"aow/repo": "api"}, otherOrgClaims))
+	assert.False(t, ta.Authorize(map[string]string{"aow/repo": "api"}, otherOrgClaims, iss, "beta/api"))
 	// ...but the explicit full form for that other org still authorizes (lenient).
-	assert.True(t, ta.Authorize(map[string]string{"aow/repo": "beta/api"}, otherOrgClaims))
+	assert.True(t, ta.Authorize(map[string]string{"aow/repo": "beta/api"}, otherOrgClaims, iss, "beta/api"))
 
 	// Empty repository claim never matches, even with default_org set.
-	assert.False(t, ta.Authorize(map[string]string{"aow/repo": "api"}, map[string]any{}))
+	assert.False(t, ta.Authorize(map[string]string{"aow/repo": "api"}, map[string]any{}, iss, ""))
 
 	// No default_org: bare tokens must not match (current behavior preserved).
 	taNoOrg := &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
-	assert.False(t, taNoOrg.Authorize(map[string]string{"aow/repo": "api"}, claims))
-	assert.True(t, taNoOrg.Authorize(map[string]string{"aow/repo": "acme/api"}, claims))
+	assert.False(t, taNoOrg.Authorize(map[string]string{"aow/repo": "api"}, claims, iss, "acme/api"))
+	assert.True(t, taNoOrg.Authorize(map[string]string{"aow/repo": "acme/api"}, claims, iss, "acme/api"))
 }

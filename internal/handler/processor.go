@@ -111,8 +111,8 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	)
 	log.Debug("Validated claims", slog.Any("claims", claims))
 
-	// Match role to repository with explicit constraints
-	matched, roles := cfg.MatchRolesToRepoWithConstraints(claims.Repository, claimsMap)
+	// Match role to (issuer, subject) with explicit conditions
+	matched, roles := cfg.AuthorizeRoles(claims.Issuer, claims.Subject, claimsMap)
 	explicitlyAllowed := matched && (len(roles) == 0 || slices.Contains(roles, requestedRole))
 
 	// Fall back to tag-based authorization: read the requested role's IAM tags
@@ -123,7 +123,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		if terr != nil {
 			log.Warn("Tag-based authorization: could not read role tags",
 				slog.String("role", requestedRole), slog.String("error", terr.Error()))
-		} else if cfg.TagAuth.Authorize(roleTags, claimsMap) {
+		} else if cfg.TagAuth.Authorize(roleTags, claimsMap, claims.Issuer, claims.Subject) {
 			allowed = true
 			log.Info("Authorized via role tags", slog.String("role", requestedRole))
 		}
@@ -141,7 +141,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// Attempting to get session policy
-	sessionPolicy, err := r.getSessionPolicy(cfg, claims.Repository)
+	sessionPolicy, err := r.getSessionPolicy(cfg, claims.Issuer, claims.Subject)
 	if err != nil {
 		log.Error("Failed to read session policy", slog.String("error", err.Error()))
 		return nil, err
@@ -171,18 +171,18 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	return credentials, nil
 }
 
-// getSessionPolicy retrieves the session policy for a given repository (config inline or S3 file)
-func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, repository string) (*string, error) {
+// getSessionPolicy retrieves the session policy for a given (issuer, subject) pair (config inline or S3 file)
+func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject string) (*string, error) {
 	// Start measuring time for this operation
 	opStart := time.Now()
 	defer func() {
 		slog.Debug("getSessionPolicy operation completed",
-			slog.String("repository", repository),
+			slog.String("subject", subject),
 			slog.Duration("duration", time.Since(opStart)))
 	}()
 
 	var sessionPolicyString *string
-	sessionPolicy, sessionPolicyFile := cfg.FindSessionPolicyForRepo(repository)
+	sessionPolicy, sessionPolicyFile := cfg.FindSessionPolicy(issuer, subject)
 
 	// Try to get policy from S3 file if specified
 	if sessionPolicyFile != nil {
@@ -227,7 +227,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, repository strin
 		sessionPolicyString = &policy
 
 		slog.Debug("Session policy loaded from S3",
-			slog.String("repository", repository),
+			slog.String("subject", subject),
 			slog.String("bucket", cfg.S3SessionPolicyBucket),
 			slog.String("key", *sessionPolicyFile),
 			slog.Int("policySize", len(policy)))
@@ -237,7 +237,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, repository strin
 	if sessionPolicy != nil {
 		sessionPolicyString = sessionPolicy
 		slog.Debug("Using inline session policy",
-			slog.String("repository", repository),
+			slog.String("subject", subject),
 			slog.Int("policySize", len(*sessionPolicy)))
 	}
 

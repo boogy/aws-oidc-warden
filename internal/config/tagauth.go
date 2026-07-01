@@ -6,17 +6,26 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
-// Authorize reports whether the role's IAM tags authorize the given OIDC claims.
-// roleTags is the role's full tag set (any keys); only keys under TagPrefix are
-// considered. A role must carry at least a `<prefix>repo` or `<prefix>repo-owner`
-// tag (and match it) to be assumable; every other present dimension tag must
-// also match (AND). Within a single tag, space-separated values mean OR.
+// Authorize reports whether the role's IAM tags authorize the given OIDC
+// claims for a verified (issuer, subject) pair. roleTags is the role's full
+// tag set (any keys); only keys under TagPrefix are considered. A role must
+// carry at least one identity tag — the canonical `<prefix>subject`, or the
+// legacy `<prefix>repo`/`<prefix>repo-owner` aliases (retained through v2 for
+// GitHub-shaped subjects) — and match it, to be assumable; every other
+// present dimension tag must also match (AND). Within a single tag,
+// space-separated values mean OR.
 //
-// The supported dimensions mirror repo_role_mappings constraints (repo,
+// When more than one issuer is configured (t.multiIssuer), a role must also
+// carry a matching `<prefix>issuer` tag: without it, tag-auth cannot tell
+// which issuer's identity namespace the role trusts, so it fails closed
+// (SHARED.md invariant #3: no cross-issuer identity collision). With a
+// single issuer, the issuer tag is optional but still checked if present.
+//
+// The supported dimensions mirror role_mapping conditions (subject, repo,
 // repo-owner, branch, ref, ref-type, event-name, workflow-ref, environment,
-// actor) so a role can require, e.g., repo==X AND ref==Y. Unlike constraints,
-// tag matching is exact (AWS tag values cannot hold regex).
-func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any) bool {
+// actor) so a role can require, e.g., subject==X AND ref==Y. Unlike
+// conditions, tag matching is exact (AWS tag values cannot hold regex).
+func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, verifiedIssuer, subject string) bool {
 	if t == nil || !t.Enabled {
 		return false
 	}
@@ -30,13 +39,26 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any) b
 		return s
 	}
 
-	// Identity gate: repo OR repo-owner. At least one must be present and match.
-	repoTag, hasRepo := get("repo")
-	ownerTag, hasOwner := get("repo-owner")
-	if !hasRepo && !hasOwner {
+	// Issuer gate: cross-issuer identity collision guard.
+	issuerTag, hasIssuer := get("issuer")
+	if hasIssuer {
+		if !valueInList(verifiedIssuer, issuerTag) {
+			return false
+		}
+	} else if t.multiIssuer {
 		return false
 	}
-	identityOK := (hasRepo && repoMatches(claim("repository"), repoTag, t.DefaultOrg)) ||
+
+	// Identity gate: subject OR repo OR repo-owner. At least one must be
+	// present and match.
+	subjectTag, hasSubject := get("subject")
+	repoTag, hasRepo := get("repo")
+	ownerTag, hasOwner := get("repo-owner")
+	if !hasSubject && !hasRepo && !hasOwner {
+		return false
+	}
+	identityOK := (hasSubject && valueInList(subject, subjectTag)) ||
+		(hasRepo && repoMatches(claim("repository"), repoTag, t.DefaultOrg)) ||
 		(hasOwner && valueInList(claim("repository_owner"), ownerTag))
 	if !identityOK {
 		return false

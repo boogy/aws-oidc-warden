@@ -38,11 +38,11 @@ func TestProvider_RefreshOverlaysAndCompiles(t *testing.T) {
 	base := baseConfig(t)
 
 	yamlCfg := []byte(`
-repo_role_mappings:
-  - repo: "owner/.*"
+role_mappings:
+  - subject: "owner/.*"
     roles:
       - "arn:aws:iam::123456789012:role/ci"
-    constraints:
+    conditions:
       branch: "main"
 `)
 	p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) {
@@ -52,11 +52,11 @@ repo_role_mappings:
 	require.NoError(t, p.Refresh(context.Background()))
 
 	cfg := p.Get()
-	require.Len(t, cfg.RepoRoleMappings, 1)
+	require.Len(t, cfg.RoleMappings, 1)
 
 	// The overlaid mapping's regex pattern must be compiled (the bug fix:
-	// otherwise MatchRolesToRepo skips nil-pattern mappings).
-	matched, roles := cfg.MatchRolesToRepo("owner/repo")
+	// otherwise AuthorizeRoles skips nil-pattern mappings).
+	matched, roles := cfg.AuthorizeRoles(base.Issuers[0].Issuer, "owner/repo", map[string]any{"ref": "main"})
 	assert.True(t, matched)
 	assert.Equal(t, []string{"arn:aws:iam::123456789012:role/ci"}, roles)
 
@@ -69,8 +69,8 @@ func TestProvider_RemovedKeyDisappearsOnReload(t *testing.T) {
 	base := baseConfig(t)
 
 	withMapping := []byte(`
-repo_role_mappings:
-  - repo: "owner/.*"
+role_mappings:
+  - subject: "owner/.*"
     roles: ["arn:aws:iam::123456789012:role/ci"]
 `)
 	empty := []byte(`{}`)
@@ -83,13 +83,13 @@ repo_role_mappings:
 	})
 
 	require.NoError(t, p.Refresh(context.Background()))
-	require.Len(t, p.Get().RepoRoleMappings, 1)
+	require.Len(t, p.Get().RoleMappings, 1)
 
 	// A newer payload omits the mapping; cloning from the pristine base means
 	// the stale mapping must not persist.
 	payload.Store(empty)
 	require.NoError(t, p.Refresh(context.Background()))
-	assert.Empty(t, p.Get().RepoRoleMappings)
+	assert.Empty(t, p.Get().RoleMappings)
 }
 
 func TestProvider_MaybeRefreshRespectsInterval(t *testing.T) {
@@ -122,8 +122,8 @@ func TestProvider_RefreshErrorKeepsPreviousConfig(t *testing.T) {
 	base := baseConfig(t)
 
 	good := []byte(`
-repo_role_mappings:
-  - repo: "owner/.*"
+role_mappings:
+  - subject: "owner/.*"
     roles: ["arn:aws:iam::123456789012:role/ci"]
 `)
 
@@ -137,7 +137,7 @@ repo_role_mappings:
 
 	require.NoError(t, p.Refresh(context.Background()))
 	prev := p.Get()
-	require.Len(t, prev.RepoRoleMappings, 1)
+	require.Len(t, prev.RoleMappings, 1)
 
 	// Fetch failure: MaybeRefresh logs and keeps the previous config.
 	fail.Store(true)
@@ -155,8 +155,8 @@ func TestProvider_RefreshRejectsInvalidConfig(t *testing.T) {
 
 	// A mapping missing roles fails Validate().
 	bad := []byte(`
-repo_role_mappings:
-  - repo: "owner/.*"
+role_mappings:
+  - subject: "owner/.*"
 `)
 	p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) {
 		return bad, nil

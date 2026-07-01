@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -43,13 +42,13 @@ func TestLoadConfig(t *testing.T) {
   - issuer: "https://test.issuer.com"
     audiences: ["test-audience"]
 role_session_name: "test-session"
-repo_role_mappings:
-  - repo: "org/repo1"
+role_mappings:
+  - subject: "org/repo1"
     session_policy: "policy1"
     roles:
       - "role1"
       - "role2"
-  - repo: "org/repo2"
+  - subject: "org/repo2"
     session_policy: "policy2"
     roles:
       - "role3"
@@ -88,17 +87,17 @@ cache_type: "memory"
 
 	// Print debug info to see what's actually in the config
 	t.Logf("Loaded config: issuers=%d, roleSessionName=%s, mappings=%d",
-		len(cfg.Issuers), cfg.RoleSessionName, len(cfg.RepoRoleMappings))
+		len(cfg.Issuers), cfg.RoleSessionName, len(cfg.RoleMappings))
 
 	// Now we should have the test values, not defaults
 	require.Len(t, cfg.Issuers, 1)
 	assert.Equal(t, "https://test.issuer.com", cfg.Issuers[0].Issuer)
 	assert.Equal(t, []string{"test-audience"}, cfg.Issuers[0].Audiences)
 	assert.Equal(t, "test-session", cfg.RoleSessionName)
-	assert.Equal(t, 2, len(cfg.RepoRoleMappings))
-	assert.Equal(t, "org/repo1", cfg.RepoRoleMappings[0].Repo)
-	assert.Equal(t, "policy1", cfg.RepoRoleMappings[0].SessionPolicy)
-	assert.Equal(t, []string{"role1", "role2"}, cfg.RepoRoleMappings[0].Roles)
+	assert.Equal(t, 2, len(cfg.RoleMappings))
+	assert.Equal(t, "org/repo1", cfg.RoleMappings[0].Subject)
+	assert.Equal(t, "policy1", cfg.RoleMappings[0].SessionPolicy)
+	assert.Equal(t, []string{"role1", "role2"}, cfg.RoleMappings[0].Roles)
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
@@ -135,9 +134,9 @@ func TestValidate(t *testing.T) {
 			config: Config{
 				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
-				RepoRoleMappings: []RepoRoleMapping{
+				RoleMappings: []RoleMapping{
 					{
-						Repo:          "org/repo",
+						Subject:       "org/repo",
 						SessionPolicy: "policy",
 						Roles:         []string{"role1"},
 					},
@@ -150,9 +149,9 @@ func TestValidate(t *testing.T) {
 			config: Config{
 				Issuers:         singleIssuer("https://issuer.com", "audience1", "audience2"),
 				RoleSessionName: "session",
-				RepoRoleMappings: []RepoRoleMapping{
+				RoleMappings: []RoleMapping{
 					{
-						Repo:          "org/repo",
+						Subject:       "org/repo",
 						SessionPolicy: "policy",
 						Roles:         []string{"role1"},
 					},
@@ -191,6 +190,14 @@ func TestValidate(t *testing.T) {
 			name: "missing audience",
 			config: Config{
 				Issuers:         []IssuerConfig{{Issuer: "https://issuer.com"}},
+				RoleSessionName: "session",
+			},
+			expectErr: true,
+		},
+		{
+			name: "empty-string audience element is rejected",
+			config: Config{
+				Issuers:         []IssuerConfig{{Issuer: "https://issuer.com", Audiences: []string{""}}},
 				RoleSessionName: "session",
 			},
 			expectErr: true,
@@ -263,11 +270,11 @@ func TestValidate(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "invalid mapping - missing repo",
+			name: "invalid mapping - missing subject",
 			config: Config{
 				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
-				RepoRoleMappings: []RepoRoleMapping{
+				RoleMappings: []RoleMapping{
 					{
 						SessionPolicy: "policy",
 						Roles:         []string{"role1"},
@@ -281,10 +288,10 @@ func TestValidate(t *testing.T) {
 			config: Config{
 				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
-				RepoRoleMappings: []RepoRoleMapping{
+				RoleMappings: []RoleMapping{
 					{
-						Repo:  "org/repo",
-						Roles: []string{"role1"},
+						Subject: "org/repo",
+						Roles:   []string{"role1"},
 					},
 				},
 			},
@@ -295,9 +302,9 @@ func TestValidate(t *testing.T) {
 			config: Config{
 				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
-				RepoRoleMappings: []RepoRoleMapping{
+				RoleMappings: []RoleMapping{
 					{
-						Repo:          "org/repo",
+						Subject:       "org/repo",
 						SessionPolicy: "policy",
 						Roles:         []string{},
 					},
@@ -319,57 +326,51 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestFindSessionPolicyForRepo(t *testing.T) {
+func TestFindSessionPolicy(t *testing.T) {
+	const iss = "https://issuer.com"
 	cfg := &Config{
-		RepoRoleMappings: []RepoRoleMapping{
+		Issuers:         singleIssuer(iss, "audience"),
+		RoleSessionName: "session",
+		RoleMappings: []RoleMapping{
 			{
-				Repo:          "org/repo1",
+				Subject:       "org/repo1",
 				SessionPolicy: "policy1",
 				Roles:         []string{"role1"},
 			},
 			{
-				Repo:          "org/repo2.*",
+				Subject:       "org/repo2.*",
 				SessionPolicy: "policy2",
 				Roles:         []string{"role2"},
 			},
 		},
 	}
-
-	// Compile the patterns before testing
-	for i := range cfg.RepoRoleMappings {
-		var err error
-		pattern := "^(?:" + cfg.RepoRoleMappings[i].Repo + ")$"
-		cfg.RepoRoleMappings[i].compiledPattern, err = regexp.Compile(pattern)
-		if err != nil {
-			t.Fatalf("failed to compile pattern: %v", err)
-		}
-	}
+	require.NoError(t, cfg.Validate())
 
 	tests := []struct {
 		name       string
-		repo       string
+		subject    string
 		wantPolicy *string
 	}{
 		{
 			name:       "exact match",
-			repo:       "org/repo1",
+			subject:    "org/repo1",
 			wantPolicy: strPtr("policy1"),
 		},
 		{
 			name:       "regex match",
-			repo:       "org/repo2-staging",
+			subject:    "org/repo2-staging",
 			wantPolicy: strPtr("policy2"),
 		},
 		{
 			name:       "no match",
-			repo:       "org/repo3",
+			subject:    "org/repo3",
 			wantPolicy: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			policy, policyFile := cfg.FindSessionPolicyForRepo(tt.repo)
+			policy, policyFile := cfg.FindSessionPolicy(iss, tt.subject)
 
 			if tt.wantPolicy == nil {
 				assert.Nil(t, policy)
@@ -384,58 +385,49 @@ func TestFindSessionPolicyForRepo(t *testing.T) {
 	}
 }
 
-func TestMatchRolesToRepo(t *testing.T) {
+func TestAuthorizeRoles(t *testing.T) {
+	const iss = "https://issuer.com"
 	cfg := &Config{
-		RepoRoleMappings: []RepoRoleMapping{
+		Issuers:         singleIssuer(iss, "audience"),
+		RoleSessionName: "session",
+		RoleMappings: []RoleMapping{
 			{
-				Repo:          "org/repo1",
-				SessionPolicy: "policy1",
-				Roles:         []string{"role1", "role2"},
+				Subject: "org/repo1",
+				Roles:   []string{"role1", "role2"},
 			},
 			{
-				Repo:          "org/repo2.*",
-				SessionPolicy: "policy2",
-				Roles:         []string{"role3"},
+				Subject: "org/repo2.*",
+				Roles:   []string{"role3"},
 			},
 			{
-				Repo:          "org/shared-.*",
-				SessionPolicy: "policy3",
-				Roles:         []string{"shared-role"},
+				Subject: "org/shared-.*",
+				Roles:   []string{"shared-role"},
 			},
 		},
 	}
-
-	// Compile the patterns before testing
-	for i := range cfg.RepoRoleMappings {
-		var err error
-		pattern := "^(?:" + cfg.RepoRoleMappings[i].Repo + ")$"
-		cfg.RepoRoleMappings[i].compiledPattern, err = regexp.Compile(pattern)
-		if err != nil {
-			t.Fatalf("failed to compile pattern: %v", err)
-		}
-	}
+	require.NoError(t, cfg.Validate())
 
 	tests := []struct {
 		name        string
-		repo        string
+		subject     string
 		wantMatched bool
 		wantRoles   []string
 	}{
 		{
 			name:        "exact match",
-			repo:        "org/repo1",
+			subject:     "org/repo1",
 			wantMatched: true,
 			wantRoles:   []string{"role1", "role2"},
 		},
 		{
 			name:        "regex match",
-			repo:        "org/repo2-staging",
+			subject:     "org/repo2-staging",
 			wantMatched: true,
 			wantRoles:   []string{"role3"},
 		},
 		{
 			name:        "multiple matches - check implementation",
-			repo:        "org/shared-repo2-staging",
+			subject:     "org/shared-repo2-staging",
 			wantMatched: true,
 			// The actual implementation may only match the first or most specific pattern
 			// Adjust this based on your actual implementation behavior
@@ -443,7 +435,7 @@ func TestMatchRolesToRepo(t *testing.T) {
 		},
 		{
 			name:        "no match",
-			repo:        "org/repo3",
+			subject:     "org/repo3",
 			wantMatched: false,
 			wantRoles:   nil,
 		},
@@ -451,7 +443,7 @@ func TestMatchRolesToRepo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matched, roles := cfg.MatchRolesToRepo(tt.repo)
+			matched, roles := cfg.AuthorizeRoles(iss, tt.subject, nil)
 
 			assert.Equal(t, tt.wantMatched, matched)
 

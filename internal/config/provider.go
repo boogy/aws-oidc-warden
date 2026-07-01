@@ -129,7 +129,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		p.interval.Store(int64(cfg.ConfigReloadInterval))
 	}
 
-	slog.Info("Configuration reloaded", slog.Int("repoRoleMappings", len(cfg.RepoRoleMappings)))
+	slog.Info("Configuration reloaded", slog.Int("roleMappings", len(cfg.effective)))
 	return nil
 }
 

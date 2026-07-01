@@ -42,32 +42,70 @@ var (
 	}
 )
 
-// Constraint defines conditions that must be met for a role to be assumed
-type Constraint struct {
-	Branch       string   `mapstructure:"branch"        json:"branch,omitempty"`        // Branch name (e.g., "main", "dev")
-	Ref          string   `mapstructure:"ref"           json:"ref,omitempty"`           // Git reference (e.g., "refs/heads/main", "refs/tags/v.*")
-	RefType      string   `mapstructure:"ref_type"      json:"ref_type,omitempty"`      // Reference type (e.g., "branch", "tag")
-	EventName    string   `mapstructure:"event_name"    json:"event_name,omitempty"`    // GitHub event name (e.g., "push", "pull_request")
-	WorkflowRef  string   `mapstructure:"workflow_ref"  json:"workflow_ref,omitempty"`  // Workflow reference (e.g., "owner/repo/.github/workflows/workflow.yml")
-	Environment  string   `mapstructure:"environment"   json:"environment,omitempty"`   // GitHub environment (e.g., "production")
-	ActorMatches []string `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // GitHub actors allowed to assume the role
+// Condition defines claim predicates that must be met for a role to be
+// assumed. The named fields below are provider-neutral sugar over the same
+// generic mechanism: each compiles to an auto-anchored regex checked against
+// one raw verified claim (see compileCondition/satisfiesConditions). Extra
+// carries arbitrary claimName->regex entries not covered by a named field,
+// so `conditions: {my_claim: "regex"}` works without a nested key.
+type Condition struct {
+	Branch       string   `mapstructure:"branch"        json:"branch,omitempty"`        // Regex against the 'ref' claim (e.g., "main", "dev")
+	Ref          string   `mapstructure:"ref"           json:"ref,omitempty"`           // Regex against the 'ref' claim (e.g., "refs/heads/main", "refs/tags/v.*")
+	RefType      string   `mapstructure:"ref_type"      json:"ref_type,omitempty"`      // Regex against 'ref_type' (e.g., "branch", "tag")
+	EventName    string   `mapstructure:"event_name"    json:"event_name,omitempty"`    // Regex against 'event_name' (e.g., "push", "pull_request")
+	WorkflowRef  string   `mapstructure:"workflow_ref"  json:"workflow_ref,omitempty"`  // Regex against 'workflow_ref' (e.g., "owner/repo/.github/workflows/workflow.yml")
+	Environment  string   `mapstructure:"environment"   json:"environment,omitempty"`   // Regex against 'runner_environment' (e.g., "production")
+	ActorMatches []string `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // Regexes against 'actor'; OR within the list
+
+	// Extra holds generic claimName->regex entries (raw verified claim names)
+	// not covered by a named field above. Populated via mapstructure's
+	// remain-fields so no nested key is required in config.
+	Extra map[string]string `mapstructure:",remain" json:"extra,omitempty"`
 
 	// Cached compiled patterns (not serialized)
-	branchPattern   *regexp.Regexp   `mapstructure:"-" json:"-"`
-	refPattern      *regexp.Regexp   `mapstructure:"-" json:"-"`
-	workflowPattern *regexp.Regexp   `mapstructure:"-" json:"-"`
-	actorPatterns   []*regexp.Regexp `mapstructure:"-" json:"-"`
+	compiled      []compiledCondition `mapstructure:"-" json:"-"` // AND'd claimName/pattern pairs (named single-value fields + Extra)
+	actorPatterns []*regexp.Regexp    `mapstructure:"-" json:"-"` // OR'd within this one dimension
 }
 
-type RepoRoleMapping struct {
-	Repo              string      `mapstructure:"repo"                json:"repo"`                          // Repository name (e.g., "owner/repo")
-	SessionPolicy     string      `mapstructure:"session_policy"      json:"session_policy,omitempty"`      // Inline session policy (JSON string)
-	SessionPolicyFile string      `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"` // S3 session policy file
-	Roles             []string    `mapstructure:"roles"               json:"roles"`                         // List of IAM roles that can be assume
-	Constraints       *Constraint `mapstructure:"constraints"         json:"constraints,omitempty"`         // Constraints for role assumption
+// compiledCondition is one AND'd (claim name, anchored pattern) pair compiled
+// from either a named Condition field or an Extra entry.
+type compiledCondition struct {
+	claim   string
+	pattern *regexp.Regexp
+}
 
-	// Cached compiled pattern (not serialized)
+// RoleMapping binds a subject (pattern) to a set of assumable roles, scoped
+// to a single issuer, optionally gated by conditions on the raw claims.
+type RoleMapping struct {
+	Subject           string     `mapstructure:"subject"             json:"subject"`                       // Subject pattern (e.g., "owner/repo"); provider-defined shape
+	Issuer            string     `mapstructure:"issuer"              json:"issuer,omitempty"`              // Trusted issuer this mapping applies to; resolved at Validate() (see resolveIssuer)
+	SessionPolicy     string     `mapstructure:"session_policy"      json:"session_policy,omitempty"`      // Inline session policy (JSON string)
+	SessionPolicyFile string     `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"` // S3 session policy file
+	Roles             []string   `mapstructure:"roles"               json:"roles"`                         // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
+	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`          // Conditions for role assumption
+
+	// Cached compiled pattern and declaration order (not serialized). order
+	// preserves first-match-wins semantics for FindSessionPolicy once
+	// mappings are bucketed into the index (see index.go).
 	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
+	order           int            `mapstructure:"-" json:"-"`
+}
+
+// RoleGroupDefaults are the fields a role_group applies uniformly to every
+// subject it expands to.
+type RoleGroupDefaults struct {
+	Roles             []string   `mapstructure:"roles"               json:"roles,omitempty"`
+	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`
+	SessionPolicy     string     `mapstructure:"session_policy"      json:"session_policy,omitempty"`
+	SessionPolicyFile string     `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
+}
+
+// RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
+// entry, all sharing Issuer and Defaults (Validate() does the expansion).
+type RoleGroup struct {
+	Issuer   string            `mapstructure:"issuer"   json:"issuer,omitempty"`
+	Defaults RoleGroupDefaults `mapstructure:"defaults" json:"defaults,omitempty"`
+	Subjects []string          `mapstructure:"subjects" json:"subjects"`
 }
 
 // IssuerConfig describes one trusted OIDC issuer: where its keys live, what
@@ -144,6 +182,11 @@ type TagAuth struct {
 	// AllowedAccounts restricts which member accounts the warden will assume into.
 	// Empty/undefined = any account. The hub account is always allowed.
 	AllowedAccounts []string `mapstructure:"allowed_accounts" json:"allowed_accounts,omitempty"`
+
+	// multiIssuer is set by Config.Validate() (len(Issuers) > 1) and gates the
+	// <prefix>issuer requirement in Authorize (invariant #3: no cross-issuer
+	// identity collision via tag-auth). Not serialized; always recomputed.
+	multiIssuer bool `mapstructure:"-" json:"-"`
 }
 
 // JWTValidation controls whether the service validates JWT signatures itself
@@ -166,11 +209,27 @@ type Config struct {
 	// there is no single-issuer field anymore (v2.0.0 breaking change).
 	Issuers []IssuerConfig `mapstructure:"issuers" json:"issuers"`
 
-	S3ConfigBucket        string            `mapstructure:"s3_config_bucket"      json:"s3_config_bucket,omitempty"`      // S3ConfigBucket is the S3 bucket where the configuration file is stored
-	S3ConfigPath          string            `mapstructure:"s3_config_path"        json:"s3_config_path,omitempty"`        // S3ConfigPath is the path to the configuration file in the S3 bucket
-	S3SessionPolicyBucket string            `mapstructure:"session_policy_bucket" json:"session_policy_bucket,omitempty"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
-	RoleSessionName       string            `mapstructure:"role_session_name"     json:"role_session_name"`               // RoleSessionName is the name of the role session
-	RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"    json:"repo_role_mappings,omitempty"`    // RepoRoleMappings is a list of repository to role mappings
+	S3ConfigBucket        string `mapstructure:"s3_config_bucket"      json:"s3_config_bucket,omitempty"`      // S3ConfigBucket is the S3 bucket where the configuration file is stored
+	S3ConfigPath          string `mapstructure:"s3_config_path"        json:"s3_config_path,omitempty"`        // S3ConfigPath is the path to the configuration file in the S3 bucket
+	S3SessionPolicyBucket string `mapstructure:"session_policy_bucket" json:"session_policy_bucket,omitempty"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
+	RoleSessionName       string `mapstructure:"role_session_name"     json:"role_session_name"`               // RoleSessionName is the name of the role session
+
+	// DefaultIssuer is the issuer inherited by a role_mapping/role_group that
+	// doesn't set its own `issuer`. Only meaningful (and required to resolve
+	// to a real issuer) when more than one issuer is configured; with a
+	// single issuer, mappings implicitly bind to it regardless.
+	DefaultIssuer string `mapstructure:"default_issuer" json:"default_issuer,omitempty"`
+
+	// RoleSets are named ARN lists referenced from a mapping/group's `roles`
+	// as "@name", resolved at Validate() before the requested-role gate.
+	RoleSets map[string][]string `mapstructure:"role_sets" json:"role_sets,omitempty"`
+
+	// RoleMappings is the literal, explicit set of subject-to-role bindings.
+	// RoleGroups is a DRY convenience expanding to additional RoleMappings.
+	// Neither is mutated by Validate(); the fully resolved/expanded set used
+	// by AuthorizeRoles/FindSessionPolicy lives in the unexported `effective`.
+	RoleMappings []RoleMapping `mapstructure:"role_mappings" json:"role_mappings,omitempty"`
+	RoleGroups   []RoleGroup   `mapstructure:"role_groups"   json:"role_groups,omitempty"`
 
 	// ConfigReloadInterval, when > 0, enables periodic hot-reload of the S3
 	// configuration (S3ConfigBucket/S3ConfigPath) without redeploying. The
@@ -199,8 +258,13 @@ type Config struct {
 	JWKSRefetchCooldown  time.Duration `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
 	AllowInsecureIssuers bool          `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
 
-	// Performance optimization - not serialized
-	estimatedRolesPerRepo int `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
+	// Performance optimization / resolved authorization state - not serialized.
+	// Rebuilt fresh by Validate() every time (from RoleMappings/RoleGroups/
+	// RoleSets), so Validate() stays idempotent and safe to call repeatedly
+	// (e.g. after a hot-reload clone).
+	estimatedRolesPerMapping int            `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
+	effective                []*RoleMapping `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
+	index                    authzIndex     `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
 }
 
 // NewConfig initializes and returns the configuration. It ensures that the config is loaded only once.
@@ -552,6 +616,11 @@ func (c *Config) Validate() error {
 		if len(iss.Audiences) == 0 {
 			return fmt.Errorf("issuers[%d] (%s): at least one audience is required", i, iss.Issuer)
 		}
+		for j, aud := range iss.Audiences {
+			if aud == "" {
+				return fmt.Errorf("issuers[%d] (%s): audiences[%d] must not be empty", i, iss.Issuer, j)
+			}
+		}
 
 		switch iss.Provider {
 		case "":
@@ -616,73 +685,114 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("max_token_age must not be negative, got %s", c.MaxTokenAge)
 	}
 
-	for i := range c.RepoRoleMappings {
-		mapping := &c.RepoRoleMappings[i]
-		if mapping.Repo == "" || len(mapping.Roles) == 0 {
-			return errors.New("repo and roles are required for each mapping")
+	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {
+		return fmt.Errorf("default_issuer %q is not a configured issuer", c.DefaultIssuer)
+	}
+	soleIssuer := ""
+	if len(c.Issuers) == 1 {
+		soleIssuer = c.Issuers[0].Issuer
+	}
+	resolveIssuer := func(explicit string) (string, error) {
+		switch {
+		case explicit != "":
+			if !seenIssuers[explicit] {
+				return "", fmt.Errorf("issuer %q is not a configured issuer", explicit)
+			}
+			return explicit, nil
+		case c.DefaultIssuer != "":
+			return c.DefaultIssuer, nil
+		case soleIssuer != "":
+			return soleIssuer, nil
+		default:
+			return "", errors.New("issuer must be set explicitly (or via default_issuer) when multiple issuers are configured")
 		}
+	}
 
-		// Precompile the regex pattern for this mapping
-		var err error
-		mapping.compiledPattern, err = regexp.Compile("^(?:" + mapping.Repo + ")$")
+	// effective is rebuilt from scratch every Validate() call so repeated
+	// validation (e.g. a hot-reload clone) is idempotent: role_groups always
+	// re-expand from their source, never from a previously-expanded state.
+	c.effective = make([]*RoleMapping, 0, len(c.RoleMappings))
+
+	appendEffective := func(m RoleMapping, source string, i int) error {
+		if m.Subject == "" || len(m.Roles) == 0 {
+			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
+		}
+		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
-			return fmt.Errorf("invalid repository pattern '%s': %w", mapping.Repo, err)
+			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
+		}
+		m.Issuer = resolvedIssuer
+
+		roles, err := c.resolveRoleSet(m.Roles)
+		if err != nil {
+			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
+		}
+		if len(roles) == 0 {
+			return fmt.Errorf("%s[%d] (%s): subject and roles are required", source, i, m.Subject)
+		}
+		m.Roles = roles
+
+		m.compiledPattern, err = regexp.Compile("^(?:" + m.Subject + ")$")
+		if err != nil {
+			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, m.Subject, err)
 		}
 
-		// Precompile constraint patterns if they exist
-		if mapping.Constraints != nil {
-			if mapping.Constraints.Branch != "" {
-				mapping.Constraints.branchPattern, err = regexp.Compile("^" + mapping.Constraints.Branch + "$")
-				if err != nil {
-					return fmt.Errorf("invalid branch pattern '%s': %w", mapping.Constraints.Branch, err)
-				}
-			}
+		if err := compileCondition(m.Conditions); err != nil {
+			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
+		}
 
-			if mapping.Constraints.Ref != "" {
-				mapping.Constraints.refPattern, err = regexp.Compile("^" + mapping.Constraints.Ref + "$")
-				if err != nil {
-					return fmt.Errorf("invalid ref pattern '%s': %w", mapping.Constraints.Ref, err)
-				}
-			}
+		m.order = len(c.effective)
+		c.effective = append(c.effective, &m)
+		return nil
+	}
 
-			if mapping.Constraints.WorkflowRef != "" {
-				// Auto-anchor like every other regex constraint (repo/branch/ref/
-				// actor) so a workflow_ref pattern matches the full claim, not a
-				// substring.
-				mapping.Constraints.workflowPattern, err = regexp.Compile("^(?:" + mapping.Constraints.WorkflowRef + ")$")
-				if err != nil {
-					return fmt.Errorf("invalid workflow pattern '%s': %w", mapping.Constraints.WorkflowRef, err)
-				}
-			}
+	for i := range c.RoleMappings {
+		if err := appendEffective(c.RoleMappings[i], "role_mappings", i); err != nil {
+			return err
+		}
+	}
 
-			// Precompile actor patterns
-			if len(mapping.Constraints.ActorMatches) > 0 {
-				mapping.Constraints.actorPatterns = make([]*regexp.Regexp, len(mapping.Constraints.ActorMatches))
-				for i, pattern := range mapping.Constraints.ActorMatches {
-					mapping.Constraints.actorPatterns[i], err = regexp.Compile("^" + pattern + "$")
-					if err != nil {
-						return fmt.Errorf("invalid actor match pattern '%s': %w", pattern, err)
-					}
-				}
+	for gi := range c.RoleGroups {
+		group := &c.RoleGroups[gi]
+		if len(group.Subjects) == 0 {
+			return fmt.Errorf("role_groups[%d]: subjects must not be empty", gi)
+		}
+		for si, subject := range group.Subjects {
+			m := RoleMapping{
+				Subject:           subject,
+				Issuer:            group.Issuer,
+				Roles:             group.Defaults.Roles,
+				Conditions:        group.Defaults.Conditions,
+				SessionPolicy:     group.Defaults.SessionPolicy,
+				SessionPolicyFile: group.Defaults.SessionPolicyFile,
+			}
+			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
+				return err
 			}
 		}
 	}
+
+	c.index = buildAuthzIndex(c.effective)
 
 	// Calculate the average number of roles per mapping for more efficient memory allocation
 	totalRoles := 0
-	for _, mapping := range c.RepoRoleMappings {
+	for _, mapping := range c.effective {
 		totalRoles += len(mapping.Roles)
 	}
 
-	if len(c.RepoRoleMappings) > 0 {
-		c.estimatedRolesPerRepo = (totalRoles / len(c.RepoRoleMappings)) + 1 // Add 1 as safety margin
+	if len(c.effective) > 0 {
+		c.estimatedRolesPerMapping = (totalRoles / len(c.effective)) + 1 // Add 1 as safety margin
 	} else {
-		c.estimatedRolesPerRepo = 4 // Default if no mappings
+		c.estimatedRolesPerMapping = 4 // Default if no mappings
 	}
 
 	// Normalize tag-auth defaults so the feature works even when Config is built
 	// directly (e.g. in tests) without going through viper defaults.
 	if c.TagAuth != nil {
+		// multiIssuer gates the <prefix>issuer requirement in TagAuth.Authorize
+		// (invariant #3: no cross-issuer identity collision via tag-auth).
+		c.TagAuth.multiIssuer = len(c.Issuers) > 1
+
 		if c.TagAuth.DefaultOrg != "" && strings.ContainsAny(c.TagAuth.DefaultOrg, "/ \t\n\r") {
 			return fmt.Errorf("tag_auth.default_org %q must not contain '/' or whitespace", c.TagAuth.DefaultOrg)
 		}
@@ -725,83 +835,206 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// FindSessionPolicyForRepo finds the session policy for a given repository.
-// Returns session policy or session policy file if defined in the config
-func (c *Config) FindSessionPolicyForRepo(repository string) (*string, *string) {
-	for _, mapping := range c.RepoRoleMappings {
-		// Skip if the pattern wasn't compiled properly
-		if mapping.compiledPattern == nil {
+// resolveRoleSet expands any "@name" alias in roles to c.RoleSets[name],
+// leaving literal role ARNs untouched. Resolution happens once, at Validate()
+// time, before AuthorizeRoles' role∈roles security gate ever runs, so an
+// alias can never widen a request beyond what's statically configured
+// (invariant #1: the token never selects the role set, config does).
+func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
+	out := make([]string, 0, len(roles))
+	for _, r := range roles {
+		if !strings.HasPrefix(r, "@") {
+			out = append(out, r)
 			continue
 		}
+		name := strings.TrimPrefix(r, "@")
+		set, ok := c.RoleSets[name]
+		if !ok {
+			return nil, fmt.Errorf("role_sets: %q is not defined", name)
+		}
+		if len(set) == 0 {
+			return nil, fmt.Errorf("role_sets: %q must not be empty", name)
+		}
+		out = append(out, set...)
+	}
+	return out, nil
+}
 
-		if mapping.compiledPattern.MatchString(repository) {
-			if mapping.SessionPolicyFile != "" {
-				return nil, &mapping.SessionPolicyFile
+// compileCondition compiles every pattern on a Condition (nil is valid: no
+// conditions means unconditional match) into the AND'd (claim, pattern) list
+// checked by satisfiesConditions. Every named field compiles through the same
+// anchored-regex mechanism as Extra, so "same mechanism" (D4) holds even for
+// fields that used to be plain string equality (ref_type/event_name/
+// environment) — an anchored regex over a literal string matches identically
+// to `==`, so this is a pure widening, not a behavior change for existing
+// literal configs.
+func compileCondition(cond *Condition) error {
+	if cond == nil {
+		return nil
+	}
+
+	cond.compiled = cond.compiled[:0]
+	add := func(claim, pattern string) error {
+		if pattern == "" {
+			return nil
+		}
+		re, err := compileAnchoredCondition(pattern)
+		if err != nil {
+			return fmt.Errorf("invalid pattern for %q: %w", claim, err)
+		}
+		cond.compiled = append(cond.compiled, compiledCondition{claim: claim, pattern: re})
+		return nil
+	}
+
+	// NOTE: Branch and Ref intentionally both check the raw "ref" claim; this
+	// mirrors pre-existing behavior and is not something Group D changes.
+	if err := add("ref", cond.Branch); err != nil {
+		return err
+	}
+	if err := add("ref", cond.Ref); err != nil {
+		return err
+	}
+	if err := add("ref_type", cond.RefType); err != nil {
+		return err
+	}
+	if err := add("event_name", cond.EventName); err != nil {
+		return err
+	}
+	if err := add("workflow_ref", cond.WorkflowRef); err != nil {
+		return err
+	}
+	if err := add("runner_environment", cond.Environment); err != nil {
+		return err
+	}
+
+	for claim, pattern := range cond.Extra {
+		if err := add(claim, pattern); err != nil {
+			return err
+		}
+	}
+
+	if len(cond.ActorMatches) > 0 {
+		cond.actorPatterns = make([]*regexp.Regexp, len(cond.ActorMatches))
+		for i, pattern := range cond.ActorMatches {
+			re, err := compileAnchoredCondition(pattern)
+			if err != nil {
+				return fmt.Errorf("invalid actor_matches pattern %q: %w", pattern, err)
 			}
+			cond.actorPatterns[i] = re
+		}
+	}
 
-			if mapping.SessionPolicy != "" {
-				return &mapping.SessionPolicy, nil
+	return nil
+}
+
+// compileAnchoredCondition compiles pattern as an auto-anchored regex,
+// rejecting empty patterns and bare wildcards that would match anything
+// (security conditions must be specific, never `.*`).
+func compileAnchoredCondition(pattern string) (*regexp.Regexp, error) {
+	if pattern == "" {
+		return nil, errors.New("pattern must not be empty")
+	}
+	if pattern == ".*" || pattern == ".+" {
+		return nil, fmt.Errorf("pattern %q is too permissive; use a specific pattern", pattern)
+	}
+	return regexp.Compile("^(?:" + pattern + ")$")
+}
+
+// satisfiesConditions reports whether claims satisfy every AND'd condition
+// (both the named-field conditions and any generic Extra entries), plus the
+// OR'd actor_matches dimension. A nil Condition always satisfies (no gate).
+func satisfiesConditions(cond *Condition, claims map[string]any) bool {
+	if cond == nil {
+		return true
+	}
+
+	for _, cc := range cond.compiled {
+		val, ok := claims[cc.claim].(string)
+		if !ok || !cc.pattern.MatchString(val) {
+			return false
+		}
+	}
+
+	if len(cond.actorPatterns) > 0 {
+		actor, ok := claims["actor"].(string)
+		if !ok {
+			return false
+		}
+		matched := false
+		for _, pattern := range cond.actorPatterns {
+			if pattern.MatchString(actor) {
+				matched = true
+				break
 			}
 		}
+		if !matched {
+			return false
+		}
+	}
+
+	return true
+}
+
+// FindSessionPolicy finds the session policy for a given (issuer, subject)
+// pair. Unlike AuthorizeRoles, this is order-dependent and ignores
+// conditions: it returns the first-declared mapping (by original config
+// order, via RoleMapping.order) whose issuer+subject match, mirroring the
+// pre-v2 first-match-wins behavior. Bucketing into the index is purely a
+// performance detail — every candidate is re-verified against the compiled
+// pattern before being considered a match (invariant #10 parity).
+func (c *Config) FindSessionPolicy(issuer, subject string) (*string, *string) {
+	idx, ok := c.index[issuer]
+	if !ok {
+		return nil, nil
+	}
+
+	var best *RoleMapping
+	for _, mapping := range candidatesFor(idx, subject) {
+		if mapping.compiledPattern == nil || !mapping.compiledPattern.MatchString(subject) {
+			continue
+		}
+		if best == nil || mapping.order < best.order {
+			best = mapping
+		}
+	}
+
+	if best == nil {
+		return nil, nil
+	}
+	if best.SessionPolicyFile != "" {
+		return nil, &best.SessionPolicyFile
+	}
+	if best.SessionPolicy != "" {
+		return &best.SessionPolicy, nil
 	}
 	return nil, nil
 }
 
-// MatchRolesToRepo matches roles to a repository.
-func (c *Config) MatchRolesToRepo(repo string) (bool, []string) {
-	// Pre-allocate capacity based on estimated roles per repo
-	capacity := c.estimatedRolesPerRepo
+// AuthorizeRoles evaluates every role_mapping/role_group entry bound to
+// issuer whose subject pattern matches subject and whose conditions (if any)
+// are satisfied by claims, and returns the union of their roles. The returned
+// bool is true only when at least one mapping fully matched (subject pattern
+// AND conditions); a subject that matches a pattern but fails that mapping's
+// conditions does not count unless another mapping fully matches.
+func (c *Config) AuthorizeRoles(issuer, subject string, claims map[string]any) (bool, []string) {
+	capacity := c.estimatedRolesPerMapping
 	if capacity < 4 {
-		capacity = 4 // Minimum capacity as fallback
+		capacity = 4
 	}
 	roles := make([]string, 0, capacity)
 	matched := false
 
-	for _, mapping := range c.RepoRoleMappings {
-		// Skip if the pattern wasn't compiled properly
-		if mapping.compiledPattern == nil {
-			continue
-		}
-
-		if mapping.compiledPattern.MatchString(repo) {
-			matched = true
-			roles = append(roles, mapping.Roles...)
-		}
+	idx, ok := c.index[issuer]
+	if !ok {
+		return false, roles
 	}
-	return matched, roles
-}
 
-// MatchRolesToRepoWithConstraints evaluates if a repository with specific token claims matches any role mappings.
-// It returns a boolean indicating if any roles were matched and a slice of matched roles.
-func (c *Config) MatchRolesToRepoWithConstraints(repo string, claims map[string]any) (bool, []string) {
-	// Pre-allocate capacity based on estimated roles per repo
-	capacity := c.estimatedRolesPerRepo
-	if capacity < 4 {
-		capacity = 4 // Minimum capacity as fallback
-	}
-	roles := make([]string, 0, capacity)
-	matched := false
-
-	for _, mapping := range c.RepoRoleMappings {
-		// Skip if the pattern wasn't compiled properly
-		if mapping.compiledPattern == nil {
+	for _, mapping := range candidatesFor(idx, subject) {
+		if mapping.compiledPattern == nil || !mapping.compiledPattern.MatchString(subject) {
 			continue
 		}
 
-		// First check if the repo matches the basic pattern
-		if !mapping.compiledPattern.MatchString(repo) {
-			continue
-		}
-
-		// If there are no constraints, add the roles and continue
-		if mapping.Constraints == nil {
-			matched = true
-			roles = append(roles, mapping.Roles...)
-			continue
-		}
-
-		// Check if the claims satisfy all the specified constraints
-		if !satisfiesConstraints(mapping.Constraints, claims) {
+		if !satisfiesConditions(mapping.Conditions, claims) {
 			continue
 		}
 
@@ -810,93 +1043,4 @@ func (c *Config) MatchRolesToRepoWithConstraints(repo string, claims map[string]
 	}
 
 	return matched, roles
-}
-
-// satisfiesConstraints checks if the provided claims satisfy all the specified constraints
-func satisfiesConstraints(constraints *Constraint, claims map[string]any) bool {
-	// Check branch constraint (using the 'ref' claim)
-	if constraints.Branch != "" {
-		ref, ok := claims["ref"].(string)
-		if !ok {
-			return false
-		}
-
-		// Use the pre-compiled branch pattern
-		if !constraints.branchPattern.MatchString(ref) {
-			return false
-		}
-	}
-
-	// Check direct ref constraint
-	if constraints.Ref != "" {
-		ref, ok := claims["ref"].(string)
-		if !ok {
-			return false
-		}
-
-		// Use the pre-compiled ref pattern
-		if !constraints.refPattern.MatchString(ref) {
-			return false
-		}
-	}
-
-	// Check ref type constraint
-	if constraints.RefType != "" {
-		refType, ok := claims["ref_type"].(string)
-		if !ok || refType != constraints.RefType {
-			return false
-		}
-	}
-
-	// Check event name constraint
-	if constraints.EventName != "" {
-		eventName, ok := claims["event_name"].(string)
-		if !ok || eventName != constraints.EventName {
-			return false
-		}
-	}
-
-	// Check workflow filename constraint
-	if constraints.WorkflowRef != "" {
-		workflow, ok := claims["workflow_ref"].(string)
-		if !ok {
-			return false
-		}
-
-		// Use the pre-compiled workflow pattern
-		if !constraints.workflowPattern.MatchString(workflow) {
-			return false
-		}
-	}
-
-	// Check environment constraint
-	if constraints.Environment != "" {
-		environment, ok := claims["runner_environment"].(string)
-		if !ok || environment != constraints.Environment {
-			return false
-		}
-	}
-
-	// Check actor matches
-	if len(constraints.ActorMatches) > 0 {
-		actor, ok := claims["actor"].(string)
-		if !ok {
-			return false
-		}
-
-		matched := false
-		for _, pattern := range constraints.actorPatterns {
-			if pattern.MatchString(actor) {
-				matched = true
-				break
-			}
-		}
-
-		if !matched {
-			return false
-		}
-	}
-
-	// All constraints passed
-	return true
 }
