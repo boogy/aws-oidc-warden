@@ -61,6 +61,7 @@ config.yaml
 .github/copilot-instructions.md
 
 .plans/
+docs/plans/
 prd.md
 
 docs/superpowers/
