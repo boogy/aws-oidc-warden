@@ -126,7 +126,7 @@ func TestGenKeyFunc_DuplicateKidDifferentType_SelectsCorrectKey(t *testing.T) {
 	require.NoError(t, err)
 	rsaPub, ok := key.(*rsa.PublicKey)
 	require.True(t, ok, "must select the RSA key, not the EC key sharing the kid")
-	assert.Equal(t, rsaKey.PublicKey.N, rsaPub.N)
+	assert.Equal(t, rsaKey.N, rsaPub.N)
 
 	esToken := &jwt.Token{Header: map[string]any{"kid": "dup", "alg": "ES256"}}
 	key, err = keyFunc(esToken)

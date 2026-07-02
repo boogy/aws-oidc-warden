@@ -77,7 +77,7 @@ func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error
 		t.jwksURICache.Delete(spec.Issuer)
 		if newURI, derr := t.discoverJWKSURI(spec); derr == nil {
 			if serr := requireSecureURL(newURI, t.allowInsecureIssuers); serr == nil {
-				jwks, status, err = t.getJWKS(newURI)
+				jwks, _, err = t.getJWKS(newURI)
 				jwksURI = newURI
 			}
 		}

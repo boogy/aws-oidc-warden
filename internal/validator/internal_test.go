@@ -93,7 +93,7 @@ func TestSecureHTTPClient_RedirectToNonLoopbackHTTPRejected(t *testing.T) {
 	client := newSecureHTTPClient(true, 2*time.Second)
 	resp, err := client.Get(server.URL)
 	if resp != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "redirect target rejected")
@@ -117,7 +117,7 @@ func TestSecureHTTPClient_RedirectCapEnforced(t *testing.T) {
 	client := newSecureHTTPClient(true, 2*time.Second)
 	resp, err := client.Get(server.URL + "/start")
 	if resp != nil {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stopped after")
