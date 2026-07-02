@@ -30,6 +30,9 @@ var (
 	maxJWTLeeway               = 120 * time.Second // Hard ceiling for jwt_leeway
 	defaultMaxTokenBytes       = 8192              // Default token length cap (8 KB) before any parsing
 	defaultJWKSRefetchCooldown = 60 * time.Second  // Default minimum interval between forced JWKS refetches per (issuer,kid)
+	defaultLogLevel            = "info"            // Default slog level name
+
+	validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 
 	accountIDPattern     = regexp.MustCompile(`^\d{12}$`)
 	sessionTagKeyPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]{1,128}$`)
@@ -260,6 +263,25 @@ type Config struct {
 	LogPrefix string `mapstructure:"log_prefix" json:"log_prefix,omitempty"` // LogKey is the S3 key to log to
 	Cache     *Cache `mapstructure:"cache"      json:"cache,omitempty"`      // CacheConfig is the cache configuration
 
+	// LogLevel is the slog level name (debug/info/warn/error); default "info".
+	// Validated (not merely parsed) in Validate() so an unknown value fails
+	// config load rather than silently falling back at first use.
+	LogLevel string `mapstructure:"log_level" json:"log_level,omitempty"`
+
+	// LogClaimValues controls whether claim VALUES (canonical subject, raw
+	// jwtSub, audience) appear in structured logs and audit records. Default
+	// off: only claim NAMES plus the decision/reason are logged. Session tag
+	// keys are always logged; tag values follow this flag too.
+	LogClaimValues bool `mapstructure:"log_claim_values" json:"log_claim_values,omitempty"`
+
+	// AuditRequired, when true, makes the audit trail a hard dependency of the
+	// request: the audit record for an allow decision must be durably written
+	// before credentials are returned, and a write failure (allow or deny)
+	// denies the request instead of logging-and-continuing. Requires
+	// log_to_s3 + log_bucket (enforced below) since those are what make the
+	// audit sink capable of persisting anything.
+	AuditRequired bool `mapstructure:"audit_required" json:"audit_required,omitempty"`
+
 	// TagAuth enables tag-based authorization and cross-account role assumption.
 	TagAuth *TagAuth `mapstructure:"tag_auth" json:"tag_auth,omitempty"`
 
@@ -324,6 +346,9 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("max_token_bytes", defaultMaxTokenBytes)
 	viper.SetDefault("jwks_refetch_cooldown", defaultJWKSRefetchCooldown)
 	viper.SetDefault("allow_insecure_issuers", false)
+	viper.SetDefault("log_level", defaultLogLevel)
+	viper.SetDefault("log_claim_values", false)
+	viper.SetDefault("audit_required", false)
 
 	// Explicitly bind all config keys to environment variables
 	// Core settings
@@ -374,6 +399,9 @@ func (c *Config) LoadConfig() error {
 	_ = viper.BindEnv("log_to_s3")
 	_ = viper.BindEnv("log_bucket")
 	_ = viper.BindEnv("log_prefix")
+	_ = viper.BindEnv("log_level")        // AOW_LOG_LEVEL
+	_ = viper.BindEnv("log_claim_values") // AOW_LOG_CLAIM_VALUES
+	_ = viper.BindEnv("audit_required")   // AOW_AUDIT_REQUIRED
 
 	configFileFound := true
 	if err := viper.ReadInConfig(); err != nil {
@@ -443,6 +471,7 @@ func reapplyEnvOverrides(c *Config) {
 		{"AOW_SESSION_POLICY_BUCKET", &c.S3SessionPolicyBucket},
 		{"AOW_LOG_BUCKET", &c.LogBucket},
 		{"AOW_LOG_PREFIX", &c.LogPrefix},
+		{"AOW_LOG_LEVEL", &c.LogLevel},
 	} {
 		if v := os.Getenv(f.env); v != "" {
 			*f.ptr = v
@@ -451,6 +480,12 @@ func reapplyEnvOverrides(c *Config) {
 
 	if v := os.Getenv("AOW_LOG_TO_S3"); v != "" {
 		c.LogToS3 = v == "true" || v == "1" || v == "True" || v == "TRUE"
+	}
+	if v := os.Getenv("AOW_LOG_CLAIM_VALUES"); v != "" {
+		c.LogClaimValues = v == "true" || v == "1" || v == "True" || v == "TRUE"
+	}
+	if v := os.Getenv("AOW_AUDIT_REQUIRED"); v != "" {
+		c.AuditRequired = v == "true" || v == "1" || v == "True" || v == "TRUE"
 	}
 
 	if v := os.Getenv("AOW_CONFIG_RELOAD_INTERVAL"); v != "" {
@@ -717,6 +752,15 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxTokenAge < 0 {
 		return fmt.Errorf("max_token_age must not be negative, got %s", c.MaxTokenAge)
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = defaultLogLevel
+	}
+	if !validLogLevels[c.LogLevel] {
+		return fmt.Errorf("log_level must be one of debug/info/warn/error, got %q", c.LogLevel)
+	}
+	if c.AuditRequired && (!c.LogToS3 || c.LogBucket == "") {
+		return errors.New("audit_required requires log_to_s3=true and log_bucket to be configured")
 	}
 
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {

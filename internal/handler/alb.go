@@ -17,16 +17,19 @@ import (
 	"github.com/google/uuid"
 )
 
+// frontendALB identifies this adapter in audit records/logs.
+const frontendALB = "alb"
+
 // AwsApplicationLoadBalancer handles AWS Application Load Balancer requests
 type AwsApplicationLoadBalancer struct {
 	processor *RequestProcessor
 	region    string
 }
 
-// NewAwsApplicationLoadBalancer creates a new Application Load Balancer handler
-func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApplicationLoadBalancer {
+// NewAwsApplicationLoadBalancer creates a new Application Load Balancer handler. audit may be nil (see AuditSink).
+func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink) *AwsApplicationLoadBalancer {
 	return &AwsApplicationLoadBalancer{
-		processor: NewRequestProcessor(provider, consumer, extractor),
+		processor: NewRequestProcessor(provider, consumer, extractor, audit, frontendALB),
 		region:    os.Getenv("AWS_REGION"),
 	}
 }

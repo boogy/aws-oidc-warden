@@ -16,6 +16,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// frontendAPIGatewayV2 identifies this adapter in audit records/logs.
+const frontendAPIGatewayV2 = "apigatewayv2"
+
 // AwsApiGatewayV2 handles AWS API Gateway HTTP API (v2) requests with a JWT Authorizer.
 // Use this adapter when API Gateway validates the JWT and passes claims via
 // event.requestContext.authorizer.jwt.claims. Set jwt_validation.mode: "apigw".
@@ -23,9 +26,9 @@ type AwsApiGatewayV2 struct {
 	processor *RequestProcessor
 }
 
-// NewAwsApiGatewayV2 creates a new HTTP API v2 handler.
-func NewAwsApiGatewayV2(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApiGatewayV2 {
-	return &AwsApiGatewayV2{processor: NewRequestProcessor(provider, consumer, extractor)}
+// NewAwsApiGatewayV2 creates a new HTTP API v2 handler. audit may be nil (see AuditSink).
+func NewAwsApiGatewayV2(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink) *AwsApiGatewayV2 {
+	return &AwsApiGatewayV2{processor: NewRequestProcessor(provider, consumer, extractor, audit, frontendAPIGatewayV2)}
 }
 
 // Handler is the Lambda function interface for API Gateway HTTP API v2.

@@ -80,7 +80,7 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
 		allowAccount: true,
 	}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
 	creds, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
 		validator.ExtractionInput{Token: "t"},
@@ -100,7 +100,7 @@ func TestProcessRequest_TagAuthDenies(t *testing.T) {
 		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 	}
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/other"}, allowAccount: true}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
 	_, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
 		validator.ExtractionInput{Token: "t"},
@@ -144,7 +144,7 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
 		allowAccount: true,
 	}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
 	creds, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
 		validator.ExtractionInput{Token: "t"},
@@ -161,7 +161,7 @@ func TestProcessRequest_AccountNotAllowed(t *testing.T) {
 	}
 	// allowAccount defaults to false → target account is denied.
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
 	_, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"},
 		validator.ExtractionInput{Token: "t"},
@@ -179,7 +179,7 @@ func TestProcessRequest_AccountCheckError(t *testing.T) {
 	// Infra error must take precedence over the allow/deny bool and map to a 5xx
 	// (ErrAssumeRoleFailed), never a 403 (ErrAccountNotAllowed).
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: true, allowAccountErr: errors.New("infra fail")}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims})
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
 	_, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"},
 		validator.ExtractionInput{Token: "t"},

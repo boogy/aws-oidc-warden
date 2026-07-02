@@ -16,15 +16,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// frontendAPIGateway identifies this adapter in audit records/logs.
+const frontendAPIGateway = "apigateway"
+
 // AwsApiGateway handles AWS API Gateway proxy integration requests
 type AwsApiGateway struct {
 	processor *RequestProcessor
 }
 
-// NewAwsApiGateway creates a new API Gateway handler
-func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApiGateway {
+// NewAwsApiGateway creates a new API Gateway handler. audit may be nil (see AuditSink).
+func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink) *AwsApiGateway {
 	return &AwsApiGateway{
-		processor: NewRequestProcessor(provider, consumer, extractor),
+		processor: NewRequestProcessor(provider, consumer, extractor, audit, frontendAPIGateway),
 	}
 }
 

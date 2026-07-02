@@ -69,7 +69,7 @@ func TestProcessRequest_DelegatedMode(t *testing.T) {
 		Ref:              "refs/heads/main",
 		Actor:            "octocat",
 	}}
-	proc := handler.NewRequestProcessor(staticProvider(t), mockConsumer(t), ex)
+	proc := handler.NewRequestProcessor(staticProvider(t), mockConsumer(t), ex, nil, "test")
 	creds, err := proc.ProcessRequest(
 		context.Background(),
 		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},

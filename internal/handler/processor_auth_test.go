@@ -35,7 +35,7 @@ func TestProcessRequest_TokenValidationErrorIsSentinel(t *testing.T) {
 
 	provider := config.NewStaticProvider(cfg)
 	ex := &stubExtractor{err: errors.New("token is expired")}
-	proc := handler.NewRequestProcessor(provider, nil, ex)
+	proc := handler.NewRequestProcessor(provider, nil, ex, nil, "test")
 
 	_, err := proc.ProcessRequest(
 		context.Background(),

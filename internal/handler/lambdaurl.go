@@ -16,15 +16,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// frontendLambdaURL identifies this adapter in audit records/logs.
+const frontendLambdaURL = "lambdaurl"
+
 // AwsLambdaUrl handles AWS Lambda URL requests
 type AwsLambdaUrl struct {
 	processor *RequestProcessor
 }
 
-// NewAwsLambdaUrl creates a new Lambda URL handler
-func NewAwsLambdaUrl(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsLambdaUrl {
+// NewAwsLambdaUrl creates a new Lambda URL handler. audit may be nil (see AuditSink).
+func NewAwsLambdaUrl(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink) *AwsLambdaUrl {
 	return &AwsLambdaUrl{
-		processor: NewRequestProcessor(provider, consumer, extractor),
+		processor: NewRequestProcessor(provider, consumer, extractor, audit, frontendLambdaURL),
 	}
 }
 

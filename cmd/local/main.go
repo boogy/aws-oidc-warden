@@ -68,8 +68,8 @@ func main() {
 	// Initialize the AWS client
 	awsClient := aws.NewAwsConsumer(cfg)
 
-	// Create the handler function
-	handlerFunc := handler.NewAwsApiGateway(provider, awsClient, extractor).Handler
+	// Create the handler function. No audit sink for the local dev server.
+	handlerFunc := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).Handler
 
 	// Set up HTTP server
 	http.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {

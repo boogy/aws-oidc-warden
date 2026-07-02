@@ -41,7 +41,7 @@ func TestAwsApiGatewayV2_Handler_ExtractsClaims(t *testing.T) {
 		Actor:            "octocat",
 	}}
 
-	h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex)
+	h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex, nil)
 	resp, err := h.Handler(context.Background(), event)
 	require.NoError(t, err)
 	assert.Equal(t, 200, resp.StatusCode)
@@ -56,7 +56,7 @@ func TestAwsApiGatewayV2_Handler_MissingAuthorizer(t *testing.T) {
 	// Use a stub extractor that always fails (simulates missing authorizer context).
 	ex := &stubExtractor{err: handler.ErrTokenValidationFailed}
 
-	h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex)
+	h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex, nil)
 	resp, err := h.Handler(context.Background(), event)
 	require.NoError(t, err)
 	assert.Equal(t, 401, resp.StatusCode)

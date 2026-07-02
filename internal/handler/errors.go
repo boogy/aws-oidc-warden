@@ -34,6 +34,10 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		errCode = "assume_role_failed"
 		errMsg = "Failed to assume the requested role"
 		*statusCode = http.StatusInternalServerError
+	case errors.Is(err, ErrAuditWriteFailed):
+		errCode = "audit_write_failed"
+		errMsg = "Request denied: durable audit logging is required and unavailable"
+		*statusCode = http.StatusInternalServerError
 	}
 	return
 }

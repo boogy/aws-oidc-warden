@@ -40,6 +40,7 @@ var (
 	ErrRoleNotPermitted      = errors.New("role not allowed for repository or doesn't meet constraints")
 	ErrAccountNotAllowed     = errors.New("target account is not in the allowed_accounts list")
 	ErrAssumeRoleFailed      = errors.New("failed to assume the requested role")
+	ErrAuditWriteFailed      = errors.New("audit record could not be durably written")
 )
 
 var (
