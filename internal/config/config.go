@@ -1009,6 +1009,18 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	return true
 }
 
+// IssuerSessionTags returns the session_tags spec (STS tag key -> raw claim
+// name) configured for issuer, or nil if issuer is not configured or has no
+// session_tags. Used to drive aws.BuildSessionTags at role-assumption time.
+func (c *Config) IssuerSessionTags(issuer string) map[string]string {
+	for i := range c.Issuers {
+		if c.Issuers[i].Issuer == issuer {
+			return c.Issuers[i].SessionTags
+		}
+	}
+	return nil
+}
+
 // FindSessionPolicy finds the session policy for a given (issuer, subject)
 // pair. Unlike AuthorizeRoles, this is order-dependent and ignores
 // conditions: it returns the first-declared mapping (by original config

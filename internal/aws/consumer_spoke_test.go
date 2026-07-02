@@ -84,7 +84,7 @@ func TestAssumeRole_CrossAccount_UsesSpokeCreds(t *testing.T) {
 	}}, nil).Once()
 
 	c := newTagAuthConsumer(m)
-	creds, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil)
+	creds, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "AK2", *creds.AccessKeyId)
 	m.AssertExpectations(t)

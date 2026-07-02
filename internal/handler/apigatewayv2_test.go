@@ -7,6 +7,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/types"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,9 +35,10 @@ func TestAwsApiGatewayV2_Handler_ExtractsClaims(t *testing.T) {
 	// Use a fixed extractor so claims are returned directly without token validation.
 	// This isolates the adapter's routing logic from the extractor implementation.
 	ex := &fixedExtractor{claims: &types.Claims{
-		Repository: "org/repo",
-		Ref:        "refs/heads/main",
-		Actor:      "octocat",
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "org/repo"},
+		Repository:       "org/repo",
+		Ref:              "refs/heads/main",
+		Actor:            "octocat",
 	}}
 
 	h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex)

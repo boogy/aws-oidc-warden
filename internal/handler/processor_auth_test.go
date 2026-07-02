@@ -23,8 +23,11 @@ func (s *stubExtractor) Extract(_ context.Context, _ validator.ExtractionInput) 
 
 func TestProcessRequest_TokenValidationErrorIsSentinel(t *testing.T) {
 	cfg := &config.Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers: []config.IssuerConfig{{
+			Issuer:    testIssuer,
+			Provider:  "github",
+			Audiences: []string{"sts.amazonaws.com"},
+		}},
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 	}

@@ -86,7 +86,7 @@ func NewBootstrap() (*Bootstrap, error) {
 
 	// Initialize token validator from the provider so hot-reloaded issuer/audience
 	// changes take effect immediately without a Lambda restart.
-	tokenValidator := validator.NewTokenValidatorFromProvider(provider, jwksCache)
+	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 
 	// The extractor is fixed at cold start. Changing jwt_validation.mode at runtime
 	// requires a Lambda redeployment. Hot-reload via Provider only affects fields
@@ -114,26 +114,43 @@ func NewBootstrap() (*Bootstrap, error) {
 	}, nil
 }
 
-// newClaimsExtractor creates the appropriate ClaimsExtractorInterface based on the configured mode.
+// newClaimsExtractor creates the appropriate ClaimsExtractorInterface based on
+// the configured mode. Delegated modes ("apigw"/"alb") trust an upstream that
+// has already verified the token's signature against a single issuer, so v2's
+// multi-issuer registry only applies to "self" mode: a delegated mode
+// requires exactly one configured issuer, whose issuer/audiences are used for
+// defense-in-depth re-validation of the pre-validated claims.
 func newClaimsExtractor(cfg *config.Config, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
 	mode := cfg.JWTValidation.Mode
-	// Resolve audiences: prefer the slice, fall back to singular field.
-	audiences := cfg.Audiences
-	if len(audiences) == 0 && cfg.Audience != "" {
-		audiences = []string{cfg.Audience}
-	}
 	switch mode {
 	case "self", "":
 		return validator.NewSelfExtractor(v), nil
 	case "apigw":
-		// Pass issuer/audiences for defense-in-depth re-validation of pre-validated claims.
-		return validator.NewAPIGWExtractor(cfg.Issuer, audiences), nil
+		iss, err := singleDelegatedIssuer(cfg, mode)
+		if err != nil {
+			return nil, err
+		}
+		return validator.NewAPIGWExtractor(iss.Issuer, iss.Audiences), nil
 	case "alb":
-		// Pass issuer/audiences for post-signature claim validation.
-		return validator.NewALBExtractor(cfg.JWTValidation.ALBExpectedSigner, cfg.Issuer, audiences), nil
+		iss, err := singleDelegatedIssuer(cfg, mode)
+		if err != nil {
+			return nil, err
+		}
+		return validator.NewALBExtractor(cfg.JWTValidation.ALBExpectedSigner, iss.Issuer, iss.Audiences), nil
 	default:
 		return nil, fmt.Errorf("unknown jwt_validation.mode: %q", mode)
 	}
+}
+
+// singleDelegatedIssuer returns the sole configured issuer for a delegated
+// jwt_validation.mode. Delegated modes trust an upstream single-issuer JWT
+// verifier (API Gateway JWT Authorizer, ALB OIDC), so a multi-issuer config
+// is ambiguous in these modes and rejected fail-closed.
+func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfig, error) {
+	if len(cfg.Issuers) != 1 {
+		return nil, fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
+	}
+	return &cfg.Issuers[0], nil
 }
 
 // buildConfigProvider wires the config provider. With an S3 config source it

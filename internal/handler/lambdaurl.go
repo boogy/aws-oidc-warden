@@ -93,41 +93,8 @@ func (h *AwsLambdaUrl) unmarshalRequestData(event events.LambdaFunctionURLReques
 
 // respondError formats a response with an error message
 func (h *AwsLambdaUrl) respondError(ctx context.Context, err error, statusCode int) (events.LambdaFunctionURLResponse, error) {
-	// Extract request ID from context if available
-	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
+	response, statusCode := buildErrorResponse(ctx, err, statusCode)
 
-	// Get processing time if available
-	var processingMS int64
-	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
-		processingMS = time.Since(startTime).Milliseconds()
-	}
-
-	// Map common errors to specific error codes and messages (shared classifier).
-	errCode, errMsg := classifyError(err, &statusCode)
-
-	// Log the error with context
-	slog.Error("Request error",
-		slog.String("requestId", requestID),
-		slog.String("errorCode", errCode),
-		slog.String("error", err.Error()),
-		slog.Int("status", statusCode),
-		slog.Int64("processingMs", processingMS))
-
-	// Create response object with non-redundant error information
-	response := Response{
-		Success:      false,
-		StatusCode:   statusCode,
-		ErrorCode:    errCode,
-		Message:      errMsg,
-		ErrorDetails: err.Error(),
-		RequestID:    requestID,
-		ProcessingMS: processingMS,
-	}
-
-	// Marshall response to JSON
 	jsonResponse, jsonErr := json.Marshal(response)
 	if jsonErr != nil {
 		// Fallback to simple error response if JSON marshalling fails
@@ -147,37 +114,12 @@ func (h *AwsLambdaUrl) respondError(ctx context.Context, err error, statusCode i
 
 // respondJSON formats a successful response with credentials
 func (h *AwsLambdaUrl) respondJSON(ctx context.Context, credentials *types.Credentials) (events.LambdaFunctionURLResponse, error) {
-	// Extract request ID from context if available
-	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
+	response := buildSuccessResponse(ctx, credentials)
 
-	// Get processing time if available
-	var processingMS int64
-	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
-		processingMS = time.Since(startTime).Milliseconds()
-	}
-
-	// Create response object
-	response := Response{
-		Success:      true,
-		StatusCode:   http.StatusOK,
-		Message:      "Token validation successful and role assumed",
-		RequestID:    requestID,
-		ProcessingMS: processingMS,
-		Data:         credentials,
-	}
-
-	// Marshal the response
 	jsonResponse, err := json.Marshal(response)
 	if err != nil {
 		return h.respondError(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError)
 	}
-
-	slog.Debug("Response successful",
-		slog.String("requestId", requestID),
-		slog.Int64("processingMs", processingMS))
 
 	return events.LambdaFunctionURLResponse{
 		StatusCode: http.StatusOK,

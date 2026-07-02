@@ -26,7 +26,7 @@ const maxConfigSize = 1024 * 1024 // 1MB
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
 type AwsConsumerInterface interface {
 	ReadS3Configuration() error
-	AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims) (*types.Credentials, error)
+	AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
 	GetS3Object(bucket, key string) (io.ReadCloser, error)
 	GetRole(role string) (*iam.GetRoleOutput, error)
 	GetRoleTags(roleARN string) (map[string]string, error)
@@ -155,9 +155,11 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 	return provider, nil
 }
 
-// AssumeRole assumes the specified AWS IAM role and returns temporary credentials
-// It also applies session tags based on GitHub claims for better traceability and security
-func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims) (*types.Credentials, error) {
+// AssumeRole assumes the specified AWS IAM role and returns temporary credentials.
+// sessionTags is the issuer's configured session_tags spec (STS tag key -> raw
+// claim name, see config.Config.IssuerSessionTags); it drives which of the
+// verified token's raw claims get attached as STS session tags.
+func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error) {
 	if roleArn == "" {
 		return nil, errors.New("roleArn cannot be empty")
 	}
@@ -197,12 +199,13 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 			"sessionName", cleanSessionName)
 	}
 
-	// Add session tags based on GitHub claims for enhanced security and traceability
-	if claims != nil {
-		tags := CreateSessionTags(claims)
+	// Add session tags per the issuer's configured session_tags spec, sourced
+	// from the token's verified raw claims.
+	if claims != nil && claims.Raw != nil {
+		tags := BuildSessionTags(claims.Raw, sessionTags)
 		if len(tags) > 0 {
 			assumeRoleInput.Tags = tags
-			slog.Debug("Added session tags from GitHub claims",
+			slog.Debug("Added session tags from verified claims",
 				"roleArn", roleArn,
 				"sessionName", cleanSessionName,
 				"tagCount", len(tags))
@@ -272,92 +275,73 @@ func selectTransitiveKeys(tags []types.Tag) []string {
 	return keys
 }
 
-// CreateSessionTags creates session tags from GitHub claims for enhanced security and audit trail
-// Session tags are limited to 50 tags with a combined size limit of 2048 characters
-func CreateSessionTags(claims *gtypes.Claims) []types.Tag {
-	if claims == nil {
+// Session-tag limits enforced by AWS STS, plus the shared key/value charset
+// (alphanumeric plus space and _.:/=+@-).
+const (
+	maxSessionTags      = 50
+	maxSessionTagKeyLen = 128
+	maxSessionTagValLen = 256
+)
+
+var sessionTagCharsetPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]*$`)
+
+// BuildSessionTags builds STS session tags from tagSpec, a mapping of STS tag
+// key -> raw claim name (config.IssuerConfig.SessionTags), reading values out
+// of rawClaims (the token's verified claims, types.Claims.Raw).
+//
+// An invalid key or value (wrong charset, over the STS length limit) is
+// SKIPPED and logged — never coerced, sanitized, or truncated. An ABAC policy
+// may trust a session tag's exact value; silently mangling it before it
+// reaches STS would be a security bug, not a convenience. Non-string claim
+// values are stringified with fmt.Sprintf("%v"); nil/empty values are
+// skipped. tagSpec keys are iterated in sorted order so, once the AWS-imposed
+// cap of 50 session tags is hit, which tags are dropped is deterministic.
+func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag {
+	if len(rawClaims) == 0 || len(tagSpec) == 0 {
 		return nil
 	}
 
+	keys := make([]string, 0, len(tagSpec))
+	for k := range tagSpec {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
 	var tags []types.Tag
-
-	// Add key GitHub claims as session tags for security and audit purposes
-	// These tags help with:
-	// 1. Security monitoring and detection of unusual activity
-	// 2. Audit trails for compliance and forensics
-	// 3. Access control policies based on session tags
-
-	// Extract repository name (without owner) from full repository path
-	repoName := ""
-	if claims.Repository != "" {
-		// Repository format is "owner/repo", extract just the repo name
-		if idx := len(claims.Repository) - 1; idx >= 0 {
-			for i := len(claims.Repository) - 1; i >= 0; i-- {
-				if claims.Repository[i] == '/' {
-					repoName = claims.Repository[i+1:]
-					break
-				}
-			}
-			// If no slash found, use the entire string as repo name
-			if repoName == "" {
-				repoName = claims.Repository
-			}
+	for _, tagKey := range keys {
+		claimName := tagSpec[tagKey]
+		raw, ok := rawClaims[claimName]
+		if !ok || raw == nil {
+			continue
 		}
-	}
-
-	tagMappings := map[string]string{
-		"repo":       repoName,
-		"actor":      claims.Actor,
-		"ref":        claims.Ref,
-		"event-name": claims.EventName,
-		"repo-owner": claims.RepositoryOwner,
-		"ref-type":   claims.RefType,
-	}
-
-	for key, value := range tagMappings {
-		if value != "" {
-			// AWS session tag keys and values have length limits and character restrictions
-			// Key: 1-128 characters, alphanumeric + certain special chars
-			// Value: 0-256 characters, same restrictions
-			cleanKey := sanitizeTagValue(key, 128)
-			cleanValue := sanitizeTagValue(value, 256)
-
-			if cleanKey != "" && cleanValue != "" {
-				tags = append(tags, types.Tag{
-					Key:   &cleanKey,
-					Value: &cleanValue,
-				})
-			}
+		value := fmt.Sprintf("%v", raw)
+		if value == "" {
+			continue
 		}
-	}
 
-	// Limit to AWS maximum of 50 session tags
-	if len(tags) > 50 {
-		slog.Warn("Too many session tags generated, truncating to 50",
-			"originalCount", len(tags))
-		tags = tags[:50]
+		if len(tagKey) > maxSessionTagKeyLen || !sessionTagCharsetPattern.MatchString(tagKey) {
+			slog.Warn("skipping session tag: key fails STS charset/length limits",
+				"tagKey", tagKey, "claim", claimName)
+			continue
+		}
+		if len(value) > maxSessionTagValLen || !sessionTagCharsetPattern.MatchString(value) {
+			slog.Warn("skipping session tag: value fails STS charset/length limits",
+				"tagKey", tagKey, "claim", claimName)
+			continue
+		}
+
+		if len(tags) >= maxSessionTags {
+			slog.Warn("session tag limit reached; dropping remaining tags",
+				"limit", maxSessionTags, "tagKey", tagKey)
+			break
+		}
+		tags = append(tags, types.Tag{
+			Key:   aws.String(tagKey),
+			Value: aws.String(value),
+		})
 	}
 
 	return tags
-}
-
-// sanitizeTagValue sanitizes a tag value to comply with AWS session tag requirements
-func sanitizeTagValue(value string, maxLength int) string {
-	if value == "" {
-		return ""
-	}
-
-	// AWS session tags allow alphanumeric characters plus: + - = . _ : / @
-	// Remove any characters that are not allowed
-	validChars := regexp.MustCompile(`[^[:alnum:]+=._:/@-]`)
-	sanitized := validChars.ReplaceAllLiteralString(value, "")
-
-	// Truncate to maximum length if necessary
-	if len(sanitized) > maxLength {
-		return sanitized[:maxLength]
-	}
-
-	return sanitized
 }
 
 // accountAllowed reports whether the warden may assume a role in account. The

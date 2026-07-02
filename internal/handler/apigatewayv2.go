@@ -74,30 +74,7 @@ func (h *AwsApiGatewayV2) createRequestContext(ctx context.Context, event events
 }
 
 func (h *AwsApiGatewayV2) respondError(ctx context.Context, err error, statusCode int) (events.APIGatewayV2HTTPResponse, error) {
-	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
-	var processingMS int64
-	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
-		processingMS = time.Since(startTime).Milliseconds()
-	}
-	errCode, errMsg := classifyError(err, &statusCode)
-	slog.Error("Request error",
-		slog.String("requestId", requestID),
-		slog.String("errorCode", errCode),
-		slog.String("error", err.Error()),
-		slog.Int("status", statusCode),
-		slog.Int64("processingMs", processingMS))
-	response := Response{
-		Success:      false,
-		StatusCode:   statusCode,
-		ErrorCode:    errCode,
-		Message:      errMsg,
-		ErrorDetails: err.Error(),
-		RequestID:    requestID,
-		ProcessingMS: processingMS,
-	}
+	response, statusCode := buildErrorResponse(ctx, err, statusCode)
 	body, jsonErr := json.Marshal(response)
 	if jsonErr != nil {
 		return events.APIGatewayV2HTTPResponse{
@@ -110,28 +87,10 @@ func (h *AwsApiGatewayV2) respondError(ctx context.Context, err error, statusCod
 }
 
 func (h *AwsApiGatewayV2) respondJSON(ctx context.Context, credentials *types.Credentials) (events.APIGatewayV2HTTPResponse, error) {
-	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
-	var processingMS int64
-	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
-		processingMS = time.Since(startTime).Milliseconds()
-	}
-	response := Response{
-		Success:      true,
-		StatusCode:   http.StatusOK,
-		Message:      "Token validation successful and role assumed",
-		RequestID:    requestID,
-		ProcessingMS: processingMS,
-		Data:         credentials,
-	}
+	response := buildSuccessResponse(ctx, credentials)
 	body, err := json.Marshal(response)
 	if err != nil {
 		return h.respondError(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError)
 	}
-	slog.Debug("Response successful",
-		slog.String("requestId", requestID),
-		slog.Int64("processingMs", processingMS))
 	return events.APIGatewayV2HTTPResponse{StatusCode: http.StatusOK, Headers: ResponseHeaders, Body: string(body)}, nil
 }

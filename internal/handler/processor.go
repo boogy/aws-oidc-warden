@@ -153,7 +153,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		slog.Bool("hasSessionPolicy", sessionPolicy != nil))
 
 	// Assume role
-	credentials, err := r.consumer.AssumeRole(requestedRole, cfg.RoleSessionName, sessionPolicy, nil, claims)
+	credentials, err := r.consumer.AssumeRole(requestedRole, cfg.RoleSessionName, sessionPolicy, nil, claims, cfg.IssuerSessionTags(claims.Issuer))
 	if err != nil {
 		log.Error("Failed to assume role",
 			slog.String("error", err.Error()),

@@ -28,12 +28,27 @@ func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/", TransitiveSessionTags: true}}
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
-	claims := &gtypes.Claims{Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main", EventName: "push"}
+	claims := &gtypes.Claims{
+		Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main", EventName: "push",
+		Raw: map[string]any{"repository": "acme/api", "actor": "deploy-bot", "ref": "refs/heads/main", "event_name": "push"},
+	}
 
-	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims)
+	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.ElementsMatch(t, []string{"repo", "ref", "actor"}, captured.TransitiveTagKeys)
+}
+
+// defaultGitHubSessionTagsForTest mirrors config.defaultGitHubIssuer's
+// SessionTags spec (STS tag key -> raw claim name), used by tests that need
+// BuildSessionTags to actually produce repo/ref/actor tags.
+var defaultGitHubSessionTagsForTest = map[string]string{
+	"repo":       "repository",
+	"repo-owner": "repository_owner",
+	"ref":        "ref",
+	"ref-type":   "ref_type",
+	"actor":      "actor",
+	"event-name": "event_name",
 }
 
 func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
@@ -50,9 +65,12 @@ func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
 	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}} // transitive off
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
-	claims := &gtypes.Claims{Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main"}
+	claims := &gtypes.Claims{
+		Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main",
+		Raw: map[string]any{"repository": "acme/api", "actor": "deploy-bot", "ref": "refs/heads/main"},
+	}
 
-	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims)
+	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.Empty(t, captured.TransitiveTagKeys)
@@ -93,7 +111,7 @@ func TestAssumeRole_CrossAccountClamp(t *testing.T) {
 	c.AWS = m
 
 	var requested int32 = 7200 // > 1h; must be clamped on the chained assume
-	_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil)
+	_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	require.NotNil(t, captured.DurationSeconds)
@@ -119,7 +137,7 @@ func TestAssumeRole_SameAccountNoClamp(t *testing.T) {
 	c.AWS = m
 
 	var requested int32 = 7200
-	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil)
+	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	require.NotNil(t, captured.DurationSeconds)

@@ -7,7 +7,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). STS/S3/IAM via AWS SDK v2. `consumer
 ```go
 type AwsConsumerInterface interface {
     ReadS3Configuration() error
-    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *types.GithubClaims) (*types.Credentials, error)
+    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *types.Claims, sessionTags map[string]string) (*types.Credentials, error)
     GetS3Object(bucket, key string) (io.ReadCloser, error)
     GetRole(role string) (*iam.GetRoleOutput, error)
 }
@@ -17,7 +17,7 @@ Handlers accept the interface for mockability. Clients are built once in `servic
 
 ## Session tags
 
-`AssumeRole` attaches tags from `CreateSessionTags(claims)` for audit and ABAC: `repo`, `actor`, `ref`, `event-name`, `repo-owner`, `ref-type`. Empty values are dropped; keys/values are sanitized to AWS limits (128/256 chars). `repo` is the bare repo name (owner stripped).
+`AssumeRole`'s `sessionTags` param is the issuer's `session_tags` spec (STS tag key → raw claim name, from `cfg.IssuerSessionTags(claims.Issuer)`). It attaches tags via `BuildSessionTags(claims.Raw, sessionTags)`: for each spec entry, the raw claim value is read from `claims.Raw`, stringified, and emitted as that tag — nil/empty values are skipped. Keys/values that violate STS limits (128/256 chars) or charset (`[A-Za-z0-9 _.:/=+@-]`) are **skipped and logged via `slog.Warn`, never sanitized or truncated** — a bad value must not silently become a different value. Output is capped at 50 tags (STS limit); extras are skipped and warned. Spec keys are processed in sorted order for deterministic truncation/logging.
 
 ## Conventions
 
