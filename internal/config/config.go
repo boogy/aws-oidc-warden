@@ -237,6 +237,23 @@ type Config struct {
 	// interval. 0 (default) disables reloading. Requires an S3 config source.
 	ConfigReloadInterval time.Duration `mapstructure:"config_reload_interval" json:"config_reload_interval,omitempty"`
 
+	// ConfigFragments lists additional sources — S3 URIs (e.g.
+	// "s3://bucket/key") or local filesystem paths — merged into the combined
+	// role_mappings/role_groups/role_sets/default_issuer set on top of the
+	// base config (see fragments.go, provider.go). Base-only: a fragment can
+	// never set this field itself (SHARED.md invariant #9); enforced by the
+	// fragment merge allowlist, not by this field's type.
+	ConfigFragments []string `mapstructure:"config_fragments" json:"config_fragments,omitempty"`
+
+	// ConfigFragmentChecksums optionally pins an expected integrity value
+	// (whatever a fragment's fetch reports as its etag — an S3 ETag, or the
+	// sha256 content hash computed for local-path fragments) per
+	// config_fragments entry. When set for an entry, a fetched value that
+	// doesn't match exactly is rejected (S9); entries with no pinned value
+	// are unauthenticated beyond transport — their etag is then used only
+	// for reload change-detection (provider.go).
+	ConfigFragmentChecksums map[string]string `mapstructure:"config_fragment_checksums" json:"config_fragment_checksums,omitempty"`
+
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
 	LogToS3   bool   `mapstructure:"log_to_s3"  json:"log_to_s3,omitempty"`  // LogToS3 is a flag to enable logging to S3
 	LogBucket string `mapstructure:"log_bucket" json:"log_bucket,omitempty"` // LogBucket is the S3 bucket to log to
@@ -314,6 +331,7 @@ func (c *Config) LoadConfig() error {
 	_ = viper.BindEnv("s3_config_bucket")       // AOW_S3_CONFIG_BUCKET
 	_ = viper.BindEnv("s3_config_path")         // AOW_S3_CONFIG_PATH
 	_ = viper.BindEnv("config_reload_interval") // AOW_CONFIG_RELOAD_INTERVAL
+	_ = viper.BindEnv("config_fragments")       // AOW_CONFIG_FRAGMENTS (comma-separated)
 	_ = viper.BindEnv("session_policy_bucket")  // AOW_SESSION_POLICY_BUCKET
 	_ = viper.BindEnv("log_to_s3")              // AOW_LOG_TO_S3
 	_ = viper.BindEnv("log_bucket")             // AOW_LOG_BUCKET
@@ -441,6 +459,16 @@ func reapplyEnvOverrides(c *Config) {
 		} else {
 			c.ConfigReloadInterval = d
 		}
+	}
+	if v := os.Getenv("AOW_CONFIG_FRAGMENTS"); v != "" {
+		parts := strings.Split(v, ",")
+		frags := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if s := strings.TrimSpace(p); s != "" {
+				frags = append(frags, s)
+			}
+		}
+		c.ConfigFragments = frags
 	}
 
 	// Cache env overrides — ensure Cache is non-nil before writing.
@@ -654,6 +682,12 @@ func (c *Config) Validate() error {
 
 	if c.RoleSessionName == "" {
 		return errors.New("role session name is required")
+	}
+
+	for i, uri := range c.ConfigFragments {
+		if strings.TrimSpace(uri) == "" {
+			return fmt.Errorf("config_fragments[%d]: must not be empty", i)
+		}
 	}
 
 	// Hardening knobs: apply defaults, then enforce bounds.
