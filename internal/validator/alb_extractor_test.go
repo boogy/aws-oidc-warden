@@ -54,7 +54,7 @@ func TestALBExtractor_Extract(t *testing.T) {
 		"actor":      "octocat",
 	})
 
-	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	claims, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		ALBOIDCData: token,
 		AWSRegion:   "us-east-1",
@@ -65,7 +65,7 @@ func TestALBExtractor_Extract(t *testing.T) {
 }
 
 func TestALBExtractor_MissingHeader(t *testing.T) {
-	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"})
+	ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: ""})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "x-amzn-oidc-data")
@@ -87,7 +87,7 @@ func TestALBExtractor_WrongSigner(t *testing.T) {
 	})
 
 	expected := "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"
-	ex := validator.NewALBExtractor(expected, "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	ex := validator.NewALBExtractor(expected, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		ALBOIDCData: token, AWSRegion: "us-east-1",
 	})
@@ -101,7 +101,7 @@ func TestALBExtractor_MaliciousKID(t *testing.T) {
 		token := makeALBJWT(t, priv, badKid, "", map[string]any{
 			"repository": "org/repo", "exp": time.Now().Add(time.Hour).Unix(),
 		})
-		ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"})
+		ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
 		_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 		require.Errorf(t, err, "expected error for kid=%q", badKid)
 		assert.Contains(t, err.Error(), "kid")
@@ -120,7 +120,7 @@ func TestALBExtractor_IssuerMismatch(t *testing.T) {
 		"iss": "https://evil.example.com", "aud": "sts.amazonaws.com",
 		"repository": "org/repo", "exp": time.Now().Add(time.Hour).Unix(),
 	})
-	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "iss")
@@ -141,11 +141,13 @@ func TestALBExtractor_KeyCache(t *testing.T) {
 
 	token := makeALBJWT(t, priv, kid, "", map[string]any{
 		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
+		"sub":        "repo:org/repo:ref:refs/heads/main",
 		"repository": "org/repo",
 		"exp":        time.Now().Add(time.Hour).Unix(),
+		"iat":        time.Now().Unix(),
 	})
 
-	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	input := validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"}
 
 	_, err := ex.Extract(context.Background(), input)
@@ -172,7 +174,7 @@ func TestALBExtractor_ExpiredToken(t *testing.T) {
 		"exp":        time.Now().Add(-time.Hour).Unix(),
 		"iat":        time.Now().Add(-2 * time.Hour).Unix(),
 	})
-	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
@@ -191,7 +193,7 @@ func TestALBExtractor_MissingExp(t *testing.T) {
 		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
 		"repository": "org/repo",
 	})
-	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 	require.Error(t, err)
 }
@@ -210,7 +212,7 @@ func TestALBExtractor_FutureIssuedAt(t *testing.T) {
 		"exp":        time.Now().Add(2 * time.Hour).Unix(),
 		"iat":        time.Now().Add(time.Hour).Unix(),
 	})
-	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"}, validator.WithALBKeyEndpoint(srv.URL+"/%s"))
+	ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 	require.Error(t, err)
 }
@@ -222,7 +224,7 @@ func TestALBExtractor_MissingRegion(t *testing.T) {
 		"repository": "org/repo",
 		"exp":        time.Now().Add(time.Hour).Unix(),
 	})
-	ex := validator.NewALBExtractor("", "https://token.actions.githubusercontent.com", []string{"sts.amazonaws.com"})
+	ex := validator.NewALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: ""})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AWSRegion")

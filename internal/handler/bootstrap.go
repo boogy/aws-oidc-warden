@@ -118,8 +118,10 @@ func NewBootstrap() (*Bootstrap, error) {
 // the configured mode. Delegated modes ("apigw"/"alb") trust an upstream that
 // has already verified the token's signature against a single issuer, so v2's
 // multi-issuer registry only applies to "self" mode: a delegated mode
-// requires exactly one configured issuer, whose issuer/audiences are used for
-// defense-in-depth re-validation of the pre-validated claims.
+// requires exactly one configured issuer, whose full spec (audiences,
+// claim_mappings, required_claims) plus the same JWTLeeway/MaxTokenLifetime/
+// MaxTokenAge bounds self mode enforces are used for defense-in-depth
+// re-validation of the pre-validated claims (SHARED.md invariant #6).
 func newClaimsExtractor(cfg *config.Config, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
 	mode := cfg.JWTValidation.Mode
 	switch mode {
@@ -130,13 +132,13 @@ func newClaimsExtractor(cfg *config.Config, v validator.TokenValidatorInterface)
 		if err != nil {
 			return nil, err
 		}
-		return validator.NewAPIGWExtractor(iss.Issuer, iss.Audiences), nil
+		return validator.NewAPIGWExtractor(iss, cfg.JWTLeeway, cfg.MaxTokenLifetime, cfg.MaxTokenAge), nil
 	case "alb":
 		iss, err := singleDelegatedIssuer(cfg, mode)
 		if err != nil {
 			return nil, err
 		}
-		return validator.NewALBExtractor(cfg.JWTValidation.ALBExpectedSigner, iss.Issuer, iss.Audiences), nil
+		return validator.NewALBExtractor(cfg.JWTValidation.ALBExpectedSigner, iss, cfg.JWTLeeway, cfg.MaxTokenLifetime, cfg.MaxTokenAge), nil
 	default:
 		return nil, fmt.Errorf("unknown jwt_validation.mode: %q", mode)
 	}

@@ -11,11 +11,11 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -64,15 +64,19 @@ func (c *albKeyCache) set(kid string, key *ecdsa.PublicKey) {
 // ALBExtractor verifies the ALB-signed x-amzn-oidc-data JWT (ES256) and
 // extracts GitHub OIDC claims. If expectedSigner is non-empty, the JWT
 // header's "signer" field must match exactly (prevents cross-ALB injection).
-// Defense-in-depth: re-validates issuer and audience after signature verification.
+// Defense-in-depth: re-validates issuer and every other claim self mode
+// checks (sub, iat, nbf, audience, lifetime/age caps, required_claims)
+// through the same checkAndNormalizeClaims path Validate() uses — ALB signs
+// the token itself, so only signature *trust* differs from self mode
+// (SHARED.md invariant #6).
 type ALBExtractor struct {
-	expectedSigner    string
-	expectedIssuer    string
-	expectedAudiences []string
-	keyEndpointFmt    string // format string for the public key URL
-	testEndpoint      bool   // true when keyEndpointFmt uses a single %s (test override)
-	httpClient        *http.Client
-	keyCache          albKeyCache
+	expectedSigner string
+	spec           *issuerSpec
+	bounds         claimBounds
+	keyEndpointFmt string // format string for the public key URL
+	testEndpoint   bool   // true when keyEndpointFmt uses a single %s (test override)
+	httpClient     *http.Client
+	keyCache       albKeyCache
 }
 
 // ALBOption configures ALBExtractor (functional option pattern).
@@ -84,16 +88,28 @@ func WithALBKeyEndpoint(fmtURL string) ALBOption {
 	return func(a *ALBExtractor) { a.keyEndpointFmt = fmtURL }
 }
 
-// NewALBExtractor creates an ALBExtractor.
-// expectedSigner: ALB ARN that must match the JWT "signer" header (empty disables the check).
-// expectedIssuer / expectedAudiences: validated after signature verification for defense in depth.
-func NewALBExtractor(expectedSigner, expectedIssuer string, expectedAudiences []string, opts ...ALBOption) *ALBExtractor {
+// WithALBHTTPClient overrides the http.Client used to fetch the ALB public
+// key (for testing). Production always gets the SSRF-hardened default
+// (newSecureHTTPClient(false, ...)), which blocks loopback; tests dialing an
+// httptest server on 127.0.0.1 must inject a client that allows it (e.g.
+// newSecureHTTPClient(true, ...)).
+func WithALBHTTPClient(c *http.Client) ALBOption {
+	return func(a *ALBExtractor) { a.httpClient = c }
+}
+
+// NewALBExtractor creates an ALBExtractor for the delegated "alb" mode's
+// single configured issuer. expectedSigner is the ALB ARN that must match the
+// JWT "signer" header (empty disables the check). iss and the
+// leeway/maxLifetime/maxAge bounds mirror NewAPIGWExtractor: they supply what
+// self mode would otherwise read from the multi-issuer registry and
+// TokenValidator's configured bounds.
+func NewALBExtractor(expectedSigner string, iss *config.IssuerConfig, leeway, maxLifetime, maxAge time.Duration, opts ...ALBOption) *ALBExtractor {
 	a := &ALBExtractor{
-		expectedSigner:    expectedSigner,
-		expectedIssuer:    expectedIssuer,
-		expectedAudiences: expectedAudiences,
-		keyEndpointFmt:    defaultALBKeyEndpoint,
-		httpClient:        &http.Client{Timeout: 5 * time.Second},
+		expectedSigner: expectedSigner,
+		spec:           newIssuerSpec(iss),
+		bounds:         claimBounds{leeway: leeway, maxLifetime: maxLifetime, maxAge: maxAge},
+		keyEndpointFmt: defaultALBKeyEndpoint,
+		httpClient:     newSecureHTTPClient(false, 5*time.Second),
 	}
 	for _, o := range opts {
 		o(a)
@@ -164,7 +180,15 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 	if !ok {
 		return nil, fmt.Errorf("unexpected ALB JWT claims type")
 	}
-	return a.mapALBClaims(mc)
+
+	// Re-validate issuer — guards against a reused or misconfigured ALB OIDC
+	// setup, and against a token from a different, unconfigured issuer.
+	verifiedIssuer, err := mc.GetIssuer()
+	if err != nil || verifiedIssuer != a.spec.Issuer {
+		return nil, fmt.Errorf("iss mismatch: got %q, want %q", verifiedIssuer, a.spec.Issuer)
+	}
+
+	return checkAndNormalizeClaims(mc, a.spec, a.bounds, time.Now())
 }
 
 func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (*ecdsa.PublicKey, error) {
@@ -229,26 +253,4 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	}
 	a.keyCache.set(kid, ecKey)
 	return ecKey, nil
-}
-
-func (a *ALBExtractor) mapALBClaims(mc jwt.MapClaims) (*types.Claims, error) {
-	// Convert MapClaims to map[string]string for reuse with mapAPIGWClaims.
-	// jwt.MapClaims stores numeric values as float64; use FormatInt to avoid
-	// scientific notation (e.g. "1.75e+09") that breaks ParseInt.
-	raw := make(map[string]string, len(mc))
-	for k, v := range mc {
-		switch val := v.(type) {
-		case string:
-			raw[k] = val
-		case float64:
-			raw[k] = strconv.FormatInt(int64(val), 10)
-		default:
-			raw[k] = fmt.Sprintf("%v", val)
-		}
-	}
-
-	return (&APIGWExtractor{
-		expectedIssuer:    a.expectedIssuer,
-		expectedAudiences: a.expectedAudiences,
-	}).mapAPIGWClaims(raw)
 }

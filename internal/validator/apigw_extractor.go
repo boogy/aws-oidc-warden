@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -15,103 +16,74 @@ import (
 // It does NOT verify signatures — that responsibility belongs to API Gateway.
 // If AuthorizerClaims is nil or empty, it rejects the request to prevent
 // direct Lambda invocations that bypass the authorizer.
-// Defense-in-depth: re-validates issuer, audience, and expiry even though
-// API Gateway checks these at authorizer time, guarding against misconfiguration
-// and clock skew between authorization and Lambda invocation.
+// Defense-in-depth: re-validates issuer, audience, expiry, and every other
+// claim self mode checks (sub, iat, nbf, lifetime/age caps, required_claims)
+// through the same checkAndNormalizeClaims path Validate() uses — delegated
+// trust in the upstream signature verification is the only difference from
+// self mode (SHARED.md invariant #6).
 type APIGWExtractor struct {
-	expectedIssuer    string
-	expectedAudiences []string
+	spec   *issuerSpec
+	bounds claimBounds
 }
 
-// NewAPIGWExtractor creates an APIGWExtractor that re-validates issuer and audience
-// against the configured values as a defense-in-depth check.
-func NewAPIGWExtractor(issuer string, audiences []string) *APIGWExtractor {
-	return &APIGWExtractor{expectedIssuer: issuer, expectedAudiences: audiences}
+// NewAPIGWExtractor creates an APIGWExtractor for the delegated "apigw"
+// mode's single configured issuer. iss supplies the issuer/provider/
+// audiences/claim_mappings/required_claims that self mode would otherwise
+// read from the multi-issuer registry; leeway/maxLifetime/maxAge apply the
+// same time bounds self mode enforces via TokenValidator.
+func NewAPIGWExtractor(iss *config.IssuerConfig, leeway, maxLifetime, maxAge time.Duration) *APIGWExtractor {
+	return &APIGWExtractor{
+		spec:   newIssuerSpec(iss),
+		bounds: claimBounds{leeway: leeway, maxLifetime: maxLifetime, maxAge: maxAge},
+	}
 }
 
 // Extract maps the API Gateway authorizer claims to types.Claims, re-validating
-// issuer, audience, and expiry for defense in depth.
+// issuer and all of self mode's claim checks for defense in depth.
 func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*types.Claims, error) {
 	if len(input.AuthorizerClaims) == 0 {
 		return nil, fmt.Errorf("no authorizer claims present: request may have bypassed API Gateway JWT Authorizer")
 	}
-	return a.mapAPIGWClaims(input.AuthorizerClaims)
+
+	raw, err := mapClaimsFromStrings(input.AuthorizerClaims)
+	if err != nil {
+		return nil, err
+	}
+
+	// Re-validate issuer — guards against a reused or misconfigured JWT
+	// Authorizer, and against a token from a different, unconfigured issuer.
+	iss, err := raw.GetIssuer()
+	if err != nil || iss != a.spec.Issuer {
+		return nil, fmt.Errorf("iss mismatch: got %q, want %q", iss, a.spec.Issuer)
+	}
+
+	return checkAndNormalizeClaims(raw, a.spec, a.bounds, time.Now())
 }
 
-func (a *APIGWExtractor) mapAPIGWClaims(raw map[string]string) (*types.Claims, error) {
-	repo := raw["repository"]
-	if repo == "" {
-		return nil, fmt.Errorf("missing required claim: repository")
-	}
+// numericClaimKeys are converted from string to float64 before being placed
+// into a jwt.MapClaims: MapClaims.GetExpirationTime/GetIssuedAt/GetNotBefore
+// only parse a float64 or json.Number, never a raw string (see
+// jwt.MapClaims.parseNumericDate). Every other claim stays a string.
+var numericClaimKeys = map[string]bool{"exp": true, "iat": true, "nbf": true}
 
-	// Re-validate issuer — guards against a reused or misconfigured JWT Authorizer.
-	iss := raw["iss"]
-	if iss != a.expectedIssuer {
-		return nil, fmt.Errorf("iss mismatch: got %q, want %q", iss, a.expectedIssuer)
-	}
-
-	// Re-validate audience — at least one must match the configured set.
-	aud := raw["aud"]
-	matched := false
-	for _, want := range a.expectedAudiences {
-		if aud == want {
-			matched = true
-			break
+// mapClaimsFromStrings converts the API Gateway authorizer's
+// map[string]string claims into a jwt.MapClaims suitable for
+// checkAndNormalizeClaims and normalizeClaims.
+func mapClaimsFromStrings(raw map[string]string) (jwt.MapClaims, error) {
+	mc := make(jwt.MapClaims, len(raw))
+	for k, v := range raw {
+		if !numericClaimKeys[k] {
+			mc[k] = v
+			continue
 		}
-	}
-	if !matched {
-		return nil, fmt.Errorf("aud mismatch: token audience %q not in allowed set %v", aud, a.expectedAudiences)
-	}
-
-	// Re-validate expiry — API Gateway checks exp at auth time; Lambda cold starts
-	// can add enough delay that a short-lived token expires before processing.
-	expUnix, err := strconv.ParseInt(raw["exp"], 10, 64)
-	if err != nil || expUnix == 0 {
-		return nil, fmt.Errorf("missing or unparseable exp claim in authorizer context")
-	}
-	if time.Now().Unix() > expUnix {
-		return nil, fmt.Errorf("token has expired (exp=%d)", expUnix)
-	}
-
-	c := &types.Claims{
-		Sub:                  raw["sub"],
-		Actor:                raw["actor"],
-		ActorID:              raw["actor_id"],
-		BaseRef:              raw["base_ref"],
-		EventName:            raw["event_name"],
-		HeadRef:              raw["head_ref"],
-		JobWorkflowRef:       raw["job_workflow_ref"],
-		JobWorkflowSha:       raw["job_workflow_sha"],
-		Ref:                  raw["ref"],
-		RefProtected:         raw["ref_protected"],
-		RefType:              raw["ref_type"],
-		Repository:           repo,
-		RepositoryID:         raw["repository_id"],
-		RepositoryOwner:      raw["repository_owner"],
-		RepositoryOwnerID:    raw["repository_owner_id"],
-		RepositoryVisibility: raw["repository_visibility"],
-		RunAttempt:           raw["run_attempt"],
-		RunID:                raw["run_id"],
-		RunNumber:            raw["run_number"],
-		RunnerEnvironment:    raw["runner_environment"],
-		Sha:                  raw["sha"],
-		Workflow:             raw["workflow"],
-		WorkflowRef:          raw["workflow_ref"],
-		WorkflowSha:          raw["workflow_sha"],
-	}
-
-	c.Issuer = iss
-	if aud != "" {
-		c.Audience = jwt.ClaimStrings{aud}
-	}
-	c.ExpiresAt = jwt.NewNumericDate(time.Unix(expUnix, 0))
-	if iat, err := strconv.ParseInt(raw["iat"], 10, 64); err == nil {
-		// Reject a future iat, matching self-mode's jwt.WithIssuedAt() check.
-		if time.Now().Unix() < iat {
-			return nil, fmt.Errorf("token iat is in the future (%d)", iat)
+		if v == "" {
+			continue
 		}
-		c.IssuedAt = jwt.NewNumericDate(time.Unix(iat, 0))
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return nil, fmt.Errorf("claim %q is not numeric: %w", k, err)
+		}
+		mc[k] = f
 	}
-
-	return c, nil
+	return mc, nil
 }

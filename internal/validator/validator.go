@@ -94,16 +94,24 @@ func buildSnapshot(cfg *config.Config) *snapshot {
 	registry := make(map[string]*issuerSpec, len(cfg.Issuers))
 	for i := range cfg.Issuers {
 		ic := &cfg.Issuers[i]
-		registry[ic.Issuer] = &issuerSpec{
-			Issuer:         ic.Issuer,
-			Provider:       ic.Provider,
-			JWKSURI:        ic.JWKSURI,
-			Audiences:      ic.Audiences,
-			ClaimMappings:  ic.ClaimMappings,
-			RequiredClaims: ic.RequiredClaims,
-		}
+		registry[ic.Issuer] = newIssuerSpec(ic)
 	}
 	return &snapshot{registry: registry}
+}
+
+// newIssuerSpec projects one config.IssuerConfig into the immutable
+// issuerSpec used on the request path. Shared by the self-mode registry
+// (buildSnapshot) and the delegated (apigw/alb) extractor constructors, so
+// every mode builds an identical spec from the same config fields.
+func newIssuerSpec(ic *config.IssuerConfig) *issuerSpec {
+	return &issuerSpec{
+		Issuer:         ic.Issuer,
+		Provider:       ic.Provider,
+		JWKSURI:        ic.JWKSURI,
+		Audiences:      ic.Audiences,
+		ClaimMappings:  ic.ClaimMappings,
+		RequiredClaims: ic.RequiredClaims,
+	}
 }
 
 // TokenValidator routes an incoming token to its issuer's spec via an
@@ -334,57 +342,16 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 		return nil, fmt.Errorf("%w: verified issuer changed during validation", ErrUnknownIssuer)
 	}
 
-	// Step 6: sub non-empty. nbf, if present, is already enforced by the
-	// parser (jwt/v5 checks nbf unconditionally when the claim exists).
-	sub, err := raw.GetSubject()
-	if err != nil || sub == "" {
-		return nil, fmt.Errorf("%w: sub", ErrMissingRequiredClaim)
-	}
-	// iat is required for the max-age check below; WithIssuedAt() does not
-	// itself make it mandatory, so it is enforced explicitly here.
-	iat, err := raw.GetIssuedAt()
-	if err != nil || iat == nil {
-		return nil, fmt.Errorf("%w: iat", ErrMissingRequiredClaim)
-	}
-
-	// Step 7: bound token lifetime and age (both opt-in; zero value disables
-	// the check). WithExpirationRequired() above already guarantees exp is
-	// present.
-	exp, err := raw.GetExpirationTime()
-	if err != nil || exp == nil {
-		return nil, fmt.Errorf("%w: exp", ErrMissingRequiredClaim)
-	}
-	now := t.timeNow()
-	if t.maxLifetime > 0 && exp.Sub(iat.Time) > t.maxLifetime {
-		return nil, fmt.Errorf("%w: %s > %s", ErrTokenLifetimeExceeded, exp.Sub(iat.Time), t.maxLifetime)
-	}
-	if t.maxAge > 0 && now.Sub(iat.Time) > t.maxAge {
-		return nil, fmt.Errorf("%w: %s > %s", ErrTokenTooOld, now.Sub(iat.Time), t.maxAge)
-	}
-
-	// Step 8: audience ANY-match against this issuer's configured audiences.
-	tokenAudience, err := raw.GetAudience()
-	if err != nil {
-		return nil, fmt.Errorf("invalid aud claim: %w", err)
-	}
-	if !audienceMatches(tokenAudience, spec.Audiences) {
-		return nil, fmt.Errorf("%w: got %v, want one of %v", ErrInvalidAudience, tokenAudience, spec.Audiences)
-	}
-
-	// Step 9: required_claims present and non-empty, checked on raw verified
-	// claims — replaces the old hard-coded "repository" requirement.
-	for _, name := range spec.RequiredClaims {
-		v, present := raw[name]
-		if !present {
-			return nil, fmt.Errorf("%w: %q", ErrMissingRequiredClaim, name)
-		}
-		if s, isStr := v.(string); isStr && s == "" {
-			return nil, fmt.Errorf("%w: %q", ErrMissingRequiredClaim, name)
-		}
-	}
-
-	// Step 10: normalize to canonical subject + raw claims map.
-	return normalizeClaims(raw, spec.Provider, spec.ClaimMappings)
+	// Steps 6-10: sub/iat/exp/nbf enforcement, lifetime/age caps, audience
+	// ANY-match, required_claims, and normalization all run through the same
+	// helper the delegated (apigw/alb) extractors use, so self mode and
+	// delegated modes can never silently drift apart (SHARED.md invariant
+	// #6). Redundant with the parser options above (WithExpirationRequired,
+	// WithIssuedAt, WithLeeway already ran during ParseWithClaims) but
+	// harmless — delegated modes have no such parser, so this is the only
+	// place those checks run for them.
+	bounds := claimBounds{leeway: t.leeway, maxLifetime: t.maxLifetime, maxAge: t.maxAge}
+	return checkAndNormalizeClaims(raw, spec, bounds, t.timeNow())
 }
 
 // audienceMatches reports whether any of the token's audiences matches any of
