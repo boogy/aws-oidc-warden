@@ -1,23 +1,61 @@
-# Session Tagging Example
+# Session Tagging
 
-This document demonstrates how the AWS OIDC Warden applies session tags when assuming IAM roles based on GitHub OIDC token claims.
+The AWS OIDC Warden attaches STS session tags when assuming a role, for ABAC,
+audit trails, and cost allocation.
 
-## How Session Tagging Works
+## v2: session tags are per-issuer and spec-driven
 
-When a GitHub Actions workflow requests temporary AWS credentials through the AWS OIDC Warden, the service automatically applies session tags based on the GitHub OIDC token claims. These tags provide enhanced security, audit trails, and cost allocation capabilities.
+Each issuer declares its own `session_tags` map — **STS tag key ← raw claim
+name** — and only those tags are attached for that issuer's tokens. There is no
+hard-coded GitHub tag set; a tag's value is the verified claim's value, taken
+verbatim.
 
-## Session Tags Applied
+```yaml
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: "github"
+    session_tags:
+      repo: "repository" # NOTE: full "owner/repo" (see below)
+      repo-owner: "repository_owner"
+      ref: "ref"
+      ref-type: "ref_type"
+      actor: "actor"
+      event-name: "event_name"
+```
 
-The following session tags are automatically applied when assuming a role:
+Tag **keys** must match `[A-Za-z0-9 _.:/=+@-]{1,128}`; values are capped at 256
+chars. An invalid key or value is **skipped and logged — never sanitized or
+truncated**, so an ABAC condition can trust that a tag it sees carries the
+exact claim value (a silently mangled value would be a security bug).
 
-| Tag Key      | Description                                | Example Value                     |
-| ------------ | ------------------------------------------ | --------------------------------- |
-| `repo`       | The repository name (without owner)        | `repo-name`                       |
-| `actor`      | The GitHub user who triggered the workflow | `username`                        |
-| `ref`        | The Git reference (branch/tag)             | `refs/heads/main`                 |
-| `event-name` | The event that triggered the workflow      | `push`, `pull_request`, `release` |
-| `repo-owner` | The owner of the repository                | `my-org`                          |
-| `ref-type`   | The type of Git reference                  | `branch`, `tag`                   |
+> **Breaking change from v1:** the default `repo` tag now carries the **full
+> `owner/repo`** (the raw `repository` claim). v1 stripped the owner to a bare
+> repo name. If an ABAC policy matched a bare repo name, update it — or map
+> `repo` to a claim that is already bare.
+
+### Example tags for the mapping above
+
+| Tag Key      | Source claim       | Example Value      |
+| ------------ | ------------------ | ------------------ |
+| `repo`       | `repository`       | `my-org/repo-name` |
+| `repo-owner` | `repository_owner` | `my-org`           |
+| `ref`        | `ref`              | `refs/heads/main`  |
+| `ref-type`   | `ref_type`         | `branch`           |
+| `actor`      | `actor`            | `username`         |
+| `event-name` | `event_name`       | `push`             |
+
+For a non-GitHub (`generic`) issuer, key the tags on that provider's raw claim
+names (e.g. GitLab `project_path`, `ref`). See [MULTI_ISSUER.md](MULTI_ISSUER.md).
+
+> **Session tagging vs. tag-based authorization.** This page covers the STS
+> session tags attached to every assumed-role session (for ABAC policy
+> conditions, audit, and cost allocation). A separate, opt-in mechanism —
+> [tag-based authorization](TAG_BASED_AUTHORIZATION.md) — lets a role's own
+> IAM tags _grant_ the authorization decision itself (in place of
+> `role_mappings`), which is the recommended path once you're managing
+> authorization for hundreds/thousands of roles or need cross-account
+> hub/spoke delegation. The two compose: an IAM-tag-authorized role still gets
+> the same per-issuer `session_tags` attached on assumption.
 
 ## Security Benefits
 
@@ -217,4 +255,6 @@ WHERE userIdentity.sessionContext.sessionIssuer.tags.ref != 'refs/heads/main'
 - Session tags are limited to 50 tags per session
 - Each tag key and value has character and length restrictions
 - Session tags only apply to the assumed role session, not the underlying IAM role
-- Tags are automatically sanitized to comply with AWS requirements
+- An invalid tag key or value is **skipped and logged, never sanitized or
+  truncated** — an ABAC condition can trust that any tag it sees carries the
+  exact verified claim value (see the note above)

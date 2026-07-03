@@ -7,13 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-02
+
+Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of
+issuers/providers, keys authorization on a provider-neutral canonical
+**subject**, and scales to thousands of mappings. This is a breaking release —
+see `docs/MIGRATION_V2.md` for the upgrade path.
+
 ### Breaking Changes
 
+- **Multi-issuer config model** — the top-level `issuer` / `audience` /
+  `audiences` keys are **removed**. Trusted issuers are now declared under
+  `issuers[]` (each with `issuer`, `provider`, `audiences`, optional
+  `jwks_uri` / `claim_mappings` / `required_claims` / `session_tags`). The
+  `AOW_ISSUER` / `AOW_AUDIENCE` / `AOW_AUDIENCES` env vars are removed.
+- **Provider-neutral authorization renames** — `repo_role_mappings` →
+  `role_mappings` (mapping key `repo:` → `subject:`, `constraints:` →
+  `conditions:`), `repo_role_groups` → `role_groups`. The old keys are no
+  longer accepted.
+- **Authorization keys on a canonical `subject`** — derived per issuer
+  (GitHub default = the `repository` claim). Non-`github` providers **must**
+  set `claim_mappings.subject`. A token can never self-assert an unmapped
+  subject.
+- **Session tags are per-issuer and spec-driven** — configured via each
+  issuer's `session_tags` (STS tag key ← raw claim name). The default GitHub
+  `repo` tag now carries the **full `owner/repo`** (the raw `repository`
+  claim); v1 stripped the owner to a bare name. Update any ABAC policies that
+  matched a bare repo name. Invalid tag values are **skipped and logged, never
+  sanitized/truncated** (a mangled value must not silently reach an ABAC
+  condition).
+- **Delegated modes (`apigw` / `alb`) require exactly one configured issuer**
+  and fail closed otherwise; they re-validate the same claim bounds as `self`.
+- **Tag-based authorization is issuer-bound** — set `aow/issuer` on the role;
+  the canonical identity tag is `aow/subject`. `aow/repo` / `aow/repo-owner`
+  remain accepted as aliases through the v2 migration window.
+- **Go API** — `types.GithubClaims` → `types.Claims`; `CreateSessionTags` →
+  `BuildSessionTags(rawClaims, tagSpec)`; `MatchRolesToRepoWithConstraints` →
+  `AuthorizeRoles(issuer, subject, claims)`; `FindSessionPolicyForRepo` →
+  `FindSessionPolicy(issuer, subject)`; `AwsConsumer.AssumeRole` gained a
+  `sessionTags` parameter. `MatchRolesToRepo` and the exported `GithubClaims`
+  are removed.
 - **S3/JSON config files must use `snake_case` keys** — `PascalCase` keys (`RepoRoleMappings`, `RoleSessionName`, etc.) are no longer accepted. Migrate any S3-hosted JSON configs to `snake_case` before upgrading (#230)
 - **`workflow_ref` constraint regex is now auto-anchored** — previously matched as a substring; now compiled as `^(?:...)$` like all other constraints. Patterns relying on partial matching must be updated (#237)
 
 ### Added
 
+- **Multi-issuer registry routing** — an incoming token's unverified `iss` is
+  used only to route to that issuer's spec (exact match); identity/role
+  decisions use only post-signature-verified, re-asserted claims. Per-issuer
+  audiences, `claim_mappings`, and `required_claims`.
+- **Any-provider support** — `provider: generic` validates tokens from any
+  OIDC IdP by mapping raw claims to the canonical `subject` (GitHub keeps its
+  native claim struct via `provider: github`). Adding a provider needs no core
+  code changes (open/closed `providerAdapter` seam).
+- **Generic `conditions`** — gate a mapping on any raw verified claim by name
+  (named fields `branch`/`ref`/`ref_type`/`event_name`/`workflow_ref`/
+  `environment`/`actor_matches` plus arbitrary `claim: regex` entries).
+- **Config scaling** — `default_issuer`, `role_sets` (named ARN lists
+  referenced as `@name`), `role_groups`, and `config_fragments` (additional
+  sources merged onto the base config; local filesystem paths today, remote
+  fetchers pluggable via `config.WithFragmentFetcher` but not yet wired into
+  the shipped binaries; sha256-gated safe reload; optional
+  `config_fragment_checksums` integrity pins). An owner-bucketed authorization
+  index keeps matching fast at thousands of mappings, proven byte-identical to
+  a linear scan.
+- **Token hardening knobs** — `jwt_leeway` (≤120s), `max_token_lifetime`,
+  `max_token_age`, `max_token_bytes`, `jwks_refetch_cooldown`,
+  `allow_insecure_issuers`.
+- **Structured audit trail** — one JSON record per allow/deny decision via
+  `internal/s3logger`; `audit_required` makes the issuance record durable
+  before credentials are returned (fail-closed); `log_level` and
+  `log_claim_values` knobs; a standardized structured-logging field contract.
 - Cross-account tag-based authorization (hub/spoke) — spoke accounts delegate role assumption decisions to a hub via ABAC session tags (#236)
 - Transitive session tags + target-account allow-list — session tags now flow across assumed roles; a per-repo `target_accounts` allow-list restricts which accounts a token may reach (#233)
 - Short `aow`/`repo` session tags via `tag_auth.default_org` — when a default org is set, the org prefix is stripped from session tag values to stay within the 256-char STS limit (#234)
@@ -29,11 +93,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenTofu deployment (`deploy/opentofu/`) — modular root wiring reusable `s3`, `dynamodb` (JWKS cache), `iam` (least-privilege Lambda role), `lambda` (zip packaging + log group), and `apigateway` (HTTP API verify route) modules, with config rendered from `terraform.tfvars` (#243)
 - CloudFormation quick-start template (`deploy/cloudformation/quickstart.yaml`) and deployment guide (`deploy/README.md`) (#243)
 
+### Security
+
+- **Algorithm/key pinning** — RS/ES 256–512 only (never `none`/HS\*); a JWKS
+  key is pinned by `kid` + `alg` + `use=sig` + key-type↔alg-family, so a
+  duplicate-`kid` JWKS cannot cause wrong-key selection. RSA ≥2048; EC verified
+  on its declared curve.
+- **Bounded time and size in `self` AND delegated modes** — `exp`/`iat`
+  required, leeway ≤120s, optional lifetime/age caps, pre-parse token-length
+  cap; a single shared claim-check path guarantees delegated modes are not a
+  weaker path.
+- **SSRF-hardened JWKS/discovery fetch** — outbound fetches can never reach
+  private/loopback/link-local/metadata IPs (enforced at dial time, including
+  on redirects); OIDC discovery `issuer` is validated; forced JWKS refetches
+  are rate-limited per `(issuer, kid)`.
+- **Fragments cannot weaken security** — a fragment may only set
+  `role_mappings` / `role_groups` / `role_sets` / `default_issuer`; `issuers`,
+  hardening knobs, `allow_insecure_issuers`, and `tag_auth` are base-only.
+- **Reload fails safe** — a failed/invalid/tampered reload retains the
+  last-good config and never reverts to the zero-config seed.
+- **Secret-safe logging** — no path logs a raw JWT or credential; with
+  `log_claim_values=false` (default), claim values are suppressed in both the
+  log stream and the audit records while names/decision/reason are retained.
+
+### Removed
+
+- Top-level `issuer` / `audience` / `audiences` config keys and the
+  `AOW_ISSUER` / `AOW_AUDIENCE` / `AOW_AUDIENCES` env vars (use `issuers[]`).
+- `repo_role_mappings` / `repo_role_groups` config keys (use `role_mappings` /
+  `role_groups`).
+- Exported `types.GithubClaims`, `CreateSessionTags`, and `MatchRolesToRepo`.
+
 ### Fixed
 
 - Adapter binaries now fail fast at startup when `jwt_validation.mode` is incompatible with the deployed adapter (panic with a clear message) instead of failing silently per request.
 - ALB public-key cache no longer has a read/write data race and now evicts expired entries on read, preventing unbounded growth of stale keys.
-
 - ALB and API Gateway delegated modes now enforce token expiration (`exp` required) and reject future-`iat` tokens, matching self-mode strictness.
 - RSA JWKS keys shorter than 2048 bits are now rejected, and EC JWKS keys are validated to lie on their declared curve (defense-in-depth against a compromised JWKS source).
 - Malformed role ARNs now return the dedicated `ErrInvalidRoleFormat` sentinel (still HTTP 400) instead of being misreported as an empty role.
@@ -187,7 +281,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.6...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.6...v2.0.0
 [1.3.6]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.5...v1.3.6
 [1.3.5]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.4...v1.3.5
 [1.3.4]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.3...v1.3.4

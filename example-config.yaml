@@ -1,391 +1,258 @@
 ####################################################################################
-# AWS OIDC Warden Example Configuration
-# This example shows all available features and configuration options
+# AWS OIDC Warden — Example Configuration (v2, multi-issuer)
+#
+# v2 validates OIDC tokens from ANY number of issuers/providers and brokers
+# short-lived AWS credentials. Precedence: AOW_-prefixed env vars > this file >
+# defaults. See docs/CONFIGURATION.md for the full reference and
+# docs/MIGRATION_V2.md if you are upgrading from a v1 single-issuer config.
 ####################################################################################
 
 ####################################################################################
-# OIDC TOKEN VALIDATION SETTINGS
+# TRUSTED OIDC ISSUERS
+#
+# Each entry is one trusted issuer. The `iss` claim is matched EXACTLY (no
+# normalization). At least one issuer is required; each needs at least one
+# audience. If no config source is found at all, a single default GitHub
+# Actions issuer is seeded automatically — but a present config that defines no
+# issuers is a hard error (the seed never masks a misconfigured file).
 ####################################################################################
+issuers:
+  # --- GitHub Actions (native provider) ---
+  - issuer: "https://token.actions.githubusercontent.com"
+    # provider "github" natively unmarshals the full GitHub claim set and
+    # defaults the canonical `subject` to the `repository` claim.
+    provider: "github"
+    audiences:
+      - "sts.amazonaws.com"
+    # jwks_uri is optional; omit to use OIDC discovery
+    # (<issuer>/.well-known/openid-configuration).
+    # claim_mappings is optional for github (subject defaults to `repository`);
+    # override only to key authorization on a different claim.
+    # claim_mappings:
+    #   subject: "repository"
+    required_claims:
+      - "repository"
+    # session_tags: STS tag key <- raw claim name. Tag KEYS must match
+    # [A-Za-z0-9 _.:/=+@-]{1,128}. NOTE (v2 change): the `repo` tag now carries
+    # the FULL "owner/repo" (raw `repository` claim); v1 stripped the owner.
+    session_tags:
+      repo: "repository"
+      repo-owner: "repository_owner"
+      ref: "ref"
+      ref-type: "ref_type"
+      actor: "actor"
+      event-name: "event_name"
 
-## Issuer URL for OIDC token validation
-## If configured in GitHub OIDC custom claims can be set to the organization name
-## e.g. "https://token.actions.githubusercontent.com/octo-org"
-## This allows to only accept tokens issued from the organization OIDC issuer
-issuer: "https://token.actions.githubusercontent.com"
+  # --- GitLab CI (generic provider) ---
+  # A non-github provider is "generic": it has no native struct, so it MUST map
+  # the canonical `subject` from a provider claim via claim_mappings.subject.
+  - issuer: "https://gitlab.com"
+    provider: "generic"
+    audiences:
+      - "https://gitlab.com" # GitLab's default OIDC audience is the instance URL
+    claim_mappings:
+      subject: "project_path" # e.g. "mygroup/myproject"
+    required_claims:
+      - "project_path"
+    session_tags:
+      project: "project_path"
+      ref: "ref"
+      ref-type: "ref_type"
 
-## Audience for the token validation (for AWS this is typically "sts.amazonaws.com")
-## DEPRECATED: Use 'audiences' array instead for multiple audience support
-audience: "sts.amazonaws.com"
-
-## Multiple audiences for token validation (recommended approach)
-## Supports validating tokens with any of the specified audiences
-## Examples:
-# audiences:
-#   - "sts.amazonaws.com"                    # AWS STS (default)
-#   - "https://my-api.example.com"           # Custom API audience
-#   - "https://vault.example.com"            # HashiCorp Vault
-#   - "https://my-service.company.com"       # Internal service
-audiences:
-  - "sts.amazonaws.com" # Default AWS STS audience
-  - "https://github.com/octo-org" # Custom audience for GitHub OIDC
-
-## AWS Role Session name for the assumed role
-## This is used to identify the session in AWS CloudTrail logs
+## AWS role session name (identifies the session in CloudTrail).
 role_session_name: aws-oidc-warden
 
-####################################################################################
-# CACHE CONFIGURATION
-# Configuration for JWKS keys caching to improve performance
-####################################################################################
-cache:
-  ## Cache type (select one): "memory", "dynamodb", or "s3"
-  ## - memory: Fast in-memory cache (default, no persistence between Lambda invocations)
-  ## - dynamodb: Use DynamoDB for persistent caching (good for Lambda environments)
-  ## - s3: Use S3 for larger cache objects (best for sharing across services)
-  type: "memory"
-
-  ## TTL (Time-To-Live) for cached JWKS keys
-  ## Format examples: "4h", "30m", "1h30m", "2d", "1w"
-  ttl: 4h
-
-  ## Maximum number of entries to store in local memory cache
-  ## Only applies when type is "memory" or as a local cache with other backends
-  max_local_size: 20
-
-  ## DynamoDB configuration (when type is "dynamodb")
-  # dynamodb_table: "aws-oidc-warden-cache"
-
-  ## S3 configuration (when type is "s3")
-  # s3_bucket: "arn:aws:s3:::aws-oidc-warden-cache" # S3 bucket for cache storage
-  # s3_prefix: "jwks-cache" # S3 prefix for cache objects
-  # s3_cleanup: true # Enable automatic cleanup of expired cache entries in S3
+## default_issuer: the issuer a role_mapping/role_group inherits when it does
+## not set its own `issuer`. Required to resolve unbound mappings when more than
+## one issuer is configured. Must reference an issuer defined above.
+default_issuer: "https://token.actions.githubusercontent.com"
 
 ####################################################################################
-# S3 CONFIGURATION
+# TOKEN HARDENING KNOBS (all optional; shown with their defaults)
 ####################################################################################
-
-## S3 bucket for storing session policies
-## These policies will be applied to the assumed role
-## The full S3 path will be: s3://${session_policy_bucket}/${session_policy_file}
-## Example: "s3://aws-oidc-warden-session-policies/org/repository-name/branch/main/policy.json"
-session_policy_bucket: "aws-oidc-warden-session-policies"
-
-## S3 config bucket (optional)
-## Used when loading config from S3 (for Lambda environments)
-# s3_config_bucket: "aws-oidc-warden-config"
-# s3_config_path: "config.yaml"
-
-## Config hot-reload interval (optional)
-## When set with an S3 config source, the running service re-fetches the S3
-## config object at most this often and applies it without redeploying.
-## 0 (default) disables reloading. Example: "5m".
-# config_reload_interval: "5m"
+## Clock-skew leeway applied to exp/nbf/iat. Default 30s; hard maximum 120s
+## (Validate() rejects anything higher). 0 means "use default", not "disable".
+jwt_leeway: "30s"
+## Cap token replay window. 0 = no cap.
+max_token_lifetime: "0s" # reject if exp-iat exceeds this
+max_token_age: "0s" # reject if now-iat exceeds this
+## Reject tokens longer than this many bytes BEFORE parsing. Default 8192.
+## 0 means "use default", not "unbounded".
+max_token_bytes: 8192
+## Minimum interval between forced JWKS refetches per (issuer, kid). Default 60s.
+jwks_refetch_cooldown: "60s"
+## Dev/test ONLY: permit http:// (loopback) issuer/jwks_uri. NEVER in production.
+allow_insecure_issuers: false
 
 ####################################################################################
-# LOGGING CONFIGURATION
+# LOGGING & AUDIT
 ####################################################################################
-
-## Enable logging to S3 (in addition to CloudWatch logs)
-## This provides persistent logs outside of Lambda execution context
+## slog level: debug | info | warn | error (default "info").
+log_level: "info"
+## When false (default), claim VALUES (canonical subject, raw sub, audience,
+## session-tag values, repository/ref/actor) are suppressed in BOTH the log
+## stream and the audit records; claim NAMES + decision + reason are kept.
+log_claim_values: false
+## When true, every allow decision's audit record must be durably written
+## BEFORE credentials are returned; a write failure denies the request
+## (fail-closed). Requires log_to_s3=true and log_bucket set.
+audit_required: false
+## Persist logs/audit records to S3 (in addition to CloudWatch).
 log_to_s3: false
 log_bucket: "aws-oidc-warden-logs"
 log_prefix: "logs/"
 
 ####################################################################################
-# GITHUB REPOSITORY TO AWS IAM ROLE MAPPINGS
-# This section defines which GitHub Actions workflows can assume which AWS IAM roles
-# and what conditions (constraints) must be met for the assumption to succeed.
+# JWKS CACHE
 ####################################################################################
-repo_role_mappings:
-  ####################################################################################
-  # BASIC EXAMPLES
-  ####################################################################################
+cache:
+  ## "memory" (default, per-container LRU), "dynamodb" (persistent/shared), or
+  ## "s3" (large/cold objects).
+  type: "memory"
+  ttl: 4h
+  max_local_size: 20
+  # dynamodb_table: "aws-oidc-warden-cache"
+  # s3_bucket: "arn:aws:s3:::aws-oidc-warden-cache"
+  # s3_prefix: "jwks-cache"
+  # s3_cleanup: true
 
-  # Example 1: Simple mapping with branch constraint
-  - repo: "org/some-repo-name"
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-create-repo
-      - arn:aws:iam::123456789012:role/github-actions-readonly
-    constraints:
-      branch: "refs/heads/main" # Only allow from main branch
+####################################################################################
+# S3 (session policies + optional remote config)
+####################################################################################
+## Bucket holding session-policy files referenced by session_policy_file below.
+session_policy_bucket: "aws-oidc-warden-session-policies"
 
-  # Example 2: Using external session policy file in S3
-  - repo: "org/main-branch-repo"
-    session_policy_file: "session-policies/org/main-branch-repo/main-branch-repo.json"
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-create-repo
-    constraints:
+## Load the primary config from S3 (Lambda). When set, the service can
+## hot-reload it on an interval without redeploying.
+# s3_config_bucket: "aws-oidc-warden-config"
+# s3_config_path: "config.yaml"
+# config_reload_interval: "5m"   # 0 (default) disables reloading
+
+####################################################################################
+# CONFIG FRAGMENTS (optional, for scaling to thousands of mappings)
+#
+# Additional sources merged onto this base config on load/reload. A fragment
+# may ONLY contribute role_mappings / role_groups / role_sets / default_issuer
+# — issuers, hardening knobs, allow_insecure_issuers and tag_auth are base-only
+# and REJECTED if a fragment tries to set them. A failed/invalid fragment
+# retains the last-good config (fail-safe reload). Local filesystem paths are
+# read directly and work today; "scheme://" URIs (e.g. s3://) resolve through
+# an injected fetcher that the shipped binaries do NOT wire up yet — do not
+# use remote fragment URIs in production until a fetcher is configured.
+####################################################################################
+# config_fragments:
+#   - "/etc/aws-oidc-warden/fragments/team-a.yaml"
+#   - "/etc/aws-oidc-warden/fragments/local.yaml"
+## Optional integrity pin per fragment path (sha256 of the file contents).
+# config_fragment_checksums:
+#   "/etc/aws-oidc-warden/fragments/team-a.yaml": "sha256:..."
+
+####################################################################################
+# ROLE SETS (named, reusable role lists; reference with "@name" in roles)
+####################################################################################
+role_sets:
+  # Map keys are plain names; reference them from a mapping's `roles` as "@name".
+  readonly:
+    - arn:aws:iam::123456789012:role/github-actions-readonly
+  deployers:
+    - arn:aws:iam::123456789012:role/github-actions-deploy
+    - arn:aws:iam::123456789012:role/github-actions-create-repo
+
+####################################################################################
+# ROLE MAPPINGS (provider-neutral authorization)
+#
+# Each mapping binds a `subject` PATTERN (auto-anchored ^(?:...)$) to a set of
+# assumable roles, scoped to a single issuer, optionally gated by `conditions`.
+# The requested role must be one of the mapping's resolved roles — a token can
+# never select an arbitrary role. `issuer` defaults to default_issuer above.
+# `conditions` are regexes against RAW verified claim names (AND across
+# dimensions); any claim not covered by a named field can be matched directly
+# by its claim name.
+####################################################################################
+role_mappings:
+  # Simple mapping, main branch only (inherits default_issuer = GitHub).
+  - subject: "org/some-repo-name"
+    roles: ["@deployers"] # role_set alias
+    conditions:
       branch: "refs/heads/main"
 
-  # Example 3: Using inline session policy
-  - repo: "org/inline-policy-repo"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["ecr:CreateRepository"],
-            "Resource": "*"
-          }
-        ]
-      }
+  # External session policy file in S3.
+  - subject: "org/main-branch-repo"
+    session_policy_file: "session-policies/org/main-branch-repo/policy.json"
     roles:
-      - arn:aws:iam::123456789012:role/github-actions-inline
+      - arn:aws:iam::123456789012:role/github-actions-create-repo
+    conditions:
+      branch: "refs/heads/main"
 
-  ####################################################################################
-  # PATTERN MATCHING EXAMPLES
-  ####################################################################################
-
-  # Example 4: Branch pattern matching for dev branches
-  - repo: "org/dev-repo"
+  # Inline session policy + subject pattern for many repos.
+  - subject: "org/service-.*"
+    roles: ["@readonly"]
     session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["iam:Create*"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-dev
-    constraints:
-      branch: "refs/heads/dev.*" # Matches dev, develop, development, etc.
+      {"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["iam:*"],"Resource":"*"}]}
 
-  # Example 5: Repository pattern matching for multiple repos
-  - repo: "org/service-.*"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["s3:*", "iam:*", "ec2:*"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-services
-
-  ####################################################################################
-  # EVENT CONSTRAINTS EXAMPLES
-  ####################################################################################
-
-  # Example 6: Restrict by GitHub event type
-  - repo: "org/push-only-repo"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["s3:GetObject*"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-push
-    constraints:
-      event_name: "push" # Only for push events
-
-  # Example 7: Restrict by specific workflow file
-  - repo: "org/specific-workflow-repo"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["dynamodb:*"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-workflow
-    constraints:
-      workflow_ref: "deploy\\.ya?ml$" # Only match deploy.yml or deploy.yaml
-
-  ####################################################################################
-  # ACTOR AND ENVIRONMENT CONSTRAINTS
-  ####################################################################################
-
-  # Example 8: Restrict by GitHub actor (username)
-  - repo: "org/restricted-users-repo"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["lambda:InvokeFunction"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-users
-    constraints:
-      actor_matches:
-        - "admin-user"
-        - "authorized-.*" # Regex pattern for usernames starting with authorized-
-
-  # Example 9: Restrict by GitHub environment
-  - repo: "org/environment-restricted-repo"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["rds:DescribeDBInstances"],
-            "Resource": "*"
-          }
-        ]
-      }
+  # Multiple conditions (all must hold) incl. a generic claim by its raw name.
+  - subject: "org/prod-repo"
     roles:
       - arn:aws:iam::123456789012:role/github-actions-prod
-    constraints:
-      environment: "production" # Only for production environment
-
-  ####################################################################################
-  # MULTIPLE CONSTRAINTS (COMBINED RULES)
-  ####################################################################################
-
-  # Example 10: Multiple constraints (all must be satisfied)
-  - repo: "org/multi-constraint-repo"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["ec2:*"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-full
-    constraints:
-      branch: "refs/heads/main"
-      event_name: "push"
-      environment: "github-hosted"
-
-  ####################################################################################
-  # SPECIAL CASES
-  ####################################################################################
-
-  # Example 11: Tag-based restrictions for releases
-  - repo: "org/tag-releases-repo"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["s3:PutObject"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-tagger
-    constraints:
-      ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+" # Only match semantic version tags
+    conditions:
+      ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
       ref_type: "tag"
+      environment: "production" # regex against the raw 'runner_environment' claim
+      sha: "^[0-9a-f]{40}$" # generic: any raw claim name works (must be string-typed)
 
-  # Example 12: Multiple roles for a single repo
-  - repo: "org/multi-role-repo"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["iam:*"],
-            "Resource": "*"
-          }
-        ]
-      }
+  # A GitLab mapping — bound explicitly to the GitLab issuer. Its `subject` is
+  # the canonical value produced by claim_mappings.subject (project_path).
+  - subject: "mygroup/myproject"
+    issuer: "https://gitlab.com"
     roles:
-      - arn:aws:iam::123456789012:role/github-actions-role1
-      - arn:aws:iam::123456789012:role/github-actions-role2
+      - arn:aws:iam::123456789012:role/gitlab-ci-deploy
+    conditions:
+      ref: "main"
 
-  # Example 13: Default fallback for any repo in the org
-  - repo: "org/.*"
-    session_policy: >
-      {
-        "Version": "2012-10-17",
-        "Statement": [
-          {
-            "Effect": "Deny",
-            "Action": ["sts:AssumeRole"],
-            "Resource": "*"
-          }
-        ]
-      }
-    roles:
-      - arn:aws:iam::123456789012:role/github-actions-default-fallback
-    # No constraints means this applies to all branches/events
+####################################################################################
+# ROLE GROUPS (DRY: one entry expands to one mapping per subject, sharing
+# issuer + defaults). Great for onboarding many repos with identical access.
+####################################################################################
+role_groups:
+  - issuer: "https://token.actions.githubusercontent.com"
+    subjects:
+      - "org/frontend"
+      - "org/backend"
+      - "org/mobile"
+    defaults:
+      roles: ["@readonly"]
+      conditions:
+        event_name: "push"
 
-# Tag-based authorization (optional, default disabled).
-# When enabled, a repo may assume a role whose IAM tags authorize its OIDC
-# claims, even if the role is not listed in repo_role_mappings above. Roles in
-# other accounts are reached via a per-account spoke role (the account ID is
-# parsed from the requested role ARN); same-account requests skip the hop.
-# See docs/TAG_BASED_AUTHORIZATION.md for the full tag reference and IAM setup.
+####################################################################################
+# TAG-BASED AUTHORIZATION (optional, default disabled) — enterprise-scale path.
+#
+# When enabled, a role whose IAM tags authorize a token's claims may be assumed
+# even without a role_mapping. v2 is ISSUER-BOUND: set aow/issuer on the role;
+# the canonical identity tag is aow/subject (aow/repo + aow/repo-owner remain
+# accepted as aliases through the v2 migration window). Cross-account targets
+# are reached via a per-account spoke role. See docs/TAG_BASED_AUTHORIZATION.md.
+####################################################################################
 tag_auth:
   enabled: false
-  tag_prefix: "aow/" # tag key namespace; keys: aow/repo, aow/repo-owner, aow/branch, aow/ref, aow/ref-type, aow/event-name, aow/workflow-ref, aow/environment, aow/actor
-  default_org: "" # if set, bare aow/repo tags (e.g. "api") expand to "<default_org>/api"
-  spoke_role_name: "aow-spoke" # role assumed in each member account (must trust the warden's execution role)
-  external_id: "" # optional external ID for the hub->spoke trust
+  tag_prefix: "aow/"
+  default_org: "" # if set, bare aow/repo tokens (e.g. "api") expand to "<default_org>/api"
+  spoke_role_name: "aow-spoke"
+  external_id: ""
   spoke_session_duration: "15m"
-  transitive_session_tags: false # when true, repo/ref/actor session tags are transitive
-  # (immutable + propagated through further role chaining).
-  # Enable ONLY if the target role chains to more roles and the
-  # repo ABAC must hold there too. See docs/TAG_BASED_AUTHORIZATION.md.
-  allowed_accounts: [] # member account IDs the warden may assume into.
-  # [] or unset = ANY account (set this in production!).
-  # The hub account is always allowed.
-#
-# Role tag examples (set these on the target IAM role, not here):
-#   aow/repo:         "org/api org/web"   # one repo or a space-separated list (OR)
-#   aow/repo-owner:   "org"               # any repo in the org (OR with aow/repo)
-#   aow/branch:       "main refs/heads/release"  # short branch name or full ref
-#   aow/ref:          "refs/heads/main"   # exact full ref
-#   aow/ref-type:     "branch"            # "branch" or "tag"
-#   aow/event-name:   "push"
-#   aow/workflow-ref: "org/api/.github/workflows/deploy.yml@refs/heads/main"
-#   aow/environment:  "production"
-#   aow/actor:        "deploy-bot"
-# All present aow/* tags must pass (AND); a space-separated value means OR.
-# A role with no aow/repo or aow/repo-owner tag is never assumable via tag-auth.
-# Matching is EXACT (AWS tag values cannot hold regex), unlike repo_role_mappings.
+  transitive_session_tags: false
+  allowed_accounts: [] # member account IDs the warden may assume into; [] = ANY (set in production!)
 
-# JWT Validation Mode
-# Controls who validates the JWT signature.
+####################################################################################
+# JWT VALIDATION MODE — who verifies the signature.
 #
-# "self"  (default) - Full signature verification by this service using JWKS.
-#                     Required when no trusted upstream service pre-validates tokens.
-#
-# "apigw" - Trust API Gateway HTTP API v2 JWT Authorizer. Claims are read from
-#           event.requestContext.authorizer.jwt.claims. No re-validation by Lambda.
-#           Use with cmd/apigatewayv2/ binary. Configure API GW JWT Authorizer with
-#           issuerUrl: https://token.actions.githubusercontent.com and the expected audience.
-#           SECURITY: Restrict Lambda invocations to the API Gateway resource via
-#           Lambda resource-based policies to prevent direct invocation bypass.
-#
-# "alb"   - Trust ALB OIDC authentication. The x-amzn-oidc-data header JWT
-#           (ALB-signed with ES256) is verified. Suitable when ALB is configured
-#           with GitHub OIDC as identity provider.
-#           alb_expected_signer should be set to the ALB ARN to prevent spoofing.
+# "self"  (default) full JWKS signature verification here (multi-issuer aware).
+# "apigw" trust an API Gateway HTTP API v2 JWT Authorizer (claims from the
+#         authorizer context). Delegated modes require EXACTLY ONE configured
+#         issuer and still re-validate issuer/audience/exp/nbf/sub/time-bounds.
+# "alb"   trust ALB OIDC; the ES256-signed x-amzn-oidc-data header is verified.
+#         Set alb_expected_signer to the ALB ARN to prevent cross-ALB spoofing.
+####################################################################################
 jwt_validation:
   mode: "self"
-  # alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"  # required (not optional) when mode is "alb"
+  # alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"

@@ -18,11 +18,11 @@ graph TB
         VALIDATOR[Token Validator]
         CACHE[Cache Layer<br/>Memory / DynamoDB / S3]
         CONSUMER[AWS Consumer]
-        CONFIG[Configuration<br/>Repository Mappings & Constraints]
+        CONFIG[Configuration<br/>Issuers, Role Mappings & Conditions]
     end
 
     subgraph "External Services"
-        JWKS[GitHub JWKS<br/>/.well-known/jwks.json]
+        JWKS[Per-Issuer JWKS<br/>e.g. GitHub, GitLab, ...]
         AWS[AWS Services<br/>STS / IAM / S3]
     end
 
@@ -116,7 +116,7 @@ sequenceDiagram
     participant Processor as Request Processor
     participant Validator as Token Validator
     participant Cache as Cache Layer
-    participant JWKS as GitHub JWKS
+    participant JWKS as Issuer JWKS
     participant Consumer as AWS Consumer
     participant STS as AWS STS
 
@@ -124,39 +124,46 @@ sequenceDiagram
     Handler->>Processor: ProcessRequest()
 
     Processor->>Validator: Validate(token)
-    Validator->>Cache: Get JWKS
+    Validator->>Validator: Peek unverified iss (routing only)
+    Validator->>Validator: Registry lookup: spec = registry[iss]
+    Note over Validator: unknown issuer -> deny, no fetch
+    Validator->>Cache: Get JWKS for this issuer
 
     alt Cache Miss
-        Cache->>JWKS: Fetch JWKS
+        Cache->>JWKS: SSRF-hardened fetch (per issuer)
         JWKS-->>Cache: Return JWKS
         Cache-->>Validator: Return JWKS
     else Cache Hit
         Cache-->>Validator: Return cached JWKS
     end
 
-    Validator->>Validator: Verify JWT signature
-    Validator->>Validator: Validate claims
-    Validator-->>Processor: Return claims
+    Validator->>Validator: Verify signature (kid+alg+use pinned)
+    Validator->>Validator: Re-assert verified iss == spec
+    Validator->>Validator: Bounds (exp/iat/nbf, leeway, lifetime/age), audience, required_claims
+    Validator->>Validator: normalize -> canonical subject + raw claims
+    Validator-->>Processor: Return claims {issuer, subject, raw}
 
     opt tag_auth.enabled
         Processor->>Consumer: IsTargetAccountAllowed(role)
         Consumer-->>Processor: allowed / denied
     end
 
-    Processor->>Processor: MatchRolesToRepoWithConstraints()
+    Processor->>Processor: AuthorizeRoles(issuer, subject, claims) via owner-bucketed index
 
     opt tag_auth.enabled and explicit match failed
         Processor->>Consumer: GetRoleTags(role)
         Consumer-->>Processor: role IAM tags
-        Processor->>Processor: TagAuth.Authorize(tags, claims)
+        Processor->>Processor: TagAuth.Authorize(tags, claims, issuer, subject)
     end
 
+    Note over Processor: requested role must be in the matched mapping's roles
     Processor->>Processor: Resolve session policy (inline or S3)
-    Processor->>Consumer: AssumeRole()
+    Processor->>Consumer: AssumeRole(role, ..., session_tags spec)
 
-    Consumer->>STS: AssumeRole with session tags
+    Consumer->>STS: AssumeRole with per-issuer session tags
     STS-->>Consumer: Return credentials
     Consumer-->>Processor: Return credentials
+    Processor->>Processor: Audit record (allow); durable before return if audit_required
     Processor-->>Handler: Return credentials
     Handler-->>Client: HTTP 200 + credentials
 ```
@@ -212,20 +219,22 @@ The validator component handles all OIDC token validation logic:
 
 ```go
 type TokenValidatorInterface interface {
-    Validate(string) (*types.GithubClaims, error)
-    ParseToken(tokenString string) (*types.GithubClaims, error)
+    Validate(string) (*types.Claims, error)
     FetchJWKS(issuer string) (*types.JWKS, error)
     GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc
 }
 ```
 
-**Validation Process:**
+**Validation Process (multi-issuer, `self` mode):**
 
-1. **JWT Parsing**: Decode and parse the JWT token
-2. **JWKS Retrieval**: Fetch public keys from OIDC provider (with caching); forced refresh on key-miss (rotation recovery)
-3. **Signature Verification**: Verify token signature using RSA (`RS256`/`RS384`/`RS512`) or ECDSA (`ES256`/`ES384`/`ES512`) public keys; `GenKeyFunc` switches on the JWKS key `kty` field (`RSA` → `parseRSAKey`, `EC` → `parseECKey`)
-4. **Claims Validation**: Validate issuer, audience (any match from `audiences` list — full multi-audience check in `Validate()`), expiration, and `repository` claim presence
-5. **Provider-Aware**: Created via `NewTokenValidatorFromProvider`; reads issuer/audiences live from the provider on every `Validate()` call so hot-reloaded config changes take effect immediately without a restart
+1. **Length guard**: reject tokens over `max_token_bytes` before any parse.
+2. **Route**: read the unverified `iss` (routing only) and look it up in the immutable issuer registry (exact match); an unknown issuer denies **before** any JWKS fetch.
+3. **Per-issuer parse**: algorithm allowlist (RS/ES 256–512), `exp` + `iat` required, `WithLeeway`.
+4. **Signature**: verify against that issuer's cached JWKS (SSRF-hardened fetch; forced refresh on key-miss, rate-limited per `(issuer, kid)`); key pinned by `kid` + `alg` + `use=sig` + key-type↔alg-family. Then **re-assert** the verified `iss` equals the matched spec.
+5. **Bounds & claims**: `sub` non-empty, `nbf` (if present), optional lifetime/age caps, audience ANY-match against this issuer's audiences only, `required_claims` present.
+6. **Normalize**: derive the canonical `subject` from the issuer's `claim_mappings` (GitHub default `repository`), populate `claims.Raw` with every verified claim. A token never self-asserts an unmapped subject.
+
+The registry is rebuilt lock-free on config hot-reload (atomic snapshot swap keyed on a `builtFrom` identity check). Delegated `apigw`/`alb` modes run the **same** bounds + normalization via a shared `checkAndNormalizeClaims` path — they are not a weaker path.
 
 **Security Features:**
 
@@ -233,7 +242,7 @@ type TokenValidatorInterface interface {
 - Issuer and multi-audience validation (any expected audience match accepted)
 - Token expiration and `iat` required
 - JWKS URI and issuer URL must use HTTPS (loopback hosts excepted for local dev/tests)
-- Claims extraction and validation; `repository` claim required
+- Claims extraction and validation; each issuer's own `required_claims` list is enforced (GitHub defaults to requiring `repository`)
 
 ### AWS Consumer (`internal/aws/`)
 
@@ -242,7 +251,7 @@ The AWS consumer abstracts all AWS service interactions:
 ```go
 type AwsConsumerInterface interface {
     ReadS3Configuration() error
-    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.GithubClaims) (*types.Credentials, error)
+    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
     GetS3Object(bucket, key string) (io.ReadCloser, error)
     GetRole(role string) (*iam.GetRoleOutput, error)
 }
@@ -251,23 +260,29 @@ type AwsConsumerInterface interface {
 **AWS Operations:**
 
 - **Role Assumption**: Use AWS STS to assume target IAM roles
-- **Session Tagging**: Apply GitHub-specific tags to AWS sessions
+- **Session Tagging**: Apply the requesting issuer's `session_tags` spec to AWS sessions
 - **Session Policies**: Apply custom IAM policies to limit permissions
 - **S3 Integration**: Read configuration and session policies from S3
 - **IAM Integration**: Validate role existence and trust relationships
 
 **Session Tags Applied:**
 
+Tags are not hardcoded — each issuer declares its own `session_tags` map (STS
+tag key ← raw claim name), and `BuildSessionTags(rawClaims, tagSpec)` resolves
+that spec against the verified claims of the token that authorized this
+request:
+
 ```go
-tags := []types.Tag{
-    {Key: aws.String("repo"), Value: aws.String(claims.Repository)},
-    {Key: aws.String("actor"), Value: aws.String(claims.Actor)},
-    {Key: aws.String("ref"), Value: aws.String(claims.Ref)},
-    {Key: aws.String("event-name"), Value: aws.String(claims.EventName)},
-    {Key: aws.String("repo-owner"), Value: aws.String(claims.RepositoryOwner)},
-    {Key: aws.String("ref-type"), Value: aws.String(claims.RefType)},
-}
+func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag
 ```
+
+A typical GitHub `session_tags` spec (`repo: repository`, `actor: actor`,
+`ref: ref`, ...) produces the same shape of tags v1 hardcoded, but any issuer
+can define its own key set from its own raw claims (see
+[SESSION_TAGGING.md](SESSION_TAGGING.md)). Invalid keys/values are skipped and
+logged, never sanitized — a tag an ABAC policy sees always carries the exact
+verified claim value. The list is deterministic (sorted by key) and capped at
+50 tags.
 
 ### Caching System (`internal/cache/`)
 
@@ -309,15 +324,27 @@ The configuration system supports multiple formats and sources:
 
 ```go
 type Config struct {
-    Issuer                string            `mapstructure:"issuer"`
-    Audience              string            `mapstructure:"audience"`
-    RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"`
+    Issuers               []IssuerConfig    `mapstructure:"issuers"`        // trusted OIDC issuers (v2)
+    DefaultIssuer         string            `mapstructure:"default_issuer"`
+    RoleMappings          []RoleMapping     `mapstructure:"role_mappings"`
+    RoleGroups            []RoleGroup       `mapstructure:"role_groups"`
+    RoleSets              map[string][]string `mapstructure:"role_sets"`
+    ConfigFragments       []string          `mapstructure:"config_fragments"`
     Cache                 *Cache            `mapstructure:"cache"`
     TagAuth               *TagAuth          `mapstructure:"tag_auth"`
     ConfigReloadInterval  time.Duration     `mapstructure:"config_reload_interval"`
-    // ... other fields
+    // hardening + logging knobs: jwt_leeway, max_token_lifetime/age/bytes,
+    // jwks_refetch_cooldown, allow_insecure_issuers, log_level,
+    // log_claim_values, audit_required, ... (see docs/CONFIGURATION.md)
 }
 ```
+
+Each `IssuerConfig` carries `issuer`, `provider` (`github`/`generic`),
+`audiences`, optional `jwks_uri`, `claim_mappings`, `required_claims`, and
+`session_tags`. At `Validate()`, `role_mappings`/`role_groups` are resolved to
+their issuer (explicit, `default_issuer`, or the sole issuer), `@role_set`
+aliases are expanded, patterns are anchored + compiled once, and an
+owner-bucketed authorization index is built (byte-identical to a linear scan).
 
 **Configuration Sources** (in order of precedence):
 
@@ -335,17 +362,18 @@ type Config struct {
 - `MaybeRefresh(ctx)` — called at the start of every request; no-op unless `config_reload_interval` has elapsed. Uses double-checked locking so at most one S3 fetch runs per interval under concurrent load. Each refresh clones the pristine base config (env/file/defaults), overlays the fetched bytes via `MergeBytes`, re-validates (recompiling all regex patterns), then atomically swaps the result in. Errors are logged and the previous config is retained.
 - `Get()` — atomic load of the current active config; zero-copy, safe for concurrent reads.
 
-The token validator is constructed via `NewTokenValidatorFromProvider`, which reads issuer and audiences from `provider.Get()` on every `Validate()` call so hot-reloaded issuer/audience changes take effect immediately without a Lambda restart.
+The token validator is constructed via `NewTokenValidator(provider, cache)`; it reads the live config from `provider.Get()` and rebuilds its issuer registry on hot-reload (identity-checked snapshot swap) so issuer/audience/mapping changes take effect immediately without a Lambda restart. Beyond the primary S3 overlay, `config_fragments` are merged on refresh with fail-safe reload (a bad fragment retains the last-good config); fragments may only contribute `role_mappings`/`role_groups`/`role_sets`/`default_issuer`. Local filesystem-path fragments are content-hashed (sha256) for change detection and work today; a remote fetcher for `"scheme://"` sources (e.g. `s3://`, keyed on the source's own ETag) is a pluggable seam (`config.WithFragmentFetcher`) that the shipped binaries do not yet install.
 
-**Repository Mapping System:**
+**Authorization Mapping System:**
 
 ```yaml
-repo_role_mappings:
-  - repo: "org/project-.*" # Regex pattern matching
+role_mappings:
+  - subject: "org/project-.*" # Regex pattern matching (canonical subject)
+    # issuer: inherited from default_issuer unless set here
     roles:
       - "arn:aws:iam::123456789012:role/github-actions-role"
-    constraints:
-      branch: "refs/heads/main" # Branch constraints
+    conditions:
+      branch: "refs/heads/main" # regex against the raw 'ref' claim
       actor_matches: ["admin-.*"] # Actor constraints
       event_name: "push" # Event type constraints
     session_policy: | # Inline session policy
@@ -372,7 +400,7 @@ flowchart TD
     G --> GA{tag_auth enabled?}
     GA -->|Yes| GB[IsTargetAccountAllowed]
     GB -->|Denied| GC[Return 403 Error]
-    GB -->|Allowed| H[MatchRolesToRepoWithConstraints]
+    GB -->|Allowed| H[AuthorizeRoles issuer+subject]
     GA -->|No| H
 
     H -->|Explicit match| N[Apply Session Policy]
@@ -387,28 +415,34 @@ flowchart TD
     O -->|Success| Q[Return Credentials]
 ```
 
-### 2. Constraint Validation
+### 2. Condition Validation
 
-The constraint engine supports multiple validation types:
+Every named field and every `Extra` (arbitrary-claim) entry compiles through the
+same anchored-regex mechanism, so a plain string is a widened `==`, not a
+special case:
 
 ```go
-type Constraint struct {
-    Branch       string   `mapstructure:"branch"`        // refs/heads/main
-    Ref          string   `mapstructure:"ref"`           // refs/tags/v.*
-    RefType      string   `mapstructure:"ref_type"`      // branch, tag
-    EventName    string   `mapstructure:"event_name"`    // push, pull_request
-    WorkflowRef  string   `mapstructure:"workflow_ref"`  // .github/workflows/deploy.yml
-    Environment  string   `mapstructure:"environment"`   // production
-    ActorMatches []string `mapstructure:"actor_matches"` // ["admin-.*", "specific-user"]
+type Condition struct {
+    Branch       string            `mapstructure:"branch"`        // checks the raw 'ref' claim
+    Ref          string            `mapstructure:"ref"`           // also checks 'ref' (alias of Branch)
+    RefType      string            `mapstructure:"ref_type"`      // branch, tag
+    EventName    string            `mapstructure:"event_name"`    // push, pull_request
+    WorkflowRef  string            `mapstructure:"workflow_ref"`  // .github/workflows/deploy.yml
+    Environment  string            `mapstructure:"environment"`   // checks the raw 'runner_environment' claim
+    ActorMatches []string          `mapstructure:"actor_matches"` // ["admin-.*", "specific-user"]
+    Extra        map[string]string `mapstructure:",remain"`       // any other raw claim, by name
 }
 ```
 
 **Validation Logic:**
 
-- All specified constraints must be satisfied (AND logic)
-- Regular expressions supported for pattern matching
-- Claims are extracted from the validated JWT token
-- Constraint compilation is cached for performance
+- All specified conditions must be satisfied (AND logic) — this includes a
+  named field and an `Extra` entry that happen to target the same underlying
+  claim; both apply and both must match.
+- Every pattern is auto-anchored (`^(?:pattern)$`) and regex-capable.
+- Claims are extracted from the validated JWT token; `Extra` claim values must
+  be string-typed (a numeric claim like `run_id` never satisfies a condition).
+- Condition compilation happens once, in `Validate()`, never per request.
 
 ### 3. Caching Strategy
 
@@ -454,21 +488,21 @@ flowchart TD
     L --> M[Token Accepted]
 ```
 
-### 2. Repository Authorization
+### 2. Subject-Based Authorization
 
 ```mermaid
 flowchart TD
-    A[Validated Token Claims] --> B[Extract Repository]
-    B --> C{Find Matching Pattern}
+    A[Validated Token Claims] --> B[Derive Canonical Subject]
+    B --> C{Find Matching Subject Pattern<br/>issuer-bound, owner-bucketed index}
     C -->|No Match| D[Access Denied]
-    C -->|Match Found| E[Load Constraints]
-    E --> F{Validate Branch}
+    C -->|Match Found| E[Load Conditions]
+    E --> F{Validate Branch/Ref}
     F -->|Failed| G[Access Denied]
     F -->|Passed| H{Validate Actor}
     H -->|Failed| I[Access Denied]
     H -->|Passed| J{Validate Event}
     J -->|Failed| K[Access Denied]
-    J -->|Passed| L{Validate Environment}
+    J -->|Passed| L{Validate Environment/Extra claims}
     L -->|Failed| M[Access Denied]
     L -->|Passed| N[Authorization Granted]
 ```
@@ -491,7 +525,7 @@ flowchart TD
 
 ### 4. Tag-Based Authorization & Cross-Account
 
-Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `repo_role_mappings` matching fails. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup.
+Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `role_mappings` matching fails. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup.
 
 **Hub/Spoke Flow:**
 
@@ -519,6 +553,29 @@ When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no
 | Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg)         |
 | Tag matching logic             | [images/tag-auth-matching.svg](images/tag-auth-matching.svg)         |
 | Authorization precedence       | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg)     |
+
+### 5. Residual Risk: Stateless Replay
+
+The validator is fully stateless — there is no `jti`/nonce replay cache. A
+token that is captured before it expires (e.g. exfiltrated from CI logs or a
+compromised runner) remains usable by an attacker for the rest of its
+validity window, and a duplicate `AssumeRole` call with the same token is not
+itself detected as a replay. The hardening knobs bound, but do not eliminate,
+this exposure:
+
+- `max_token_lifetime` / `max_token_age` shrink the window a stolen token
+  stays valid, independent of what the issuer itself set for `exp`.
+- `jwks_refetch_cooldown` and per-`(issuer, kid)` rate limiting stop a replay
+  attempt from being amplified into a JWKS-fetch storm.
+- Structured audit records (`docs/LOGGING.md`) let you detect anomalous
+  reuse after the fact (e.g. the same `jwtSub`/`subject` assuming roles from
+  unexpected source IPs or in an unexpected cadence), even though the service
+  itself does not block it in real time.
+
+If your threat model requires hard replay prevention, put a short-lived,
+single-use token issuance step in front of this service, or rely on the
+short (minutes-scale) validity window GitHub Actions/GitLab CI already give
+OIDC tokens.
 
 ## Performance Architecture
 
@@ -594,7 +651,7 @@ graph LR
 
 ```dockerfile
 # Multi-stage build for optimal image size
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 COPY . .
 RUN go mod download
