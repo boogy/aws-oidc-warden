@@ -308,7 +308,7 @@ sequenceDiagram
     V->>V: length guard (max_token_bytes)
     V->>V: unverified iss peek (routing only)
     V->>V: registry lookup (exact iss) — unknown ⇒ deny
-    V->>K: JWKS (cache-first; singleflight; discovery if needed)
+    V->>K: JWKS (cache-first, singleflight, discovery if needed)
     K-->>V: keys (≤20, RSA≥2048 / EC on-curve)
     V->>V: select key by kid+alg+type, verify signature
     V->>V: re-assert verified iss == spec
