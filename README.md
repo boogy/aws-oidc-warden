@@ -114,13 +114,33 @@ For the full reference — all keys, condition fields, session-policy options, r
 
 #### Request Format
 
-Send a POST request with the OIDC token and desired AWS role ARN:
+The wire contract depends on `jwt_validation.mode` — specifically, **who verifies the token**. The role ARN is always in the JSON body; the token's location differs.
+
+| Mode             | `Authorization` header          | Request body                     | Token verified by            |
+| ---------------- | ------------------------------- | -------------------------------- | ---------------------------- |
+| `self` (default) | none                            | `{"token": "...", "role": "..."}`| This service                 |
+| `apigw`          | `Authorization: Bearer <token>` | `{"role": "..."}`                | API Gateway JWT Authorizer   |
+| `alb`            | none — ALB injects `x-amzn-oidc-data` | `{"role": "..."}`          | ALB OIDC                      |
+
+> **The token is never sent twice.** In `apigw` mode it lives **only** in the `Authorization` header — a `token` field in the body is ignored (`ParseRoleOnlyRequestBody` reads only `role`), and a missing header makes API Gateway reject the call before this service runs. See [docs/TOKEN_VALIDATION.md §2.1](docs/TOKEN_VALIDATION.md#21-request-contract-per-mode).
+
+**Self mode** (default) — POST the OIDC token and role ARN in the body:
 
 ```json
 {
   "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
   "role": "arn:aws:iam::123456789012:role/github-actions-role"
 }
+```
+
+**apigw mode** — send the token as a Bearer header (API Gateway validates it); the body carries only the role:
+
+```http
+POST /verify HTTP/1.1
+Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+Content-Type: application/json
+
+{"role": "arn:aws:iam::123456789012:role/github-actions-role"}
 ```
 
 #### Running Locally
@@ -142,7 +162,7 @@ Endpoints:
 
 #### Using in GitHub Actions Workflows
 
-The recommended approach uses `@actions/core` to request an OIDC token with a specific audience:
+The recommended approach uses `@actions/core` to request an OIDC token with a specific audience. The example below targets **self mode** (token in the body). For **apigw mode**, see the variant that follows.
 
 ```yaml
 name: AWS Deployment
@@ -186,6 +206,38 @@ jobs:
 ```
 
 > **curl alternative**: You can also call the endpoint directly via `curl` using `$ACTIONS_ID_TOKEN_REQUEST_URL`. The `@actions/core` method above is preferred for cleaner audience control.
+
+**apigw mode variant** — send the token as an `Authorization: Bearer` header (API Gateway's JWT Authorizer validates it) and put only the role in the body:
+
+```yaml
+      - name: Get AWS credentials via OIDC warden (apigw mode)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const core = require('@actions/core');
+            const token = await core.getIDToken('sts.amazonaws.com');
+
+            const response = await fetch('https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/verify', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                role: 'arn:aws:iam::123456789012:role/github-actions-role'
+              })
+            });
+
+            const { data } = await response.json();
+            core.setSecret(data.AccessKeyId);
+            core.setSecret(data.SecretAccessKey);
+            core.setSecret(data.SessionToken);
+            core.exportVariable('AWS_ACCESS_KEY_ID', data.AccessKeyId);
+            core.exportVariable('AWS_SECRET_ACCESS_KEY', data.SecretAccessKey);
+            core.exportVariable('AWS_SESSION_TOKEN', data.SessionToken);
+```
+
+The audience requested by `getIDToken(...)` must match the audience configured on both the API Gateway JWT Authorizer and this service's issuer.
 
 #### Deploying to AWS Lambda
 

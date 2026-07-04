@@ -61,6 +61,33 @@ checked). Multi-issuer is a `self`-mode capability.
 > extractor returns an error wrapping `ErrTokenValidationFailed` rather than
 > treating "no claims" as "anonymous allow".
 
+### 2.1 Request contract per mode
+
+The mode also changes **what the caller sends on the wire** — because it changes
+_who receives the token_. The role ARN is always in the JSON body; only the
+token's location differs.
+
+| Mode             | `Authorization` header                | Request body                      | Token consumed by              |
+| ---------------- | ------------------------------------- | --------------------------------- | ------------------------------ |
+| `self` (default) | none                                  | `{"token": "...", "role": "..."}` | This service (`SelfExtractor`) |
+| `apigw`          | `Authorization: Bearer <token>`       | `{"role": "..."}`                 | API Gateway JWT Authorizer     |
+| `alb`            | none — ALB injects `x-amzn-oidc-data` | `{"role": "..."}`                 | ALB OIDC                       |
+
+- **The token is never sent both in the header and the body.** In `apigw` mode
+  the token lives **only** in the `Authorization: Bearer` header, where API
+  Gateway's JWT Authorizer reads it. This service's Lambda never sees the raw
+  token — it receives the authorizer's decoded claims from
+  `event.requestContext.authorizer.jwt.claims`.
+- Delegated adapters parse the body with `ParseRoleOnlyRequestBody`, which reads
+  **only** `role`. A `token` field sent in the body in `apigw`/`alb` mode is
+  silently ignored.
+- Omitting the `Authorization` header in `apigw` mode makes **API Gateway**
+  reject the request (before this service runs); the bypass guard above only
+  covers the case where API Gateway forwards a request carrying no claims.
+- In `apigw` mode the token's `aud` must satisfy **both** the API Gateway JWT
+  Authorizer's configured audience **and** this service's issuer `audiences`
+  (re-checked here as defense in depth — see [§6](#6-claim-checks)).
+
 ---
 
 ## 3. The self-mode pipeline
