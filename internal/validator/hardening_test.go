@@ -1,6 +1,6 @@
 package validator_test
 
-// Adversarial coverage for Group C's crypto/time hardening: alg-confusion and
+// Adversarial coverage for crypto/time hardening: alg-confusion and
 // duplicate-kid-different-type key selection (genKeyFuncForIssuer), OIDC
 // discovery issuer mismatch (RFC 8414), zero-key JWKS never cached, and
 // singleflight collapsing concurrent cold fetches for one issuer into a

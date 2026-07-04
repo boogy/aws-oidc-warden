@@ -67,8 +67,7 @@ func (c *albKeyCache) set(kid string, key *ecdsa.PublicKey) {
 // Defense-in-depth: re-validates issuer and every other claim self mode
 // checks (sub, iat, nbf, audience, lifetime/age caps, required_claims)
 // through the same checkAndNormalizeClaims path Validate() uses — ALB signs
-// the token itself, so only signature *trust* differs from self mode
-// (SHARED.md invariant #6).
+// the token itself, so only signature *trust* differs from self mode.
 type ALBExtractor struct {
 	provider       *config.Provider
 	keyEndpointFmt string // format string for the public key URL

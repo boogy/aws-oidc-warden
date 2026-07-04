@@ -15,9 +15,8 @@ import "github.com/golang-jwt/jwt/v5"
 // below, which retains the raw "sub" JWT claim. Claims.Subject is instead set
 // exclusively by normalizeClaims (internal/validator) from the issuer's
 // configured claim_mappings.subject — never directly from token JSON — so a
-// token can never self-assert its own canonical identity (see SHARED.md
-// invariant #4). Do not read Subject on a value that hasn't gone through
-// Validate()/normalizeClaims.
+// token can never self-assert its own canonical identity. Do not read Subject
+// on a value that hasn't gone through Validate()/normalizeClaims.
 type Claims struct {
 	jwt.RegisteredClaims
 	Actor                string `json:"actor"`

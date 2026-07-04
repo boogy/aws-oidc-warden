@@ -187,8 +187,8 @@ type TagAuth struct {
 	AllowedAccounts []string `mapstructure:"allowed_accounts" json:"allowed_accounts,omitempty"`
 
 	// multiIssuer is set by Config.Validate() (len(Issuers) > 1) and gates the
-	// <prefix>issuer requirement in Authorize (invariant #3: no cross-issuer
-	// identity collision via tag-auth). Not serialized; always recomputed.
+	// <prefix>issuer requirement in Authorize (no cross-issuer identity
+	// collision via tag-auth). Not serialized; always recomputed.
 	multiIssuer bool `mapstructure:"-" json:"-"`
 }
 
@@ -244,8 +244,8 @@ type Config struct {
 	// "s3://bucket/key") or local filesystem paths — merged into the combined
 	// role_mappings/role_groups/role_sets/default_issuer set on top of the
 	// base config (see fragments.go, provider.go). Base-only: a fragment can
-	// never set this field itself (SHARED.md invariant #9); enforced by the
-	// fragment merge allowlist, not by this field's type.
+	// never set this field itself; enforced by the fragment merge allowlist,
+	// not by this field's type.
 	ConfigFragments []string `mapstructure:"config_fragments" json:"config_fragments,omitempty"`
 
 	// ConfigFragmentChecksums optionally pins an expected integrity value
@@ -852,7 +852,7 @@ func (c *Config) Validate() error {
 	// directly (e.g. in tests) without going through viper defaults.
 	if c.TagAuth != nil {
 		// multiIssuer gates the <prefix>issuer requirement in TagAuth.Authorize
-		// (invariant #3: no cross-issuer identity collision via tag-auth).
+		// (no cross-issuer identity collision via tag-auth).
 		c.TagAuth.multiIssuer = len(c.Issuers) > 1
 
 		if c.TagAuth.DefaultOrg != "" && strings.ContainsAny(c.TagAuth.DefaultOrg, "/ \t\n\r") {
@@ -901,7 +901,7 @@ func (c *Config) Validate() error {
 // leaving literal role ARNs untouched. Resolution happens once, at Validate()
 // time, before AuthorizeRoles' role∈roles security gate ever runs, so an
 // alias can never widen a request beyond what's statically configured
-// (invariant #1: the token never selects the role set, config does).
+// (the token never selects the role set, config does).
 func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 	out := make([]string, 0, len(roles))
 	for _, r := range roles {
@@ -949,7 +949,7 @@ func compileCondition(cond *Condition) error {
 	}
 
 	// NOTE: Branch and Ref intentionally both check the raw "ref" claim; this
-	// mirrors pre-existing behavior and is not something Group D changes.
+	// mirrors pre-existing behavior.
 	if err := add("ref", cond.Branch); err != nil {
 		return err
 	}
@@ -1055,7 +1055,7 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 // order, via RoleMapping.order) whose issuer+subject match, mirroring the
 // pre-v2 first-match-wins behavior. Bucketing into the index is purely a
 // performance detail — every candidate is re-verified against the compiled
-// pattern before being considered a match (invariant #10 parity).
+// pattern before being considered a match (index↔linear-scan parity).
 func (c *Config) FindSessionPolicy(issuer, subject string) (*string, *string) {
 	idx, ok := c.index[issuer]
 	if !ok {

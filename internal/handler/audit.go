@@ -15,8 +15,8 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
 
-// AuditSink is the durability boundary for the structured audit trail
-// (SHARED.md invariant #11): one JSON record per allow/deny decision.
+// AuditSink is the durability boundary for the structured audit trail:
+// one JSON record per allow/deny decision.
 // *s3logger.S3Logger satisfies this via its WriteRecord/BufferRecord methods —
 // duck-typed, so this package never imports s3logger and there's no import
 // cycle. A nil AuditSink is always safe: recordDecision no-ops the write and
@@ -42,16 +42,16 @@ type AuditSink interface {
 //
 // kid is deliberately absent: types.Claims carries no post-verification key
 // ID, and adding one would mean touching validator internals, which is out of
-// scope for this group.
+// scope here.
 type auditRecord struct {
 	RequestID string `json:"requestId"`
 	Frontend  string `json:"frontend"`
 	JWTMode   string `json:"jwtMode"`
 	Decision  string `json:"decision"`        // "allow" | "deny"
 	Stage     string `json:"stage,omitempty"` // failing stage; deny only
-	// Reason is the deny reason (I5's "denyReason" field, named "reason" here
-	// to match the standardized slog attribute set in auditLogAttrs — one name
-	// for the same value in both the log line and the audit record). Deny only.
+	// Reason is the deny reason, named "reason" here to match the standardized
+	// slog attribute set in auditLogAttrs — one name for the same value in both
+	// the log line and the audit record. Deny only.
 	Reason string `json:"reason,omitempty"`
 
 	Issuer   string   `json:"issuer,omitempty"`
@@ -77,20 +77,20 @@ type auditRecord struct {
 
 	Expiry *time.Time `json:"expiry,omitempty"`
 
-	// ProcessingMS is per-request wall-clock time (I5's per-stage timing, at the
-	// granularity available without threading a stage-timer through every branch
-	// of ProcessRequest). Emitted on both allow and deny.
+	// ProcessingMS is per-request wall-clock time (per-stage granularity is not
+	// available without threading a stage-timer through every branch of
+	// ProcessRequest). Emitted on both allow and deny.
 	//
 	// TODO(v2): optional EMF metrics — emit ProcessingMS/decision/stage as
 	// CloudWatch Embedded Metric Format instead of (or alongside) this JSON
 	// record, for native CloudWatch Metrics dashboards/alarms without a log
-	// insights query. Deferred: no EMF dependency added in this group.
+	// insights query. Deferred: no EMF dependency added yet.
 	ProcessingMS int64 `json:"processingMs"`
 }
 
 // redact zeroes claim VALUES (never names/decision/reason/IDs) when
-// logClaimValues is false, per SHARED.md invariant #11 and I4. Must run
-// before the record is logged or marshaled for the audit sink.
+// logClaimValues is false. Must run before the record is logged or marshaled
+// for the audit sink.
 func (rec *auditRecord) redact(logClaimValues bool) {
 	if logClaimValues {
 		return
@@ -111,7 +111,7 @@ func (rec *auditRecord) matchedRole() string {
 	return rec.RequestedRole
 }
 
-// auditLogAttrs returns the standardized slog attribute set (I1) for one
+// auditLogAttrs returns the standardized slog attribute set for one
 // decision: requestId, frontend, jwtMode, issuer, provider, jwtSub, subject,
 // audience, decision, reason, matchedRole, accountId, processingMs, stage.
 // Callers append these to their existing log.Error/log.Info call rather than
@@ -121,8 +121,8 @@ func (rec *auditRecord) matchedRole() string {
 // logClaimValues gates the same claim VALUES that auditRecord.redact()
 // suppresses for the durable sink (jwtSub, subject, audience) — so when
 // log_claim_values=false those values are absent from the emitted log stream
-// too, not just the audit record (SHARED.md invariant #11 / I4: suppress in
-// BOTH). Claim NAMES, decision, reason, and non-claim metadata
+// too, not just the audit record (suppress in BOTH the log stream and the
+// audit record). Claim NAMES, decision, reason, and non-claim metadata
 // (requestId/issuer/provider/role/account/stage) are always emitted.
 func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 	jwtSub, subject, audience := rec.JWTSub, rec.Subject, rec.Audience
@@ -148,7 +148,7 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 }
 
 // recordDecision is the single terminal point for a decision: it redacts rec
-// per cfg.LogClaimValues, emits the ONE standardized decision log line (I1)
+// per cfg.LogClaimValues, emits the ONE standardized decision log line
 // from the redacted record — so the log stream and the durable sink are keyed
 // off the identical, already-redacted record and can never disagree about the
 // decision or what was suppressed — then sends it to the audit sink as one
@@ -167,8 +167,8 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.redact(cfg.LogClaimValues)
 
-	// Standardized decision line (I1). Allow at Info; deny at Warn — a denial
-	// is a security-relevant signal (I3) but not an operational error.
+	// Standardized decision line. Allow at Info; deny at Warn — a denial
+	// is a security-relevant signal but not an operational error.
 	attrs := auditLogAttrs(rec, cfg.LogClaimValues)
 	if rec.Decision == "allow" {
 		log.Info("authorization decision", attrs...)

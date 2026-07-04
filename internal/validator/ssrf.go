@@ -19,12 +19,11 @@ const maxJWKSRedirects = 5
 
 // newSecureHTTPClient builds the single shared http.Client used for every
 // outbound JWKS/discovery fetch (built once at TokenValidator construction,
-// never per call -- SHARED.md cold-start standard). It blocks connections to
-// private/loopback/link-local/metadata addresses at dial time -- including on
-// redirects -- enforces TLS 1.2+, and caps + re-validates redirects.
-// allowInsecureIssuers permits dialing loopback (dev/test servers) only; it
-// never relaxes the private/link-local/metadata block (SHARED.md invariant
-// #7).
+// never per call). It blocks connections to private/loopback/link-local/
+// metadata addresses at dial time -- including on redirects -- enforces
+// TLS 1.2+, and caps + re-validates redirects. allowInsecureIssuers permits
+// dialing loopback (dev/test servers) only; it never relaxes the
+// private/link-local/metadata block.
 func newSecureHTTPClient(allowInsecureIssuers bool, timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: timeout}
 
@@ -88,7 +87,7 @@ func isBlockedIP(ip net.IP, allowLoopback bool) bool {
 
 // requireSecureURL ensures u uses HTTPS. Plain HTTP is permitted only for
 // loopback hosts (127.0.0.1, ::1, localhost), and only when allowInsecure is
-// set (dev/test only -- SHARED.md invariant #7).
+// set (dev/test only).
 func requireSecureURL(u string, allowInsecure bool) error {
 	parsed, err := url.Parse(u)
 	if err != nil {

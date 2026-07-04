@@ -11,8 +11,7 @@ import (
 // only affect performance, never correctness: every candidate returned by
 // candidatesFor is re-verified against its own compiledPattern before being
 // treated as a match (see AuthorizeRoles/FindSessionPolicy in config.go),
-// which is what makes the index provably equivalent to a full linear scan
-// (SHARED.md invariant #10).
+// which is what makes the index provably equivalent to a full linear scan.
 type issuerIndex struct {
 	exact   map[string][]*RoleMapping // subject pattern is a literal, whole string
 	byOwner map[string][]*RoleMapping // subject pattern's first "owner/" segment is literal
@@ -81,8 +80,8 @@ func classifySubject(pattern string) (owner string, class subjectClass) {
 	// literal "owner" prefix: "a/b|c/d" actually means "(a/b)|(c/d)" and can
 	// match "c/d", which does not start with "a/". Classifying that as
 	// byOwner["a"] would make candidatesFor miss it for a query subject of
-	// "c/d" (owner "c"), silently dropping a match a linear scan would find
-	// (SHARED.md invariant #10). Any top-level alternation therefore forces
+	// "c/d" (owner "c"), silently dropping a match a linear scan would find.
+	// Any top-level alternation therefore forces
 	// the conservative "any" bucket — an over-approximation that only costs
 	// performance, never correctness.
 	if strings.ContainsRune(pattern, '|') {

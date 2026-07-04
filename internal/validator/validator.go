@@ -249,12 +249,11 @@ func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
 	}
 }
 
-// Validate implements the self-mode verification flow (SHARED.md steps
-// 0-4b, 8-10). Steps 5-7 (key-pinning refinement, sub/nbf enforcement,
-// lifetime/age caps, refetch rate limiting) are Group C's hardening layer;
-// the parser/GenKeyFunc below already provide the non-hardening baseline
-// (algorithm allowlist, WithLeeway/WithIssuedAt/WithExpirationRequired, kid
-// match) that Group C extends in place.
+// Validate implements the self-mode verification flow. The hardening steps
+// (key-pinning refinement, sub/nbf enforcement, lifetime/age caps, refetch
+// rate limiting) layer on top of the non-hardening baseline the
+// parser/GenKeyFunc below already provide (algorithm allowlist,
+// WithLeeway/WithIssuedAt/WithExpirationRequired, kid match).
 func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 	// Read config once; time bounds and the length guard are derived live
 	// from it (not frozen at construction) so a hot config reload takes
@@ -272,7 +271,7 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 	}
 
 	// Step 1: unverified iss peek — routing only, never used for identity or
-	// authorization decisions (SHARED.md invariant #2).
+	// authorization decisions.
 	unverified := jwt.MapClaims{}
 	if _, _, err := jwt.NewParser().ParseUnverified(tokenString, unverified); err != nil {
 		return nil, fmt.Errorf("failed to parse token: %w", err)
@@ -355,8 +354,8 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 	// Steps 6-10: sub/iat/exp/nbf enforcement, lifetime/age caps, audience
 	// ANY-match, required_claims, and normalization all run through the same
 	// helper the delegated (apigw/alb) extractors use, so self mode and
-	// delegated modes can never silently drift apart (SHARED.md invariant
-	// #6). Redundant with the parser options above (WithExpirationRequired,
+	// delegated modes can never silently drift apart. Redundant with the
+	// parser options above (WithExpirationRequired,
 	// WithIssuedAt, WithLeeway already ran during ParseWithClaims) but
 	// harmless — delegated modes have no such parser, so this is the only
 	// place those checks run for them.
@@ -384,7 +383,7 @@ func audienceMatches(tokenAudiences jwt.ClaimStrings, expected []string) bool {
 // providerAdapter derives canonical claims from an issuer's verified raw
 // claims for one provider. Adding a new provider = implement this interface
 // and register it in providerAdapters; no core Validate()/normalizeClaims
-// edits required (open/closed, SHARED.md engineering standards).
+// edits required (open/closed).
 type providerAdapter interface {
 	// subject returns the canonical subject for raw, given the issuer's
 	// configured claim_mappings (may be nil).
@@ -392,7 +391,7 @@ type providerAdapter interface {
 	// populate does provider-specific native struct population on top of the
 	// registered claims already set by populateRegisteredClaims. Must never
 	// set claims.Subject — that is set once, afterward, by normalizeClaims
-	// from subject() (SHARED.md invariant #4: no self-asserted identity).
+	// from subject() (no self-asserted identity).
 	populate(raw jwt.MapClaims, claims *types.Claims) error
 }
 
@@ -460,7 +459,7 @@ func stringClaim(raw jwt.MapClaims, name string) (string, error) {
 // populateRegisteredClaims copies the standard registered claims (iss, aud,
 // exp, iat, nbf, jti) from the verified raw claims into claims.RegisteredClaims.
 // Runs for every provider, before the provider-specific adapter. Deliberately
-// does NOT set claims.Subject — see types.Claims doc and invariant #4.
+// does NOT set claims.Subject — see the types.Claims doc.
 func populateRegisteredClaims(raw jwt.MapClaims, claims *types.Claims) error {
 	iss, err := raw.GetIssuer()
 	if err != nil {

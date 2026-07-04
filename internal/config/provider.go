@@ -161,7 +161,7 @@ func (p *Provider) Refresh(ctx context.Context) error {
 // refreshLocked performs the actual fetch+merge+swap. Must be called with
 // p.mu held. On any error cfg is discarded without being swapped in and
 // p.fragments is left untouched — the previously-served configuration (and
-// fragment cache) is retained unchanged (invariant #12: reload fails safe).
+// fragment cache) is retained unchanged (reload fails safe).
 func (p *Provider) refreshLocked(ctx context.Context) error {
 	cfg, err := cloneConfig(p.base)
 	if err != nil {

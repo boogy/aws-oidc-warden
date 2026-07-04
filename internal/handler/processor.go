@@ -89,8 +89,8 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 
 	// Add request context to the logger. The requested role ARN is not a claim
 	// value and is always logged; repository/ref/branch/actor ARE claim values,
-	// so they're only attached when log_claim_values permits (invariant #11 /
-	// I4 — suppress claim values in the log stream, not just the audit record).
+	// so they're only attached when log_claim_values permits (suppress claim
+	// values in the log stream, not just the audit record).
 	if cfg.LogClaimValues {
 		log = log.With(
 			slog.Group("request",
@@ -140,7 +140,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// Concise success line at Info; the full claim set (a bag of claim VALUES)
 	// only at Debug AND only when log_claim_values permits it — otherwise it
 	// would leak every raw claim value the audit record/standardized log line
-	// carefully suppresses (invariant #11 / I4).
+	// carefully suppresses.
 	log.Info("Token validation successful",
 		slog.Duration("validationTime", time.Since(startTime)),
 	)

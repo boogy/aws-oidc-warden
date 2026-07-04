@@ -116,8 +116,8 @@ func allowClaims(subject string) *types.Claims {
 
 // --- log-stream suppression (not just the audit sink) ---
 
-// TestAudit_LogClaimValuesOff_SuppressesValuesInLogStream guards invariant #11
-// / I4 at the LOG level: with log_claim_values=false, claim VALUES (raw sub,
+// TestAudit_LogClaimValuesOff_SuppressesValuesInLogStream guards claim-value
+// suppression at the LOG level: with log_claim_values=false, claim VALUES (raw sub,
 // canonical subject, audience, repository, actor) must be absent from the
 // emitted slog stream too — not only the durable audit sink. Decision, reason,
 // and requestId stay present. Regression test for the earlier gap where only

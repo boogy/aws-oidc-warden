@@ -28,8 +28,7 @@ type claimBounds struct {
 // ANY-match, required_claims, then normalizeClaims. Delegated modes differ
 // from self mode only in how raw got here (trusting an upstream signature
 // verifier instead of verifying one locally) — everything after that point
-// runs through this one function, so it cannot silently drift weaker
-// (SHARED.md invariant #6).
+// runs through this one function, so it cannot silently drift weaker.
 //
 // now is passed in (rather than read from time.Now) so callers — including
 // tests — control the clock explicitly.

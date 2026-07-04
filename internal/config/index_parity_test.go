@@ -13,7 +13,7 @@ import (
 // AuthorizeRoles: it scans every effective mapping directly, bypassing the
 // owner-bucketed index (index.go) entirely. TestIndexParity asserts the
 // index path is byte-identical to this for a large, mixed sample — the
-// parity proof required by SHARED.md invariant #10.
+// index↔linear-scan parity proof.
 func linearAuthorizeRoles(c *Config, issuer, subject string, claims map[string]any) (bool, []string) {
 	matched := false
 	var roles []string

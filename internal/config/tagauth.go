@@ -18,7 +18,7 @@ import (
 // When more than one issuer is configured (t.multiIssuer), a role must also
 // carry a matching `<prefix>issuer` tag: without it, tag-auth cannot tell
 // which issuer's identity namespace the role trusts, so it fails closed
-// (SHARED.md invariant #3: no cross-issuer identity collision). With a
+// (no cross-issuer identity collision). With a
 // single issuer, the issuer tag is optional but still checked if present.
 //
 // The supported dimensions mirror role_mapping conditions (subject, repo,

@@ -25,7 +25,7 @@ import (
 )
 
 // TestSelfDelegatedParity proves the "delegated modes are not a weaker path"
-// invariant (SHARED.md #6) end-to-end: the SAME claim set validated in self
+// invariant end-to-end: the SAME claim set validated in self
 // mode (full signature verification) and in delegated apigw mode (trusting an
 // upstream verifier) yields the identical canonical Subject and the identical
 // session tags. Both paths route through checkAndNormalizeClaims →
@@ -123,7 +123,7 @@ func TestSelfDelegatedParity(t *testing.T) {
 		}})
 	require.NoError(t, err)
 
-	// Canonical identity parity — the security-critical projection (invariant #4).
+	// Canonical identity parity — the security-critical projection.
 	assert.Equal(t, repository, fromSelf.Subject)
 	assert.Equal(t, fromSelf.Subject, fromDelegated.Subject, "canonical subject must match across modes")
 	assert.Equal(t, fromSelf.Repository, fromDelegated.Repository)

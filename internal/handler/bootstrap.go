@@ -124,7 +124,7 @@ func NewBootstrap() (*Bootstrap, error) {
 // fail-fast), whose full spec (audiences, claim_mappings, required_claims)
 // plus the same jwt_leeway/max_token_lifetime/max_token_age bounds self mode
 // enforces are used for defense-in-depth re-validation of the pre-validated
-// claims (SHARED.md invariant #6). The delegated extractors themselves read
+// claims. The delegated extractors themselves read
 // provider live on every Extract() call, so a later hot-reload is not
 // frozen at this startup check.
 func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {

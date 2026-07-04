@@ -20,7 +20,7 @@ import (
 // claim self mode checks (sub, iat, nbf, lifetime/age caps, required_claims)
 // through the same checkAndNormalizeClaims path Validate() uses — delegated
 // trust in the upstream signature verification is the only difference from
-// self mode (SHARED.md invariant #6).
+// self mode.
 type APIGWExtractor struct {
 	provider *config.Provider
 }

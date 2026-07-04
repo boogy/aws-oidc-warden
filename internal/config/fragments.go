@@ -19,8 +19,8 @@ import (
 // session policy reads).
 const maxFragmentBytes = 1024 * 1024
 
-// fragmentAllowedKeys is the config_fragments merge allowlist (SHARED.md
-// invariant #9): a fragment may only ever contribute to the provider-neutral
+// fragmentAllowedKeys is the config_fragments merge allowlist: a fragment may
+// only ever contribute to the provider-neutral
 // authorization surface. Everything else — issuers, hardening knobs,
 // allow_insecure_issuers, tag_auth, config_fragments itself, etc. — is
 // base-only and rejected by rejectDisallowedFragmentKeys regardless of how
@@ -45,7 +45,7 @@ type FragmentConfig struct {
 // parseFragment parses one fragment's raw bytes, rejecting any top-level (or
 // nested) key outside fragmentAllowedKeys before unmarshalling — so a
 // fragment can never smuggle in `issuers`, `tag_auth`,
-// `allow_insecure_issuers`, or any other base-only setting (invariant #9).
+// `allow_insecure_issuers`, or any other base-only setting.
 // format is the viper config type, normally derived from the fragment's URI
 // via FormatFromPath.
 func parseFragment(data []byte, format, source string) (*FragmentConfig, error) {
