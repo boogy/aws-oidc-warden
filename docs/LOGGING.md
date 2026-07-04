@@ -4,6 +4,13 @@ The service emits structured `slog` JSON to stdout (CloudWatch) and, when
 enabled, a durable per-decision audit trail to S3. Secrets are never logged:
 no path logs a raw JWT or credential.
 
+**Every authorization decision — allow _and_ deny — is always logged** as one
+standardized `slog` line, emitted before (and independently of) any S3 write.
+In Lambda that stream lands in CloudWatch Logs, which is itself durable, so the
+decision trail is never off. `audit_required` and `log_to_s3` add a _second_,
+S3-based structured trail on top of that baseline; they do not enable or
+disable decision logging itself.
+
 ## Knobs
 
 | key                         | env                                 | default | meaning                                                                                                                                                                                |
@@ -60,6 +67,26 @@ trail, set `audit_required=true`: each decision record is written
 synchronously (bypassing the batch buffer) before the credential response, and
 a write failure fails the request closed. Treat container-shutdown flushing as
 a best-effort backstop only.
+
+## Production hardening recommendation
+
+For any security-sensitive deployment, enable the durable, fail-closed trail:
+
+```yaml
+log_to_s3: true
+log_bucket: "your-audit-bucket" # object-lock / WORM + restrictive bucket policy
+audit_required: true # deny rather than issue credentials with no audit record
+```
+
+The default (`audit_required: false`) favors availability and zero-dependency
+startup: it never blocks credential issuance on S3, and it lets the service run
+with no S3 bucket configured. It is the right default for local/dev and for
+deployments that treat CloudWatch Logs as the system of record. It is **not**
+the recommended posture when the audit trail is a compliance or security
+control — there, a lost or unwritten record must fail the request, which is
+exactly what `audit_required: true` guarantees. Point CloudWatch alerts at
+`errorCode=audit_write_failed` so a failing sink is paged, not silently
+tolerated.
 
 ## Suggested CloudWatch alerts
 

@@ -96,6 +96,9 @@ log_claim_values: false
 ## When true, every allow decision's audit record must be durably written
 ## BEFORE credentials are returned; a write failure denies the request
 ## (fail-closed). Requires log_to_s3=true and log_bucket set.
+## Default false keeps zero-dependency startup (decisions still log to
+## CloudWatch); RECOMMENDED true in production when the audit trail is a
+## security/compliance control. See docs/LOGGING.md.
 audit_required: false
 ## Persist logs/audit records to S3 (in addition to CloudWatch).
 log_to_s3: false

@@ -20,24 +20,31 @@
 
 ## Documentation
 
-| Document                                                           | What's inside                                                                         |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md)                     | Full config reference — all keys, env vars, remote S3 reload, cache, session policies |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                       | Component diagram, deployment options, full build/deploy commands                     |
-| [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                 | Session tags applied to every STS call, ABAC patterns                                 |
-| [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) | Tag-based authorization, hub/spoke cross-account model                                |
+| Document                                                           | What's inside                                                                                                    |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)               | **How token validation works** — the security core: modes, JWKS, crypto hardening, claim checks, SSRF protection |
+| [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md)                       | Onboard any OIDC provider — discovery, `provider`, `claim_mappings`, per-issuer audiences                        |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md)                     | Full config reference — all keys, env vars, remote S3 reload, cache, session policies                            |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                       | Component diagram, request pipeline, deployment options, full build/deploy commands                              |
+| [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                 | Per-issuer session tags applied to every STS call, ABAC patterns                                                 |
+| [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) | Tag-based authorization, hub/spoke cross-account model                                                           |
+| [docs/LOGGING.md](docs/LOGGING.md)                                 | Structured logging, durable audit trail, `audit_required`, SIEM signals, alerts                                  |
+| [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md)                       | Upgrading from v1 (single-issuer) to the v2 `issuers[]` model — breaking-change checklist                        |
 
 ---
 
 ## Features
 
-- **Universal OIDC Validation**: Validates tokens from GitHub Actions and any OIDC provider with JWKS endpoints
-- **Multiple Deployment Options**: API Gateway, Lambda URLs, Application Load Balancer, and a local development server
-- **Fine-Grained Access Control**: Regex-based repo/branch/actor/event/workflow constraints; all constraints are AND-ed
-- **Session Policy Support**: Inline JSON or S3-stored policy files to scope AWS permissions per-repo
-- **Session Tagging & ABAC**: GitHub claims are forwarded as STS session tags for auditability and attribute-based access control — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)
+- **Multi-Issuer, Any-Provider Validation**: Trust any number of OIDC issuers at once (`issuers[]`); GitHub Actions has native support, and `provider: generic` onboards any OIDC IdP by mapping its claims — see [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md)
+- **Hardened Token Validation**: Strict algorithm allow-list (RS/ES 256–512, never `none`/`HS*`), `kid`+`alg`+key-type key pinning, RSA≥2048 / EC on-curve checks, SSRF-safe JWKS fetching, and bounded time/size — full detail in [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)
+- **Delegated Validation Modes**: Let API Gateway (HTTP API v2 JWT Authorizer) or ALB OIDC verify the signature, while the service still re-validates every claim (`jwt_validation.mode: self`/`apigw`/`alb`)
+- **Multiple Deployment Options**: API Gateway (REST v1 + HTTP v2), Lambda URLs, Application Load Balancer, and a local development server
+- **Fine-Grained Access Control**: Authorization on a provider-neutral canonical **subject**; auto-anchored regex `conditions` on any verified claim (branch/actor/event/workflow/environment + arbitrary claims), all AND-ed
+- **Session Policy Support**: Inline JSON or S3-stored policy files to scope AWS permissions per mapping
+- **Per-Issuer Session Tagging & ABAC**: Claims are forwarded as STS session tags for auditability and attribute-based access control — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)
 - **Tag-Based Authorization & Cross-Account (hub/spoke)**: Authorize role assumptions via IAM role tags without enumerating roles in config; extend to other AWS accounts through a spoke role — see [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md)
-- **Hot Config Reload**: Update `repo_role_mappings` and session policies in S3 without redeploying — the Lambda picks up changes within the configured interval (see [docs/CONFIGURATION.md](docs/CONFIGURATION.md))
+- **Structured Audit Trail**: One JSON record per allow/deny decision, secret-safe redaction, and an optional fail-closed `audit_required` mode — see [docs/LOGGING.md](docs/LOGGING.md)
+- **Hot Config Reload**: Update issuers, `role_mappings`, and session policies in S3 without redeploying — the Lambda picks up changes within the configured interval, fail-safe on a bad reload
 - **Multi-Tier Caching**: Memory (LRU), DynamoDB (persistent/shared), and S3 backends for JWKS
 - **Multi-Architecture Support**: Native ARM64 and AMD64 builds; pre-built container images on GHCR
 
@@ -78,24 +85,28 @@
 AWS OIDC Warden reads config from environment variables (`AOW_` prefix), a YAML/JSON/TOML file, or an S3 object. A minimal example:
 
 ```yaml
-issuer: https://token.actions.githubusercontent.com
-audiences:
-  - sts.amazonaws.com
+issuers:
+  - issuer: https://token.actions.githubusercontent.com
+    provider: github
+    audiences:
+      - sts.amazonaws.com
 
 cache:
   type: dynamodb
   ttl: 1h
   dynamodb_table: aws-oidc-warden-cache
 
-repo_role_mappings:
-  - repo: "my-org/my-repo"
+role_mappings:
+  - subject: "my-org/my-repo"
     roles:
       - arn:aws:iam::123456789012:role/github-actions-role
-    constraints:
+    conditions:
       branch: "refs/heads/main"
 ```
 
-For the full reference — all keys, constraint fields, session-policy options, remote S3 hot-reload, and tag-auth config — see [docs/CONFIGURATION.md](docs/CONFIGURATION.md) and [`example-config.yaml`](example-config.yaml).
+> **v2 note:** the top-level `issuer`/`audiences` and `repo_role_mappings`/`constraints` keys from v1 were replaced by `issuers[]`, `role_mappings`, and `conditions`. See [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md).
+
+For the full reference — all keys, condition fields, session-policy options, remote S3 hot-reload, multi-issuer setup, and tag-auth config — see [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md), and [`example-config.yaml`](example-config.yaml).
 
 ---
 
@@ -211,9 +222,9 @@ For full build commands, ECR pull-through cache setup, and infrastructure detail
 
 ## Tag-Based Authorization (Cross-Account)
 
-Tag-based authorization lets a repository assume an IAM role authorized by **tags on the role itself**, without listing the role in `repo_role_mappings`. This is especially useful when roles are managed across many accounts or teams: add `aow/repo`, `aow/ref`, and similar tags to the IAM role and the warden will evaluate them against the OIDC claims.
+Tag-based authorization lets a repository assume an IAM role authorized by **tags on the role itself**, without listing the role in `role_mappings`. This is especially useful when roles are managed across many accounts or teams: add `aow/subject` (or the legacy `aow/repo`), `aow/ref`, and similar tags to the IAM role and the warden will evaluate them against the OIDC claims.
 
-For cross-account (hub/spoke) scenarios, the warden reads and assumes roles in member accounts by first assuming a convention-named spoke role (`aow-spoke` by default) in the target account. Explicit `repo_role_mappings` are always evaluated first; tag-auth is a fallback path only.
+For cross-account (hub/spoke) scenarios, the warden reads and assumes roles in member accounts by first assuming a convention-named spoke role (`aow-spoke` by default) in the target account. Explicit `role_mappings` are always evaluated first; tag-auth is a fallback path only.
 
 The feature is opt-in (`tag_auth.enabled: true`, default `false`) and supports transitive session tags, a target-account allow-list, and an external ID for spoke-role trust. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) for setup, tag reference, and IAM examples.
 
@@ -257,24 +268,34 @@ The feature is opt-in (`tag_auth.enabled: true`, default `false`) and supports t
 
 ## Security Considerations
 
-- Use specific repository patterns; avoid overly broad patterns like `.*`
-- Apply multiple constraints for sensitive roles, and session policies to scope AWS permissions
-- Follow least-privilege when defining IAM roles; review CloudWatch logs regularly
+- Use specific subject patterns; avoid overly broad patterns like `.*` (patterns are auto-anchored `^(?:...)$`)
+- Apply multiple `conditions` for sensitive roles, and session policies to scope AWS permissions
+- Follow least-privilege when defining IAM roles; review CloudWatch logs and the audit trail regularly (`audit_required` for a fail-closed durable trail — see [docs/LOGGING.md](docs/LOGGING.md))
+- Understand the validation guarantees before relying on any claim — see [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)
 
-Session tags (`repo`, `actor`, `ref`, `event-name`, `repo-owner`, `ref-type`) are attached to every STS session for auditing, cost allocation, and ABAC — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md).
+Per-issuer session tags are attached to every STS session for auditing, cost allocation, and ABAC — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md).
 
 ---
 
 ## How It Works
 
-1. **Receive Request**: GitHub Actions sends OIDC token + role ARN
-2. **Fetch JWKS**: JWKS retrieved (from cache if available) and token signature verified
-3. **Validate Token**: Issuer, audience, and expiration checked
-4. **Check Repository Mapping**: Repository claim matched against configured patterns
-5. **Apply Constraints**: Branch, actor, and other constraints evaluated
-6. **Apply Session Policy**: Optional custom session policy applied
-7. **Assume Role**: AWS role assumed with session tags ([AWS Role Session Tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html))
-8. **Return Credentials**: Temporary AWS credentials returned
+1. **Receive Request**: a CI job sends an OIDC token + desired role ARN
+2. **Route by Issuer**: the unverified `iss` selects the configured issuer spec (routing only — never trusted for identity)
+3. **Verify Signature**: the issuer's JWKS is fetched (cache-first) and the signature verified against a `kid`+`alg`+key-type–pinned key
+4. **Validate Claims**: issuer re-asserted, audience (ANY-match), expiration, `nbf`/`iat`, lifetime/age caps, and `required_claims` checked — all fail-closed
+5. **Derive Canonical Subject**: the authorization identity is derived from config (`claim_mappings.subject` / GitHub `repository`), never self-asserted
+6. **Authorize**: the subject is matched (issuer-bound) against `role_mappings`, then evaluated against auto-anchored regex `conditions`; a tag-auth fallback can authorize via IAM role tags
+7. **Apply Session Policy**: optional inline or S3 session policy scopes the credentials
+8. **Assume Role**: the role is assumed with per-issuer [STS session tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html)
+9. **Audit + Return**: the allow/deny decision is recorded and temporary credentials are returned
+
+Token validation is the security core of the service. The fail-closed
+validation pipeline (self mode):
+
+![Token validation pipeline](docs/img/token-validation.svg)
+
+For the full step-by-step flow, crypto hardening, JWKS handling, and SSRF
+protection see **[docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)**.
 
 ---
 

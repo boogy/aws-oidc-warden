@@ -137,12 +137,20 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - S3 config hot-reload no longer triggers N concurrent fetches at the interval boundary — exactly one fetch per interval (#230)
 - `AOW_*` env-var overrides are preserved across S3 hot-reloads (#230)
 - S3Logger now initialises after the config provider so `log_bucket`/`log_prefix` from remote config are respected (#230)
+- Authorization now builds its claim set from the verified raw claims (`claims.Raw`) instead of a JSON round-trip of the typed struct, which dropped non-GitHub claims and wrongly denied legitimate `generic`-issuer / custom-claim requests.
+- `transitive_session_tags` now marks **every** operator-configured session tag transitive; a hardcoded `repo`/`ref`/`actor` set previously dropped custom-named tags from `TransitiveTagKeys`, breaking ABAC across assumed roles.
+- Audit records buffer into the amortized batch by default; a per-request synchronous S3 `PutObject` fires only when `audit_required=true` (which stays synchronous and fail-closed), not on every decision.
+- A required-audit write failure is classified before the wrapped deny sentinel, so it surfaces as `audit_write_failed`/500 instead of being masked as a plain deny.
+- An explicit `jwt_leeway: 0` is honored instead of being coerced back to the 30s default.
+- `FindSessionPolicy` runs once per allow decision instead of twice.
 
 ### Changed
 
 - Moved `pkg/` to `internal/` — all shared packages are now under `internal/` in line with Go conventions
 - `ProcessRequest` signature now accepts `validator.ExtractionInput` to carry per-request extraction data.
 - `RequestProcessor` holds `ClaimsExtractorInterface` instead of `TokenValidatorInterface` directly.
+- `jwt_leeway` / `max_token_lifetime` / `max_token_age` / `max_token_bytes` are read live from the config provider on every `Validate()` call, so a hot-reloaded change takes effect without a Lambda restart; delegated `apigw`/`alb` extractors likewise resolve the issuer spec, time bounds, and `alb_expected_signer` live on each `Extract()`.
+- `normalizeClaims` populates the raw `sub` for every provider, so the audit record's `jwtSub` is present for generic (non-GitHub) issuers too.
 
 ### Dependencies
 
