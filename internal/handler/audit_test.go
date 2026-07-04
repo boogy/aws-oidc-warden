@@ -21,10 +21,13 @@ import (
 // fakeAuditSink is a test double for handler.AuditSink. It captures every
 // record it's asked to write (for assertions on record content/ordering) and
 // can be told to fail, to exercise the audit_required durability paths.
+// writes/buffers are tracked separately so tests can assert which of the two
+// AuditSink paths (synchronous WriteRecord vs. batched BufferRecord) was used.
 type fakeAuditSink struct {
 	mu      sync.Mutex
 	records [][]byte
 	writes  int
+	buffers int
 	err     error
 }
 
@@ -32,6 +35,18 @@ func (f *fakeAuditSink) WriteRecord(_ context.Context, record []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writes++
+	if f.err != nil {
+		return f.err
+	}
+	cp := append([]byte(nil), record...)
+	f.records = append(f.records, cp)
+	return nil
+}
+
+func (f *fakeAuditSink) BufferRecord(record []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buffers++
 	if f.err != nil {
 		return f.err
 	}
@@ -241,8 +256,35 @@ func TestAudit_Required_WritesBeforeCredentialsReturned(t *testing.T) {
 	require.NotNil(t, creds)
 
 	// The write is synchronous inside ProcessRequest, so by the time it
-	// returns credentials the record must already be durably captured.
+	// returns credentials the record must already be durably captured. With
+	// audit_required=true the synchronous WriteRecord path is used, never the
+	// batched BufferRecord path.
 	assert.Equal(t, 1, sink.writes)
+	assert.Equal(t, 0, sink.buffers)
+	rec := sink.last(t)
+	assert.Equal(t, "allow", rec["decision"])
+}
+
+// TestAudit_NotRequired_UsesBufferedPath asserts the fix for the finding where
+// recordDecision always called the synchronous, batch-bypassing WriteRecord
+// even when audit_required=false, defeating the batch buffer on every
+// request. With audit_required=false, decisions must go through the
+// best-effort BufferRecord path instead.
+func TestAudit_NotRequired_UsesBufferedPath(t *testing.T) {
+	cfg := auditTestCfg(t, false, true)
+	claims := allowClaims("org/repo")
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), &fixedExtractor{claims: claims}, sink, "test")
+
+	creds, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"},
+		"req-buffered", slog.Default())
+	require.NoError(t, err)
+	require.NotNil(t, creds)
+
+	assert.Equal(t, 1, sink.buffers)
+	assert.Equal(t, 0, sink.writes)
 	rec := sink.last(t)
 	assert.Equal(t, "allow", rec["decision"])
 }
@@ -276,6 +318,9 @@ func TestAudit_NotRequired_WriteFailureOnAllow_StillSucceeds(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, creds)
+	// Best-effort path is BufferRecord, so its failure never surfaces here.
+	assert.Equal(t, 1, sink.buffers)
+	assert.Equal(t, 0, sink.writes)
 }
 
 func TestAudit_NilSink_IsNoOp(t *testing.T) {

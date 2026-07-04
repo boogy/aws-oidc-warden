@@ -51,12 +51,15 @@ storms), fragment-rejected keys, account-not-allowed, and assume-role failure.
 
 ## Durability note (Lambda)
 
-Batched log flushing runs on a timer that is frozen between Lambda invocations,
-so buffered records can be lost at container reclaim. When you need a guaranteed
-trail, set `audit_required=true`: each issuance record is written synchronously
-(bypassing the batch buffer) before the credential response, and a write
-failure fails the request closed. Treat container-shutdown flushing as a
-best-effort backstop only.
+With `audit_required=false` (the default, best-effort), every decision record
+is appended to the amortized batch buffer — the same one `WriteLogToS3` feeds
+— and flushed by size (`BatchSize`), age (`MaxBatchAge`), or `Cleanup()`.
+Batched flushing runs on a timer that is frozen between Lambda invocations, so
+buffered records can be lost at container reclaim. When you need a guaranteed
+trail, set `audit_required=true`: each decision record is written
+synchronously (bypassing the batch buffer) before the credential response, and
+a write failure fails the request closed. Treat container-shutdown flushing as
+a best-effort backstop only.
 
 ## Suggested CloudWatch alerts
 

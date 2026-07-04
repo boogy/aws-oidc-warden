@@ -17,12 +17,21 @@ import (
 
 // AuditSink is the durability boundary for the structured audit trail
 // (SHARED.md invariant #11): one JSON record per allow/deny decision.
-// *s3logger.S3Logger satisfies this via its WriteRecord method — duck-typed,
-// so this package never imports s3logger and there's no import cycle.
-// A nil AuditSink is always safe: recordDecision no-ops the write and only
-// emits the standardized log line.
+// *s3logger.S3Logger satisfies this via its WriteRecord/BufferRecord methods —
+// duck-typed, so this package never imports s3logger and there's no import
+// cycle. A nil AuditSink is always safe: recordDecision no-ops the write and
+// only emits the standardized log line.
+//
+// Two write paths, chosen by cfg.AuditRequired (see recordDecision):
+//   - WriteRecord: synchronous, batch-bypassing. Used only when audit_required
+//     is true, so a failure can fail the request closed before credentials are
+//     returned.
+//   - BufferRecord: best-effort, appended to the amortized batch buffer
+//     (flushed by size/age/cleanup). Used when audit_required is false, so an
+//     ordinary decision never blocks on a synchronous S3 PUT.
 type AuditSink interface {
 	WriteRecord(ctx context.Context, record []byte) error
+	BufferRecord(record []byte) error
 }
 
 // auditRecord is the structured record for one authorization decision, fed to
@@ -142,11 +151,12 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 // per cfg.LogClaimValues, emits the ONE standardized decision log line (I1)
 // from the redacted record — so the log stream and the durable sink are keyed
 // off the identical, already-redacted record and can never disagree about the
-// decision or what was suppressed — then durably (best-effort unless
-// cfg.AuditRequired) writes it to the audit sink as one JSON record (never
-// string concatenation — encoding/json escapes control characters, so a claim
-// value with embedded newlines/control chars cannot break the record
-// structure or inject a fake log line).
+// decision or what was suppressed — then sends it to the audit sink as one
+// JSON record (never string concatenation — encoding/json escapes control
+// characters, so a claim value with embedded newlines/control chars cannot
+// break the record structure or inject a fake log line): synchronously via
+// WriteRecord when cfg.AuditRequired, otherwise best-effort via BufferRecord
+// (batched, see AuditSink).
 //
 // Callers must set rec.Decision before calling. A nil sink still emits the log
 // line (only the durable write is skipped). When cfg.AuditRequired is true, a
@@ -179,14 +189,19 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 		return nil
 	}
 
-	if werr := r.audit.WriteRecord(ctx, data); werr != nil {
-		log.Error("failed to write audit record", slog.String("error", werr.Error()))
-		if cfg.AuditRequired {
+	if cfg.AuditRequired {
+		if werr := r.audit.WriteRecord(ctx, data); werr != nil {
+			log.Error("failed to write audit record", slog.String("error", werr.Error()))
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, werr)
 		}
 		return nil
 	}
 
+	// Best-effort: buffer into the amortized batch; a failure is logged and
+	// swallowed so the decision still proceeds.
+	if werr := r.audit.BufferRecord(data); werr != nil {
+		log.Error("failed to buffer audit record", slog.String("error", werr.Error()))
+	}
 	return nil
 }
 
@@ -243,24 +258,6 @@ func issuerProvider(cfg *config.Config, issuer string) string {
 		}
 	}
 	return ""
-}
-
-// sessionPolicyRef identifies which session policy (if any) applies to an
-// (issuer, subject) pair, for the audit record's SessionPolicyRef field:
-// "inline" for an inline policy, the S3 key for a file-backed one, or "" when
-// none is configured. Re-derived from the cheap, pure FindSessionPolicy
-// lookup rather than plumbed through getSessionPolicy's return value, so the
-// existing session-policy-loading code path is untouched.
-func sessionPolicyRef(cfg *config.Config, issuer, subject string) string {
-	inline, file := cfg.FindSessionPolicy(issuer, subject)
-	switch {
-	case file != nil:
-		return *file
-	case inline != nil:
-		return "inline"
-	default:
-		return ""
-	}
 }
 
 // claimsAudience returns the verified token's audience claim as a plain

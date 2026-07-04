@@ -126,22 +126,15 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		}
 	}
 
-	// Convert claims to map for constraint checking
-	claimsMap := make(map[string]any)
-	claimsJSON, err := json.Marshal(claims)
-	if err != nil {
-		rec.Stage = "claims_processing"
-		rec.Reason = err.Error()
-		rec.ProcessingMS = elapsed()
-		log.Error("Failed to marshal claims", slog.String("stage", rec.Stage), slog.String("error", err.Error()))
-		return nil, r.finalizeDeny(ctx, log, cfg, rec, fmt.Errorf("failed to marshal claims: %w", err))
-	}
-	if err := json.Unmarshal(claimsJSON, &claimsMap); err != nil {
-		rec.Stage = "claims_processing"
-		rec.Reason = err.Error()
-		rec.ProcessingMS = elapsed()
-		log.Error("Failed to process claims", slog.String("stage", rec.Stage), slog.String("error", err.Error()))
-		return nil, r.finalizeDeny(ctx, log, cfg, rec, fmt.Errorf("failed to process claims: %w", err))
+	// Conditions and tag-auth match against raw verified claim names, so use the
+	// verified raw claim set directly. It carries every claim — including
+	// provider-native and custom claims that have no types.Claims struct field
+	// (generic issuers) — whereas a JSON round-trip of the typed struct drops
+	// claims.Raw (json:"-") and yields only zero-valued GitHub fields for a
+	// generic issuer.
+	claimsMap := claims.Raw
+	if claimsMap == nil {
+		claimsMap = map[string]any{}
 	}
 
 	// Concise success line at Info; the full claim set (a bag of claim VALUES)
@@ -194,7 +187,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// Attempting to get session policy
-	sessionPolicy, err := r.getSessionPolicy(cfg, claims.Issuer, claims.Subject)
+	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, claims.Issuer, claims.Subject)
 	if err != nil {
 		rec.Stage = "session_policy"
 		rec.Reason = err.Error()
@@ -236,7 +229,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if cfg.LogClaimValues {
 		rec.SessionTags = resolvedSessionTags(claims.Raw, sessionTagSpec)
 	}
-	rec.SessionPolicyRef = sessionPolicyRef(cfg, claims.Issuer, claims.Subject)
+	rec.SessionPolicyRef = policyRef
 	if account, _, aerr := aws.ParseRoleARN(requestedRole); aerr == nil {
 		rec.AccountID = account
 	}
@@ -251,8 +244,13 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	return r.finalizeAllow(ctx, log, cfg, rec, credentials)
 }
 
-// getSessionPolicy retrieves the session policy for a given (issuer, subject) pair (config inline or S3 file)
-func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject string) (*string, error) {
+// getSessionPolicy retrieves the session policy for a given (issuer, subject)
+// pair (config inline or S3 file), along with a policyRef label identifying
+// which source it came from ("inline", the S3 key, or "" when none is
+// configured) for the audit record's SessionPolicyRef field — computed here,
+// alongside the single cfg.FindSessionPolicy lookup, so callers don't need a
+// second lookup just to label the decision.
+func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject string) (sessionPolicyString *string, policyRef string, err error) {
 	// Start measuring time for this operation
 	opStart := time.Now()
 	defer func() {
@@ -261,18 +259,19 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject 
 			slog.Duration("duration", time.Since(opStart)))
 	}()
 
-	var sessionPolicyString *string
 	sessionPolicy, sessionPolicyFile := cfg.FindSessionPolicy(issuer, subject)
 
 	// Try to get policy from S3 file if specified
 	if sessionPolicyFile != nil {
+		policyRef = *sessionPolicyFile
+
 		sessionPolicyData, err := r.consumer.GetS3Object(cfg.S3SessionPolicyBucket, *sessionPolicyFile)
 		if err != nil {
 			slog.Error("Failed to read session policy file",
 				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
-			return nil, fmt.Errorf("failed to read session policy file: %w", ErrSessionPolicyAccess)
+			return nil, "", fmt.Errorf("failed to read session policy file: %w", ErrSessionPolicyAccess)
 		}
 
 		// Read the content and ensure the reader is closed
@@ -289,7 +288,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject 
 				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
-			return nil, fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
+			return nil, "", fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
 		}
 
 		// Validate that the policy is valid JSON
@@ -299,7 +298,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject 
 				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
-			return nil, fmt.Errorf("invalid JSON in session policy file: %w", ErrSessionPolicyAccess)
+			return nil, "", fmt.Errorf("invalid JSON in session policy file: %w", ErrSessionPolicyAccess)
 		}
 
 		// Store the policy string
@@ -316,10 +315,11 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject 
 	// Use inline policy if provided (overrides S3 file if both exist)
 	if sessionPolicy != nil {
 		sessionPolicyString = sessionPolicy
+		policyRef = "inline"
 		slog.Debug("Using inline session policy",
 			slog.String("subject", subject),
 			slog.Int("policySize", len(*sessionPolicy)))
 	}
 
-	return sessionPolicyString, nil
+	return sessionPolicyString, policyRef, nil
 }

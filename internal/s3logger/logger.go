@@ -358,6 +358,17 @@ func (l *S3Logger) WriteRecord(_ context.Context, record []byte) error {
 	return l.WriteSingleLog(record)
 }
 
+// BufferRecord appends a structured audit record to the amortized batch buffer
+// (the same buffer WriteLogToS3 feeds), for the best-effort path when
+// audit_required is false. Unlike WriteRecord it does not force an immediate
+// per-record S3 PutObject; the record is flushed with the batch (BatchSize /
+// MaxBatchAge) or at Cleanup. No-ops when S3 logging is disabled.
+func (l *S3Logger) BufferRecord(record []byte) error {
+	var buf bytes.Buffer
+	buf.Write(record)
+	return l.WriteLogToS3(buf)
+}
+
 // compressGzip compresses the given data using gzip
 func compressGzip(data []byte) ([]byte, error) {
 	var buf bytes.Buffer

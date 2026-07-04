@@ -12,6 +12,17 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 	errCode = "internal_error"
 	errMsg = "An internal error occurred"
 	switch {
+	// ErrAuditWriteFailed is checked first: finalizeDeny folds it into the
+	// original deny error via fmt.Errorf("%w: %w", origErr, ErrAuditWriteFailed),
+	// so errors.Is matches BOTH the original sentinel (e.g. ErrRoleNotPermitted)
+	// and this one. It's only ever produced when audit_required=true AND the
+	// durable write failed, so it must always win over the original deny
+	// reason — otherwise a broken audit pipeline is misreported as an ordinary
+	// permission_denied/token_invalid and never alerts.
+	case errors.Is(err, ErrAuditWriteFailed):
+		errCode = "audit_write_failed"
+		errMsg = "Request denied: durable audit logging is required and unavailable"
+		*statusCode = http.StatusInternalServerError
 	case errors.Is(err, ErrEmptyToken), errors.Is(err, ErrTokenTooLarge),
 		errors.Is(err, ErrEmptyRole), errors.Is(err, ErrInvalidRoleFormat),
 		errors.Is(err, ErrRoleTooLarge), errors.Is(err, ErrInvalidJSON):
@@ -33,10 +44,6 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 	case errors.Is(err, ErrAssumeRoleFailed):
 		errCode = "assume_role_failed"
 		errMsg = "Failed to assume the requested role"
-		*statusCode = http.StatusInternalServerError
-	case errors.Is(err, ErrAuditWriteFailed):
-		errCode = "audit_write_failed"
-		errMsg = "Request denied: durable audit logging is required and unavailable"
 		*statusCode = http.StatusInternalServerError
 	}
 	return

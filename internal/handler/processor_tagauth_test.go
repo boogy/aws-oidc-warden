@@ -73,6 +73,10 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
 		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		// Raw mirrors what normalizeClaims populates in production (the verified
+		// raw claim set); tag-auth/condition matching reads from it, not from the
+		// typed struct fields.
+		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
 	}
 	exp := time.Now()
 	fc := &fakeConsumer{
@@ -98,6 +102,7 @@ func TestProcessRequest_TagAuthDenies(t *testing.T) {
 	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
 		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
 	}
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/other"}, allowAccount: true}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
@@ -137,6 +142,7 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
 		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/feature",
+		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/feature"},
 	}
 	exp := time.Now()
 	fc := &fakeConsumer{
