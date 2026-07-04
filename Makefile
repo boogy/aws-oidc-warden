@@ -125,7 +125,7 @@ lint-all:
 	@golangci-lint run --no-config --tests=false --enable-only=bodyclose,errcheck,govet,ineffassign,misspell,staticcheck,unused ./...
 
 .PHONY: check
-check: fmt lint test
+check: fmt lint vuln test
 	@echo "All checks passed!"
 
 # -----------------------------------------------------------------------------
