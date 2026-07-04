@@ -5,7 +5,13 @@ defaultPlatforms:
   - linux/arm64
   - linux/amd64
 
-# AWS Lambda container images require the executable to be named 'bootstrap'
+# AWS Lambda container images require the executable to be named 'bootstrap'.
+#
+# Image tags are NOT set here: every invocation (release.yml and the Makefile
+# ko-build/ko-publish targets) passes `--tags` on the CLI, which overrides any
+# per-build `tags:` in this file. The CLI is the single source of truth. The
+# published scheme is `<module>-<tag>` / `<module>-latest`, with `apigateway`
+# additionally publishing the bare `<tag>` / `latest` as the default module.
 builds:
   - id: apigateway
     dir: .
@@ -23,11 +29,6 @@ builds:
     flags:
       - -tags=lambda.norpc
       - -trimpath
-    tags:
-      - "{{.Git.Tag}}"
-      - "{{.Git.Tag}}-apigateway"
-      - latest
-      - latest-apigateway
 
   - id: apigatewayv2
     dir: .
@@ -45,11 +46,6 @@ builds:
     flags:
       - -tags=lambda.norpc
       - -trimpath
-    tags:
-      - "{{.Git.Tag}}"
-      - "{{.Git.Tag}}-apigatewayv2"
-      - latest
-      - latest-apigatewayv2
 
   - id: alb
     dir: .
@@ -67,9 +63,6 @@ builds:
     flags:
       - -tags=lambda.norpc
       - -trimpath
-    tags:
-      - "{{.Git.Tag}}-alb"
-      - latest-alb
 
   - id: lambdaurl
     dir: .
@@ -87,9 +80,6 @@ builds:
     flags:
       - -tags=lambda.norpc
       - -trimpath
-    tags:
-      - "{{.Git.Tag}}-lambdaurl"
-      - latest-lambdaurl
 
 labels:
   org.opencontainers.image.title: "AWS OIDC Warden"
