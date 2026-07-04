@@ -163,7 +163,7 @@ sequenceDiagram
     Consumer->>STS: AssumeRole with per-issuer session tags
     STS-->>Consumer: Return credentials
     Consumer-->>Processor: Return credentials
-    Processor->>Processor: Audit record (allow); durable before return if audit_required
+    Processor->>Processor: Audit record (allow) — durable before return if audit_required
     Processor-->>Handler: Return credentials
     Handler-->>Client: HTTP 200 + credentials
 ```
