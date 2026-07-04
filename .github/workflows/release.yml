@@ -91,30 +91,17 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USER }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      - name: Build and push default module (apigateway)
-        if: matrix.module == 'apigateway'
-        env:
-          GH_REPO: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
-          DR_REPO: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          echo "Building and pushing apigateway to GHCR and Docker Hub..."
-          echo "VERSION: $VERSION"
-
-          KO_DOCKER_REPO=$GH_REPO ko publish ./cmd/apigateway/ --tags=$VERSION,latest --bare
-          KO_DOCKER_REPO=$DR_REPO ko publish ./cmd/apigateway/ --tags=$VERSION,latest --bare
-        timeout-minutes: 15
-
+      # Image tags come from .ko.yaml (per-build `tags:`), which templates
+      # {{.Git.Tag}} from the pushed `v*` tag. apigateway also carries the bare
+      # <tag>/latest as the default module. No --tags here.
       - name: Build and push ${{ matrix.module }} to GHCR
         id: ghcr
         env:
           KO_DOCKER_REPO: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
-          VERSION: ${{ github.ref_name }}
         run: |
           echo "Building and pushing ${{ matrix.module }} to GHCR..."
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
-          echo "VERSION: $VERSION"
-          IMAGE=$(ko publish ./cmd/${{ matrix.module }}/ --tags=${{ matrix.module }}-$VERSION,${{ matrix.module }}-latest --bare)
+          IMAGE=$(ko publish ./cmd/${{ matrix.module }}/ --bare)
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "digest=${IMAGE##*@}" >> "$GITHUB_OUTPUT"
         timeout-minutes: 15
@@ -123,12 +110,10 @@ jobs:
         id: dockerhub
         env:
           KO_DOCKER_REPO: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
-          VERSION: ${{ github.ref_name }}
         run: |
           echo "Building and pushing ${{ matrix.module }} to Docker Hub..."
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
-          echo "VERSION: $VERSION"
-          IMAGE=$(ko publish ./cmd/${{ matrix.module }}/ --tags=${{ matrix.module }}-$VERSION,${{ matrix.module }}-latest --bare)
+          IMAGE=$(ko publish ./cmd/${{ matrix.module }}/ --bare)
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "digest=${IMAGE##*@}" >> "$GITHUB_OUTPUT"
         timeout-minutes: 15

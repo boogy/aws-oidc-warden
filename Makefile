@@ -156,12 +156,14 @@ test-coverage:
 .PHONY: ko-build
 ko-build: verify-ko
 	@echo "Building container images with ko locally..."
+	@# Local override: pin a flat tag so the build never depends on git tag state.
 	@KO_DOCKER_REPO=ko.local ko build ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --tags=$(VERSION),latest
 
 .PHONY: ko-publish
 ko-publish: verify-ko
 	@echo "Publishing container images to $(KO_DOCKER_REPO)..."
-	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --bare --tags=$(VERSION),latest
+	@# Tags come from .ko.yaml (per-module <module>-<tag>/<module>-latest scheme).
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --bare
 
 .PHONY: ko-publish-all
 ko-publish-all: ko-publish
