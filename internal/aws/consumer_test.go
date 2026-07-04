@@ -247,6 +247,109 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 	mockAWS.AssertExpectations(t)
 }
 
+func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
+	mockAWS := new(MockAwsServiceWrapper)
+	consumer := &AwsConsumer{
+		AWS: mockAWS,
+		Config: &gtvcfg.Config{
+			TagAuth: &gtvcfg.TagAuth{TransitiveSessionTags: true},
+		},
+	}
+
+	testRoleArn := "arn:aws:iam::123456789012:role/test-role"
+	testSessionName := "test-session"
+	testDuration := int32(3600)
+
+	testClaims := &gtypes.Claims{
+		Raw: map[string]any{
+			"repository": "owner/repo",
+			"project_id": "my-project",
+		},
+	}
+	// A custom-named tag ("project") alongside the well-known ones: all of
+	// them are operator-configured identity tags and must be marked
+	// transitive, not just the historical repo/ref/actor set.
+	testSpec := map[string]string{
+		"repo":    "repository",
+		"project": "project_id",
+	}
+
+	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+		return *input.RoleArn == testRoleArn &&
+			len(input.TransitiveTagKeys) == 2 &&
+			assert.ElementsMatch(t, []string{"repo", "project"}, input.TransitiveTagKeys)
+	})).Return(&sts.AssumeRoleOutput{
+		Credentials: &types.Credentials{
+			AccessKeyId:     aws.String("AKIATEST"),
+			SecretAccessKey: aws.String("SECRET"),
+			SessionToken:    aws.String("TOKEN"),
+			Expiration:      nil,
+		},
+	}, nil).Once()
+
+	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	assert.NoError(t, err)
+	assert.NotNil(t, creds)
+
+	// TransitiveSessionTags off: no transitive keys are set, even with tags present.
+	consumer.Config.TagAuth.TransitiveSessionTags = false
+	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+		return *input.RoleArn == testRoleArn && input.TransitiveTagKeys == nil && len(input.Tags) == 2
+	})).Return(&sts.AssumeRoleOutput{
+		Credentials: &types.Credentials{
+			AccessKeyId:     aws.String("AKIATEST2"),
+			SecretAccessKey: aws.String("SECRET2"),
+			SessionToken:    aws.String("TOKEN2"),
+			Expiration:      nil,
+		},
+	}, nil).Once()
+
+	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	assert.NoError(t, err)
+	assert.NotNil(t, creds)
+
+	mockAWS.AssertExpectations(t)
+}
+
+func TestSelectTransitiveKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		tags []types.Tag
+		want []string
+	}{
+		{
+			name: "no tags",
+			tags: nil,
+			want: []string{},
+		},
+		{
+			name: "well-known and custom-named tags are all included",
+			tags: []types.Tag{
+				{Key: aws.String("repo"), Value: aws.String("owner/repo")},
+				{Key: aws.String("ref"), Value: aws.String("refs/heads/main")},
+				{Key: aws.String("actor"), Value: aws.String("testuser")},
+				{Key: aws.String("project"), Value: aws.String("my-project")},
+			},
+			want: []string{"repo", "ref", "actor", "project"},
+		},
+		{
+			name: "nil keys are skipped",
+			tags: []types.Tag{
+				{Key: nil, Value: aws.String("ignored")},
+				{Key: aws.String("project"), Value: aws.String("my-project")},
+			},
+			want: []string{"project"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectTransitiveKeys(tt.tags)
+			assert.ElementsMatch(t, tt.want, got)
+		})
+	}
+}
+
 func TestBuildSessionTags(t *testing.T) {
 	t.Run("valid spec produces correct tags", func(t *testing.T) {
 		raw := map[string]any{

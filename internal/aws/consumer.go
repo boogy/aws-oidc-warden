@@ -258,17 +258,15 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 	return result.Credentials, nil
 }
 
-// transitiveSessionTagKeys are the session-tag keys marked transitive when
-// tag_auth.transitive_session_tags is enabled. Kept minimal on purpose:
-// transitive tags are immutable through the entire role chain.
-var transitiveSessionTagKeys = []string{"repo", "ref", "actor"}
-
-// selectTransitiveKeys returns the subset of tag keys present in tags that are
-// eligible to be transitive.
+// selectTransitiveKeys returns the keys of every session tag attached to the
+// assumption. Session-tag key names are operator-configured per issuer
+// (config.IssuerConfig.SessionTags), so when tag_auth.transitive_session_tags
+// is enabled all of them are marked transitive — a hardcoded key list would
+// silently drop custom-named identity tags and break ABAC across role chains.
 func selectTransitiveKeys(tags []types.Tag) []string {
-	keys := make([]string, 0, len(transitiveSessionTagKeys))
+	keys := make([]string, 0, len(tags))
 	for _, t := range tags {
-		if t.Key != nil && slices.Contains(transitiveSessionTagKeys, *t.Key) {
+		if t.Key != nil {
 			keys = append(keys, *t.Key)
 		}
 	}

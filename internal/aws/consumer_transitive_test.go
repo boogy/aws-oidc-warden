@@ -36,7 +36,10 @@ func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
-	assert.ElementsMatch(t, []string{"repo", "ref", "actor"}, captured.TransitiveTagKeys)
+	// All configured session tags are marked transitive, not just repo/ref/actor:
+	// key names are operator-defined per issuer (repo-owner/ref-type are absent
+	// here only because their source claims are empty on this test's Claims).
+	assert.ElementsMatch(t, []string{"repo", "ref", "actor", "event-name"}, captured.TransitiveTagKeys)
 }
 
 // defaultGitHubSessionTagsForTest mirrors config.defaultGitHubIssuer's
