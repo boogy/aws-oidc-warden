@@ -88,10 +88,12 @@ func NewBootstrap() (*Bootstrap, error) {
 	// changes take effect immediately without a Lambda restart.
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 
-	// The extractor is fixed at cold start. Changing jwt_validation.mode at runtime
-	// requires a Lambda redeployment. Hot-reload via Provider only affects fields
-	// read per-request (repo_role_mappings, audiences, etc.).
-	extractor, err := newClaimsExtractor(cfg, tokenValidator)
+	// The extractor's mode is fixed at cold start. Changing jwt_validation.mode
+	// at runtime requires a Lambda redeployment. Delegated extractors still
+	// read the live config from provider on every Extract() call, so
+	// hot-reloaded audiences/claim_mappings/required_claims/jwt_leeway/
+	// alb_expected_signer take effect immediately, like self mode.
+	extractor, err := newClaimsExtractor(provider, tokenValidator)
 	if err != nil {
 		logger.Error("Failed to create claims extractor", slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to create claims extractor: %w", err)
@@ -118,27 +120,29 @@ func NewBootstrap() (*Bootstrap, error) {
 // the configured mode. Delegated modes ("apigw"/"alb") trust an upstream that
 // has already verified the token's signature against a single issuer, so v2's
 // multi-issuer registry only applies to "self" mode: a delegated mode
-// requires exactly one configured issuer, whose full spec (audiences,
-// claim_mappings, required_claims) plus the same JWTLeeway/MaxTokenLifetime/
-// MaxTokenAge bounds self mode enforces are used for defense-in-depth
-// re-validation of the pre-validated claims (SHARED.md invariant #6).
-func newClaimsExtractor(cfg *config.Config, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
+// requires exactly one configured issuer at startup (checked here as a
+// fail-fast), whose full spec (audiences, claim_mappings, required_claims)
+// plus the same jwt_leeway/max_token_lifetime/max_token_age bounds self mode
+// enforces are used for defense-in-depth re-validation of the pre-validated
+// claims (SHARED.md invariant #6). The delegated extractors themselves read
+// provider live on every Extract() call, so a later hot-reload is not
+// frozen at this startup check.
+func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
+	cfg := provider.Get()
 	mode := cfg.JWTValidation.Mode
 	switch mode {
 	case "self", "":
 		return validator.NewSelfExtractor(v), nil
 	case "apigw":
-		iss, err := singleDelegatedIssuer(cfg, mode)
-		if err != nil {
+		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
 			return nil, err
 		}
-		return validator.NewAPIGWExtractor(iss, cfg.JWTLeeway, cfg.MaxTokenLifetime, cfg.MaxTokenAge), nil
+		return validator.NewAPIGWExtractor(provider), nil
 	case "alb":
-		iss, err := singleDelegatedIssuer(cfg, mode)
-		if err != nil {
+		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
 			return nil, err
 		}
-		return validator.NewALBExtractor(cfg.JWTValidation.ALBExpectedSigner, iss, cfg.JWTLeeway, cfg.MaxTokenLifetime, cfg.MaxTokenAge), nil
+		return validator.NewALBExtractor(provider), nil
 	default:
 		return nil, fmt.Errorf("unknown jwt_validation.mode: %q", mode)
 	}

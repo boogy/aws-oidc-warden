@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/golang-jwt/jwt/v5"
 )
 
 // claimBounds carries the time-bound knobs Validate applies in self mode
-// (JWTLeeway/MaxTokenLifetime/MaxTokenAge on TokenValidator) so
+// (jwt_leeway/max_token_lifetime/max_token_age, read live from config) so
 // checkAndNormalizeClaims can apply the identical bounds to claims that
 // arrive by a different trust path (apigw/alb).
 type claimBounds struct {
@@ -99,4 +100,16 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 
 	// Normalize to canonical subject + raw claims map.
 	return normalizeClaims(raw, spec.Provider, spec.ClaimMappings)
+}
+
+// resolveDelegatedSpec returns the sole configured issuer's spec plus the live
+// time bounds for a delegated mode, from the current config. Fails closed if
+// the config is not exactly one issuer (matches the bootstrap fail-fast).
+func resolveDelegatedSpec(cfg *config.Config) (*issuerSpec, claimBounds, error) {
+	if len(cfg.Issuers) != 1 {
+		return nil, claimBounds{}, fmt.Errorf("delegated jwt_validation mode requires exactly one configured issuer, got %d", len(cfg.Issuers))
+	}
+	spec := newIssuerSpec(&cfg.Issuers[0])
+	b := claimBounds{leeway: cfg.LeewayOrDefault(), maxLifetime: cfg.MaxTokenLifetime, maxAge: cfg.MaxTokenAge}
+	return spec, b, nil
 }

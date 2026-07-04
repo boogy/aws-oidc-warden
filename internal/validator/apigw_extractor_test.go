@@ -28,9 +28,25 @@ func unixStr(t time.Time) string {
 	return strconv.FormatInt(t.Unix(), 10)
 }
 
+// newTestAPIGWExtractor builds an APIGWExtractor backed by a static
+// single-issuer config.Provider, mirroring what NewAPIGWExtractor's
+// production caller (bootstrap.go) wires from a real config: the extractor
+// now reads iss/leeway/maxLifetime/maxAge live from the provider on every
+// Extract() call instead of freezing them at construction.
+func newTestAPIGWExtractor(iss *config.IssuerConfig, leeway, maxLifetime, maxAge time.Duration) *validator.APIGWExtractor {
+	cfg := &config.Config{
+		Issuers:          []config.IssuerConfig{*iss},
+		RoleSessionName:  "test",
+		JWTLeeway:        &leeway,
+		MaxTokenLifetime: maxLifetime,
+		MaxTokenAge:      maxAge,
+	}
+	return validator.NewAPIGWExtractor(config.NewStaticProvider(cfg))
+}
+
 func TestAPIGWExtractor_Extract(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	claims, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss":        "https://token.actions.githubusercontent.com",
@@ -56,7 +72,7 @@ func TestAPIGWExtractor_Extract(t *testing.T) {
 
 func TestAPIGWExtractor_MissingClaims(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: nil,
 	})
@@ -66,7 +82,7 @@ func TestAPIGWExtractor_MissingClaims(t *testing.T) {
 
 func TestAPIGWExtractor_MissingRepository(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss": "https://token.actions.githubusercontent.com",
@@ -83,7 +99,7 @@ func TestAPIGWExtractor_MissingRepository(t *testing.T) {
 
 func TestAPIGWExtractor_MissingSubject(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss":        "https://token.actions.githubusercontent.com",
@@ -100,7 +116,7 @@ func TestAPIGWExtractor_MissingSubject(t *testing.T) {
 
 func TestAPIGWExtractor_ExpiredToken(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss":        "https://token.actions.githubusercontent.com",
@@ -117,7 +133,7 @@ func TestAPIGWExtractor_ExpiredToken(t *testing.T) {
 
 func TestAPIGWExtractor_MissingExp(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
@@ -133,7 +149,7 @@ func TestAPIGWExtractor_MissingExp(t *testing.T) {
 
 func TestAPIGWExtractor_IssuerMismatch(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss": "https://evil.example.com", "aud": "sts.amazonaws.com",
@@ -146,7 +162,7 @@ func TestAPIGWExtractor_IssuerMismatch(t *testing.T) {
 
 func TestAPIGWExtractor_AudienceMismatch(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss": "https://token.actions.githubusercontent.com", "aud": "wrong-audience",
@@ -161,7 +177,7 @@ func TestAPIGWExtractor_AudienceMismatch(t *testing.T) {
 
 func TestAPIGWExtractor_MinimalClaims(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	claims, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss":        "https://token.actions.githubusercontent.com",
@@ -181,7 +197,7 @@ func TestAPIGWExtractor_MinimalClaims(t *testing.T) {
 
 func TestAPIGWExtractor_FutureIssuedAt(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss":        "https://token.actions.githubusercontent.com",
@@ -197,7 +213,7 @@ func TestAPIGWExtractor_FutureIssuedAt(t *testing.T) {
 
 func TestAPIGWExtractor_MaxTokenAgeExceeded(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, 0, time.Minute)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, time.Minute)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{
 			"iss":        "https://token.actions.githubusercontent.com",
@@ -214,7 +230,7 @@ func TestAPIGWExtractor_MaxTokenAgeExceeded(t *testing.T) {
 
 func TestAPIGWExtractor_MaxTokenLifetimeExceeded(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
-	ex := validator.NewAPIGWExtractor(iss, 30*time.Second, time.Minute, 0)
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, time.Minute, 0)
 	now := time.Now()
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		AuthorizerClaims: map[string]string{

@@ -107,7 +107,7 @@ func TestSelfDelegatedParity(t *testing.T) {
 	require.NoError(t, err)
 
 	// --- delegated apigw mode: same claims as the authorizer's string map ---
-	fromDelegated, err := validator.NewAPIGWExtractor(issCfg, 30*time.Second, 0, 0).
+	fromDelegated, err := validator.NewAPIGWExtractor(config.NewStaticProvider(cfg)).
 		Extract(t.Context(), validator.ExtractionInput{AuthorizerClaims: map[string]string{
 			"iss":              issuer,
 			"sub":              repository,

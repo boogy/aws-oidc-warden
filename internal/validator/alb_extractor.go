@@ -70,9 +70,7 @@ func (c *albKeyCache) set(kid string, key *ecdsa.PublicKey) {
 // the token itself, so only signature *trust* differs from self mode
 // (SHARED.md invariant #6).
 type ALBExtractor struct {
-	expectedSigner string
-	spec           *issuerSpec
-	bounds         claimBounds
+	provider       *config.Provider
 	keyEndpointFmt string // format string for the public key URL
 	testEndpoint   bool   // true when keyEndpointFmt uses a single %s (test override)
 	httpClient     *http.Client
@@ -98,16 +96,14 @@ func WithALBHTTPClient(c *http.Client) ALBOption {
 }
 
 // NewALBExtractor creates an ALBExtractor for the delegated "alb" mode's
-// single configured issuer. expectedSigner is the ALB ARN that must match the
-// JWT "signer" header (empty disables the check). iss and the
-// leeway/maxLifetime/maxAge bounds mirror NewAPIGWExtractor: they supply what
-// self mode would otherwise read from the multi-issuer registry and
-// TokenValidator's configured bounds.
-func NewALBExtractor(expectedSigner string, iss *config.IssuerConfig, leeway, maxLifetime, maxAge time.Duration, opts ...ALBOption) *ALBExtractor {
+// single configured issuer. provider is read on every Extract() call (via
+// resolveDelegatedSpec, plus a live read of JWTValidation.ALBExpectedSigner),
+// so a hot-reloaded audiences/claim_mappings/required_claims/jwt_leeway/
+// alb_expected_signer change takes effect without a restart, matching self
+// mode.
+func NewALBExtractor(provider *config.Provider, opts ...ALBOption) *ALBExtractor {
 	a := &ALBExtractor{
-		expectedSigner: expectedSigner,
-		spec:           newIssuerSpec(iss),
-		bounds:         claimBounds{leeway: leeway, maxLifetime: maxLifetime, maxAge: maxAge},
+		provider:       provider,
 		keyEndpointFmt: defaultALBKeyEndpoint,
 		httpClient:     newSecureHTTPClient(false, 5*time.Second),
 	}
@@ -151,9 +147,16 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 		return nil, fmt.Errorf("ALB JWT kid contains invalid characters: %q", kid)
 	}
 
+	cfg := a.provider.Get()
+	spec, bounds, err := resolveDelegatedSpec(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	expectedSigner := cfg.JWTValidation.ALBExpectedSigner
 	signer, _ := unverified.Header["signer"].(string)
-	if a.expectedSigner != "" && signer != a.expectedSigner {
-		return nil, fmt.Errorf("ALB JWT signer mismatch: got %q, want %q", signer, a.expectedSigner)
+	if expectedSigner != "" && signer != expectedSigner {
+		return nil, fmt.Errorf("ALB JWT signer mismatch: got %q, want %q", signer, expectedSigner)
 	}
 
 	// Fetch ALB public key.
@@ -184,11 +187,11 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 	// Re-validate issuer — guards against a reused or misconfigured ALB OIDC
 	// setup, and against a token from a different, unconfigured issuer.
 	verifiedIssuer, err := mc.GetIssuer()
-	if err != nil || verifiedIssuer != a.spec.Issuer {
-		return nil, fmt.Errorf("iss mismatch: got %q, want %q", verifiedIssuer, a.spec.Issuer)
+	if err != nil || verifiedIssuer != spec.Issuer {
+		return nil, fmt.Errorf("iss mismatch: got %q, want %q", verifiedIssuer, spec.Issuer)
 	}
 
-	return checkAndNormalizeClaims(mc, a.spec, a.bounds, time.Now())
+	return checkAndNormalizeClaims(mc, spec, bounds, time.Now())
 }
 
 func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (*ecdsa.PublicKey, error) {

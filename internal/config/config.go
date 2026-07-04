@@ -290,12 +290,12 @@ type Config struct {
 	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation,omitempty"`
 
 	// Hardening knobs (top-level, apply across all issuers and modes).
-	JWTLeeway            time.Duration `mapstructure:"jwt_leeway"             json:"jwt_leeway,omitempty"`             // Clock-skew leeway for exp/iat/nbf; default 30s, hard max 120s
-	MaxTokenLifetime     time.Duration `mapstructure:"max_token_lifetime"     json:"max_token_lifetime,omitempty"`     // Reject if exp-iat exceeds this; 0 = no cap
-	MaxTokenAge          time.Duration `mapstructure:"max_token_age"          json:"max_token_age,omitempty"`          // Reject if now-iat exceeds this; 0 = no cap
-	MaxTokenBytes        int           `mapstructure:"max_token_bytes"        json:"max_token_bytes,omitempty"`        // Token length cap before any parsing; default 8192 (8 KB)
-	JWKSRefetchCooldown  time.Duration `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
-	AllowInsecureIssuers bool          `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
+	JWTLeeway            *time.Duration `mapstructure:"jwt_leeway"             json:"jwt_leeway,omitempty"`             // Clock-skew leeway for exp/iat/nbf; nil = unset (defaults to 30s in Validate); hard max 120s
+	MaxTokenLifetime     time.Duration  `mapstructure:"max_token_lifetime"     json:"max_token_lifetime,omitempty"`     // Reject if exp-iat exceeds this; 0 = no cap
+	MaxTokenAge          time.Duration  `mapstructure:"max_token_age"          json:"max_token_age,omitempty"`          // Reject if now-iat exceeds this; 0 = no cap
+	MaxTokenBytes        int            `mapstructure:"max_token_bytes"        json:"max_token_bytes,omitempty"`        // Token length cap before any parsing; default 8192 (8 KB)
+	JWKSRefetchCooldown  time.Duration  `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
+	AllowInsecureIssuers bool           `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
 
 	// Performance optimization / resolved authorization state - not serialized.
 	// Rebuilt fresh by Validate() every time (from RoleMappings/RoleGroups/
@@ -304,6 +304,197 @@ type Config struct {
 	estimatedRolesPerMapping int            `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
 	effective                []*RoleMapping `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
 	index                    authzIndex     `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
+}
+
+// envKeyReplacer mirrors the SetEnvKeyReplacer configured on viper in
+// LoadConfig, so envVarName can derive the same AOW_ env var name viper would
+// bind for a given config key.
+var envKeyReplacer = strings.NewReplacer(".", "_", "-", "_")
+
+// envVarName derives the AOW_ environment variable name for a config/viper
+// key, matching viper's SetEnvPrefix("aow") + SetEnvKeyReplacer(".","_","-","_").
+func envVarName(key string) string {
+	return "AOW_" + strings.ToUpper(envKeyReplacer.Replace(key))
+}
+
+// envTrue implements the truthy check used by all boolean AOW_ env knobs.
+func envTrue(v string) bool {
+	return v == "true" || v == "1" || v == "True" || v == "TRUE"
+}
+
+// ensureTagAuth returns c.TagAuth, initializing it to a zero-value TagAuth
+// first if it is nil.
+func ensureTagAuth(c *Config) *TagAuth {
+	if c.TagAuth == nil {
+		c.TagAuth = &TagAuth{}
+	}
+	return c.TagAuth
+}
+
+// splitCommaList splits v on "," trimming whitespace and dropping empty
+// entries; used by every comma-separated list env knob.
+func splitCommaList(v string) []string {
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// warnInvalidEnv logs the standard "invalid env var, skipping" warning shared
+// by every parse-then-assign env knob.
+func warnInvalidEnv(key, value string, err error) {
+	slog.Warn("invalid env var, skipping", "key", key, "value", value, "error", err)
+}
+
+// envBinding ties one AOW_ environment knob to both viper's file-load binding
+// (LoadConfig) and the manual re-apply after a remote-config merge
+// (reapplyEnvOverrides), so the two paths cannot drift.
+type envBinding struct {
+	key   string                    // config/viper key, e.g. "tag_auth.enabled"
+	apply func(c *Config, v string) // parse v (a non-empty env value) and assign; encodes any parent-struct init
+}
+
+// envBindings is the single source of truth for every AOW_ environment-
+// variable knob: LoadConfig binds each key to viper, and reapplyEnvOverrides
+// re-applies each after a remote/S3 config merge (env > S3 > file precedence).
+var envBindings = []envBinding{
+	// Core settings (plain strings).
+	{"role_session_name", func(c *Config, v string) { c.RoleSessionName = v }},
+	{"s3_config_bucket", func(c *Config, v string) { c.S3ConfigBucket = v }},
+	{"s3_config_path", func(c *Config, v string) { c.S3ConfigPath = v }},
+	{"session_policy_bucket", func(c *Config, v string) { c.S3SessionPolicyBucket = v }},
+	{"log_bucket", func(c *Config, v string) { c.LogBucket = v }},
+	{"log_prefix", func(c *Config, v string) { c.LogPrefix = v }},
+	{"log_level", func(c *Config, v string) { c.LogLevel = v }},
+
+	// Booleans.
+	{"log_to_s3", func(c *Config, v string) { c.LogToS3 = envTrue(v) }},
+	{"log_claim_values", func(c *Config, v string) { c.LogClaimValues = envTrue(v) }},
+	{"audit_required", func(c *Config, v string) { c.AuditRequired = envTrue(v) }},
+	{"allow_insecure_issuers", func(c *Config, v string) { c.AllowInsecureIssuers = envTrue(v) }},
+
+	// Durations (warn-and-skip on parse error).
+	{"config_reload_interval", func(c *Config, v string) {
+		if d, err := time.ParseDuration(v); err != nil {
+			warnInvalidEnv(envVarName("config_reload_interval"), v, err)
+		} else {
+			c.ConfigReloadInterval = d
+		}
+	}},
+	{"max_token_lifetime", func(c *Config, v string) {
+		if d, err := time.ParseDuration(v); err != nil {
+			warnInvalidEnv(envVarName("max_token_lifetime"), v, err)
+		} else {
+			c.MaxTokenLifetime = d
+		}
+	}},
+	{"max_token_age", func(c *Config, v string) {
+		if d, err := time.ParseDuration(v); err != nil {
+			warnInvalidEnv(envVarName("max_token_age"), v, err)
+		} else {
+			c.MaxTokenAge = d
+		}
+	}},
+	{"jwks_refetch_cooldown", func(c *Config, v string) {
+		if d, err := time.ParseDuration(v); err != nil {
+			warnInvalidEnv(envVarName("jwks_refetch_cooldown"), v, err)
+		} else {
+			c.JWKSRefetchCooldown = d
+		}
+	}},
+	{"jwt_leeway", func(c *Config, v string) {
+		if d, err := time.ParseDuration(v); err != nil {
+			warnInvalidEnv(envVarName("jwt_leeway"), v, err)
+		} else {
+			c.JWTLeeway = &d
+		}
+	}},
+
+	// Int (warn-and-skip on parse error).
+	{"max_token_bytes", func(c *Config, v string) {
+		if n, err := strconv.Atoi(v); err != nil {
+			warnInvalidEnv(envVarName("max_token_bytes"), v, err)
+		} else {
+			c.MaxTokenBytes = n
+		}
+	}},
+
+	// Comma-separated list.
+	{"config_fragments", func(c *Config, v string) { c.ConfigFragments = splitCommaList(v) }},
+
+	// Cache knobs (c.Cache is guaranteed non-nil before these run).
+	{"cache.type", func(c *Config, v string) { c.Cache.Type = v }},
+	{"cache.dynamodb_table", func(c *Config, v string) { c.Cache.DynamoDBTable = v }},
+	{"cache.s3_bucket", func(c *Config, v string) { c.Cache.S3Bucket = v }},
+	{"cache.s3_prefix", func(c *Config, v string) { c.Cache.S3Prefix = v }},
+	{"cache.ttl", func(c *Config, v string) {
+		if d, err := time.ParseDuration(v); err != nil {
+			warnInvalidEnv(envVarName("cache.ttl"), v, err)
+		} else {
+			c.Cache.TTL = d
+		}
+	}},
+	{"cache.max_local_size", func(c *Config, v string) {
+		if n, err := strconv.Atoi(v); err != nil {
+			warnInvalidEnv(envVarName("cache.max_local_size"), v, err)
+		} else {
+			c.Cache.MaxLocalSize = n
+		}
+	}},
+	{"cache.s3_cleanup", func(c *Config, v string) {
+		// NOTE: strconv.ParseBool, not envTrue — this field has always used
+		// Go's canonical bool parsing rather than the looser truthy check.
+		if b, err := strconv.ParseBool(v); err != nil {
+			warnInvalidEnv(envVarName("cache.s3_cleanup"), v, err)
+		} else {
+			c.Cache.S3Cleanup = b
+		}
+	}},
+
+	// Tag-based authorization knobs. enabled/transitive_session_tags/
+	// allowed_accounts create TagAuth if nil; the rest only apply if it
+	// already exists (preserves the pre-refactor init semantics exactly).
+	{"tag_auth.enabled", func(c *Config, v string) { ensureTagAuth(c).Enabled = envTrue(v) }},
+	{"tag_auth.transitive_session_tags", func(c *Config, v string) { ensureTagAuth(c).TransitiveSessionTags = envTrue(v) }},
+	{"tag_auth.allowed_accounts", func(c *Config, v string) { ensureTagAuth(c).AllowedAccounts = splitCommaList(v) }},
+	{"tag_auth.tag_prefix", func(c *Config, v string) {
+		if c.TagAuth != nil {
+			c.TagAuth.TagPrefix = v
+		}
+	}},
+	{"tag_auth.spoke_role_name", func(c *Config, v string) {
+		if c.TagAuth != nil {
+			c.TagAuth.SpokeRoleName = v
+		}
+	}},
+	{"tag_auth.external_id", func(c *Config, v string) {
+		if c.TagAuth != nil {
+			c.TagAuth.ExternalID = v
+		}
+	}},
+	{"tag_auth.default_org", func(c *Config, v string) {
+		if c.TagAuth != nil {
+			c.TagAuth.DefaultOrg = v
+		}
+	}},
+	{"tag_auth.spoke_session_duration", func(c *Config, v string) {
+		if c.TagAuth == nil {
+			return
+		}
+		if d, err := time.ParseDuration(v); err != nil {
+			warnInvalidEnv(envVarName("tag_auth.spoke_session_duration"), v, err)
+		} else {
+			c.TagAuth.SpokeSessionDuration = d
+		}
+	}},
+
+	// JWT validation settings (value struct, always present).
+	{"jwt_validation.mode", func(c *Config, v string) { c.JWTValidation.Mode = v }},
+	{"jwt_validation.alb_expected_signer", func(c *Config, v string) { c.JWTValidation.ALBExpectedSigner = v }},
 }
 
 // NewConfig initializes and returns the configuration. It ensures that the config is loaded only once.
@@ -342,7 +533,6 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("tag_auth.spoke_session_duration", "15m")
 	viper.SetDefault("tag_auth.transitive_session_tags", false)
 	viper.SetDefault("jwt_validation.mode", "self")
-	viper.SetDefault("jwt_leeway", defaultJWTLeeway)
 	viper.SetDefault("max_token_bytes", defaultMaxTokenBytes)
 	viper.SetDefault("jwks_refetch_cooldown", defaultJWKSRefetchCooldown)
 	viper.SetDefault("allow_insecure_issuers", false)
@@ -350,58 +540,12 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("log_claim_values", false)
 	viper.SetDefault("audit_required", false)
 
-	// Explicitly bind all config keys to environment variables
-	// Core settings
-	_ = viper.BindEnv("role_session_name")      // AOW_ROLE_SESSION_NAME
-	_ = viper.BindEnv("s3_config_bucket")       // AOW_S3_CONFIG_BUCKET
-	_ = viper.BindEnv("s3_config_path")         // AOW_S3_CONFIG_PATH
-	_ = viper.BindEnv("config_reload_interval") // AOW_CONFIG_RELOAD_INTERVAL
-	_ = viper.BindEnv("config_fragments")       // AOW_CONFIG_FRAGMENTS (comma-separated)
-	_ = viper.BindEnv("session_policy_bucket")  // AOW_SESSION_POLICY_BUCKET
-	_ = viper.BindEnv("log_to_s3")              // AOW_LOG_TO_S3
-	_ = viper.BindEnv("log_bucket")             // AOW_LOG_BUCKET
-	_ = viper.BindEnv("log_prefix")             // AOW_LOG_PREFIX
-
-	// Cache settings
-	_ = viper.BindEnv("cache.type")             // AOW_CACHE_TYPE
-	_ = viper.BindEnv("cache.ttl")              // AOW_CACHE_TTL
-	_ = viper.BindEnv("cache.max_local_size")   // AOW_CACHE_MAX_LOCAL_SIZE
-	_ = viper.BindEnv("cache.dynamodb_table")   // AOW_CACHE_DYNAMODB_TABLE
-	_ = viper.BindEnv("cache.s3_bucket")        // AOW_CACHE_S3_BUCKET
-	_ = viper.BindEnv("cache.s3_prefix")        // AOW_CACHE_S3_PREFIX
-	_ = viper.BindEnv("cache.s3_cleanup")       // AOW_CACHE_S3_CLEANUP
-	_ = viper.BindEnv("cache.s3_config_bucket") // AOW_CACHE_S3_CONFIG_BUCKET
-	_ = viper.BindEnv("cache.s3_config_path")   // AOW_CACHE_S3_CONFIG_PATH
-
-	// Tag-based authorization settings
-	_ = viper.BindEnv("tag_auth.enabled")                 // AOW_TAG_AUTH_ENABLED
-	_ = viper.BindEnv("tag_auth.tag_prefix")              // AOW_TAG_AUTH_TAG_PREFIX
-	_ = viper.BindEnv("tag_auth.spoke_role_name")         // AOW_TAG_AUTH_SPOKE_ROLE_NAME
-	_ = viper.BindEnv("tag_auth.external_id")             // AOW_TAG_AUTH_EXTERNAL_ID
-	_ = viper.BindEnv("tag_auth.default_org")             // AOW_TAG_AUTH_DEFAULT_ORG
-	_ = viper.BindEnv("tag_auth.spoke_session_duration")  // AOW_TAG_AUTH_SPOKE_SESSION_DURATION
-	_ = viper.BindEnv("tag_auth.transitive_session_tags") // AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS
-	_ = viper.BindEnv("tag_auth.allowed_accounts")        // AOW_TAG_AUTH_ALLOWED_ACCOUNTS (comma-separated)
-
-	// JWT validation settings
-	_ = viper.BindEnv("jwt_validation.mode")                // AOW_JWT_VALIDATION_MODE
-	_ = viper.BindEnv("jwt_validation.alb_expected_signer") // AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER
-
-	// Hardening knobs
-	_ = viper.BindEnv("jwt_leeway")             // AOW_JWT_LEEWAY
-	_ = viper.BindEnv("max_token_lifetime")     // AOW_MAX_TOKEN_LIFETIME
-	_ = viper.BindEnv("max_token_age")          // AOW_MAX_TOKEN_AGE
-	_ = viper.BindEnv("max_token_bytes")        // AOW_MAX_TOKEN_BYTES
-	_ = viper.BindEnv("jwks_refetch_cooldown")  // AOW_JWKS_REFETCH_COOLDOWN
-	_ = viper.BindEnv("allow_insecure_issuers") // AOW_ALLOW_INSECURE_ISSUERS
-
-	// Logging settings
-	_ = viper.BindEnv("log_to_s3")
-	_ = viper.BindEnv("log_bucket")
-	_ = viper.BindEnv("log_prefix")
-	_ = viper.BindEnv("log_level")        // AOW_LOG_LEVEL
-	_ = viper.BindEnv("log_claim_values") // AOW_LOG_CLAIM_VALUES
-	_ = viper.BindEnv("audit_required")   // AOW_AUDIT_REQUIRED
+	// Explicitly bind all config keys to environment variables. Driven by
+	// envBindings (see below) so this list and reapplyEnvOverrides cannot
+	// drift apart.
+	for _, b := range envBindings {
+		_ = viper.BindEnv(b.key)
+	}
 
 	configFileFound := true
 	if err := viper.ReadInConfig(); err != nil {
@@ -460,186 +604,15 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 // uses a fresh viper.Viper without the AOW_* bindings set up by LoadConfig, so
 // env-var overrides are otherwise silently clobbered by S3 payload values.
 func reapplyEnvOverrides(c *Config) {
-	type strField struct {
-		env string
-		ptr *string
-	}
-	for _, f := range []strField{
-		{"AOW_ROLE_SESSION_NAME", &c.RoleSessionName},
-		{"AOW_S3_CONFIG_BUCKET", &c.S3ConfigBucket},
-		{"AOW_S3_CONFIG_PATH", &c.S3ConfigPath},
-		{"AOW_SESSION_POLICY_BUCKET", &c.S3SessionPolicyBucket},
-		{"AOW_LOG_BUCKET", &c.LogBucket},
-		{"AOW_LOG_PREFIX", &c.LogPrefix},
-		{"AOW_LOG_LEVEL", &c.LogLevel},
-	} {
-		if v := os.Getenv(f.env); v != "" {
-			*f.ptr = v
-		}
-	}
-
-	if v := os.Getenv("AOW_LOG_TO_S3"); v != "" {
-		c.LogToS3 = v == "true" || v == "1" || v == "True" || v == "TRUE"
-	}
-	if v := os.Getenv("AOW_LOG_CLAIM_VALUES"); v != "" {
-		c.LogClaimValues = v == "true" || v == "1" || v == "True" || v == "TRUE"
-	}
-	if v := os.Getenv("AOW_AUDIT_REQUIRED"); v != "" {
-		c.AuditRequired = v == "true" || v == "1" || v == "True" || v == "TRUE"
-	}
-
-	if v := os.Getenv("AOW_CONFIG_RELOAD_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_CONFIG_RELOAD_INTERVAL", "value", v, "error", err)
-		} else {
-			c.ConfigReloadInterval = d
-		}
-	}
-	if v := os.Getenv("AOW_CONFIG_FRAGMENTS"); v != "" {
-		parts := strings.Split(v, ",")
-		frags := make([]string, 0, len(parts))
-		for _, p := range parts {
-			if s := strings.TrimSpace(p); s != "" {
-				frags = append(frags, s)
-			}
-		}
-		c.ConfigFragments = frags
-	}
-
-	// Cache env overrides — ensure Cache is non-nil before writing.
+	// Ensure Cache is non-nil before applying cache knobs (matches prior
+	// behavior: the old code unconditionally created c.Cache here).
 	if c.Cache == nil {
 		c.Cache = &Cache{}
 	}
-
-	for _, f := range []strField{
-		{"AOW_CACHE_TYPE", &c.Cache.Type},
-		{"AOW_CACHE_DYNAMODB_TABLE", &c.Cache.DynamoDBTable},
-		{"AOW_CACHE_S3_BUCKET", &c.Cache.S3Bucket},
-		{"AOW_CACHE_S3_PREFIX", &c.Cache.S3Prefix},
-	} {
-		if v := os.Getenv(f.env); v != "" {
-			*f.ptr = v
+	for _, b := range envBindings {
+		if v := os.Getenv(envVarName(b.key)); v != "" {
+			b.apply(c, v)
 		}
-	}
-
-	if v := os.Getenv("AOW_CACHE_TTL"); v != "" {
-		if d, err := time.ParseDuration(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_TTL", "value", v, "error", err)
-		} else {
-			c.Cache.TTL = d
-		}
-	}
-
-	if v := os.Getenv("AOW_CACHE_MAX_LOCAL_SIZE"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_MAX_LOCAL_SIZE", "value", v, "error", err)
-		} else {
-			c.Cache.MaxLocalSize = n
-		}
-	}
-
-	if v := os.Getenv("AOW_CACHE_S3_CLEANUP"); v != "" {
-		if b, err := strconv.ParseBool(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_CACHE_S3_CLEANUP", "value", v, "error", err)
-		} else {
-			c.Cache.S3Cleanup = b
-		}
-	}
-
-	// Tag-based authorization env overrides.
-	if v := os.Getenv("AOW_TAG_AUTH_ENABLED"); v != "" {
-		if c.TagAuth == nil {
-			c.TagAuth = &TagAuth{}
-		}
-		c.TagAuth.Enabled = v == "true" || v == "1" || v == "True" || v == "TRUE"
-	}
-	if c.TagAuth != nil {
-		for _, f := range []strField{
-			{"AOW_TAG_AUTH_TAG_PREFIX", &c.TagAuth.TagPrefix},
-			{"AOW_TAG_AUTH_SPOKE_ROLE_NAME", &c.TagAuth.SpokeRoleName},
-			{"AOW_TAG_AUTH_EXTERNAL_ID", &c.TagAuth.ExternalID},
-			{"AOW_TAG_AUTH_DEFAULT_ORG", &c.TagAuth.DefaultOrg},
-		} {
-			if v := os.Getenv(f.env); v != "" {
-				*f.ptr = v
-			}
-		}
-		if v := os.Getenv("AOW_TAG_AUTH_SPOKE_SESSION_DURATION"); v != "" {
-			if d, err := time.ParseDuration(v); err != nil {
-				slog.Warn("invalid env var, skipping", "key", "AOW_TAG_AUTH_SPOKE_SESSION_DURATION", "value", v, "error", err)
-			} else {
-				c.TagAuth.SpokeSessionDuration = d
-			}
-		}
-	}
-
-	if v := os.Getenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS"); v != "" {
-		if c.TagAuth == nil {
-			c.TagAuth = &TagAuth{}
-		}
-		c.TagAuth.TransitiveSessionTags = v == "true" || v == "1" || v == "True" || v == "TRUE"
-	}
-	if v := os.Getenv("AOW_TAG_AUTH_ALLOWED_ACCOUNTS"); v != "" {
-		if c.TagAuth == nil {
-			c.TagAuth = &TagAuth{}
-		}
-		parts := strings.Split(v, ",")
-		accts := make([]string, 0, len(parts))
-		for _, p := range parts {
-			if s := strings.TrimSpace(p); s != "" {
-				accts = append(accts, s)
-			}
-		}
-		c.TagAuth.AllowedAccounts = accts
-	}
-
-	// JWT validation env overrides — must be re-applied after hot-reload so
-	// that AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER is never silently dropped.
-	if v := os.Getenv("AOW_JWT_VALIDATION_MODE"); v != "" {
-		c.JWTValidation.Mode = v
-	}
-	if v := os.Getenv("AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER"); v != "" {
-		c.JWTValidation.ALBExpectedSigner = v
-	}
-
-	// Hardening knob env overrides.
-	if v := os.Getenv("AOW_JWT_LEEWAY"); v != "" {
-		if d, err := time.ParseDuration(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_JWT_LEEWAY", "value", v, "error", err)
-		} else {
-			c.JWTLeeway = d
-		}
-	}
-	if v := os.Getenv("AOW_MAX_TOKEN_LIFETIME"); v != "" {
-		if d, err := time.ParseDuration(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_MAX_TOKEN_LIFETIME", "value", v, "error", err)
-		} else {
-			c.MaxTokenLifetime = d
-		}
-	}
-	if v := os.Getenv("AOW_MAX_TOKEN_AGE"); v != "" {
-		if d, err := time.ParseDuration(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_MAX_TOKEN_AGE", "value", v, "error", err)
-		} else {
-			c.MaxTokenAge = d
-		}
-	}
-	if v := os.Getenv("AOW_MAX_TOKEN_BYTES"); v != "" {
-		if n, err := strconv.Atoi(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_MAX_TOKEN_BYTES", "value", v, "error", err)
-		} else {
-			c.MaxTokenBytes = n
-		}
-	}
-	if v := os.Getenv("AOW_JWKS_REFETCH_COOLDOWN"); v != "" {
-		if d, err := time.ParseDuration(v); err != nil {
-			slog.Warn("invalid env var, skipping", "key", "AOW_JWKS_REFETCH_COOLDOWN", "value", v, "error", err)
-		} else {
-			c.JWKSRefetchCooldown = d
-		}
-	}
-	if v := os.Getenv("AOW_ALLOW_INSECURE_ISSUERS"); v != "" {
-		c.AllowInsecureIssuers = v == "true" || v == "1" || v == "True" || v == "TRUE"
 	}
 }
 
@@ -654,6 +627,16 @@ func FormatFromPath(path string) string {
 	default:
 		return "json"
 	}
+}
+
+// LeewayOrDefault returns the configured jwt_leeway, or the default when
+// unset (nil). Safe on a config that never ran Validate() (e.g. hand-built
+// test configs).
+func (c *Config) LeewayOrDefault() time.Duration {
+	if c.JWTLeeway == nil {
+		return defaultJWTLeeway
+	}
+	return *c.JWTLeeway
 }
 
 // Validate checks if the configuration is valid.
@@ -726,14 +709,15 @@ func (c *Config) Validate() error {
 	}
 
 	// Hardening knobs: apply defaults, then enforce bounds.
-	if c.JWTLeeway == 0 {
-		c.JWTLeeway = defaultJWTLeeway
+	if c.JWTLeeway == nil {
+		d := defaultJWTLeeway
+		c.JWTLeeway = &d
 	}
-	if c.JWTLeeway > maxJWTLeeway {
-		return fmt.Errorf("jwt_leeway must be <= %s, got %s", maxJWTLeeway, c.JWTLeeway)
+	if *c.JWTLeeway > maxJWTLeeway {
+		return fmt.Errorf("jwt_leeway must be <= %s, got %s", maxJWTLeeway, *c.JWTLeeway)
 	}
-	if c.JWTLeeway < 0 {
-		return fmt.Errorf("jwt_leeway must not be negative, got %s", c.JWTLeeway)
+	if *c.JWTLeeway < 0 {
+		return fmt.Errorf("jwt_leeway must not be negative, got %s", *c.JWTLeeway)
 	}
 	if c.MaxTokenBytes == 0 {
 		c.MaxTokenBytes = defaultMaxTokenBytes

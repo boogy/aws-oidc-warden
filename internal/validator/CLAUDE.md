@@ -16,7 +16,7 @@ type TokenValidatorInterface interface {
 
 ## Multi-issuer registry
 
-Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec` (issuer, provider, JWKS URI override, audiences, claim mappings, required claims); the full set is keyed by exact issuer string into a `snapshot`. `TokenValidator` holds the current snapshot behind `atomic.Pointer[snapshot]`, plus a `builtFrom atomic.Pointer[config.Config]` cheap-identity check — a hot config reload (new/removed issuer, audience, mapping) is picked up on the next `Validate()` call via a lock-free rebuild-on-pointer-change, no restart required. `leeway`/`maxLifetime`/`maxAge`/`maxTokenBytes` are read once at construction and are **not** re-derived on hot reload.
+Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec` (issuer, provider, JWKS URI override, audiences, claim mappings, required claims); the full set is keyed by exact issuer string into a `snapshot`. `TokenValidator` holds the current snapshot behind `atomic.Pointer[snapshot]`, plus a `builtFrom atomic.Pointer[config.Config]` cheap-identity check — a hot config reload (new/removed issuer, audience, mapping) is picked up on the next `Validate()` call via a lock-free rebuild-on-pointer-change, no restart required. `leeway`/`maxLifetime`/`maxAge`/`maxTokenBytes` are read live from the provider on every `Validate()` call, so a hot-reloaded change to `jwt_leeway`/`max_token_lifetime`/`max_token_age`/`max_token_bytes` takes effect without a restart. (`allowInsecureIssuers` is the exception — it configures the shared HTTP client built once at construction, so changing it still requires a restart.)
 
 ## Flow (`Validate()`)
 

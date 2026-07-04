@@ -265,7 +265,7 @@ func TestValidate(t *testing.T) {
 			config: Config{
 				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
-				JWTLeeway:       200 * time.Second,
+				JWTLeeway:       durationPtr(200 * time.Second),
 			},
 			expectErr: true,
 		},
@@ -324,6 +324,34 @@ func TestValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestJWTLeewayExplicitZero verifies that an explicit jwt_leeway: 0 is
+// distinguishable from unset and is preserved as-is (not coerced to the
+// default), since JWTLeeway is a *time.Duration (nil = unset).
+func TestJWTLeewayExplicitZero(t *testing.T) {
+	cfg := Config{
+		Issuers:         singleIssuer("https://issuer.com", "audience"),
+		RoleSessionName: "session",
+		JWTLeeway:       durationPtr(0),
+	}
+	require.NoError(t, cfg.Validate())
+	require.NotNil(t, cfg.JWTLeeway)
+	assert.Equal(t, time.Duration(0), *cfg.JWTLeeway)
+	assert.Equal(t, time.Duration(0), cfg.LeewayOrDefault())
+}
+
+// TestJWTLeewayUnsetDefaults verifies that a nil (unset) jwt_leeway is
+// defaulted to defaultJWTLeeway by Validate/LeewayOrDefault.
+func TestJWTLeewayUnsetDefaults(t *testing.T) {
+	cfg := Config{
+		Issuers:         singleIssuer("https://issuer.com", "audience"),
+		RoleSessionName: "session",
+	}
+	require.NoError(t, cfg.Validate())
+	require.NotNil(t, cfg.JWTLeeway)
+	assert.Equal(t, defaultJWTLeeway, *cfg.JWTLeeway)
+	assert.Equal(t, defaultJWTLeeway, cfg.LeewayOrDefault())
 }
 
 func TestFindSessionPolicy(t *testing.T) {
@@ -553,6 +581,11 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 // Helper function to convert string to pointer
 func strPtr(s string) *string {
 	return &s
+}
+
+// Helper function to convert time.Duration to pointer
+func durationPtr(d time.Duration) *time.Duration {
+	return &d
 }
 
 // singleIssuer builds a one-entry Issuers slice for tests that only care

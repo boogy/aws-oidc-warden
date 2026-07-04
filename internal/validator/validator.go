@@ -124,13 +124,11 @@ type TokenValidator struct {
 	provider *config.Provider
 	httpc    *http.Client // built once at init, SSRF/TLS-hardened (ssrf.go)
 
-	// leeway/maxLifetime/maxAge/maxTokenBytes are read once from the config in
-	// effect at construction time. Unlike the registry, they are not re-derived
-	// on hot reload (see CLAUDE.md).
-	leeway               time.Duration
-	maxLifetime          time.Duration
-	maxAge               time.Duration
-	maxTokenBytes        int
+	// allowInsecureIssuers configures the http client built once at
+	// construction (newSecureHTTPClient). leeway/maxLifetime/maxAge/
+	// maxTokenBytes are read LIVE from the provider on every Validate() call
+	// instead (see currentConfig), so a hot config reload takes effect
+	// immediately, like the registry.
 	allowInsecureIssuers bool
 
 	// timeNow is the clock used for lifetime/age checks and the refetch
@@ -177,18 +175,9 @@ func WithTimeNow(now func() time.Time) TokenValidatorOption {
 func NewTokenValidator(provider *config.Provider, jwksCache cache.Cache, opts ...TokenValidatorOption) *TokenValidator {
 	cfg := provider.Get()
 
-	maxTokenBytes := cfg.MaxTokenBytes
-	if maxTokenBytes <= 0 {
-		maxTokenBytes = defaultMaxTokenBytes
-	}
-
 	t := &TokenValidator{
 		cache:                jwksCache,
 		provider:             provider,
-		leeway:               cfg.JWTLeeway,
-		maxLifetime:          cfg.MaxTokenLifetime,
-		maxAge:               cfg.MaxTokenAge,
-		maxTokenBytes:        maxTokenBytes,
 		allowInsecureIssuers: cfg.AllowInsecureIssuers,
 		timeNow:              time.Now,
 	}
@@ -211,11 +200,20 @@ func (t *TokenValidator) currentConfig() *config.Config {
 
 // currentSnapshot returns the registry snapshot for the provider's current
 // config, rebuilding and atomically publishing it if the config pointer
-// changed since the last build. Concurrent callers racing a rebuild for the
-// same new pointer redo the (idempotent) work harmlessly — atomic.Pointer
-// loads/stores are torn-read-free, so this stays race-free without a lock.
+// changed since the last build.
 func (t *TokenValidator) currentSnapshot() *snapshot {
-	cfg := t.currentConfig()
+	return t.snapshotFor(t.currentConfig())
+}
+
+// snapshotFor returns the registry snapshot for cfg, rebuilding and
+// atomically publishing it if the config pointer changed since the last
+// build. Concurrent callers racing a rebuild for the same new pointer redo
+// the (idempotent) work harmlessly — atomic.Pointer loads/stores are
+// torn-read-free, so this stays race-free without a lock. Accepting cfg
+// (rather than re-reading the provider) lets Validate() do a single
+// provider.Get() and reuse it for both the snapshot and the live time
+// bounds.
+func (t *TokenValidator) snapshotFor(cfg *config.Config) *snapshot {
 	if t.builtFrom.Load() == cfg {
 		if snap := t.snap.Load(); snap != nil {
 			return snap
@@ -258,9 +256,19 @@ func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
 // (algorithm allowlist, WithLeeway/WithIssuedAt/WithExpirationRequired, kid
 // match) that Group C extends in place.
 func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
+	// Read config once; time bounds and the length guard are derived live
+	// from it (not frozen at construction) so a hot config reload takes
+	// effect immediately, like the registry.
+	cfg := t.currentConfig()
+
+	maxTokenBytes := cfg.MaxTokenBytes
+	if maxTokenBytes <= 0 {
+		maxTokenBytes = defaultMaxTokenBytes
+	}
+
 	// Step 0: length guard before any parsing.
-	if len(tokenString) > t.maxTokenBytes {
-		return nil, fmt.Errorf("%w: %d bytes (max %d)", ErrTokenTooLarge, len(tokenString), t.maxTokenBytes)
+	if len(tokenString) > maxTokenBytes {
+		return nil, fmt.Errorf("%w: %d bytes (max %d)", ErrTokenTooLarge, len(tokenString), maxTokenBytes)
 	}
 
 	// Step 1: unverified iss peek — routing only, never used for identity or
@@ -276,10 +284,12 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 
 	// Step 2: registry lookup by exact issuer match. An unknown issuer denies
 	// before any JWKS fetch is attempted.
-	spec, ok := t.currentSnapshot().registry[unverifiedIssuer]
+	spec, ok := t.snapshotFor(cfg).registry[unverifiedIssuer]
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownIssuer, unverifiedIssuer)
 	}
+
+	leeway := cfg.LeewayOrDefault()
 
 	// Step 3: per-call parser scoped to this issuer.
 	parser := jwt.NewParser(
@@ -294,7 +304,7 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 		}),
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuedAt(),
-		jwt.WithLeeway(t.leeway),
+		jwt.WithLeeway(leeway),
 	)
 
 	// Step 4: verify signature against this issuer's cached JWKS.
@@ -350,7 +360,7 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 	// WithIssuedAt, WithLeeway already ran during ParseWithClaims) but
 	// harmless — delegated modes have no such parser, so this is the only
 	// place those checks run for them.
-	bounds := claimBounds{leeway: t.leeway, maxLifetime: t.maxLifetime, maxAge: t.maxAge}
+	bounds := claimBounds{leeway: leeway, maxLifetime: cfg.MaxTokenLifetime, maxAge: cfg.MaxTokenAge}
 	return checkAndNormalizeClaims(raw, spec, bounds, t.timeNow())
 }
 
@@ -507,6 +517,13 @@ func normalizeClaims(raw jwt.MapClaims, provider string, mappings map[string]str
 	}
 	if err := adapter.populate(raw, claims); err != nil {
 		return nil, err
+	}
+
+	// Sub retains the raw "sub" claim for every provider, so the audit record's
+	// pre-canonicalization jwtSub is populated for generic issuers too (github's
+	// adapter already sets it via native unmarshal).
+	if sub, ok := raw["sub"].(string); ok {
+		claims.Sub = sub
 	}
 
 	subject, err := adapter.subject(raw, mappings)

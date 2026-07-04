@@ -22,20 +22,16 @@ import (
 // trust in the upstream signature verification is the only difference from
 // self mode (SHARED.md invariant #6).
 type APIGWExtractor struct {
-	spec   *issuerSpec
-	bounds claimBounds
+	provider *config.Provider
 }
 
 // NewAPIGWExtractor creates an APIGWExtractor for the delegated "apigw"
-// mode's single configured issuer. iss supplies the issuer/provider/
-// audiences/claim_mappings/required_claims that self mode would otherwise
-// read from the multi-issuer registry; leeway/maxLifetime/maxAge apply the
-// same time bounds self mode enforces via TokenValidator.
-func NewAPIGWExtractor(iss *config.IssuerConfig, leeway, maxLifetime, maxAge time.Duration) *APIGWExtractor {
-	return &APIGWExtractor{
-		spec:   newIssuerSpec(iss),
-		bounds: claimBounds{leeway: leeway, maxLifetime: maxLifetime, maxAge: maxAge},
-	}
+// mode's single configured issuer. provider is read on every Extract() call
+// (via resolveDelegatedSpec), so a hot-reloaded audiences/claim_mappings/
+// required_claims/jwt_leeway change takes effect without a restart, matching
+// self mode.
+func NewAPIGWExtractor(provider *config.Provider) *APIGWExtractor {
+	return &APIGWExtractor{provider: provider}
 }
 
 // Extract maps the API Gateway authorizer claims to types.Claims, re-validating
@@ -50,14 +46,20 @@ func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*typ
 		return nil, err
 	}
 
+	cfg := a.provider.Get()
+	spec, bounds, err := resolveDelegatedSpec(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	// Re-validate issuer — guards against a reused or misconfigured JWT
 	// Authorizer, and against a token from a different, unconfigured issuer.
 	iss, err := raw.GetIssuer()
-	if err != nil || iss != a.spec.Issuer {
-		return nil, fmt.Errorf("iss mismatch: got %q, want %q", iss, a.spec.Issuer)
+	if err != nil || iss != spec.Issuer {
+		return nil, fmt.Errorf("iss mismatch: got %q, want %q", iss, spec.Issuer)
 	}
 
-	return checkAndNormalizeClaims(raw, a.spec, a.bounds, time.Now())
+	return checkAndNormalizeClaims(raw, spec, bounds, time.Now())
 }
 
 // numericClaimKeys are converted from string to float64 before being placed
