@@ -86,10 +86,12 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 		return nil, fmt.Errorf("%w: got %v, want one of %v", ErrInvalidAudience, tokenAudience, spec.Audiences)
 	}
 
-	// required_claims present and non-empty, checked on the raw claims.
+	// required_claims present and non-empty, checked on the raw claims. A JSON
+	// null (nil value) is treated as absent — presence alone must not satisfy a
+	// required claim.
 	for _, name := range spec.RequiredClaims {
 		v, present := raw[name]
-		if !present {
+		if !present || v == nil {
 			return nil, fmt.Errorf("%w: %q", ErrMissingRequiredClaim, name)
 		}
 		if s, isStr := v.(string); isStr && s == "" {

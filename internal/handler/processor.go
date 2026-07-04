@@ -150,7 +150,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 
 	// Match role to (issuer, subject) with explicit conditions
 	matched, roles := cfg.AuthorizeRoles(claims.Issuer, claims.Subject, claimsMap)
-	explicitlyAllowed := matched && (len(roles) == 0 || slices.Contains(roles, requestedRole))
+	explicitlyAllowed := matched && slices.Contains(roles, requestedRole)
 
 	// Fall back to tag-based authorization: read the requested role's IAM tags
 	// and check they authorize these claims. Cross-account aware via GetRoleTags.
