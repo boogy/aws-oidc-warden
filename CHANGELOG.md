@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CI: consolidated `build.yml` into `release.yml` — a single tag-triggered workflow with one concurrency group and a combined summary. The GoReleaser (archives) and ko (image) jobs stay independent so neither blocks the other. Replaced the duplicated tag-extraction steps with the built-in `github.ref_name`.
+- CI: removed the per-build `tags:` from `.ko.yaml`; the CLI `--tags` (release workflow and Makefile targets) is now the single source of truth for image tags. The config blocks were overridden on every invocation and contradicted the published `<module>-<tag>` / `<module>-latest` scheme.
+
+### Fixed
+
+- docs: JWKS label in the token-validation sequence diagram used semicolons — mermaid statement separators that broke rendering; switched to commas.
+
 ## [2.0.0] - 2026-07-02
 
 Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of
