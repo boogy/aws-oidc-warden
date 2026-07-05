@@ -523,8 +523,12 @@ flowchart TD
 
 **Session Security:**
 
-- Session duration limits (default: 1 hour, max: 12 hours; role-chained
-  cross-account sessions clamped to 1 hour)
+- Session duration limits (default: 1 hour, max: 12 hours; whenever the
+  warden's own credentials are a role session — always true on Lambda,
+  same-account assumes included — chaining clamps the issued session to 1
+  hour regardless of target. Only `local` server mode with IAM user
+  credentials can exceed 1 hour, up to the target role's own max, cross-account
+  targets included)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
 - Credentials are short-lived and expire on their own — no long-lived secrets
@@ -532,19 +536,18 @@ flowchart TD
 
 ### 4. Tag-Based Authorization & Cross-Account
 
-Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `role_mappings` matching fails. Cross-account transport is a separate opt-in (`cross_account.enabled`, default `false`) and applies to explicit mappings and tag-auth alike. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup, and [examples/cross-account/](examples/cross-account/) for a worked example.
+Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `role_mappings` matching fails. Cross-account is a separate opt-in policy gate (`cross_account.enabled`, default `false`): `false` (or the block omitted) hard-blocks **every** cross-account operation — both role assumption and tag reads fail closed with an error, for explicit mappings and tag-auth alike. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup, and [examples/cross-account/](examples/cross-account/) for a worked example.
 
-**Hub/Spoke Flow:**
+**Flow:**
 
-1. The hub (warden's own AWS account) is the central trust anchor.
-2. For each requested role ARN the account ID is parsed from the ARN.
-3. If the target is a different account and `cross_account.enabled` is true, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account.
-4. Using spoke credentials, `GetRoleTags` calls `iam:GetRole` on the target role to read its IAM tags.
-5. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
-6. If authorized, `AssumeRole` is called (via spoke credentials for cross-account). When `TransitiveSessionTags` is true, every attached session tag (the issuer's `session_tags` spec) is marked transitive so it propagates immutably through subsequent role chaining. Cross-account sessions are clamped to 1 hour.
+1. The hub (warden's own AWS account) is the central trust anchor; every role assumption — same-account or cross-account — goes **directly** from the hub's own credentials to the target role, one hop.
+2. For each requested role ARN the account ID is parsed from the ARN. If it differs from the hub and `cross_account.enabled` is not true, the request fails closed.
+3. _(tag-auth only, and only when no explicit mapping already authorized the role)_ If the target account differs from the hub, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`, solely to call `iam:GetRole` on the target role and read its IAM tags. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account. The spoke is never used to assume the target role itself.
+4. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
+5. If authorized, `AssumeRole` is called directly on the target role using the hub's own credentials (never spoke credentials). When `TransitiveSessionTags` is true, every attached session tag (the issuer's `session_tags` spec) is marked transitive so it propagates immutably through subsequent role chaining. Because the hub's credentials are always a role session on Lambda, this assume — same-account included — is clamped to 1 hour; only `local` mode with IAM user credentials avoids the clamp.
 
 **Account Allow-List (`IsTargetAccountAllowed`):**
-Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `cross_account.allowed_accounts`. The hub account is always implicitly allowed. Empty list = any account is allowed (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
+Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `cross_account.allowed_accounts`. With `cross_account` disabled, only the hub account is allowed. With it enabled, the hub account is always implicitly allowed, and an empty list permits any account (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
 
 **`DefaultOrg` shorthand:**
 When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no `/`) are automatically expanded to `<default_org>/<name>` before comparison, enabling short tag values like `my-service` instead of `org/my-service`.
@@ -740,7 +743,7 @@ The Lambda execution role requires the following IAM permissions:
 }
 ```
 
-> `iam:GetRole` is only needed when `tag_auth` is enabled (role-tag reads via `GetRoleTags`; performed with spoke credentials when the role is cross-account).
+> `iam:GetRole` is only needed when `tag_auth` is enabled (role-tag reads via `GetRoleTags`; performed with spoke credentials only when the role is cross-account — the target `AssumeRole` itself is always direct with the hub's own credentials).
 
 ## References
 

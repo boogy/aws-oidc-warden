@@ -82,7 +82,7 @@ role_mappings:
 
 `jwt_validation.mode: apigw` / `alb` trust an upstream (API Gateway JWT
 Authorizer, ALB OIDC) that verified the token against a **single** issuer — the
-upstream cannot tell this service *which* issuer it checked. Both modes
+upstream cannot tell this service _which_ issuer it checked. Both modes
 therefore require **exactly one** entry in `issuers[]`; `NewBootstrap()` fails
 at cold start otherwise (`jwt_validation.mode %q supports exactly one
 configured issuer, got %d`). Multi-issuer configs are `self`-mode only.

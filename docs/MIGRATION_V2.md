@@ -79,10 +79,11 @@ on `default_issuer`.
 6. **Cross-account keys moved.** `tag_auth.spoke_role_name` / `external_id` /
    `spoke_session_duration` / `allowed_accounts` are now the top-level
    `cross_account:` block (with its own `enabled` flag; env prefix
-   `AOW_CROSS_ACCOUNT_*`). The spoke transport no longer requires tag-auth:
+   `AOW_CROSS_ACCOUNT_*`). Cross-account no longer requires tag-auth:
    set `cross_account.enabled: true` and explicit `role_mappings` can target
-   member-account ARNs with `tag_auth` off. If you used tag-auth cross-account
-   in v1, enable **both** blocks.
+   member-account ARNs with `tag_auth` off (assumes go direct hub→target; the
+   spoke role is only a tag-read broker for cross-account tag-auth). If you
+   used tag-auth cross-account in v1, enable **both** blocks.
 7. **Delegated modes.** `apigw`/`alb` now require **exactly one** configured
    issuer.
 8. **snake_case S3/JSON config.** `PascalCase` keys are rejected (carried over

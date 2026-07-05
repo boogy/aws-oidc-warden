@@ -243,21 +243,25 @@ tag_auth:
   transitive_session_tags: false
 
 ####################################################################################
-# CROSS-ACCOUNT TRANSPORT (optional, default disabled) — hub-and-spoke.
+# CROSS-ACCOUNT POLICY GATE (optional, default disabled).
 #
-# When enabled, roles in other AWS accounts (role_mappings targets AND
-# tag-authorized roles) are reached by first assuming a convention-named spoke
-# role in the target account. Independent of tag_auth — explicit mappings can
-# target member accounts with tag-auth off. Cross-account sessions are capped
-# at 1h (AWS role-chaining limit). See docs/examples/cross-account/ for a full
-# worked example including the IAM roles.
+# false (the default) hard-blocks EVERY cross-account operation — both role
+# assumption and, for tag_auth, IAM tag reads — regardless of role_mappings or
+# tag_auth settings. Role assumption is always DIRECT: hub -> target, one hop,
+# using the warden's own credentials. The per-account spoke role below is used
+# only so tag_auth can read a target role's IAM tags cross-account
+# (iam:GetRole); it never assumes the target role itself. Cross-account
+# sessions are capped at 1h whenever the warden's own credentials are a role
+# session (always true on Lambda, same-account assumes included). See
+# docs/examples/cross-account/ for a full worked example including the IAM
+# roles.
 ####################################################################################
 cross_account:
   enabled: false
-  spoke_role_name: "aow-spoke"
-  external_id: ""
+  spoke_role_name: "aow-spoke" # only used for cross-account tag reads (tag_auth)
+  external_id: "" # hub->spoke trust only; never sent on the hub->target assume
   spoke_session_duration: "15m"
-  allowed_accounts: [] # member account IDs the warden may assume into; [] = ANY (set in production!)
+  allowed_accounts: [] # member account IDs the warden may assume into; [] = ANY once enabled (set in production!)
 
 ####################################################################################
 # JWT VALIDATION MODE — who verifies the signature.

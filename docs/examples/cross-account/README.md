@@ -6,11 +6,11 @@ let CI workloads assume roles in **any number of member accounts**. It contains:
 | File | Purpose |
 | --- | --- |
 | [`config.yaml`](config.yaml) | Annotated warden configuration for the hub |
-| [`member-account-roles.yaml`](member-account-roles.yaml) | CloudFormation for each member account (spoke + example target role), StackSets-ready |
+| [`member-account-roles.yaml`](member-account-roles.yaml) | CloudFormation for each member account (target role + optional spoke), StackSets-ready |
 | This README | The IAM roles, trust policies, and rollout steps |
 
 Background reading: [TAG_BASED_AUTHORIZATION.md](../../TAG_BASED_AUTHORIZATION.md)
-(hub/spoke model, tag reference), [SESSION_TAGGING.md](../../SESSION_TAGGING.md) (ABAC).
+(cross-account model, tag reference), [SESSION_TAGGING.md](../../SESSION_TAGGING.md) (ABAC).
 
 Accounts used throughout:
 
@@ -27,37 +27,41 @@ Member 333333333333   production workloads
 ```
 GitHub Actions ──OIDC token──▶ Warden (hub 111111111111)
                                   │ 1. validate token, authorize role
-                                  │ 2. sts:AssumeRole aow-spoke        (member account)
-                                  │ 3. iam:GetRole target tags         (via spoke creds)
-                                  │ 4. sts:AssumeRole target role      (via spoke creds)
+                                  │ 2. (tag_auth only) iam:GetRole target tags
+                                  │    — via the per-account spoke role
+                                  │ 3. sts:AssumeRole target role — DIRECT,
+                                  │    using the warden's own (hub) credentials
                                   ▼
                      temporary credentials for
                      arn:aws:iam::222222222222:role/aow/deploy-staging
 ```
 
-Three roles are involved:
+Two roles are involved for a plain `role_mappings` setup:
 
-1. **Hub execution role** — the warden Lambda's own role. The *only* principal
-   any member account needs to trust.
-2. **Spoke role** (`aow-spoke`) — a small broker role deployed **once per
-   member account**. Trusts the hub execution role (with an external ID) and
-   can read tags on / assume only the target roles in its account.
-3. **Target roles** — the roles workloads actually receive credentials for.
-   They trust only their local spoke role.
+1. **Hub execution role** — the warden Lambda's own role. It assumes every
+   target role directly, same-account and cross-account alike — the *only*
+   principal any member account's target roles need to trust.
+2. **Target roles** — the roles workloads actually receive credentials for.
+   They trust the hub execution role directly.
 
-Adding a new member account = deploying one CloudFormation stack (the spoke)
-and adding its account ID to `cross_account.allowed_accounts`. No warden redeploy,
-no new trust edges to the hub.
+A third role, the **spoke** (`aow-spoke`), is only needed if you enable
+`tag_auth` for roles in member accounts. IAM has no resource-based policies,
+so the warden cannot read a role's tags in another account using its own
+identity — it needs an identity *in* that account. The spoke is a small role,
+deployed once per member account, whose only job is `iam:GetRole` for that
+tag read. **It is never used to assume the target role** — the final
+`AssumeRole` always goes directly hub → target, in one hop, with the warden's
+own credentials.
 
-> **Choosing a pattern.** The spoke transport activates with
-> `cross_account.enabled: true` and is the recommended pattern for many
-> accounts. It is independent of tag-based authorization — explicit
-> `role_mappings` reach member accounts through the spoke with `tag_auth`
-> off. A simpler **direct-trust** alternative (no spoke) exists for a handful
-> of roles — see [the last section](#alternative-direct-trust-without-the-spoke).
-> Note the two don't mix: once `cross_account.enabled` is on, **every**
-> cross-account assumption goes through the spoke, so target roles must trust
-> the spoke, not the hub role.
+`cross_account.enabled` is a **policy gate**, not a transport choice: `false`
+(or the `cross_account` block omitted) hard-blocks *every* cross-account
+operation — both assumes and tag reads fail closed with an error. Set it
+`true` and populate `allowed_accounts` to reach member-account roles, whether
+through `role_mappings` or `tag_auth`.
+
+Adding a new member account = deploying its target role(s) (and the spoke,
+only if `tag_auth` reads roles in that account) and adding the account ID to
+`cross_account.allowed_accounts`. No warden redeploy.
 
 ---
 
@@ -71,18 +75,18 @@ cache permissions):
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ResolveOwnAccount",
+      "Sid": "ResolveOwnIdentity",
       "Effect": "Allow",
       "Action": "sts:GetCallerIdentity",
       "Resource": "*"
     },
     {
-      "Sid": "AssumeSpokeRolesInMemberAccounts",
+      "Sid": "AssumeTargetRolesInMemberAccounts",
       "Effect": "Allow",
-      "Action": "sts:AssumeRole",
+      "Action": ["sts:AssumeRole", "sts:TagSession"],
       "Resource": [
-        "arn:aws:iam::222222222222:role/aow-spoke",
-        "arn:aws:iam::333333333333:role/aow-spoke"
+        "arn:aws:iam::222222222222:role/aow/*",
+        "arn:aws:iam::333333333333:role/aow/*"
       ]
     },
     {
@@ -90,6 +94,15 @@ cache permissions):
       "Effect": "Allow",
       "Action": ["iam:GetRole", "sts:AssumeRole", "sts:TagSession"],
       "Resource": "arn:aws:iam::111111111111:role/aow/*"
+    },
+    {
+      "Sid": "AssumeSpokeRolesForTagReads",
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": [
+        "arn:aws:iam::222222222222:role/aow-spoke",
+        "arn:aws:iam::333333333333:role/aow-spoke"
+      ]
     }
   ]
 }
@@ -97,25 +110,32 @@ cache permissions):
 
 Notes:
 
-- List the spoke ARNs per account as above, or use
-  `arn:aws:iam::*:role/aow-spoke` and rely on `cross_account.allowed_accounts`
-  plus each spoke's trust policy — explicit ARNs are the tighter default.
-- `sts:GetCallerIdentity` is how the warden learns its own (hub) account ID to
-  decide when the spoke hop is needed. (It is allowed for any principal by
-  default; the explicit statement just survives restrictive boundaries.)
-- The `SameAccountTargets` statement is only needed if some target roles live
-  in the hub account itself (they skip the spoke and are assumed directly).
+- Prefer per-account target-role patterns
+  (`arn:aws:iam::<member>:role/aow/*`) over a blanket
+  `arn:aws:iam::*:role/aow/*` — a tighter blast radius if `role_mappings` or
+  `allowed_accounts` is ever misconfigured.
+- `sts:GetCallerIdentity` is how the warden learns its own account ID *and*
+  whether its own credentials are a role session — both feed the
+  `allowed_accounts` check and the session-duration clamp (see
+  [Operational notes](#operational-notes)). It's allowed for any principal by
+  default; the explicit statement just survives restrictive permission
+  boundaries.
+- `AssumeSpokeRolesForTagReads` is only needed when `tag_auth` reaches roles
+  in member accounts. Omit it if you authorize purely through
+  `role_mappings`.
+- `SameAccountTargets` is only needed if some target roles live in the hub
+  account itself.
 
-## Step 2 — Member accounts: deploy the spoke (and target roles)
+## Step 2 — Member accounts: deploy target roles (and the spoke, if needed)
 
 Deploy [`member-account-roles.yaml`](member-account-roles.yaml) to every member
 account. From one central place, use **CloudFormation StackSets** so a single
-operation covers the whole organization (and new accounts get the spoke
+operation covers the whole organization (and new accounts are provisioned
 automatically via auto-deployment):
 
 ```sh
 aws cloudformation create-stack-set \
-  --stack-set-name aws-oidc-warden-spoke \
+  --stack-set-name aws-oidc-warden-member \
   --template-body file://member-account-roles.yaml \
   --capabilities CAPABILITY_NAMED_IAM \
   --permission-model SERVICE_MANAGED \
@@ -126,7 +146,7 @@ aws cloudformation create-stack-set \
     ParameterKey=ExternalId,ParameterValue=CHANGE-ME-org-wide-external-id
 
 aws cloudformation create-stack-instances \
-  --stack-set-name aws-oidc-warden-spoke \
+  --stack-set-name aws-oidc-warden-member \
   --deployment-targets OrganizationalUnitIds=ou-abcd-11111111 \
   --regions us-east-1
 ```
@@ -136,8 +156,37 @@ accounts, `aws cloudformation deploy` per account works just as well.)
 
 What the template creates:
 
-**The spoke role** — trust policy (only the hub execution role, gated by the
-external ID):
+**Target roles** — each trusts the **hub execution role directly** (no
+`sts:ExternalId` condition; the warden sends none on this direct assume), with
+an optional `aws:RequestTag` condition as defense-in-depth (session tags are
+attached by the warden from *verified* token claims, so the condition holds
+independently of warden configuration):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111111111111:role/aws-oidc-warden-execution-role"
+      },
+      "Action": ["sts:AssumeRole", "sts:TagSession"],
+      "Condition": {
+        "StringEquals": { "aws:RequestTag/repo-owner": "acme" }
+      }
+    }
+  ]
+}
+```
+
+`sts:TagSession` must be in the trust policy's `Action` — the warden always
+attaches the issuer's session tags, and STS rejects a tagged AssumeRole
+without it.
+
+**The spoke role** (`aow-spoke`) — deploy only if `tag_auth` reads role tags
+in this account. Its trust policy is unchanged from before (hub principal,
+optional external ID):
 
 ```json
 {
@@ -157,8 +206,8 @@ external ID):
 }
 ```
 
-and a permissions policy scoped to the `/aow/` path, so only roles deliberately
-created under that path are reachable through the warden:
+but its permissions policy is now scoped to **`iam:GetRole` only** — it is
+never used to assume anything:
 
 ```json
 {
@@ -169,41 +218,13 @@ created under that path are reachable through the warden:
       "Effect": "Allow",
       "Action": "iam:GetRole",
       "Resource": "arn:aws:iam::222222222222:role/aow/*"
-    },
-    {
-      "Sid": "AssumeTargetRoles",
-      "Effect": "Allow",
-      "Action": ["sts:AssumeRole", "sts:TagSession"],
-      "Resource": "arn:aws:iam::222222222222:role/aow/*"
     }
   ]
 }
 ```
 
-**Target roles** — each trusts only the local spoke, with an optional
-`aws:RequestTag` condition as defense-in-depth (session tags are attached by
-the warden from *verified* token claims, so the condition holds independently
-of warden configuration):
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": { "AWS": "arn:aws:iam::222222222222:role/aow-spoke" },
-      "Action": ["sts:AssumeRole", "sts:TagSession"],
-      "Condition": {
-        "StringEquals": { "aws:RequestTag/repo-owner": "acme" }
-      }
-    }
-  ]
-}
-```
-
-`sts:TagSession` must be in the trust policy's `Action` — the warden always
-attaches the issuer's session tags, and STS rejects a tagged AssumeRole
-without it.
+If you authorize exclusively through `role_mappings`, skip the spoke resource
+entirely — it has no role in the assume path.
 
 ## Step 3 — Hub: warden configuration
 
@@ -211,10 +232,10 @@ Use [`config.yaml`](config.yaml). The cross-account essentials:
 
 ```yaml
 cross_account:
-  enabled: true # activates the spoke transport
-  spoke_role_name: "aow-spoke" # must match the role name in member accounts
-  external_id: "CHANGE-ME-org-wide-external-id" # must match the spokes' trust condition
-  allowed_accounts: # REQUIRED in production — empty list = ANY account
+  enabled: true # policy gate: required for ANY cross-account use (assumes and tag reads)
+  spoke_role_name: "aow-spoke" # only used for cross-account tag reads (tag_auth)
+  external_id: "CHANGE-ME-org-wide-external-id" # hub->spoke trust only; never sent on the hub->target assume
+  allowed_accounts: # REQUIRED in production — empty list = ANY account, once enabled
     - "222222222222"
     - "333333333333"
 
@@ -242,63 +263,51 @@ curl -sS -X POST "$WARDEN_URL" \
   -d '{"token":"'"$OIDC_TOKEN"'","role":"arn:aws:iam::222222222222:role/aow/deploy-staging"}'
 ```
 
-Expected: temporary credentials for the member-account role, session ≤ 1 hour.
-Then confirm in the **member account's** CloudTrail: an `AssumeRole` of
-`aow-spoke` by the hub execution role, followed by an `AssumeRole` of the
-target role by the spoke session, carrying the session tags (`repo`, `ref`,
-`actor`, …).
+Expected: temporary credentials for the member-account role, session ≤ 1 hour
+(the warden's Lambda credentials are always a role session, so chaining clamps
+the duration — see [Operational notes](#operational-notes)). Then confirm in
+the **member account's** CloudTrail: a single `AssumeRole` of the target role
+by the hub execution role, directly, carrying the session tags (`repo`, `ref`,
+`actor`, …). If `tag_auth` reached this role, you'll also see an `AssumeRole`
+of `aow-spoke` followed by a `GetRole` call using those credentials — that
+call never appears in the final `AssumeRole`'s chain.
 
 Denial checks worth doing once:
 
-- A role ARN in an account **not** in `allowed_accounts` → `403` (`ErrAccountNotAllowed`).
+- A role ARN in an account **not** in `allowed_accounts` (or with
+  `cross_account` disabled/absent) → `403`/`500` (`ErrAccountNotAllowed` /
+  assume-role failure).
 - A repo/branch not matching any mapping (and no matching `aow/*` tags) → `403` (`ErrRoleNotPermitted`).
 
 ---
 
 ## Operational notes
 
-- **1-hour session cap.** Cross-account assumption is role chaining, so AWS
-  caps the final session at 1 hour regardless of the target role's
-  `MaxSessionDuration`. Same-account (hub) targets can still get up to 12 h.
-- **`allowed_accounts` fails open when empty.** An empty list means *any*
-  account reachable via a spoke. Always populate it in production; the hub
-  account is always implicitly allowed and doesn't need listing.
-- **External ID.** One org-wide value is fine — it defends against a
-  confused-deputy misuse of the hub role, not against member-vs-member
-  isolation (that comes from each spoke being scoped to its own account).
-  Rotate by updating the spokes' trust policies, then the warden config.
-- **Caching.** Spoke credentials are cached until ~5 min before expiry and
-  role tags for ~60 s — tag changes on target roles take up to a minute to
-  apply.
+- **`cross_account.enabled` fails closed.** Leaving it `false` or omitting the
+  block hard-blocks every cross-account operation — assumes *and* tag reads —
+  with an error. There is no fail-open behavior.
+- **Session duration is about chained credentials, not cross-account.** STS
+  fails (does not clamp) a chained `AssumeRole`'s `DurationSeconds` over 1
+  hour. The warden's own credentials are always a role session on Lambda, so
+  *any* assume it performs — same-account included — is clamped to 1 hour.
+  Only `local` server mode running with long-lived IAM user credentials can
+  request up to the target role's own `MaxSessionDuration` (≤ 12h), even for a
+  cross-account target.
+- **External ID protects only the hub→spoke tag-read hop.** It defends
+  against a confused-deputy misuse of the hub role reading tags in the wrong
+  account — it has no bearing on the hub→target assume, which the warden
+  performs with no external ID at all. Member target-role trust policies must
+  **not** require `sts:ExternalId`.
+- **`allowed_accounts` fails open only once enabled.** With
+  `cross_account.enabled: true`, an empty list means *any* account is
+  reachable. Always populate it in production; the hub account is always
+  implicitly allowed and doesn't need listing.
+- **Caching.** Spoke credentials (when used) are cached until ~5 min before
+  expiry and role tags for ~60 s — tag changes on target roles take up to a
+  minute to apply.
 - **Scoping the spoke.** The `/aow/` role path is the containment boundary in
-  each member account: the spoke can only see and assume roles under it.
+  each member account for tag reads: the spoke can only see roles under it.
   Creating a target role under `/aow/` is the deliberate act that exposes it
-  to the warden.
+  to tag-based authorization.
 - **Session policies** apply only on the mapping path; tag-authorized roles
   get no inline session policy — keep them least-privilege at the IAM level.
-
-## Alternative: direct trust (without the spoke)
-
-For a *small, fixed* set of cross-account roles you can skip the spoke: leave
-`cross_account.enabled: false`, list the member-account ARNs in
-`role_mappings`, grant the hub execution role `sts:AssumeRole` +
-`sts:TagSession` on those exact ARNs, and have each target role trust the hub
-execution role directly:
-
-```json
-{
-  "Effect": "Allow",
-  "Principal": {
-    "AWS": "arn:aws:iam::111111111111:role/aws-oidc-warden-execution-role"
-  },
-  "Action": ["sts:AssumeRole", "sts:TagSession"]
-}
-```
-
-Trade-offs: no role chaining (sessions up to 12 h), one less hop — but every
-target role in every account must individually trust the hub role, there is no
-per-account containment boundary, no external ID, and no `allowed_accounts`
-gate (that check activates with `cross_account.enabled`). The hub-and-spoke
-pattern above scales better and is the recommended default; the two patterns
-don't mix, since enabling `cross_account` reroutes all cross-account calls
-through the spoke.

@@ -5,27 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-
-- **Cross-account transport moved out of `tag_auth` into a top-level `cross_account` block** (`enabled`, `spoke_role_name`, `external_id`, `spoke_session_duration`, `allowed_accounts`; env prefix `AOW_CROSS_ACCOUNT_*`) and decoupled from tag-based authorization: with `cross_account.enabled: true`, explicit `role_mappings` can target member-account role ARNs through the per-account spoke role without enabling the tag-auth fallback, and the `allowed_accounts` gate now applies to every cross-account assumption. `tag_auth` keeps only tag-matching concerns (`enabled`, `tag_prefix`, `default_org`, `transitive_session_tags`). The old `tag_auth.*` transport keys are no longer accepted (v2 is unreleased; no deprecation aliases). Added a full worked cross-account example (hub config + member-account spoke/target roles + StackSets template) under `docs/examples/cross-account/`.
-
-- CI: consolidated `build.yml` into `release.yml` — a single tag-triggered workflow with one concurrency group and a combined summary. The GoReleaser (archives) and ko (image) jobs stay independent so neither blocks the other. Replaced the duplicated tag-extraction steps with the built-in `github.ref_name`.
-- CI: moved the container image tag scheme into `.ko.yaml` per-build `tags:` as the single source of truth (`<module>-<tag>` / `<module>-latest`, plus bare `<tag>` / `latest` for the `apigateway` default module). `release.yml` and `make ko-publish` no longer pass `--tags`, which removes the special-cased apigateway publish step and makes `make ko-publish` emit the same tags as CI; only the local `make ko-build` (to `ko.local`) still overrides with `--tags`.
-
-### Fixed
-
-- **deploy: OpenTofu stack rendered a v1 config that v2 rejects at startup.** `main.tf` emitted top-level `issuer`/`audiences` and `repo_role_mappings` (with `repo:`/`constraints:`) — keys removed in 2.0.0 — so the deployed Lambda failed config load with "at least one issuer is required". It now renders the v2 schema: a single GitHub `issuers[]` entry (with `required_claims` and the standard `session_tags` spec) plus `role_mappings` (`subject:`/`conditions:`); the tf variable was renamed `repo_role_mappings` → `role_mappings` accordingly. The unusable `jwt_validation_mode = "alb"` option was removed from the OpenTofu and CloudFormation stacks (it requires the `alb` binary behind an ALB, which neither provisions — the `apigateway` binary refuses to start in `alb` mode), along with the now-orphaned `alb_expected_signer` variable.
-- deploy: CloudFormation quickstart set the `AOW_ISSUER`/`AOW_AUDIENCES` env vars removed in 2.0.0; dropped them (and the `Issuer`/`Audiences` parameters) and documented that `ConfigBucket`/`ConfigKey` are effectively required for a working v2 deployment.
-- docs: three docs described `transitive_session_tags` as marking a fixed `repo`/`ref`/`actor` key set transitive; the code marks **every attached session tag** (the issuer's `session_tags` spec) transitive. Corrected `TAG_BASED_AUTHORIZATION.md`, `CONFIGURATION.md`, `ARCHITECTURE.md`, and the `config.go` field comment.
-- docs: refreshed `TAG_BASED_AUTHORIZATION.md` to the v2 model — `role_mappings`/`conditions` naming, the canonical `aow/subject` identity tag and the multi-issuer `aow/issuer` gate in the tag reference and corner cases, and the session-tag `repo` value (full `owner/repo` since 2.0.0, not the bare name shown in the ABAC examples).
-- docs: `SESSION_TAGGING.md` workflow example could never work — it sent `github.token` (not an OIDC ID token) to a nonexistent `/assume-role` endpoint and parsed a `.credentials` response field. Replaced with the `core.getIDToken()` → `POST /verify` → `.data` flow, and updated the CloudTrail/ABAC examples to the full `owner/repo` tag value.
-- docs: `ARCHITECTURE.md` drift — corrected the config-precedence order (env > S3 > file > defaults), replaced the fictitious memory→DynamoDB→S3 cache-cascade diagram (backends are alternatives selected by `cache.type`) and invented cache-hit-rate/latency figures, removed the nonexistent "automatic credential rotation" and iat-based cache invalidation claims, updated the stale `RequestProcessor`/`AwsConsumerInterface`/`Cache` interface listings, and marked `alb_expected_signer` as required in `alb` mode.
-- docs: added the `MULTI_ISSUER.md` "Delegated modes are single-issuer only" section that `CONFIGURATION.md` linked to (broken anchor) plus a cross-issuer tag-auth section; README now lists all four Lambda variants including the `apigatewayv2-latest` image; root/package `CLAUDE.md` files updated (consumer interface methods, `alb_expected_signer` required, `newClaimsExtractor` signature, Go 1.26, `make check` includes vuln).
-- docs: documented the per-mode request contract (`self`/`apigw`/`alb`). The only prior request example showed the self-mode body (`{token, role}`) with no note that it is mode-specific — an `apigw` user would wrongly put the token in the body and omit the `Authorization: Bearer` header API Gateway requires. Added a contract table + `apigw` GitHub Actions example to `README.md`, and a new "§2.1 Request contract per mode" section to `docs/TOKEN_VALIDATION.md`.
-- docs: JWKS label in the token-validation sequence diagram used semicolons — mermaid statement separators that broke rendering; switched to commas.
-
 ## [2.0.0] - 2026-07-02
 
 Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of
@@ -97,8 +76,26 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
   `internal/s3logger`; `audit_required` makes the issuance record durable
   before credentials are returned (fail-closed); `log_level` and
   `log_claim_values` knobs; a standardized structured-logging field contract.
-- Cross-account tag-based authorization (hub/spoke) — spoke accounts delegate role assumption decisions to a hub via ABAC session tags (#236)
-- Transitive session tags + target-account allow-list — session tags now flow across assumed roles; a per-repo `target_accounts` allow-list restricts which accounts a token may reach (#233)
+- **Cross-account role assumption** — a top-level `cross_account` block
+  (`enabled`, `spoke_role_name`, `external_id`, `spoke_session_duration`,
+  `allowed_accounts`; env prefix `AOW_CROSS_ACCOUNT_*`). The warden assumes
+  member-account target roles **directly** (one hop, its own hub credentials);
+  target roles trust the hub execution role for `sts:AssumeRole` +
+  `sts:TagSession` with **no `sts:ExternalId` condition** (none is sent on the
+  direct assume). `enabled` is a fail-closed **policy gate**: `false` (or the
+  block omitted) hard-denies every cross-account operation. `allowed_accounts`
+  restricts member accounts (empty = any once enabled; hub always allowed).
+  Independent of tag-auth — explicit `role_mappings` can target member-account
+  ARNs. For cross-account **tag-based authorization**, a convention-named
+  spoke role (default `aow-spoke`, permissions policy `iam:GetRole` only) acts
+  solely as a tag-read broker — IAM has no resource-based policies, so a
+  target-account identity is needed for that one read; `external_id` applies
+  only to that hub→spoke hop, and `spoke_session_duration` is capped at 1 h
+  (the spoke hop is itself a chained session). Full worked example (hub config + member-account
+  roles + StackSets template) under `docs/examples/cross-account/` (#236)
+- Transitive session tags — `tag_auth.transitive_session_tags` marks the
+  attached session tags transitive so they flow immutably across further role
+  chaining by the target role (#233)
 - Short `aow`/`repo` session tags via `tag_auth.default_org` — when a default org is set, the org prefix is stripped from session tag values to stay within the 256-char STS limit (#234)
 - EC key support restored (ES256/384/512) — EC tokens were incorrectly rejected in prior versions (#230)
 - Hot-reload now propagates to the AWS consumer — `allowed_accounts`, tag-auth enable/disable, spoke role, and external-id changes take effect without a Lambda cold start (#237)
@@ -157,7 +154,15 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - `AOW_*` env-var overrides are preserved across S3 hot-reloads (#230)
 - S3Logger now initialises after the config provider so `log_bucket`/`log_prefix` from remote config are respected (#230)
 - Authorization now builds its claim set from the verified raw claims (`claims.Raw`) instead of a JSON round-trip of the typed struct, which dropped non-GitHub claims and wrongly denied legitimate `generic`-issuer / custom-claim requests.
-- `transitive_session_tags` now marks **every** operator-configured session tag transitive; a hardcoded `repo`/`ref`/`actor` set previously dropped custom-named tags from `TransitiveTagKeys`, breaking ABAC across assumed roles.
+- `transitive_session_tags` now marks **every** operator-configured session tag transitive; a hardcoded `repo`/`ref`/`actor` set previously dropped custom-named tags from `TransitiveTagKeys`, breaking ABAC across assumed roles. `TAG_BASED_AUTHORIZATION.md`, `CONFIGURATION.md`, `ARCHITECTURE.md`, and the `config.go` field comment were corrected to match.
+- **deploy: OpenTofu stack rendered a v1 config that v2 rejects at startup.** `main.tf` emitted top-level `issuer`/`audiences` and `repo_role_mappings` (with `repo:`/`constraints:`) — keys removed in 2.0.0 — so the deployed Lambda failed config load with "at least one issuer is required". It now renders the v2 schema: a single GitHub `issuers[]` entry (with `required_claims` and the standard `session_tags` spec) plus `role_mappings` (`subject:`/`conditions:`); the tf variable was renamed `repo_role_mappings` → `role_mappings` accordingly. The unusable `jwt_validation_mode = "alb"` option was removed from the OpenTofu and CloudFormation stacks (it requires the `alb` binary behind an ALB, which neither provisions — the `apigateway` binary refuses to start in `alb` mode), along with the now-orphaned `alb_expected_signer` variable.
+- deploy: CloudFormation quickstart set the `AOW_ISSUER`/`AOW_AUDIENCES` env vars removed in 2.0.0; dropped them (and the `Issuer`/`Audiences` parameters) and documented that `ConfigBucket`/`ConfigKey` are effectively required for a working v2 deployment.
+- docs: refreshed `TAG_BASED_AUTHORIZATION.md` to the v2 model — `role_mappings`/`conditions` naming, the canonical `aow/subject` identity tag and the multi-issuer `aow/issuer` gate in the tag reference and corner cases, and the session-tag `repo` value (full `owner/repo` since 2.0.0, not the bare name shown in the ABAC examples).
+- docs: `SESSION_TAGGING.md` workflow example could never work — it sent `github.token` (not an OIDC ID token) to a nonexistent `/assume-role` endpoint and parsed a `.credentials` response field. Replaced with the `core.getIDToken()` → `POST /verify` → `.data` flow, and updated the CloudTrail/ABAC examples to the full `owner/repo` tag value.
+- docs: `ARCHITECTURE.md` drift — corrected the config-precedence order (env > S3 > file > defaults), replaced the fictitious memory→DynamoDB→S3 cache-cascade diagram (backends are alternatives selected by `cache.type`) and invented cache-hit-rate/latency figures, removed the nonexistent "automatic credential rotation" and iat-based cache invalidation claims, updated the stale `RequestProcessor`/`AwsConsumerInterface`/`Cache` interface listings, and marked `alb_expected_signer` as required in `alb` mode.
+- docs: added the `MULTI_ISSUER.md` "Delegated modes are single-issuer only" section that `CONFIGURATION.md` linked to (broken anchor) plus a cross-issuer tag-auth section; README now lists all four Lambda variants including the `apigatewayv2-latest` image; root/package `CLAUDE.md` files updated (consumer interface methods, `alb_expected_signer` required, `newClaimsExtractor` signature, Go 1.26, `make check` includes vuln).
+- docs: documented the per-mode request contract (`self`/`apigw`/`alb`). The only prior request example showed the self-mode body (`{token, role}`) with no note that it is mode-specific — an `apigw` user would wrongly put the token in the body and omit the `Authorization: Bearer` header API Gateway requires. Added a contract table + `apigw` GitHub Actions example to `README.md`, and a new "§2.1 Request contract per mode" section to `docs/TOKEN_VALIDATION.md`.
+- docs: JWKS label in the token-validation sequence diagram used semicolons — mermaid statement separators that broke rendering; switched to commas.
 - Audit records buffer into the amortized batch by default; a per-request synchronous S3 `PutObject` fires only when `audit_required=true` (which stays synchronous and fail-closed), not on every decision.
 - A required-audit write failure is classified before the wrapped deny sentinel, so it surfaces as `audit_write_failed`/500 instead of being masked as a plain deny.
 - An explicit `jwt_leeway: 0` is honored instead of being coerced back to the 30s default.
@@ -167,6 +172,16 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 
 ### Changed
 
+- **Session durations are clamped to 1 hour whenever the warden's own
+  credentials are a role session** (always true on Lambda, same-account
+  assumes included): AWS role chaining *fails* a `DurationSeconds` above 3600
+  on a chained `AssumeRole` rather than clamping it, so the warden clamps
+  first and logs a warning instead of surfacing an STS error. Only `local`
+  server mode running with IAM user credentials can issue sessions beyond
+  1 hour (single hop, up to the target role's configured max, cross-account
+  targets included).
+- CI: consolidated `build.yml` into `release.yml` — a single tag-triggered workflow with one concurrency group and a combined summary. The GoReleaser (archives) and ko (image) jobs stay independent so neither blocks the other. Replaced the duplicated tag-extraction steps with the built-in `github.ref_name`.
+- CI: moved the container image tag scheme into `.ko.yaml` per-build `tags:` as the single source of truth (`<module>-<tag>` / `<module>-latest`, plus bare `<tag>` / `latest` for the `apigateway` default module). `release.yml` and `make ko-publish` no longer pass `--tags`, which removes the special-cased apigateway publish step and makes `make ko-publish` emit the same tags as CI; only the local `make ko-build` (to `ko.local`) still overrides with `--tags`.
 - CI: lint is now a blocking check (removed `continue-on-error`) and `golangci-lint` is pinned to `v2.12.2`; a shared `.golangci.yml` makes `make lint` and CI use the same linter set.
 - CI: added a blocking `govulncheck` job (and a `make vuln` target) for Go-native vulnerability scanning; Trivy/gosec remain advisory.
 - CI: added `concurrency` groups to all workflows — PR/branch runs auto-cancel superseded runs; tag-triggered publish/release runs do not.

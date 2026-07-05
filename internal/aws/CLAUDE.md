@@ -28,7 +28,14 @@ Handlers accept the interface for mockability. Clients are built once in `servic
 
 ## Gotchas
 
-- Session duration: 1h default, up to role-defined max (≤12h).
+- Session duration: 1h default, up to role-defined max (≤12h) — but capped
+  hard at 1h whenever the warden's own credentials are a role session
+  (`GetCallerIdentityInfo`'s `isRoleSession`), which is always true on Lambda,
+  same-account assumes included: STS *fails* (does not clamp)
+  `DurationSeconds` > 3600 on a chained `AssumeRole`, so `AssumeRole` clamps
+  the request itself before calling STS. Only `local` server mode running
+  with IAM user credentials (not a role session) can get a session up to the
+  target role's own max, cross-account targets included.
 - Inline session policy max ~2048 chars.
 - Region via default SDK resolution.
 
@@ -36,4 +43,10 @@ IAM: execution role needs `sts:AssumeRole`+`sts:TagSession` on target roles, `s3
 
 ## Tag-based auth & cross-account
 
-When `cfg.CrossAccount.Enabled`, `AssumeRole` and `GetRoleTags` are account-aware: the account ID is parsed from the role ARN (`ParseRoleARN`), and for a non-hub account the consumer assumes a convention-named spoke role (`spokeCredsFor`, cached) and uses `AssumeRoleAs`/`GetRoleAs`. Independent of `cfg.TagAuth.Enabled` — explicit mappings targeting member-account ARNs use the same transport. Same-account → default hub clients (identical to legacy). Hub also needs `sts:GetCallerIdentity` and cross-account `sts:AssumeRole` on `arn:aws:iam::*:role/<spoke>`. `IsTargetAccountAllowed` enforces `cfg.CrossAccount.AllowedAccounts` (hub implicit, empty=any). When `cfg.TagAuth.TransitiveSessionTags` is true, `AssumeRole` into the target marks all configured session tags transitive (`TransitiveTagKeys`), not just a fixed `repo`/`ref`/`actor` set — key names are operator-defined per issuer; cross-account sessions are clamped to 1 h. See `docs/TAG_BASED_AUTHORIZATION.md`.
+`AssumeRole` always assumes the target role **directly** with the warden's own (hub) credentials, one hop, whether same-account or cross-account — it never uses spoke credentials. `cfg.CrossAccount.Enabled` is a policy gate, checked inline in `AssumeRole`: if the target account differs from the hub (`ParseRoleARN` + `GetCallerIdentityInfo`) and `CrossAccount` is nil/disabled, the call fails closed with an error; otherwise `accountAllowed` enforces `cfg.CrossAccount.AllowedAccounts` (hub implicit, empty=any).
+
+`GetRoleTags` is the one operation that *is* account-aware via the spoke: for a non-hub account it calls `spokeCredsFor` (assumes the convention-named spoke role, cached) and reads tags with `GetRoleAs`; `spokeCredsFor` itself fails closed if `CrossAccount` is nil/disabled or the account isn't allowed. This is independent of `cfg.TagAuth.Enabled` — explicit mappings targeting member-account ARNs still get their tags read the same way if tag_auth is also on. Same-account → default hub clients via `GetRole` (identical to legacy).
+
+Hub execution role IAM: `sts:GetCallerIdentity` (`GetCallerIdentityInfo`, also used for the hub account ID and the chained-session check), `sts:AssumeRole`+`sts:TagSession` directly on member-account target roles (prefer per-account patterns over `arn:aws:iam::*:role/*`), and — only if `tag_auth` reads roles cross-account — `sts:AssumeRole` on `arn:aws:iam::*:role/<spoke>`.
+
+When `cfg.TagAuth.TransitiveSessionTags` is true, `AssumeRole` into the target marks all configured session tags transitive (`TransitiveTagKeys`), not just a fixed `repo`/`ref`/`actor` set — key names are operator-defined per issuer. See `docs/TAG_BASED_AUTHORIZATION.md`.
