@@ -56,6 +56,8 @@ docker-compose.override.yml
 # Config files
 config.yaml
 # example-config.yaml
+# ...but keep documented example configs
+!docs/examples/**/config.yaml
 
 # Local configuration files
 .github/copilot-instructions.md
