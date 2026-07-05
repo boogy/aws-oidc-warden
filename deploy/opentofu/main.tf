@@ -14,29 +14,43 @@ locals {
   cache_table_name           = "${var.name_prefix}-cache"
   config_key                 = "config.yaml"
 
-  # Rendered application configuration. yamlencode drops null/omitted attributes
-  # via the compact() / try() filtering below so config.yaml stays minimal.
+  # Rendered application configuration (v2 schema: issuers[] + role_mappings).
+  # Unset optional object attributes render as YAML nulls, which the service
+  # treats as absent.
   app_config = merge(
     {
-      issuer            = var.issuer
-      audiences         = var.audiences
+      issuers = [
+        {
+          issuer          = var.issuer
+          provider        = "github"
+          audiences       = var.audiences
+          required_claims = ["repository"]
+          # Standard GitHub session-tag spec (STS tag key <- raw claim name).
+          # NOTE: the `repo` tag carries the full "owner/repo" value in v2.
+          session_tags = {
+            repo       = "repository"
+            repo-owner = "repository_owner"
+            ref        = "ref"
+            ref-type   = "ref_type"
+            actor      = "actor"
+            event-name = "event_name"
+          }
+        }
+      ]
       role_session_name = var.role_session_name
       cache = merge(
         { type = local.cache_type, ttl = var.cache_ttl },
         var.enable_dynamodb_cache ? { dynamodb_table = local.cache_table_name } : {},
         var.enable_s3_cache ? { s3_bucket = local.cache_bucket_name, s3_prefix = "jwks/" } : {},
       )
-      repo_role_mappings = var.repo_role_mappings
+      role_mappings = var.role_mappings
     },
     var.enable_s3_logs ? { log_to_s3 = true, log_bucket = local.log_bucket_name, log_prefix = "audit/" } : {},
     var.enable_session_policy_bucket ? { session_policy_bucket = local.session_policy_bucket_name } : {},
     var.tag_auth.enabled ? { tag_auth = var.tag_auth } : {},
     # Render jwt_validation block only when not using the default "self" mode.
     var.jwt_validation_mode != "self" ? {
-      jwt_validation = merge(
-        { mode = var.jwt_validation_mode },
-        var.jwt_validation_mode == "alb" && var.alb_expected_signer != "" ? { alb_expected_signer = var.alb_expected_signer } : {},
-      )
+      jwt_validation = { mode = var.jwt_validation_mode }
     } : {},
   )
 }

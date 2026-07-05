@@ -16,7 +16,7 @@ Two deployment paths are provided: **OpenTofu** (full-featured, recommended) and
 ### 1. Build the Lambda zip
 
 ```bash
-./deploy/opentofu/build.sh              # default: apigateway (self/alb modes)
+./deploy/opentofu/build.sh              # default: apigateway (self mode)
 ./deploy/opentofu/build.sh apigatewayv2 # apigw mode (delegates JWT to API GW)
 ```
 
@@ -26,7 +26,7 @@ The script calls `make build-<variant>`, stages the binary as `bootstrap`, and p
 
 ```bash
 cp deploy/opentofu/terraform.tfvars.example deploy/opentofu/terraform.tfvars
-# Edit terraform.tfvars — set region, repo_role_mappings, assumable_role_arns, etc.
+# Edit terraform.tfvars — set region, role_mappings, assumable_role_arns, etc.
 ```
 
 ### 3. Init, plan, and apply
@@ -58,7 +58,7 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 
 ## How config.yaml is delivered
 
-`main.tf` renders `var.repo_role_mappings`, `var.audiences`, cache settings, and `jwt_validation` into a `config.yaml` object and uploads it to the config S3 bucket. The Lambda receives two env vars at startup:
+`main.tf` renders a v2 config — `var.issuer`/`var.audiences` as a single GitHub `issuers[]` entry, `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. The Lambda receives two env vars at startup:
 
 - `AOW_S3_CONFIG_BUCKET` — bucket name
 - `AOW_S3_CONFIG_PATH` — object key (`config.yaml`)
@@ -69,16 +69,17 @@ On startup the Lambda fetches and parses this file. All complex configuration (r
 
 ## JWT Validation Mode
 
-| Mode                | `jwt_validation_mode` | Binary         | Infra provisioned               | Request format                                                                     |
-| ------------------- | --------------------- | -------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
-| **Self** (default)  | `"self"`              | `apigateway`   | No extra infra                  | `POST /verify` body: `{"token":"<jwt>","role":"<arn>"}`                            |
-| **API GW delegate** | `"apigw"`             | `apigatewayv2` | JWT Authorizer on HTTP API      | `POST /verify` with `Authorization: Bearer <jwt>` header; body: `{"role":"<arn>"}` |
-| **ALB OIDC**        | `"alb"`               | `apigateway`   | External ALB (not managed here) | ALB injects `x-amzn-oidc-data` header; body: `{"role":"<arn>"}`                    |
+| Mode                | `jwt_validation_mode` | Binary         | Infra provisioned          | Request format                                                                     |
+| ------------------- | --------------------- | -------------- | -------------------------- | ---------------------------------------------------------------------------------- |
+| **Self** (default)  | `"self"`              | `apigateway`   | No extra infra             | `POST /verify` body: `{"token":"<jwt>","role":"<arn>"}`                            |
+| **API GW delegate** | `"apigw"`             | `apigatewayv2` | JWT Authorizer on HTTP API | `POST /verify` with `Authorization: Bearer <jwt>` header; body: `{"role":"<arn>"}` |
+
+> **ALB mode is not supported by this stack.** `jwt_validation.mode: "alb"` requires the `alb` Lambda binary (`make build-alb`) deployed behind an Application Load Balancer, which neither the OpenTofu module nor the CloudFormation template provisions. The `apigateway` binary refuses to start in `alb` mode.
 
 Build the correct binary before running `tofu apply`:
 
 ```bash
-./deploy/opentofu/build.sh              # self or alb mode
+./deploy/opentofu/build.sh              # self mode
 ./deploy/opentofu/build.sh apigatewayv2 # apigw mode
 ```
 
@@ -164,7 +165,7 @@ aws cloudformation deploy \
 
 The `ApiEndpoint` stack output is the verify URL.
 
-> CloudFormation covers the common case only. For `repo_role_mappings`, set `ConfigBucket`/`ConfigKey` to point at a `config.yaml` you upload separately, or use OpenTofu which renders it automatically.
+> CloudFormation covers the common case only, and `ConfigBucket`/`ConfigKey` are effectively required: v2 has no `AOW_ISSUER`/`AOW_AUDIENCES` env vars, so `issuers[]` and `role_mappings` must come from a `config.yaml` you upload separately. Use OpenTofu if you want the config rendered automatically.
 
 ---
 
