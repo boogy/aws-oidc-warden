@@ -180,6 +180,24 @@ Three modes controlled by `jwt_validation.mode`:
 
 **Security invariant:** In delegated modes, if no upstream-injected claims arrive (direct Lambda invocation bypass), `Extract()` returns an error wrapping `ErrTokenValidationFailed` → HTTP 401.
 
+> **Trust boundary warning — `apigw` mode has no cryptographic backstop.**
+> In `apigw` mode the Lambda never sees or verifies the original OIDC token's
+> signature; it fully trusts `event.requestContext.authorizer.jwt.claims` as
+> handed to it. The invariant above only rejects an **empty** claims map — it
+> does **not** detect a direct invoke that supplies **forged, non-empty**
+> claims (an arbitrary `iss`/`aud`/`sub`/`exp`), which pass straight through
+> with no signature to check them against. **`lambda:InvokeFunction` on this
+> function is therefore equivalent to full identity impersonation in `apigw`
+> mode** — anyone who can invoke it directly can obtain AWS credentials for
+> any spoofed subject your `role_mappings`/`role_groups`/`tag_auth` would
+> authorize. `alb` mode does not share this gap: the Lambda itself verifies
+> the ALB's ES256 signature over `x-amzn-oidc-data`, so a forged direct
+> invoke fails that check. **Mitigation:** the function's resource-based
+> (invoke) policy must restrict `lambda:InvokeFunction` to the fronting API
+> Gateway's execution/service principal only — never a broader principal.
+> See [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode)
+> for the full write-up.
+
 **API Gateway mode** requires an `aws_apigatewayv2_authorizer` JWT resource pointing at `https://token.actions.githubusercontent.com`. Restrict Lambda invocations to the API Gateway execution role via Lambda resource-based policies.
 
 **ALB mode** verifies the ALB-signed ES256 JWT but does not re-verify the original OIDC signature. `alb_expected_signer` (the trusted ALB's ARN) is **required** in this mode — config validation fails without it — to prevent cross-ALB token injection.

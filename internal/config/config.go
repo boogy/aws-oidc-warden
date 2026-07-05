@@ -29,6 +29,8 @@ var (
 	defaultJWTLeeway           = 30 * time.Second  // Default clock-skew leeway for exp/iat/nbf checks
 	maxJWTLeeway               = 120 * time.Second // Hard ceiling for jwt_leeway
 	defaultMaxTokenBytes       = 8192              // Default token length cap (8 KB) before any parsing
+	defaultMaxTokenLifetime    = time.Hour         // Default cap on exp-iat when max_token_lifetime is unset
+	defaultMaxTokenAge         = time.Hour         // Default cap on now-iat when max_token_age is unset
 	defaultJWKSRefetchCooldown = 60 * time.Second  // Default minimum interval between forced JWKS refetches per (issuer,kid)
 	defaultLogLevel            = "info"            // Default slog level name
 
@@ -312,8 +314,8 @@ type Config struct {
 
 	// Hardening knobs (top-level, apply across all issuers and modes).
 	JWTLeeway            *time.Duration `mapstructure:"jwt_leeway"             json:"jwt_leeway,omitempty"`             // Clock-skew leeway for exp/iat/nbf; nil = unset (defaults to 30s in Validate); hard max 120s
-	MaxTokenLifetime     time.Duration  `mapstructure:"max_token_lifetime"     json:"max_token_lifetime,omitempty"`     // Reject if exp-iat exceeds this; 0 = no cap
-	MaxTokenAge          time.Duration  `mapstructure:"max_token_age"          json:"max_token_age,omitempty"`          // Reject if now-iat exceeds this; 0 = no cap
+	MaxTokenLifetime     time.Duration  `mapstructure:"max_token_lifetime"     json:"max_token_lifetime,omitempty"`     // Reject if exp-iat exceeds this; 0/unset defaults to 1h in Validate (not "no cap")
+	MaxTokenAge          time.Duration  `mapstructure:"max_token_age"          json:"max_token_age,omitempty"`          // Reject if now-iat exceeds this; 0/unset defaults to 1h in Validate (not "no cap")
 	MaxTokenBytes        int            `mapstructure:"max_token_bytes"        json:"max_token_bytes,omitempty"`        // Token length cap before any parsing; default 8192 (8 KB)
 	JWKSRefetchCooldown  time.Duration  `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
 	AllowInsecureIssuers bool           `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
@@ -757,8 +759,14 @@ func (c *Config) Validate() error {
 	if c.MaxTokenLifetime < 0 {
 		return fmt.Errorf("max_token_lifetime must not be negative, got %s", c.MaxTokenLifetime)
 	}
+	if c.MaxTokenLifetime == 0 {
+		c.MaxTokenLifetime = defaultMaxTokenLifetime
+	}
 	if c.MaxTokenAge < 0 {
 		return fmt.Errorf("max_token_age must not be negative, got %s", c.MaxTokenAge)
+	}
+	if c.MaxTokenAge == 0 {
+		c.MaxTokenAge = defaultMaxTokenAge
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = defaultLogLevel

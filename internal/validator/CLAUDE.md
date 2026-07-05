@@ -7,10 +7,10 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Multi-issuer JWT parsing + JWKS veri
 ```go
 type TokenValidatorInterface interface {
     Validate(string) (*types.Claims, error)
-    FetchJWKS(issuer string) (*types.JWKS, error)
-    GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc
 }
 ```
+
+Deliberately scoped to `Validate` only. `FetchJWKS`/`GenKeyFunc` remain exported on the concrete `*TokenValidator` (used by tests and `WarmPrefetch`) but are not part of the interface — they're an unscoped, audience-less path, not a standalone validation entry point.
 
 `NewTokenValidator(provider *config.Provider, jwksCache cache.Cache) *TokenValidator` builds the shared `http.Client` and the initial issuer registry once, at construction — call it once during bootstrap, never per request.
 
@@ -25,10 +25,10 @@ Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec
 2. Registry lookup by exact issuer match. Unknown issuer denies **before any JWKS fetch is attempted**.
 3. Per-call parser scoped to the matched issuer (algorithm allowlist, `WithExpirationRequired`, `WithIssuedAt`, `WithLeeway`).
 4. Fetch JWKS (cached per issuer); verify signature. A `kid` miss (`ErrKeyNotFound`) triggers one cache-bypassing refetch (key-rotation recovery), then fails.
-4b. Re-assert the verified issuer matches the spec used, guarding a hot-reload race between steps 2 and 4.
-8. Audience ANY-match against the issuer's configured audiences (`audienceMatches`).
-9. `required_claims` present and non-empty on the verified raw claims.
-10. `normalizeClaims` — see below.
+   4b. Re-assert the verified issuer matches the spec used, guarding a hot-reload race between steps 2 and 4.
+5. Audience ANY-match against the issuer's configured audiences (`audienceMatches`).
+6. `required_claims` present and non-empty on the verified raw claims.
+7. `normalizeClaims` — see below.
 
 Steps 5-7 (key-pinning refinement, `sub`/`nbf` enforcement, lifetime/age caps, per-`(issuer,kid)` refetch rate limiting) are Group C's hardening layer, added in place around this flow.
 
@@ -44,7 +44,7 @@ type providerAdapter interface {
 ```
 
 - `githubAdapter` — native unmarshal of the full GitHub claim set; subject defaults to `repository`, overridable via `claim_mappings.subject`.
-- `genericAdapter` — no native struct; subject *must* come from `claim_mappings.subject` (also enforced at `config.Validate()`, re-checked here as defense in depth).
+- `genericAdapter` — no native struct; subject _must_ come from `claim_mappings.subject` (also enforced at `config.Validate()`, re-checked here as defense in depth).
 
 Adding a new OIDC provider = implement `providerAdapter` and register it in `providerAdapters`; no `Validate()`/`normalizeClaims` edits required (open/closed).
 

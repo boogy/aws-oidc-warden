@@ -115,6 +115,15 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
   key is pinned by `kid` + `alg` + `use=sig` + key-type↔alg-family, so a
   duplicate-`kid` JWKS cannot cause wrong-key selection. RSA ≥2048; EC verified
   on its declared curve.
+- **RSA public exponent validated** — `parseRSAKey` now rejects a JWKS `e`
+  that decodes to more than 4 bytes or to a value `< 3` or even, closing a
+  path where an oversized exponent could silently truncate/overflow through
+  `big.Int.Int64()`→`int` and produce an unintended `rsa.PublicKey`.
+- **`max_token_lifetime` / `max_token_age` now default to 1h, not "no cap"**
+  — previously an unset (zero) value meant unbounded; `Validate()` now
+  applies a 1h default (same pattern as `max_token_bytes`) so a
+  stolen/leaked long-lived token isn't usable indefinitely by default.
+  Still fully overridable per-deployment; negative values remain rejected.
 - **Bounded time and size in `self` AND delegated modes** — `exp`/`iat`
   required, leeway ≤120s, optional lifetime/age caps, pre-parse token-length
   cap; a single shared claim-check path guarantees delegated modes are not a
@@ -123,6 +132,15 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
   private/loopback/link-local/metadata IPs (enforced at dial time, including
   on redirects); OIDC discovery `issuer` is validated; forced JWKS refetches
   are rate-limited per `(issuer, kid)`.
+- **ALB public-key cache bounded** — the in-process ALB signer-key success
+  cache (`albKeyCache`) now caps at 128 distinct `kid` entries, clearing
+  itself before growing past the cap (mirrors the existing JWKS key-memo
+  overflow pattern), so a flood of distinct/rotating kids can only cost
+  re-fetches, never unbounded memory.
+- **`TokenValidatorInterface` narrowed to `Validate` only** — `FetchJWKS`
+  and `GenKeyFunc` remain on the concrete `*TokenValidator` (used by tests
+  and `WarmPrefetch`) but are no longer part of the interface contract,
+  since neither is a standalone, audience-checked validation entry point.
 - **Fragments cannot weaken security** — a fragment may only set
   `role_mappings` / `role_groups` / `role_sets` / `default_issuer`; `issuers`,
   hardening knobs, `allow_insecure_issuers`, and `tag_auth` are base-only.
@@ -131,6 +149,12 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - **Secret-safe logging** — no path logs a raw JWT or credential; with
   `log_claim_values=false` (default), claim values are suppressed in both the
   log stream and the audit records while names/decision/reason are retained.
+- **`apigw` mode trust boundary documented** — `lambda:InvokeFunction` on
+  this function is equivalent to full identity impersonation in `apigw`
+  mode (no signature check on upstream-injected claims; the bypass guard
+  only rejects empty claims, not forged ones). See
+  `docs/TOKEN_VALIDATION.md` §2.2 and `docs/ARCHITECTURE.md` for the
+  required invoke-policy mitigation.
 
 ### Removed
 
@@ -174,7 +198,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 
 - **Session durations are clamped to 1 hour whenever the warden's own
   credentials are a role session** (always true on Lambda, same-account
-  assumes included): AWS role chaining *fails* a `DurationSeconds` above 3600
+  assumes included): AWS role chaining _fails_ a `DurationSeconds` above 3600
   on a chained `AssumeRole` rather than clamping it, so the warden clamps
   first and logs a warning instead of surfacing an STS error. Only `local`
   server mode running with IAM user credentials can issue sessions beyond

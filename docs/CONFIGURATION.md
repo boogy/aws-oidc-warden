@@ -170,13 +170,13 @@ Top-level, apply across every configured issuer and every `jwt_validation.mode`.
 | Environment Variable         | Config File Key          | Description                                                                                                          | Default            |
 | ---------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------ |
 | `AOW_JWT_LEEWAY`             | `jwt_leeway`             | Clock-skew leeway applied to `exp`/`iat`/`nbf` checks                                                                | `30s` (max `120s`) |
-| `AOW_MAX_TOKEN_LIFETIME`     | `max_token_lifetime`     | Reject if `exp - iat` exceeds this; `0` = no cap                                                                     | `0` (no cap)       |
-| `AOW_MAX_TOKEN_AGE`          | `max_token_age`          | Reject if `now - iat` exceeds this; `0` = no cap                                                                     | `0` (no cap)       |
+| `AOW_MAX_TOKEN_LIFETIME`     | `max_token_lifetime`     | Reject if `exp - iat` exceeds this                                                                                   | `1h`               |
+| `AOW_MAX_TOKEN_AGE`          | `max_token_age`          | Reject if `now - iat` exceeds this                                                                                   | `1h`               |
 | `AOW_MAX_TOKEN_BYTES`        | `max_token_bytes`        | Raw token length cap enforced before any parsing                                                                     | `8192` (8 KB)      |
 | `AOW_JWKS_REFETCH_COOLDOWN`  | `jwks_refetch_cooldown`  | Minimum interval between forced JWKS refetches per `(issuer, kid)` — bounds the cost of an unknown-`kid` DoS attempt | `60s`              |
 | `AOW_ALLOW_INSECURE_ISSUERS` | `allow_insecure_issuers` | Dev-only escape hatch: permit `http://` issuer/`jwks_uri` (otherwise rejected)                                       | `false`            |
 
-`jwt_leeway: 0` and `max_token_bytes: 0` mean "use the default", not "disable" — `Validate()` applies the default whenever the field is its zero value. A negative value for any of these knobs is a config validation error; `jwt_leeway` above `120s` is also rejected.
+`jwt_leeway: 0`, `max_token_bytes: 0`, `max_token_lifetime: 0`, and `max_token_age: 0` all mean "use the default", not "disable" — `Validate()` applies the default whenever the field is its zero value. There is currently no way to opt out of the `max_token_lifetime`/`max_token_age` caps entirely; set them to a large duration instead. A negative value for any of these knobs is a config validation error; `jwt_leeway` above `120s` is also rejected.
 
 ### Logging & Audit Settings
 
@@ -227,6 +227,13 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 | `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER` | `jwt_validation.alb_expected_signer` | ARN of the trusted ALB; **required** in ALB mode to prevent cross-ALB token injection | (empty, startup fails if unset in alb mode) |
 
 > **Multi-issuer restriction**: `apigw` and `alb` modes trust an upstream that has already verified the token against a single issuer, so both modes require **exactly one** entry in `issuers` — `NewBootstrap()` fails at cold start otherwise (`jwt_validation.mode %q supports exactly one configured issuer, got %d`). Multi-issuer configs are `self`-mode only. See [MULTI_ISSUER.md](MULTI_ISSUER.md#delegated-modes-are-single-issuer-only).
+
+> **Trust boundary warning**: in `apigw` mode, `lambda:InvokeFunction` on this
+> function is equivalent to full identity impersonation — the service trusts
+> upstream-injected claims with no signature check, and the only bypass
+> guard rejects empty claims, not forged ones. Restrict the function's
+> invoke/resource policy to the fronting API Gateway only. See
+> [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).
 
 ### Other Settings
 

@@ -41,6 +41,14 @@ type albKeyCacheEntry struct {
 
 const albKeyCacheTTL = 5 * time.Minute
 
+// maxALBKeyCacheEntries bounds the in-process ALB public-key cache so churn
+// of distinct kids (e.g. a flood of forged/rotating kid values from a
+// malicious or misconfigured direct-invoke caller) can't grow it
+// unboundedly. Hitting the cap just clears the cache; the next lookups
+// re-fetch from the ALB key endpoint -- never a security regression, only a
+// perf one (mirrors the keyMemo overflow-clear pattern in keymemo.go).
+const maxALBKeyCacheEntries = 128
+
 func (c *albKeyCache) get(kid string) (*ecdsa.PublicKey, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -56,6 +64,9 @@ func (c *albKeyCache) set(kid string, key *ecdsa.PublicKey) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
+		c.entries = make(map[string]albKeyCacheEntry)
+	}
+	if _, exists := c.entries[kid]; !exists && len(c.entries) >= maxALBKeyCacheEntries {
 		c.entries = make(map[string]albKeyCacheEntry)
 	}
 	c.entries[kid] = albKeyCacheEntry{key: key, expiresAt: time.Now().Add(albKeyCacheTTL)}

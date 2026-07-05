@@ -58,18 +58,18 @@ var (
 // TokenValidatorInterface is the contract for validating an OIDC token end to
 // end: signature, issuer, audience, expiration, and required claims, then
 // normalizing to a canonical subject + raw claims map.
+//
+// Deliberately scoped to Validate only: FetchJWKS and GenKeyFunc (still
+// exported on the concrete *TokenValidator for tests and WarmPrefetch) are an
+// unscoped, audience-less path — neither is a standalone token-validation
+// entry point, and neither is used by production code through this
+// interface. Validate is the only supported way to authenticate a token.
 type TokenValidatorInterface interface {
 	// Validate verifies a token against the issuer it claims, using that
 	// issuer's registered spec (audiences/claim mappings/required claims),
 	// and returns the normalized claims. Always use Validate for end-to-end
 	// token authentication.
 	Validate(string) (*types.Claims, error)
-	// FetchJWKS fetches the JWKS for the given issuer, using the cache when
-	// available. Exposed for testing and warm-prefetch; Validate calls it
-	// internally with the issuer's registered spec (which may carry a
-	// jwks_uri override).
-	FetchJWKS(issuer string) (*types.JWKS, error)
-	GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc
 }
 
 // issuerSpec is the immutable, per-issuer view of config.IssuerConfig used on
@@ -602,9 +602,21 @@ func parseRSAKey(key types.JSONWebKey) (*rsa.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode RSA exponent: %w", err)
 	}
+	// Defense-in-depth: a real RSA public exponent is tiny (65537 is 3
+	// bytes); bound eBytes before converting so an oversized value can't
+	// silently truncate/overflow through big.Int.Int64()->int (e.g. a 9-byte
+	// exponent yields a negative int). Also reject non-sane values (E < 3 or
+	// even) even when the length check passes.
+	if len(eBytes) > 4 {
+		return nil, fmt.Errorf("RSA key public exponent too large: %d bytes", len(eBytes))
+	}
+	e := int(new(big.Int).SetBytes(eBytes).Int64())
+	if e < 3 || e%2 == 0 {
+		return nil, fmt.Errorf("RSA key has invalid public exponent: %d", e)
+	}
 	pub := &rsa.PublicKey{
 		N: new(big.Int).SetBytes(nBytes),
-		E: int(new(big.Int).SetBytes(eBytes).Int64()),
+		E: e,
 	}
 	// Defense-in-depth: reject undersized keys that could be served by a
 	// compromised JWKS source to enable offline signature forgery.

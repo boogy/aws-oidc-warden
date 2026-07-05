@@ -8,7 +8,13 @@ package validator
 // TokenValidatorInterface.
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/base64"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -187,6 +193,32 @@ func TestKeyMemo_StoreAndLoadRoundTrip(t *testing.T) {
 	assert.Equal(t, "some-key", got)
 }
 
+// TestALBKeyCache_OverflowClearsMap verifies the ALB public-key success
+// cache is bounded: once it holds maxALBKeyCacheEntries distinct kids, adding
+// one more clears the map first (mirroring keyMemo's overflow-clear pattern)
+// rather than growing unboundedly, so a flood of distinct kids can only cost
+// re-fetches, never unbounded memory.
+func TestALBKeyCache_OverflowClearsMap(t *testing.T) {
+	var c albKeyCache
+	key := &ecdsa.PublicKey{Curve: elliptic.P256(), X: big.NewInt(1), Y: big.NewInt(2)}
+
+	for i := 0; i < maxALBKeyCacheEntries; i++ {
+		c.set(fmt.Sprintf("kid-%d", i), key)
+	}
+	assert.Equal(t, maxALBKeyCacheEntries, len(c.entries), "cache should be exactly at capacity")
+
+	// First kid must still be present before the overflow insert.
+	_, ok := c.get("kid-0")
+	assert.True(t, ok)
+
+	c.set("kid-overflow", key)
+	assert.Equal(t, 1, len(c.entries), "hitting the cap must clear the map before inserting the new entry")
+	_, ok = c.get("kid-0")
+	assert.False(t, ok, "the overflow clear must have evicted the earlier entries")
+	_, ok = c.get("kid-overflow")
+	assert.True(t, ok, "the entry that triggered the overflow must still be cached")
+}
+
 func rsaJWK(kid, n, e string) types.JSONWebKey {
 	return types.JSONWebKey{KeyID: kid, KeyType: "RSA", N: n, E: e}
 }
@@ -201,4 +233,43 @@ func TestKeyFingerprint_DiffersAcrossIssuers(t *testing.T) {
 	fpA := keyFingerprint("issuer-a", rsaJWK("k1", "same-n", "AQAB"))
 	fpB := keyFingerprint("issuer-b", rsaJWK("k1", "same-n", "AQAB"))
 	assert.NotEqual(t, fpA, fpB, "the same kid/material from a different issuer must not collide")
+}
+
+// TestParseRSAKey_ExponentValidation guards against a malformed/oversized "e"
+// silently truncating through big.Int.Int64()->int (e.g. a 9-byte exponent
+// yields a negative int, which crypto/rsa would otherwise accept as a public
+// exponent). A real RSA public exponent is tiny (65537 is 3 bytes), so a sane
+// exponent must decode to <= 4 bytes, be >= 3, and be odd.
+func TestParseRSAKey_ExponentValidation(t *testing.T) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	n := base64.RawURLEncoding.EncodeToString(priv.N.Bytes())
+
+	encodeE := func(b ...byte) string {
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+
+	tests := []struct {
+		name    string
+		e       string
+		wantErr bool
+	}{
+		{"E=1 rejected (below minimum)", encodeE(1), true},
+		{"E=2 rejected (even)", encodeE(2), true},
+		{"oversized 9-byte exponent rejected", encodeE(1, 2, 3, 4, 5, 6, 7, 8, 9), true},
+		{"E=65537 accepted", encodeE(1, 0, 1), false},
+		{"E=3 accepted", encodeE(3), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := types.JSONWebKey{KeyID: "k", KeyType: "RSA", N: n, E: tt.e}
+			_, err := parseRSAKey(key)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }

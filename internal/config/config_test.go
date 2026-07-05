@@ -354,6 +354,35 @@ func TestJWTLeewayUnsetDefaults(t *testing.T) {
 	assert.Equal(t, defaultJWTLeeway, cfg.LeewayOrDefault())
 }
 
+// TestMaxTokenLifetimeAndAgeDefaults verifies that an unset (zero-value)
+// max_token_lifetime/max_token_age is defaulted to 1h by Validate(), since
+// leaving them uncapped by default would let a stolen/leaked long-lived
+// token remain usable indefinitely.
+func TestMaxTokenLifetimeAndAgeDefaults(t *testing.T) {
+	cfg := Config{
+		Issuers:         singleIssuer("https://issuer.com", "audience"),
+		RoleSessionName: "session",
+	}
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, defaultMaxTokenLifetime, cfg.MaxTokenLifetime)
+	assert.Equal(t, defaultMaxTokenAge, cfg.MaxTokenAge)
+}
+
+// TestMaxTokenLifetimeAndAgeExplicitValuesPreserved verifies that an explicit
+// non-zero max_token_lifetime/max_token_age is preserved as-is, not
+// overwritten by the default.
+func TestMaxTokenLifetimeAndAgeExplicitValuesPreserved(t *testing.T) {
+	cfg := Config{
+		Issuers:          singleIssuer("https://issuer.com", "audience"),
+		RoleSessionName:  "session",
+		MaxTokenLifetime: 15 * time.Minute,
+		MaxTokenAge:      5 * time.Minute,
+	}
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, 15*time.Minute, cfg.MaxTokenLifetime)
+	assert.Equal(t, 5*time.Minute, cfg.MaxTokenAge)
+}
+
 func TestFindSessionPolicy(t *testing.T) {
 	const iss = "https://issuer.com"
 	cfg := &Config{

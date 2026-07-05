@@ -73,9 +73,9 @@ default_issuer: "https://token.actions.githubusercontent.com"
 ## Clock-skew leeway applied to exp/nbf/iat. Default 30s; hard maximum 120s
 ## (Validate() rejects anything higher). 0 means "use default", not "disable".
 jwt_leeway: "30s"
-## Cap token replay window. 0 = no cap.
-max_token_lifetime: "0s" # reject if exp-iat exceeds this
-max_token_age: "0s" # reject if now-iat exceeds this
+## Cap token replay window. Default 1h; 0/unset means "use default", not "no cap".
+max_token_lifetime: "1h" # reject if exp-iat exceeds this
+max_token_age: "1h" # reject if now-iat exceeds this
 ## Reject tokens longer than this many bytes BEFORE parsing. Default 8192.
 ## 0 means "use default", not "unbounded".
 max_token_bytes: 8192

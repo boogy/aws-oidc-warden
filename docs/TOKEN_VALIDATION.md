@@ -88,6 +88,44 @@ token's location differs.
   Authorizer's configured audience **and** this service's issuer `audiences`
   (re-checked here as defense in depth — see [§6](#6-claim-checks)).
 
+### 2.2 Trust boundary: `lambda:InvokeFunction` is identity impersonation in `apigw` mode
+
+> **This is the most important thing to understand about delegated modes.**
+> In `apigw` (and `alb`) mode, the Lambda **fully trusts** the claims handed
+> to it by the upstream — it never sees, and never verifies, the original
+> OIDC token's signature. **Anyone who can invoke the function directly
+> (`lambda:InvokeFunction`) bypasses the upstream entirely** and can hand the
+> function whatever claims they like.
+>
+> - The **only** guard against a direct invoke is "claims must be
+>   non-empty" (`apigw_extractor.go`, the bypass-guard check in
+>   [§2](#2-validation-modes) above). This guard catches an **empty**
+>   direct-invoke payload. **It cannot detect a direct invoke that supplies
+>   forged, non-empty claims** — a crafted `event.requestContext.authorizer.jwt.claims`
+>   with an arbitrary `iss`/`aud`/`exp`/`sub` sails straight through, because
+>   there is no signature to check it against.
+> - Therefore, in `apigw` mode, **`lambda:InvokeFunction` permission on this
+>   function is equivalent to full identity impersonation** — anyone who
+>   holds it can obtain AWS credentials for any spoofed subject the
+>   `role_mappings`/`role_groups`/`tag_auth` config would authorize.
+> - **`alb` mode has an asymmetry in its favor:** the Lambda itself verifies
+>   the ALB's ES256 signature over `x-amzn-oidc-data`
+>   ([§4](#4-key-selection--crypto-hardening) applies identically there). A
+>   direct invoke supplying a forged `x-amzn-oidc-data` value fails that
+>   signature check and is rejected. **`apigw` mode has no equivalent
+>   cryptographic backstop** — API Gateway's JWT Authorizer verification
+>   happens entirely upstream of the Lambda, so IAM is the _only_ line of
+>   defense.
+>
+> **Required mitigation:** lock down the function's resource-based (invoke)
+> policy so that **only the fronting API Gateway's execution/service
+> principal** can call `lambda:InvokeFunction` — never grant it broadly (e.g.
+> to a wildcard principal, an entire account, or an over-broad IAM role/group).
+> See [ARCHITECTURE.md](ARCHITECTURE.md#jwt-validation-modes) for the same
+> invariant framed against the request pipeline, and
+> [CONFIGURATION.md](CONFIGURATION.md#jwt-validation-mode-settings) for the
+> `jwt_validation.mode` config reference.
+
 ---
 
 ## 3. The self-mode pipeline
@@ -238,8 +276,8 @@ fail-closed):
 | `iat`                | present; not in the future beyond `leeway`                                                                                     |
 | `exp`                | present; not expired beyond `leeway`                                                                                           |
 | `nbf`                | if present, not in the future beyond `leeway`                                                                                  |
-| `max_token_lifetime` | if set, `exp - iat` must not exceed it (0 = disabled)                                                                          |
-| `max_token_age`      | if set, `now - iat` must not exceed it (0 = disabled)                                                                          |
+| `max_token_lifetime` | `exp - iat` must not exceed it (default 1h; `0`/unset applies the default, not "disabled")                                     |
+| `max_token_age`      | `now - iat` must not exceed it (default 1h; `0`/unset applies the default, not "disabled")                                     |
 | **audience**         | **ANY-match** — at least one token `aud` equals one of the issuer's configured `audiences`; an empty set on either side denies |
 | `required_claims`    | every configured claim name is present and (if a string) non-empty, checked on the raw claims                                  |
 
@@ -296,14 +334,14 @@ All optional, top-level, hot-reloadable (except `allow_insecure_issuers`, which
 configures the HTTP client built at construction). Full reference in
 [CONFIGURATION.md](CONFIGURATION.md).
 
-| Key                      | Default | Effect                                                        |
-| ------------------------ | ------- | ------------------------------------------------------------- |
-| `jwt_leeway`             | `30s`   | Clock-skew allowance for `exp`/`iat`/`nbf`; hard max `120s`   |
-| `max_token_lifetime`     | `0`     | Reject if `exp - iat` exceeds it (0 = no cap)                 |
-| `max_token_age`          | `0`     | Reject if `now - iat` exceeds it (0 = no cap)                 |
-| `max_token_bytes`        | `8192`  | Pre-parse token length cap                                    |
-| `jwks_refetch_cooldown`  | `60s`   | Min interval between forced JWKS refetches per `(issuer,kid)` |
-| `allow_insecure_issuers` | `false` | Dev-only: permit `http://` loopback issuer/`jwks_uri`         |
+| Key                      | Default | Effect                                                          |
+| ------------------------ | ------- | --------------------------------------------------------------- |
+| `jwt_leeway`             | `30s`   | Clock-skew allowance for `exp`/`iat`/`nbf`; hard max `120s`     |
+| `max_token_lifetime`     | `1h`    | Reject if `exp - iat` exceeds it; `0`/unset applies the default |
+| `max_token_age`          | `1h`    | Reject if `now - iat` exceeds it; `0`/unset applies the default |
+| `max_token_bytes`        | `8192`  | Pre-parse token length cap                                      |
+| `jwks_refetch_cooldown`  | `60s`   | Min interval between forced JWKS refetches per `(issuer,kid)`   |
+| `allow_insecure_issuers` | `false` | Dev-only: permit `http://` loopback issuer/`jwks_uri`           |
 
 ---
 
