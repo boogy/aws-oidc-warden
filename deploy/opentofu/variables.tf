@@ -68,11 +68,19 @@ variable "tag_auth" {
     enabled                 = optional(bool, false)
     tag_prefix              = optional(string, "aow/")
     default_org             = optional(string)
-    spoke_role_name         = optional(string, "aow-spoke")
-    external_id             = optional(string)
-    spoke_session_duration  = optional(string, "15m")
     transitive_session_tags = optional(bool, false)
-    allowed_accounts        = optional(list(string), [])
+  })
+  default = { enabled = false }
+}
+
+variable "cross_account" {
+  description = "Cross-account (hub/spoke) transport settings. Set enabled=true to assume roles in member accounts through a per-account spoke role."
+  type = object({
+    enabled                = optional(bool, false)
+    spoke_role_name        = optional(string, "aow-spoke")
+    external_id            = optional(string)
+    spoke_session_duration = optional(string, "15m")
+    allowed_accounts       = optional(list(string), [])
   })
   default = { enabled = false }
 }
@@ -143,8 +151,8 @@ variable "assumable_role_arns" {
   type        = list(string)
   description = <<-EOT
     Role ARNs the Lambda may assume (sts:AssumeRole/sts:TagSession). When
-    tag_auth.enabled is true with cross-account hub/spoke, ALSO include the spoke
-    role ARN pattern, e.g. "arn:aws:iam::*:role/aow-spoke", so the hub can reach
+    cross_account.enabled is true (hub/spoke), ALSO include the spoke role ARN
+    pattern, e.g. "arn:aws:iam::*:role/aow-spoke", so the hub can reach
     member accounts. (sts:GetCallerIdentity needs no explicit permission.)
   EOT
   default     = []

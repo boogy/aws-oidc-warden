@@ -63,6 +63,7 @@ func baseTagCfg(t *testing.T) *config.Config {
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 		TagAuth:         &config.TagAuth{Enabled: true, TagPrefix: "aow/"},
+		CrossAccount:    &config.CrossAccount{Enabled: true},
 	}
 	require.NoError(t, cfg.Validate())
 	return cfg

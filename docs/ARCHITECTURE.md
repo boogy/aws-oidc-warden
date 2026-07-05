@@ -143,7 +143,7 @@ sequenceDiagram
     Validator->>Validator: normalize -> canonical subject + raw claims
     Validator-->>Processor: Return claims {issuer, subject, raw}
 
-    opt tag_auth.enabled
+    opt cross_account.enabled
         Processor->>Consumer: IsTargetAccountAllowed(role)
         Consumer-->>Processor: allowed / denied
     end
@@ -337,6 +337,7 @@ type Config struct {
     ConfigFragments       []string          `mapstructure:"config_fragments"`
     Cache                 *Cache            `mapstructure:"cache"`
     TagAuth               *TagAuth          `mapstructure:"tag_auth"`
+    CrossAccount          *CrossAccount     `mapstructure:"cross_account"`
     ConfigReloadInterval  time.Duration     `mapstructure:"config_reload_interval"`
     // hardening + logging knobs: jwt_leeway, max_token_lifetime/age/bytes,
     // jwks_refetch_cooldown, allow_insecure_issuers, log_level,
@@ -402,7 +403,7 @@ flowchart TD
     E -->|Invalid| F[Return 401/403 Error]
     E -->|Valid| G[Extract Claims]
 
-    G --> GA{tag_auth enabled?}
+    G --> GA{cross_account enabled?}
     GA -->|Yes| GB[IsTargetAccountAllowed]
     GB -->|Denied| GC[Return 403 Error]
     GB -->|Allowed| H[AuthorizeRoles issuer+subject]
@@ -531,19 +532,19 @@ flowchart TD
 
 ### 4. Tag-Based Authorization & Cross-Account
 
-Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `role_mappings` matching fails. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup.
+Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `role_mappings` matching fails. Cross-account transport is a separate opt-in (`cross_account.enabled`, default `false`) and applies to explicit mappings and tag-auth alike. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup, and [examples/cross-account/](examples/cross-account/) for a worked example.
 
 **Hub/Spoke Flow:**
 
 1. The hub (warden's own AWS account) is the central trust anchor.
 2. For each requested role ARN the account ID is parsed from the ARN.
-3. If the target is a different account, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account.
+3. If the target is a different account and `cross_account.enabled` is true, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account.
 4. Using spoke credentials, `GetRoleTags` calls `iam:GetRole` on the target role to read its IAM tags.
 5. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
 6. If authorized, `AssumeRole` is called (via spoke credentials for cross-account). When `TransitiveSessionTags` is true, every attached session tag (the issuer's `session_tags` spec) is marked transitive so it propagates immutably through subsequent role chaining. Cross-account sessions are clamped to 1 hour.
 
 **Account Allow-List (`IsTargetAccountAllowed`):**
-Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `tag_auth.allowed_accounts`. The hub account is always implicitly allowed. Empty list = any account is allowed (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
+Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `cross_account.allowed_accounts`. The hub account is always implicitly allowed. Empty list = any account is allowed (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
 
 **`DefaultOrg` shorthand:**
 When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no `/`) are automatically expanded to `<default_org>/<name>` before comparison, enabling short tag values like `my-service` instead of `org/my-service`.
@@ -739,7 +740,7 @@ The Lambda execution role requires the following IAM permissions:
 }
 ```
 
-> `iam:GetRole` is only needed when `tag_auth` is enabled (cross-account role-tag reads via `GetRoleTags`).
+> `iam:GetRole` is only needed when `tag_auth` is enabled (role-tag reads via `GetRoleTags`; performed with spoke credentials when the role is cross-account).
 
 ## References
 

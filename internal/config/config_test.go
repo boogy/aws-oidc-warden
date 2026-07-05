@@ -647,7 +647,8 @@ func TestTagAuthDefaults(t *testing.T) {
 	require.NotNil(t, c.TagAuth)
 	assert.True(t, c.TagAuth.Enabled)
 	assert.Equal(t, "aow/", c.TagAuth.TagPrefix)
-	assert.Equal(t, "aow-spoke", c.TagAuth.SpokeRoleName)
+	require.NotNil(t, c.CrossAccount)
+	assert.Equal(t, "aow-spoke", c.CrossAccount.SpokeRoleName)
 }
 
 func TestReapplyEnvOverrides_JWTValidation(t *testing.T) {

@@ -106,10 +106,13 @@ func TestAssumeRole_CrossAccountClamp(t *testing.T) {
 		SessionToken: aws.String("ST2"), Expiration: &targetExp,
 	}}, nil).Once()
 
-	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{
-		Enabled: true, TagPrefix: "aow/", SpokeRoleName: "aow-spoke",
-		SpokeSessionDuration: 15 * time.Minute,
-	}}
+	cfg := &gtvcfg.Config{
+		TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"},
+		CrossAccount: &gtvcfg.CrossAccount{
+			Enabled: true, SpokeRoleName: "aow-spoke",
+			SpokeSessionDuration: 15 * time.Minute,
+		},
+	}
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
 

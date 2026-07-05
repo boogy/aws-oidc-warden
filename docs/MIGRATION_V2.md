@@ -76,11 +76,18 @@ on `default_issuer`.
 5. **Tag-based auth.** If you use it, add `aow/issuer` to your roles and prefer
    `aow/subject` for identity. `aow/repo` / `aow/repo-owner` still work as
    aliases during the v2 migration window — plan to move to `aow/subject`.
-6. **Delegated modes.** `apigw`/`alb` now require **exactly one** configured
+6. **Cross-account keys moved.** `tag_auth.spoke_role_name` / `external_id` /
+   `spoke_session_duration` / `allowed_accounts` are now the top-level
+   `cross_account:` block (with its own `enabled` flag; env prefix
+   `AOW_CROSS_ACCOUNT_*`). The spoke transport no longer requires tag-auth:
+   set `cross_account.enabled: true` and explicit `role_mappings` can target
+   member-account ARNs with `tag_auth` off. If you used tag-auth cross-account
+   in v1, enable **both** blocks.
+7. **Delegated modes.** `apigw`/`alb` now require **exactly one** configured
    issuer.
-7. **snake_case S3/JSON config.** `PascalCase` keys are rejected (carried over
+8. **snake_case S3/JSON config.** `PascalCase` keys are rejected (carried over
    from the prior release).
-8. **Go embedders.** Update any code using the renamed types/functions above;
+9. **Go embedders.** Update any code using the renamed types/functions above;
    `AssumeRole` now takes a trailing `sessionTags map[string]string`.
 
 ## Onboarding a non-GitHub provider

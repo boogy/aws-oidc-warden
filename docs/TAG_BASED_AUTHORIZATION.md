@@ -1,11 +1,16 @@
 # Tag-Based Authorization & Cross-Account
 
 Tag-based authorization lets a workload assume an IAM role whose **tags**
-authorize the request, without listing the role in `role_mappings`. It also
-enables serving roles from **other AWS accounts** through a per-account spoke
-role. The feature is opt-in (`tag_auth.enabled`, default `false`) and **additive**:
+authorize the request, without listing the role in `role_mappings`. The
+feature is opt-in (`tag_auth.enabled`, default `false`) and **additive**:
 explicit `role_mappings` are evaluated first; tag-based authorization is a
 fallback used only when no explicit mapping authorizes the requested role.
+
+Serving roles from **other AWS accounts** is configured separately via the
+top-level `cross_account` block (per-account spoke role). It works with plain
+`role_mappings`, with tag-auth, or both — see
+[Cross-account](#cross-account) and the full worked example in
+[examples/cross-account/](examples/cross-account/).
 
 - [How it works](#how-it-works)
 - [Conditions (multi-dimensional matching)](#conditions-multi-dimensional-matching)
@@ -43,10 +48,11 @@ fallback used only when no explicit mapping authorizes the requested role.
    (`ErrRoleNotPermitted`).
 
 The account ID is parsed from the requested role ARN. If the role lives in a
-different account than the warden (the _hub_), the warden first assumes a
-convention-named **spoke** role in that account and uses those credentials for
-both the tag read and the final `sts:AssumeRole`. Same-account requests skip
-this hop. See [Cross-account](#cross-account).
+different account than the warden (the _hub_) and `cross_account.enabled` is
+`true`, the warden first assumes a convention-named **spoke** role in that
+account and uses those credentials for both the tag read and the final
+`sts:AssumeRole`. Same-account requests skip this hop. See
+[Cross-account](#cross-account).
 
 ---
 
@@ -235,9 +241,10 @@ Key consequences:
   when you need an exact ref including tags like `refs/tags/v1.2.3`.
 - **Caching.** Spoke credentials are cached until ~5 min before expiry; role
   tags are cached ~60 s. A tag change can take up to ~60 s to take effect.
-- **Cross-account requires the spoke.** With tag-auth enabled, a cross-account
-  request fails closed if the `aow-spoke` role is missing or untrusted — see
-  below.
+- **Cross-account requires the spoke.** With `cross_account.enabled`, a
+  cross-account request fails closed if the `aow-spoke` role is missing or
+  untrusted; with it disabled, a cross-account tag read fails (IAM is
+  account-scoped) and tag-auth denies — see below.
 
 ---
 
@@ -254,10 +261,10 @@ tag-auth in production:
    that also publishes matching `aow/*` tags.** See
    [Precedence](#precedence-mappings--tags-together).
 
-2. **Empty `allowed_accounts` fails open.** With tag-auth enabled and
-   `allowed_accounts` empty, the warden may assume into **any** member account
-   reachable via the spoke. Config load only logs a warning. Always populate
-   `allowed_accounts` in production. See
+2. **Empty `allowed_accounts` fails open.** With `cross_account.enabled` and
+   `cross_account.allowed_accounts` empty, the warden may assume into **any**
+   member account reachable via the spoke. Config load only logs a warning.
+   Always populate `allowed_accounts` in production. See
    [Target account allow-list](#target-account-allow-list).
 
 3. **Tag-authorized roles receive no session policy.** Session policies come only
@@ -418,17 +425,17 @@ role, the `repo` tag remains bound to the original GitHub repository.
 
 By default, the warden may assume roles in **any** AWS account reachable via the
 spoke. In production, restrict this to a known set of member accounts with
-`tag_auth.allowed_accounts`.
+`cross_account.allowed_accounts`.
 
 ```yaml
-tag_auth:
+cross_account:
   allowed_accounts:
     - "111111111111"
     - "222222222222"
 ```
 
 Or as a comma-separated environment variable:
-`AOW_TAG_AUTH_ALLOWED_ACCOUNTS=111111111111,222222222222`
+`AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS=111111111111,222222222222`
 
 ### Semantics
 
@@ -450,8 +457,13 @@ Or as a comma-separated environment variable:
 
 ![Cross-account hub/spoke flow](images/tag-auth-crossaccount.svg)
 
+Enabled by the top-level `cross_account` block (`cross_account.enabled: true`)
+— independent of `tag_auth`; explicit `role_mappings` targeting member-account
+ARNs use the same transport. A full worked example (config + IAM roles +
+StackSets template) lives in [examples/cross-account/](examples/cross-account/).
+
 - **Hub** = the account running the warden (Lambda/local).
-- **Spoke** = a small broker role (`tag_auth.spoke_role_name`, default
+- **Spoke** = a small broker role (`cross_account.spoke_role_name`, default
   `aow-spoke`) deployed once per member account.
 - **Target** = the role the workflow actually assumes.
 
@@ -464,7 +476,8 @@ For a target role in account `222…`:
 3. Warden (hub identity) assumes `arn:aws:iam::222…:role/aow-spoke` (with the
    optional external ID).
 4. With spoke credentials it calls `iam:GetRole` to read the target's tags and
-   checks them against the claims.
+   checks them against the claims (tag-auth path only; skipped when an explicit
+   mapping already authorized the role).
 5. With spoke credentials it calls `sts:AssumeRole` on the target role, attaching
    the GitHub session tags (and transitive keys if enabled). **The resulting
    session is capped at 1 hour** due to AWS role-chaining limits.
@@ -494,7 +507,7 @@ Create a role named `<spoke_role_name>` (default `aow-spoke`) in each member
 account.
 
 - **Trust policy:** trusts the hub execution role. Optionally require
-  `sts:ExternalId` matching `tag_auth.external_id`.
+  `sts:ExternalId` matching `cross_account.external_id`.
 - **Permissions:** `iam:GetRole` (read target tags), plus `sts:AssumeRole` and
   `sts:TagSession` on the target roles in that account.
 
@@ -532,14 +545,21 @@ tag_auth:
   enabled: true
   tag_prefix: "aow/"
   default_org: "" # if set, bare aow/repo tags (e.g. "api") expand to "<default_org>/api"
+  transitive_session_tags: false # set true to mark all attached session tags immutable through role chaining
+
+# Cross-account transport (hub/spoke). Independent of tag_auth: required for
+# ANY cross-account target (explicit mappings included), optional for
+# same-account tag-auth.
+cross_account:
+  enabled: true
   spoke_role_name: "aow-spoke"
   external_id: "" # optional
   spoke_session_duration: "15m"
-  transitive_session_tags: false # set true to mark all attached session tags immutable through role chaining
   allowed_accounts: [] # restrict target accounts; hub always allowed; empty = any
 ```
 
 Or via environment variables: `AOW_TAG_AUTH_ENABLED`, `AOW_TAG_AUTH_TAG_PREFIX`,
-`AOW_TAG_AUTH_DEFAULT_ORG`, `AOW_TAG_AUTH_SPOKE_ROLE_NAME`, `AOW_TAG_AUTH_EXTERNAL_ID`,
-`AOW_TAG_AUTH_SPOKE_SESSION_DURATION`, `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`,
-`AOW_TAG_AUTH_ALLOWED_ACCOUNTS` (comma-separated account IDs).
+`AOW_TAG_AUTH_DEFAULT_ORG`, `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`,
+`AOW_CROSS_ACCOUNT_ENABLED`, `AOW_CROSS_ACCOUNT_SPOKE_ROLE_NAME`,
+`AOW_CROSS_ACCOUNT_EXTERNAL_ID`, `AOW_CROSS_ACCOUNT_SPOKE_SESSION_DURATION`,
+`AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS` (comma-separated account IDs).

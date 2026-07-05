@@ -168,29 +168,39 @@ type Cache struct {
 
 // TagAuth enables tag-based role authorization: a role may be assumed when its
 // IAM tags authorize the request's OIDC claims, without an explicit
-// role_mappings entry. Also enables cross-account role assumption via a
-// per-account spoke role (account ID is parsed from the requested role ARN).
+// role_mappings entry. Cross-account transport (the per-account spoke role)
+// is configured separately in CrossAccount.
 type TagAuth struct {
-	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
-	TagPrefix            string        `mapstructure:"tag_prefix"             json:"tag_prefix,omitempty"`             // default "aow/"
-	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
-	ExternalID           string        `mapstructure:"external_id"            json:"external_id,omitempty"`            // optional hub->spoke external ID
-	DefaultOrg           string        `mapstructure:"default_org"            json:"default_org,omitempty"`            // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
-	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m
+	Enabled    bool   `mapstructure:"enabled"    json:"enabled,omitempty"`
+	TagPrefix  string `mapstructure:"tag_prefix" json:"tag_prefix,omitempty"`   // default "aow/"
+	DefaultOrg string `mapstructure:"default_org" json:"default_org,omitempty"` // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
 
 	// TransitiveSessionTags, when true, marks every session tag attached to the
 	// AssumeRole call transitive (see aws.selectTransitiveKeys) so they
 	// propagate immutably through role chaining. Default off.
 	TransitiveSessionTags bool `mapstructure:"transitive_session_tags" json:"transitive_session_tags,omitempty"`
 
-	// AllowedAccounts restricts which member accounts the warden will assume into.
-	// Empty/undefined = any account. The hub account is always allowed.
-	AllowedAccounts []string `mapstructure:"allowed_accounts" json:"allowed_accounts,omitempty"`
-
 	// multiIssuer is set by Config.Validate() (len(Issuers) > 1) and gates the
 	// <prefix>issuer requirement in Authorize (no cross-issuer identity
 	// collision via tag-auth). Not serialized; always recomputed.
 	multiIssuer bool `mapstructure:"-" json:"-"`
+}
+
+// CrossAccount configures the hub-and-spoke transport for assuming roles in
+// other AWS accounts: every cross-account AssumeRole (and cross-account IAM
+// tag read for tag-auth) is brokered through a convention-named spoke role in
+// the target account. Independent of tag_auth — explicit role_mappings can
+// target member-account ARNs with tag-auth disabled. The account ID is parsed
+// from the requested role ARN.
+type CrossAccount struct {
+	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
+	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
+	ExternalID           string        `mapstructure:"external_id"            json:"external_id,omitempty"`            // optional hub->spoke external ID
+	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m
+
+	// AllowedAccounts restricts which member accounts the warden will assume into.
+	// Empty/undefined = any account. The hub account is always allowed.
+	AllowedAccounts []string `mapstructure:"allowed_accounts" json:"allowed_accounts,omitempty"`
 }
 
 // JWTValidation controls whether the service validates JWT signatures itself
@@ -283,8 +293,12 @@ type Config struct {
 	// audit sink capable of persisting anything.
 	AuditRequired bool `mapstructure:"audit_required" json:"audit_required,omitempty"`
 
-	// TagAuth enables tag-based authorization and cross-account role assumption.
+	// TagAuth enables tag-based authorization (IAM role tags authorize claims).
 	TagAuth *TagAuth `mapstructure:"tag_auth" json:"tag_auth,omitempty"`
+
+	// CrossAccount enables the hub-and-spoke transport for assuming roles in
+	// other AWS accounts.
+	CrossAccount *CrossAccount `mapstructure:"cross_account" json:"cross_account,omitempty"`
 
 	// JWTValidation controls whether the service validates JWT signatures itself
 	// or trusts pre-validation by an upstream AWS service.
@@ -330,6 +344,15 @@ func ensureTagAuth(c *Config) *TagAuth {
 		c.TagAuth = &TagAuth{}
 	}
 	return c.TagAuth
+}
+
+// ensureCrossAccount returns c.CrossAccount, initializing it to a zero-value
+// CrossAccount first if it is nil.
+func ensureCrossAccount(c *Config) *CrossAccount {
+	if c.CrossAccount == nil {
+		c.CrossAccount = &CrossAccount{}
+	}
+	return c.CrossAccount
 }
 
 // splitCommaList splits v on "," trimming whitespace and dropping empty
@@ -456,25 +479,14 @@ var envBindings = []envBinding{
 		}
 	}},
 
-	// Tag-based authorization knobs. enabled/transitive_session_tags/
-	// allowed_accounts create TagAuth if nil; the rest only apply if it
-	// already exists (preserves the pre-refactor init semantics exactly).
+	// Tag-based authorization knobs. enabled/transitive_session_tags create
+	// TagAuth if nil; the rest only apply if it already exists (preserves the
+	// pre-refactor init semantics exactly).
 	{"tag_auth.enabled", func(c *Config, v string) { ensureTagAuth(c).Enabled = envTrue(v) }},
 	{"tag_auth.transitive_session_tags", func(c *Config, v string) { ensureTagAuth(c).TransitiveSessionTags = envTrue(v) }},
-	{"tag_auth.allowed_accounts", func(c *Config, v string) { ensureTagAuth(c).AllowedAccounts = splitCommaList(v) }},
 	{"tag_auth.tag_prefix", func(c *Config, v string) {
 		if c.TagAuth != nil {
 			c.TagAuth.TagPrefix = v
-		}
-	}},
-	{"tag_auth.spoke_role_name", func(c *Config, v string) {
-		if c.TagAuth != nil {
-			c.TagAuth.SpokeRoleName = v
-		}
-	}},
-	{"tag_auth.external_id", func(c *Config, v string) {
-		if c.TagAuth != nil {
-			c.TagAuth.ExternalID = v
 		}
 	}},
 	{"tag_auth.default_org", func(c *Config, v string) {
@@ -482,14 +494,17 @@ var envBindings = []envBinding{
 			c.TagAuth.DefaultOrg = v
 		}
 	}},
-	{"tag_auth.spoke_session_duration", func(c *Config, v string) {
-		if c.TagAuth == nil {
-			return
-		}
+
+	// Cross-account transport knobs.
+	{"cross_account.enabled", func(c *Config, v string) { ensureCrossAccount(c).Enabled = envTrue(v) }},
+	{"cross_account.spoke_role_name", func(c *Config, v string) { ensureCrossAccount(c).SpokeRoleName = v }},
+	{"cross_account.external_id", func(c *Config, v string) { ensureCrossAccount(c).ExternalID = v }},
+	{"cross_account.allowed_accounts", func(c *Config, v string) { ensureCrossAccount(c).AllowedAccounts = splitCommaList(v) }},
+	{"cross_account.spoke_session_duration", func(c *Config, v string) {
 		if d, err := time.ParseDuration(v); err != nil {
-			warnInvalidEnv(envVarName("tag_auth.spoke_session_duration"), v, err)
+			warnInvalidEnv(envVarName("cross_account.spoke_session_duration"), v, err)
 		} else {
-			c.TagAuth.SpokeSessionDuration = d
+			ensureCrossAccount(c).SpokeSessionDuration = d
 		}
 	}},
 
@@ -530,9 +545,10 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("cache.max_local_size", cacheMaxLocalSize)
 	viper.SetDefault("tag_auth.enabled", false)
 	viper.SetDefault("tag_auth.tag_prefix", "aow/")
-	viper.SetDefault("tag_auth.spoke_role_name", "aow-spoke")
-	viper.SetDefault("tag_auth.spoke_session_duration", "15m")
 	viper.SetDefault("tag_auth.transitive_session_tags", false)
+	viper.SetDefault("cross_account.enabled", false)
+	viper.SetDefault("cross_account.spoke_role_name", "aow-spoke")
+	viper.SetDefault("cross_account.spoke_session_duration", "15m")
 	viper.SetDefault("jwt_validation.mode", "self")
 	viper.SetDefault("max_token_bytes", defaultMaxTokenBytes)
 	viper.SetDefault("jwks_refetch_cooldown", defaultJWKSRefetchCooldown)
@@ -859,25 +875,28 @@ func (c *Config) Validate() error {
 		if c.TagAuth.DefaultOrg != "" && strings.ContainsAny(c.TagAuth.DefaultOrg, "/ \t\n\r") {
 			return fmt.Errorf("tag_auth.default_org %q must not contain '/' or whitespace", c.TagAuth.DefaultOrg)
 		}
-		if c.TagAuth.Enabled {
-			if c.TagAuth.TagPrefix == "" {
-				c.TagAuth.TagPrefix = "aow/"
+		if c.TagAuth.Enabled && c.TagAuth.TagPrefix == "" {
+			c.TagAuth.TagPrefix = "aow/"
+		}
+	}
+
+	// Normalize cross-account transport defaults, mirroring the tag-auth block
+	// above for directly-built Configs.
+	if c.CrossAccount != nil && c.CrossAccount.Enabled {
+		if c.CrossAccount.SpokeRoleName == "" {
+			c.CrossAccount.SpokeRoleName = "aow-spoke"
+		}
+		if c.CrossAccount.SpokeSessionDuration == 0 {
+			c.CrossAccount.SpokeSessionDuration = 15 * time.Minute
+		}
+		for i, acct := range c.CrossAccount.AllowedAccounts {
+			c.CrossAccount.AllowedAccounts[i] = strings.TrimSpace(acct)
+			if !accountIDPattern.MatchString(c.CrossAccount.AllowedAccounts[i]) {
+				return fmt.Errorf("cross_account.allowed_accounts entry %q is not a 12-digit AWS account ID", acct)
 			}
-			if c.TagAuth.SpokeRoleName == "" {
-				c.TagAuth.SpokeRoleName = "aow-spoke"
-			}
-			if c.TagAuth.SpokeSessionDuration == 0 {
-				c.TagAuth.SpokeSessionDuration = 15 * time.Minute
-			}
-			for i, acct := range c.TagAuth.AllowedAccounts {
-				c.TagAuth.AllowedAccounts[i] = strings.TrimSpace(acct)
-				if !accountIDPattern.MatchString(c.TagAuth.AllowedAccounts[i]) {
-					return fmt.Errorf("tag_auth.allowed_accounts entry %q is not a 12-digit AWS account ID", acct)
-				}
-			}
-			if len(c.TagAuth.AllowedAccounts) == 0 {
-				slog.Warn("tag_auth enabled with empty allowed_accounts; the warden may assume into ANY member account. Populate tag_auth.allowed_accounts in production.")
-			}
+		}
+		if len(c.CrossAccount.AllowedAccounts) == 0 {
+			slog.Warn("cross_account enabled with empty allowed_accounts; the warden may assume into ANY member account. Populate cross_account.allowed_accounts in production.")
 		}
 	}
 

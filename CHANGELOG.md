@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Cross-account transport moved out of `tag_auth` into a top-level `cross_account` block** (`enabled`, `spoke_role_name`, `external_id`, `spoke_session_duration`, `allowed_accounts`; env prefix `AOW_CROSS_ACCOUNT_*`) and decoupled from tag-based authorization: with `cross_account.enabled: true`, explicit `role_mappings` can target member-account role ARNs through the per-account spoke role without enabling the tag-auth fallback, and the `allowed_accounts` gate now applies to every cross-account assumption. `tag_auth` keeps only tag-matching concerns (`enabled`, `tag_prefix`, `default_org`, `transitive_session_tags`). The old `tag_auth.*` transport keys are no longer accepted (v2 is unreleased; no deprecation aliases). Added a full worked cross-account example (hub config + member-account spoke/target roles + StackSets template) under `docs/examples/cross-account/`.
+
 - CI: consolidated `build.yml` into `release.yml` — a single tag-triggered workflow with one concurrency group and a combined summary. The GoReleaser (archives) and ko (image) jobs stay independent so neither blocks the other. Replaced the duplicated tag-extraction steps with the built-in `github.ref_name`.
 - CI: moved the container image tag scheme into `.ko.yaml` per-build `tags:` as the single source of truth (`<module>-<tag>` / `<module>-latest`, plus bare `<tag>` / `latest` for the `apigateway` default module). `release.yml` and `make ko-publish` no longer pass `--tags`, which removes the special-cased apigateway publish step and makes `make ko-publish` emit the same tags as CI; only the local `make ko-build` (to `ko.local`) still overrides with `--tags`.
 

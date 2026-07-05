@@ -106,9 +106,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// Account guardrail: reject target accounts outside the allow-list before
-	// reading role tags or assuming anything. Only relevant when tag-auth (and
-	// thus cross-account) is enabled.
-	if cfg.TagAuth != nil && cfg.TagAuth.Enabled {
+	// reading role tags or assuming anything. Only relevant when cross-account
+	// transport is enabled.
+	if cfg.CrossAccount != nil && cfg.CrossAccount.Enabled {
 		ok, aerr := r.consumer.IsTargetAccountAllowed(requestedRole)
 		if aerr != nil {
 			rec.Stage = "account_check"

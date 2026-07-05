@@ -14,10 +14,13 @@ import (
 )
 
 func newTagAuthConsumer(m *MockAwsServiceWrapper) *AwsConsumer {
-	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{
-		Enabled: true, TagPrefix: "aow/", SpokeRoleName: "aow-spoke",
-		SpokeSessionDuration: 15 * time.Minute,
-	}}
+	cfg := &gtvcfg.Config{
+		TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"},
+		CrossAccount: &gtvcfg.CrossAccount{
+			Enabled: true, SpokeRoleName: "aow-spoke",
+			SpokeSessionDuration: 15 * time.Minute,
+		},
+	}
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
 	return c
@@ -56,11 +59,37 @@ func TestSpokeCredsFor_CrossAccount_AssumesSpokeAndCaches(t *testing.T) {
 
 func TestSpokeCredsFor_Disabled_ReturnsNil(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	c := NewAwsConsumer(&gtvcfg.Config{}) // TagAuth nil
+	c := NewAwsConsumer(&gtvcfg.Config{}) // CrossAccount nil
 	c.AWS = m
 	creds, err := c.spokeCredsFor("222222222222")
 	require.NoError(t, err)
 	assert.Nil(t, creds)
+}
+
+func TestSpokeCredsFor_CrossAccountOnly_TagAuthDisabled(t *testing.T) {
+	// The spoke transport must work with tag-auth off: explicit role_mappings
+	// can target member accounts without enabling the tag-auth fallback.
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount").Return("111111111111", nil)
+	exp := time.Now().Add(time.Hour)
+	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
+	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
+		SessionToken: aws.String("ST"), Expiration: &exp,
+	}}, nil).Once()
+
+	c := NewAwsConsumer(&gtvcfg.Config{
+		CrossAccount: &gtvcfg.CrossAccount{
+			Enabled: true, SpokeRoleName: "aow-spoke",
+			SpokeSessionDuration: 15 * time.Minute,
+		},
+	})
+	c.AWS = m
+	creds, err := c.spokeCredsFor("222222222222")
+	require.NoError(t, err)
+	require.NotNil(t, creds)
+	m.AssertExpectations(t)
 }
 
 func TestAssumeRole_CrossAccount_UsesSpokeCreds(t *testing.T) {

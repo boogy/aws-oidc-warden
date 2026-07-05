@@ -233,17 +233,30 @@ role_groups:
 # When enabled, a role whose IAM tags authorize a token's claims may be assumed
 # even without a role_mapping. v2 is ISSUER-BOUND: set aow/issuer on the role;
 # the canonical identity tag is aow/subject (aow/repo + aow/repo-owner remain
-# accepted as aliases through the v2 migration window). Cross-account targets
-# are reached via a per-account spoke role. See docs/TAG_BASED_AUTHORIZATION.md.
+# accepted as aliases through the v2 migration window). See
+# docs/TAG_BASED_AUTHORIZATION.md.
 ####################################################################################
 tag_auth:
   enabled: false
   tag_prefix: "aow/"
   default_org: "" # if set, bare aow/repo tokens (e.g. "api") expand to "<default_org>/api"
+  transitive_session_tags: false
+
+####################################################################################
+# CROSS-ACCOUNT TRANSPORT (optional, default disabled) — hub-and-spoke.
+#
+# When enabled, roles in other AWS accounts (role_mappings targets AND
+# tag-authorized roles) are reached by first assuming a convention-named spoke
+# role in the target account. Independent of tag_auth — explicit mappings can
+# target member accounts with tag-auth off. Cross-account sessions are capped
+# at 1h (AWS role-chaining limit). See docs/examples/cross-account/ for a full
+# worked example including the IAM roles.
+####################################################################################
+cross_account:
+  enabled: false
   spoke_role_name: "aow-spoke"
   external_id: ""
   spoke_session_duration: "15m"
-  transitive_session_tags: false
   allowed_accounts: [] # member account IDs the warden may assume into; [] = ANY (set in production!)
 
 ####################################################################################

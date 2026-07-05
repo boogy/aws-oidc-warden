@@ -97,13 +97,13 @@ func (a *AwsConsumer) SessionName(name string) string {
 }
 
 // spokeCredsFor resolves credentials for operating in the given account. It
-// returns (nil, nil) when tag-auth is disabled or the account is the warden's
-// own (hub) account — callers then use the default hub clients. For a different
-// account it assumes the convention-named spoke role and caches the result
-// until shortly before expiry.
+// returns (nil, nil) when cross-account transport is disabled or the account
+// is the warden's own (hub) account — callers then use the default hub
+// clients. For a different account it assumes the convention-named spoke role
+// and caches the result until shortly before expiry.
 func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, error) {
 	cfg := a.cfg()
-	if cfg == nil || cfg.TagAuth == nil || !cfg.TagAuth.Enabled {
+	if cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
 		return nil, nil
 	}
 	hub, err := a.AWS.GetCallerAccount()
@@ -114,7 +114,7 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 		return nil, nil
 	}
 	if !a.accountAllowed(account, hub) {
-		return nil, fmt.Errorf("target account %s is not in tag_auth.allowed_accounts", account)
+		return nil, fmt.Errorf("target account %s is not in cross_account.allowed_accounts", account)
 	}
 
 	a.mu.Lock()
@@ -123,10 +123,10 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 		return c.provider, nil
 	}
 
-	ta := cfg.TagAuth
-	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ta.SpokeRoleName)
+	ca := cfg.CrossAccount
+	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ca.SpokeRoleName)
 	sessionName := "aow-broker"
-	dur := int32(ta.SpokeSessionDuration.Seconds())
+	dur := int32(ca.SpokeSessionDuration.Seconds())
 	if dur < 900 {
 		dur = 900
 	}
@@ -135,8 +135,8 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 		RoleSessionName: &sessionName,
 		DurationSeconds: &dur,
 	}
-	if ta.ExternalID != "" {
-		input.ExternalId = &ta.ExternalID
+	if ca.ExternalID != "" {
+		input.ExternalId = &ca.ExternalID
 	}
 	out, err := a.AWS.AssumeRole(input)
 	if err != nil {
@@ -221,7 +221,7 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 	}
 
 	// Route cross-account targets through the spoke role; same-account and
-	// tag-auth-disabled paths use the default hub identity (creds == nil).
+	// cross-account-disabled paths use the default hub identity (creds == nil).
 	var creds aws.CredentialsProvider
 	if account, _, perr := ParseRoleARN(roleArn); perr == nil {
 		var cerr error
@@ -352,22 +352,22 @@ func (a *AwsConsumer) accountAllowed(account, hub string) bool {
 	if account == hub {
 		return true
 	}
-	ta := cfg.TagAuth
-	if ta == nil || len(ta.AllowedAccounts) == 0 {
+	ca := cfg.CrossAccount
+	if ca == nil || len(ca.AllowedAccounts) == 0 {
 		return true
 	}
-	return slices.Contains(ta.AllowedAccounts, account)
+	return slices.Contains(ca.AllowedAccounts, account)
 }
 
 // IsTargetAccountAllowed checks the requested role ARN's account against the
-// tag_auth.allowed_accounts list. Returns true when tag-auth is disabled (no
-// cross-account path exists) or the account is permitted.
+// cross_account.allowed_accounts list. Returns true when cross-account
+// transport is disabled (no spoke path exists) or the account is permitted.
 func (a *AwsConsumer) IsTargetAccountAllowed(roleArn string) (bool, error) {
 	account, _, err := ParseRoleARN(roleArn)
 	if err != nil {
 		return false, err
 	}
-	if cfg := a.cfg(); cfg == nil || cfg.TagAuth == nil || !cfg.TagAuth.Enabled {
+	if cfg := a.cfg(); cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
 		return true, nil
 	}
 	hub, err := a.AWS.GetCallerAccount()

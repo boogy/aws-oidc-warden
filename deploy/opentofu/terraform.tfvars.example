@@ -43,12 +43,17 @@ role_mappings = [
   },
 ]
 
-# --- Optional tag-based / cross-account authorization ---
-# When enabled with cross-account hub/spoke, add the spoke role to
-# assumable_role_arns above, e.g. "arn:aws:iam::*:role/aow-spoke".
+# --- Optional tag-based authorization ---
 # tag_auth = {
+#   enabled     = true
+#   default_org = "my-org"
+# }
+
+# --- Optional cross-account (hub/spoke) transport ---
+# When enabled, add the spoke role to assumable_role_arns above,
+# e.g. "arn:aws:iam::*:role/aow-spoke".
+# cross_account = {
 #   enabled          = true
-#   default_org      = "my-org"
 #   allowed_accounts = ["111122223333", "444455556666"]
 # }
 

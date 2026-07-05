@@ -48,6 +48,7 @@ locals {
     var.enable_s3_logs ? { log_to_s3 = true, log_bucket = local.log_bucket_name, log_prefix = "audit/" } : {},
     var.enable_session_policy_bucket ? { session_policy_bucket = local.session_policy_bucket_name } : {},
     var.tag_auth.enabled ? { tag_auth = var.tag_auth } : {},
+    var.cross_account.enabled ? { cross_account = var.cross_account } : {},
     # Render jwt_validation block only when not using the default "self" mode.
     var.jwt_validation_mode != "self" ? {
       jwt_validation = { mode = var.jwt_validation_mode }
@@ -111,7 +112,7 @@ module "iam" {
   source                    = "./modules/iam"
   name_prefix               = var.name_prefix
   assumable_role_arns       = var.assumable_role_arns
-  enable_iam_getrole        = var.tag_auth.enabled
+  enable_iam_getrole        = var.tag_auth.enabled || var.cross_account.enabled
   cache_dynamodb_table_arn  = var.enable_dynamodb_cache ? module.dynamodb[0].table_arn : null
   cache_s3_bucket_arn       = var.enable_s3_cache ? module.cache_bucket[0].bucket_arn : null
   config_bucket_arn         = module.config_bucket.bucket_arn

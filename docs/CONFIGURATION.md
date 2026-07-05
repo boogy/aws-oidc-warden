@@ -196,20 +196,28 @@ See [LOGGING.md](LOGGING.md) for the full audit-record schema and the standardiz
 
 ### Tag-Based Authorization Settings
 
-Optional, disabled by default. When enabled, a role may be assumed via its IAM tags even if it's not listed in `role_mappings`/`role_groups`. Roles in other accounts are reached via a per-account spoke role. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the tag reference and IAM setup, and [MULTI_ISSUER.md](MULTI_ISSUER.md) for the v2 canonical `subject`/`issuer` tags.
+Optional, disabled by default. When enabled, a role may be assumed via its IAM tags even if it's not listed in `role_mappings`/`role_groups`. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the tag reference and IAM setup, and [MULTI_ISSUER.md](MULTI_ISSUER.md) for the v2 canonical `subject`/`issuer` tags.
 
 | Environment Variable                   | Config File Key                    | Description                                                                                    | Default     |
 | -------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------ | ----------- |
-| `AOW_TAG_AUTH_ENABLED`                 | `tag_auth.enabled`                  | Enable tag-based authorization + cross-account assume                                            | `false`     |
+| `AOW_TAG_AUTH_ENABLED`                 | `tag_auth.enabled`                  | Enable tag-based authorization                                                                    | `false`     |
 | `AOW_TAG_AUTH_TAG_PREFIX`              | `tag_auth.tag_prefix`               | Namespace prefix for authorization tag keys                                                       | `aow/`      |
 | `AOW_TAG_AUTH_DEFAULT_ORG`             | `tag_auth.default_org`              | Org prefix for bare `aow/repo` tokens (e.g. `"api"` → `"<org>/api"`); must not contain `/` or whitespace | (empty) |
-| `AOW_TAG_AUTH_SPOKE_ROLE_NAME`         | `tag_auth.spoke_role_name`          | Role assumed in each member account for cross-account requests                                    | `aow-spoke` |
-| `AOW_TAG_AUTH_EXTERNAL_ID`             | `tag_auth.external_id`              | Optional external ID for the hub→spoke trust                                                      |             |
-| `AOW_TAG_AUTH_SPOKE_SESSION_DURATION`  | `tag_auth.spoke_session_duration`   | Hub→spoke session length                                                                            | `15m`       |
 | `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` | `tag_auth.transitive_session_tags`  | Mark every attached session tag (the issuer's `session_tags` spec) transitive — immutable through role chaining | `false`     |
-| `AOW_TAG_AUTH_ALLOWED_ACCOUNTS`        | `tag_auth.allowed_accounts`         | Comma-separated member account IDs allowed as assume targets (must be 12 digits; hub always allowed; empty = any — a startup warning is logged) | (empty) |
 
 `tag_auth`'s identity gate now accepts the canonical `<prefix>subject` tag (any issuer's subject) in addition to the legacy `<prefix>repo`/`<prefix>repo-owner` tags (GitHub-shaped subjects only). With more than one issuer configured, `Authorize()` also requires a matching `<prefix>issuer` tag on the role — a role with no `<prefix>issuer` tag cannot be reached via tag-auth once a second issuer is added, preventing a role scoped to one issuer's subjects from being reachable by another issuer's identically-shaped subject. See [MULTI_ISSUER.md](MULTI_ISSUER.md).
+
+### Cross-Account Settings
+
+Optional, disabled by default. When enabled, roles in other AWS accounts (from `role_mappings` and tag-auth alike) are reached by first assuming a per-account spoke role — independent of `tag_auth`. Cross-account sessions are capped at 1h (AWS role-chaining limit). See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md#cross-account) and the worked example in [examples/cross-account/](examples/cross-account/).
+
+| Environment Variable                        | Config File Key                        | Description                                                                                    | Default     |
+| -------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------- |
+| `AOW_CROSS_ACCOUNT_ENABLED`                 | `cross_account.enabled`                 | Enable the hub/spoke cross-account transport                                                      | `false`     |
+| `AOW_CROSS_ACCOUNT_SPOKE_ROLE_NAME`         | `cross_account.spoke_role_name`         | Role assumed in each member account for cross-account requests                                    | `aow-spoke` |
+| `AOW_CROSS_ACCOUNT_EXTERNAL_ID`             | `cross_account.external_id`             | Optional external ID for the hub→spoke trust                                                      |             |
+| `AOW_CROSS_ACCOUNT_SPOKE_SESSION_DURATION`  | `cross_account.spoke_session_duration`  | Hub→spoke session length                                                                            | `15m`       |
+| `AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS`        | `cross_account.allowed_accounts`        | Comma-separated member account IDs allowed as assume targets (must be 12 digits; hub always allowed; empty = any — a startup warning is logged) | (empty) |
 
 ### JWT Validation Mode Settings
 

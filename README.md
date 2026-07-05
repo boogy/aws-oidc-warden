@@ -283,9 +283,9 @@ For full build commands, ECR pull-through cache setup, and infrastructure detail
 
 Tag-based authorization lets a repository assume an IAM role authorized by **tags on the role itself**, without listing the role in `role_mappings`. This is especially useful when roles are managed across many accounts or teams: add `aow/subject` (or the legacy `aow/repo`), `aow/ref`, and similar tags to the IAM role and the warden will evaluate them against the OIDC claims.
 
-For cross-account (hub/spoke) scenarios, the warden reads and assumes roles in member accounts by first assuming a convention-named spoke role (`aow-spoke` by default) in the target account. Explicit `role_mappings` are always evaluated first; tag-auth is a fallback path only.
+For cross-account (hub/spoke) scenarios, enable the separate top-level `cross_account` block: the warden reads and assumes roles in member accounts by first assuming a convention-named spoke role (`aow-spoke` by default) in the target account. The transport is independent of tag-auth — explicit `role_mappings` can target member-account ARNs on their own. Explicit `role_mappings` are always evaluated first; tag-auth is a fallback path only.
 
-The feature is opt-in (`tag_auth.enabled: true`, default `false`) and supports transitive session tags, a target-account allow-list, and an external ID for spoke-role trust. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) for setup, tag reference, and IAM examples.
+Both features are opt-in (`tag_auth.enabled` / `cross_account.enabled`, default `false`); cross-account supports a target-account allow-list and an external ID for spoke-role trust, and tag-auth supports transitive session tags. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) for setup, tag reference, and IAM examples, and [docs/examples/cross-account/](docs/examples/cross-account/) for a full worked cross-account example (config + IAM roles + StackSets template).
 
 ---
 
@@ -363,7 +363,7 @@ protection see **[docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)**.
 - **Token validation fails** — ensure the workflow has `id-token: write`; verify the repository name matches your configured patterns and the issuer/audience settings.
 - **Role assumption fails** — confirm the Lambda execution role can assume the target role; check for conflicting constraints or overly restrictive session policies.
 - **Cache issues** — DynamoDB needs a TTL field configured; S3 needs bucket read/write; raise `max_local_size` for high traffic.
-- **Tag-auth / cross-account** — set `tag_auth.enabled: true`, ensure the spoke role (`aow-spoke` by default) exists in each member account and trusts the hub Lambda role, grant `iam:GetRole`, and list the target account in `tag_auth.allowed_accounts` if used. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md).
+- **Cross-account** — set `cross_account.enabled: true`, ensure the spoke role (`aow-spoke` by default) exists in each member account and trusts the hub Lambda role, grant `iam:GetRole`, and list the target account in `cross_account.allowed_accounts`. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) and [docs/examples/cross-account/](docs/examples/cross-account/).
 
 ---
 
