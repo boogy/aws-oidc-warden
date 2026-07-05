@@ -116,7 +116,7 @@ A successful response returns HTTP 200 with STS temporary credentials JSON.
 
 2. **No VPC (default):** The Lambda runs outside any VPC and needs outbound internet access to fetch issuer JWKS (self/alb modes) or the ALB key endpoint (alb mode). If you later attach the Lambda to a VPC, provide a NAT gateway or VPC endpoint path.
 
-3. **Tag-auth hub/spoke:** For cross-account `tag_auth`, member-account `aow-spoke` roles must trust the hub execution role. The hub IAM policy must list the spoke ARN pattern (e.g. `arn:aws:iam::*:role/aow-spoke`) in `assumable_role_arns`.
+3. **Cross-account trust:** With `cross_account.enabled = true`, AssumeRole goes direct — member-account target roles must trust the hub execution role for `sts:AssumeRole` and `sts:TagSession`, with no `sts:ExternalId` condition (the warden sends no external ID on direct assumes). Their ARNs/patterns go in `assumable_role_arns`. A convention-named spoke role (default `aow-spoke`) is only needed for cross-account `tag_auth`, where it acts as a tag-read broker with `iam:GetRole` only — it is never an assume target.
 
 ---
 

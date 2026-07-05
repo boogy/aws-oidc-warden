@@ -74,7 +74,7 @@ variable "tag_auth" {
 }
 
 variable "cross_account" {
-  description = "Cross-account (hub/spoke) transport settings. Set enabled=true to assume roles in member accounts through a per-account spoke role."
+  description = "Cross-account policy gate. enabled=false hard-denies all cross-account operations. When true, the Lambda assumes target roles in member accounts directly (one hop, no spoke); the spoke role (spoke_role_name) is used only as a tag-read broker (iam:GetRole) when tag_auth is enabled against cross-account targets. external_id applies only to that hub->spoke tag-read hop, never to direct role assumption."
   type = object({
     enabled                = optional(bool, false)
     spoke_role_name        = optional(string, "aow-spoke")
@@ -150,10 +150,14 @@ variable "enable_session_policy_bucket" {
 variable "assumable_role_arns" {
   type        = list(string)
   description = <<-EOT
-    Role ARNs the Lambda may assume (sts:AssumeRole/sts:TagSession). When
-    cross_account.enabled is true (hub/spoke), ALSO include the spoke role ARN
-    pattern, e.g. "arn:aws:iam::*:role/aow-spoke", so the hub can reach
-    member accounts. (sts:GetCallerIdentity needs no explicit permission.)
+    Role ARNs the Lambda may assume directly (sts:AssumeRole/sts:TagSession),
+    including target roles in member accounts under cross_account.enabled
+    (direct hub -> target, one hop). Prefer least-privilege per-account
+    patterns, e.g. "arn:aws:iam::<member-account-id>:role/<prefix>*", over
+    "arn:aws:iam::*:role/*". Only include the spoke role pattern (e.g.
+    "arn:aws:iam::*:role/aow-spoke") when using cross-account tag_auth, since
+    the spoke is a tag-read broker (iam:GetRole), not an assume target.
+    (sts:GetCallerIdentity needs no explicit permission.)
   EOT
   default     = []
 }

@@ -49,9 +49,14 @@ role_mappings = [
 #   default_org = "my-org"
 # }
 
-# --- Optional cross-account (hub/spoke) transport ---
-# When enabled, add the spoke role to assumable_role_arns above,
-# e.g. "arn:aws:iam::*:role/aow-spoke".
+# --- Optional cross-account policy gate ---
+# enabled=true lets the Lambda assume target roles in member accounts
+# directly (one hop) — add those target role ARNs/patterns to
+# assumable_role_arns above, preferring per-account patterns like
+# "arn:aws:iam::111122223333:role/<prefix>*" over "arn:aws:iam::*:role/*".
+# Only add the spoke pattern (e.g. "arn:aws:iam::*:role/aow-spoke") if using
+# cross-account tag_auth, since the spoke is a tag-read broker, not an
+# assume target. enabled=false hard-denies all cross-account operations.
 # cross_account = {
 #   enabled          = true
 #   allowed_accounts = ["111122223333", "444455556666"]

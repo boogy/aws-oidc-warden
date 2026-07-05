@@ -109,10 +109,12 @@ resource "aws_s3_object" "config" {
 
 # ---- IAM ----
 module "iam" {
-  source                    = "./modules/iam"
-  name_prefix               = var.name_prefix
-  assumable_role_arns       = var.assumable_role_arns
-  enable_iam_getrole        = var.tag_auth.enabled || var.cross_account.enabled
+  source              = "./modules/iam"
+  name_prefix         = var.name_prefix
+  assumable_role_arns = var.assumable_role_arns
+  # iam:GetRole is only needed for tag-auth's hub-account tag reads; cross-account
+  # assumes are direct and don't require it.
+  enable_iam_getrole        = var.tag_auth.enabled
   cache_dynamodb_table_arn  = var.enable_dynamodb_cache ? module.dynamodb[0].table_arn : null
   cache_s3_bucket_arn       = var.enable_s3_cache ? module.cache_bucket[0].bucket_arn : null
   config_bucket_arn         = module.config_bucket.bucket_arn
