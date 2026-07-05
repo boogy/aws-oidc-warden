@@ -106,24 +106,23 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// Account guardrail: reject target accounts outside the allow-list before
-	// reading role tags or assuming anything. Only relevant when cross-account
-	// transport is enabled.
-	if cfg.CrossAccount != nil && cfg.CrossAccount.Enabled {
-		ok, aerr := r.consumer.IsTargetAccountAllowed(requestedRole)
-		if aerr != nil {
-			rec.Stage = "account_check"
-			rec.Reason = aerr.Error()
-			rec.ProcessingMS = elapsed()
-			log.Error("Account allow-list check failed", slog.String("stage", rec.Stage), slog.String("error", aerr.Error()))
-			return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrAssumeRoleFailed)
-		}
-		if !ok {
-			rec.Stage = "account_check"
-			rec.Reason = "target account not allowed"
-			rec.ProcessingMS = elapsed()
-			log.Error("Target account not allowed", slog.String("stage", rec.Stage), slog.String("role", requestedRole))
-			return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrAccountNotAllowed)
-		}
+	// reading role tags or assuming anything. Runs on every request regardless
+	// of cross-account transport; IsTargetAccountAllowed itself encodes
+	// disabled-means-hub-only (fail closed).
+	ok, aerr := r.consumer.IsTargetAccountAllowed(requestedRole)
+	if aerr != nil {
+		rec.Stage = "account_check"
+		rec.Reason = aerr.Error()
+		rec.ProcessingMS = elapsed()
+		log.Error("Account allow-list check failed", slog.String("stage", rec.Stage), slog.String("error", aerr.Error()))
+		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrAssumeRoleFailed)
+	}
+	if !ok {
+		rec.Stage = "account_check"
+		rec.Reason = "target account not allowed"
+		rec.ProcessingMS = elapsed()
+		log.Error("Target account not allowed", slog.String("stage", rec.Stage), slog.String("role", requestedRole))
+		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrAccountNotAllowed)
 	}
 
 	// Conditions and tag-auth match against raw verified claim names, so use the

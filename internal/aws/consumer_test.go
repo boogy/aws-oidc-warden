@@ -65,6 +65,8 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 	testPolicy := aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`)
 	testDuration := int32(3600)
 
+	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
+
 	// Test case: Successful role assumption
 	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && *input.RoleSessionName == testSessionName
@@ -198,6 +200,8 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		"ref":   "ref",
 	}
 
+	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
+
 	// With claims + a session_tags spec, verify the expected tags are attached.
 	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		if *input.RoleArn != testRoleArn || *input.RoleSessionName != testSessionName {
@@ -273,6 +277,8 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 		"repo":    "repository",
 		"project": "project_id",
 	}
+
+	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
 
 	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn &&

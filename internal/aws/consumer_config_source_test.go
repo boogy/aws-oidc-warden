@@ -65,10 +65,11 @@ func TestConfigSource_ToggleEnabled(t *testing.T) {
 	c.AWS = m
 	c.SetConfigSource(func() *gtvcfg.Config { return current })
 
-	// Disabled: no cross-account path, gate returns true (nothing to enforce).
+	// Disabled: no cross-account path exists, so a member-account target is
+	// rejected (fail closed; only the hub account is reachable).
 	ok, err := c.IsTargetAccountAllowed(member)
 	require.NoError(t, err)
-	assert.True(t, ok)
+	assert.False(t, ok)
 
 	// Reload enables cross-account with an allow-list excluding the member.
 	current = enabled

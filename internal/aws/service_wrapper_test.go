@@ -2,9 +2,11 @@ package aws
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -53,12 +55,9 @@ func (m *MockAwsServiceWrapper) GetCallerAccount() (string, error) {
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockAwsServiceWrapper) AssumeRoleAs(input *sts.AssumeRoleInput, creds aws.CredentialsProvider) (*sts.AssumeRoleOutput, error) {
-	args := m.Called(input, creds)
-	if out, ok := args.Get(0).(*sts.AssumeRoleOutput); ok {
-		return out, args.Error(1)
-	}
-	return nil, args.Error(1)
+func (m *MockAwsServiceWrapper) GetCallerIdentityInfo() (string, bool, error) {
+	args := m.Called()
+	return args.String(0), args.Bool(1), args.Error(2)
 }
 
 func (m *MockAwsServiceWrapper) GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
@@ -190,6 +189,85 @@ func TestGetS3ObjectErrorCase(t *testing.T) {
 	assert.Equal(t, expectedErr, err)
 
 	mockWrapper.AssertExpectations(t)
+}
+
+// TestGetCallerIdentityInfo_RetryAfterFailure verifies a failed GetCallerIdentity
+// call is not cached: the next call retries and, on success, caches the result.
+func TestGetCallerIdentityInfo_RetryAfterFailure(t *testing.T) {
+	callCount := 0
+	expectedErr := errors.New("throttled")
+
+	w := &AwsServiceWrapper{
+		defaultTimeout: time.Second,
+		getCallerIdentityFn: func(ctx context.Context) (*sts.GetCallerIdentityOutput, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, expectedErr
+			}
+			return &sts.GetCallerIdentityOutput{
+				Account: aws.String("111111111111"),
+				Arn:     aws.String("arn:aws:sts::111111111111:assumed-role/aow/lambda"),
+			}, nil
+		},
+	}
+
+	account, isRoleSession, err := w.GetCallerIdentityInfo()
+	assert.Error(t, err)
+	assert.Equal(t, expectedErr, err)
+	assert.Empty(t, account)
+	assert.False(t, isRoleSession)
+
+	account, isRoleSession, err = w.GetCallerIdentityInfo()
+	assert.NoError(t, err)
+	assert.Equal(t, "111111111111", account)
+	assert.True(t, isRoleSession)
+	assert.Equal(t, 2, callCount)
+
+	// Subsequent calls use the cache, not the injected fetch function.
+	account, isRoleSession, err = w.GetCallerIdentityInfo()
+	assert.NoError(t, err)
+	assert.Equal(t, "111111111111", account)
+	assert.True(t, isRoleSession)
+	assert.Equal(t, 2, callCount)
+}
+
+// TestGetCallerIdentityInfo_ArnDetection verifies role-session vs. IAM-user ARNs.
+func TestGetCallerIdentityInfo_ArnDetection(t *testing.T) {
+	tests := []struct {
+		name            string
+		arn             string
+		wantRoleSession bool
+	}{
+		{
+			name:            "assumed role session",
+			arn:             "arn:aws:sts::111111111111:assumed-role/aow/lambda",
+			wantRoleSession: true,
+		},
+		{
+			name:            "iam user",
+			arn:             "arn:aws:iam::111111111111:user/bogdan",
+			wantRoleSession: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &AwsServiceWrapper{
+				defaultTimeout: time.Second,
+				getCallerIdentityFn: func(ctx context.Context) (*sts.GetCallerIdentityOutput, error) {
+					return &sts.GetCallerIdentityOutput{
+						Account: aws.String("111111111111"),
+						Arn:     aws.String(tt.arn),
+					}, nil
+				},
+			}
+
+			account, isRoleSession, err := w.GetCallerIdentityInfo()
+			assert.NoError(t, err)
+			assert.Equal(t, "111111111111", account)
+			assert.Equal(t, tt.wantRoleSession, isRoleSession)
+		})
+	}
 }
 
 // TestServiceWrapperImplementation tests the real implementation of AwsServiceWrapper

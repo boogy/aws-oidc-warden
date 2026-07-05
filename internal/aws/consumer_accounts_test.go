@@ -61,13 +61,22 @@ func TestIsTargetAccountAllowed_EmptyListFailsOpen(t *testing.T) {
 	assert.True(t, ok, "empty allowed_accounts must fail open (any account allowed)")
 }
 
-func TestIsTargetAccountAllowed_CrossAccountDisabled(t *testing.T) {
+// TestIsTargetAccountAllowedDisabled locks in the new fail-closed semantics:
+// with cross-account transport disabled, only the hub account is allowed
+// (there is no spoke path to reach any other account).
+func TestIsTargetAccountAllowedDisabled(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount").Return("111111111111", nil)
 	c := NewAwsConsumer(&gtvcfg.Config{}) // CrossAccount nil
 	c.AWS = m
-	ok, err := c.IsTargetAccountAllowed("arn:aws:iam::222222222222:role/app")
+
+	ok, err := c.IsTargetAccountAllowed("arn:aws:iam::111111111111:role/app")
 	require.NoError(t, err)
-	assert.True(t, ok) // no spoke transport; nothing to gate
+	assert.True(t, ok, "hub account must be allowed even when cross-account is disabled")
+
+	ok, err = c.IsTargetAccountAllowed("arn:aws:iam::222222222222:role/app")
+	require.NoError(t, err)
+	assert.False(t, ok, "member account must be disallowed when cross-account is disabled")
 }
 
 func TestIsTargetAccountAllowed_BadARN(t *testing.T) {

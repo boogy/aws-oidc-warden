@@ -186,17 +186,23 @@ type TagAuth struct {
 	multiIssuer bool `mapstructure:"-" json:"-"`
 }
 
-// CrossAccount configures the hub-and-spoke transport for assuming roles in
-// other AWS accounts: every cross-account AssumeRole (and cross-account IAM
-// tag read for tag-auth) is brokered through a convention-named spoke role in
-// the target account. Independent of tag_auth — explicit role_mappings can
-// target member-account ARNs with tag-auth disabled. The account ID is parsed
-// from the requested role ARN.
+// CrossAccount is a policy gate for member-account role assumption: Enabled
+// false (the default, or this struct nil) hard-blocks every cross-account
+// operation — both AssumeRole and, for tag_auth, the IAM tag read — failing
+// closed rather than falling back to any other behavior. Role assumption is
+// always direct: one hop, hub account to target account, using the warden's
+// own credentials. SpokeRoleName/ExternalID/SpokeSessionDuration configure a
+// separate hop — a convention-named role assumed only so tag_auth can read a
+// target role's IAM tags cross-account (iam:GetRole); the spoke is never used
+// to assume the target role itself, and ExternalID is never sent on that
+// assume. Independent of tag_auth — explicit role_mappings can target
+// member-account ARNs with tag_auth disabled. The account ID is parsed from
+// the requested role ARN.
 type CrossAccount struct {
 	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
 	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
 	ExternalID           string        `mapstructure:"external_id"            json:"external_id,omitempty"`            // optional hub->spoke external ID
-	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m
+	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m, capped at 1h (chained-session limit)
 
 	// AllowedAccounts restricts which member accounts the warden will assume into.
 	// Empty/undefined = any account. The hub account is always allowed.

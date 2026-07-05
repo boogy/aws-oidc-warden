@@ -130,6 +130,15 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 	if dur < 900 {
 		dur = 900
 	}
+	// The hub->spoke assume is role chaining whenever the warden's own creds
+	// are a role session (always on Lambda), and STS fails chained sessions
+	// over 1h rather than clamping. Spoke sessions are short-lived tag-read
+	// plumbing, so cap unconditionally instead of branching on credential type.
+	if dur > 3600 {
+		slog.Warn("spoke_session_duration exceeds the 1h role-chaining cap; clamping",
+			"requestedSeconds", dur)
+		dur = 3600
+	}
 	input := &sts.AssumeRoleInput{
 		RoleArn:         &spokeArn,
 		RoleSessionName: &sessionName,
@@ -220,33 +229,41 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		}
 	}
 
-	// Route cross-account targets through the spoke role; same-account and
-	// cross-account-disabled paths use the default hub identity (creds == nil).
-	var creds aws.CredentialsProvider
-	if account, _, perr := ParseRoleARN(roleArn); perr == nil {
-		var cerr error
-		if creds, cerr = a.spokeCredsFor(account); cerr != nil {
-			return nil, fmt.Errorf("resolve credentials for %s: %w", roleArn, cerr)
+	// AssumeRole always goes direct hub -> target (1 hop) with hub creds; the
+	// spoke role is only used for cross-account GetRoleTags reads. Fail closed
+	// on an unparseable ARN or on cross-account transport being disabled.
+	account, _, err := ParseRoleARN(roleArn)
+	if err != nil {
+		return nil, err
+	}
+
+	hub, isRoleSession, err := a.AWS.GetCallerIdentityInfo()
+	if err != nil {
+		return nil, fmt.Errorf("resolve caller identity: %w", err)
+	}
+
+	if account != hub {
+		cfg := a.cfg()
+		if cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
+			return nil, fmt.Errorf("cross-account is disabled (cross_account.enabled=false); refusing to assume role in account %s", account)
+		}
+		if !a.accountAllowed(account, hub) {
+			return nil, fmt.Errorf("target account %s is not in cross_account.allowed_accounts", account)
 		}
 	}
 
-	// Cross-account assume is role chaining; AWS caps chained sessions at 1h.
-	if creds != nil && durationSeconds > 3600 {
-		slog.Warn("cross-account role chaining caps the session at 1h; clamping duration",
+	// AWS role chaining caps chained sessions at 1h and STS fails (does not
+	// clamp) DurationSeconds > 3600. Chaining is a property of the source
+	// creds (the warden's own identity is a role session), not the target
+	// account, so this applies regardless of whether account == hub.
+	if isRoleSession && durationSeconds > 3600 {
+		slog.Warn("source credentials are a role session; role chaining caps sessions at 1h; clamping duration",
 			"requestedDuration", durationSeconds)
 		durationSeconds = 3600
 		assumeRoleInput.DurationSeconds = &durationSeconds
 	}
 
-	var (
-		result *sts.AssumeRoleOutput
-		err    error
-	)
-	if creds == nil {
-		result, err = a.AWS.AssumeRole(&assumeRoleInput)
-	} else {
-		result, err = a.AWS.AssumeRoleAs(&assumeRoleInput, creds)
-	}
+	result, err := a.AWS.AssumeRole(&assumeRoleInput)
 	if err != nil {
 		return nil, fmt.Errorf("unable to perform sts.AssumeRole: %w", err)
 	}
@@ -360,19 +377,21 @@ func (a *AwsConsumer) accountAllowed(account, hub string) bool {
 }
 
 // IsTargetAccountAllowed checks the requested role ARN's account against the
-// cross_account.allowed_accounts list. Returns true when cross-account
-// transport is disabled (no spoke path exists) or the account is permitted.
+// cross_account.allowed_accounts list. When cross-account transport is
+// disabled, only the hub account is allowed (there is no spoke path to reach
+// any other account); otherwise the account must be the hub or in the
+// allow-list (empty allow-list permits any account).
 func (a *AwsConsumer) IsTargetAccountAllowed(roleArn string) (bool, error) {
 	account, _, err := ParseRoleARN(roleArn)
 	if err != nil {
 		return false, err
 	}
-	if cfg := a.cfg(); cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
-		return true, nil
-	}
 	hub, err := a.AWS.GetCallerAccount()
 	if err != nil {
 		return false, fmt.Errorf("resolve hub account: %w", err)
+	}
+	if cfg := a.cfg(); cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
+		return account == hub, nil
 	}
 	return a.accountAllowed(account, hub), nil
 }
@@ -442,6 +461,15 @@ func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 	creds, err := a.spokeCredsFor(account)
 	if err != nil {
 		return nil, err
+	}
+	if creds == nil {
+		hub, herr := a.AWS.GetCallerAccount()
+		if herr != nil {
+			return nil, herr
+		}
+		if account != hub {
+			return nil, fmt.Errorf("cross-account is disabled; refusing to read role tags in account %s (would read a same-named hub role)", account)
+		}
 	}
 
 	input := &iam.GetRoleInput{RoleName: aws.String(roleName)}

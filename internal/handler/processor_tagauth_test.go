@@ -195,3 +195,68 @@ func TestProcessRequest_AccountCheckError(t *testing.T) {
 	assert.True(t, errors.Is(err, handler.ErrAssumeRoleFailed))
 	assert.False(t, errors.Is(err, handler.ErrAccountNotAllowed))
 }
+
+// TestProcessRequest_AccountNotAllowed_CrossAccountNil locks in that the account
+// guardrail runs even when cross-account transport is not configured at all:
+// IsTargetAccountAllowed itself encodes disabled-means-hub-only, so a false
+// result must still deny before role tags are read or AssumeRole is attempted.
+func TestProcessRequest_AccountNotAllowed_CrossAccountNil(t *testing.T) {
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:    testIssuer,
+			Provider:  "github",
+			Audiences: []string{"sts.amazonaws.com"},
+		}},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 0},
+		TagAuth:         &config.TagAuth{Enabled: true, TagPrefix: "aow/"},
+		// CrossAccount intentionally left nil.
+	}
+	require.NoError(t, cfg.Validate())
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
+		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+	}
+	// allowAccount defaults to false → target account is denied even though tags would match.
+	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, handler.ErrAccountNotAllowed))
+	assert.Empty(t, fc.assumed, "AssumeRole must not be called when the account guard denies")
+}
+
+// TestProcessRequest_AccountCheckError_CrossAccountNil mirrors
+// TestProcessRequest_AccountCheckError but with cross-account unconfigured,
+// confirming the infra-error mapping to ErrAssumeRoleFailed also applies
+// unconditionally.
+func TestProcessRequest_AccountCheckError_CrossAccountNil(t *testing.T) {
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:    testIssuer,
+			Provider:  "github",
+			Audiences: []string{"sts.amazonaws.com"},
+		}},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 0},
+		TagAuth:         &config.TagAuth{Enabled: true, TagPrefix: "aow/"},
+	}
+	require.NoError(t, cfg.Validate())
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
+		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+	}
+	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccountErr: errors.New("infra fail")}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::999999999999:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, handler.ErrAssumeRoleFailed))
+	assert.False(t, errors.Is(err, handler.ErrAccountNotAllowed))
+	assert.Empty(t, fc.assumed)
+}
