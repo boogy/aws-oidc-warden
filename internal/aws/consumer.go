@@ -400,7 +400,7 @@ func (a *AwsConsumer) ReadS3Configuration() error {
 	}
 
 	// Overlay using the documented snake_case schema (same as the YAML config)
-	// and re-validate so repo_role_mappings regex patterns get compiled.
+	// and re-validate so role_mappings regex patterns get compiled.
 	if err := a.Config.MergeBytes(data, gtvcfg.FormatFromPath(a.Config.S3ConfigPath)); err != nil {
 		return fmt.Errorf("unable to decode configuration from S3: %w", err)
 	}

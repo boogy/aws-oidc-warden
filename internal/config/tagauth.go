@@ -73,7 +73,7 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, v
 	}
 
 	// Remaining single-claim dimensions (AND). These mirror the
-	// repo_role_mappings constraints, but match exactly (AWS tag charset has no
+	// role_mappings conditions, but match exactly (AWS tag charset has no
 	// regex); a space-separated tag value means OR.
 	dims := []struct{ suffix, claimKey string }{
 		{"ref", "ref"},                   // exact full ref, e.g. refs/heads/main

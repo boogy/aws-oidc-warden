@@ -61,7 +61,7 @@ type auditRecord struct {
 	Audience []string `json:"audience,omitempty"`
 
 	// MatchedVia records which authorization path allowed the request:
-	// "explicit" (repo_role_mappings/role_groups) or "tag-auth" (IAM role tag
+	// "explicit" (role_mappings/role_groups) or "tag-auth" (IAM role tag
 	// fallback). Allow decisions only.
 	MatchedVia    string `json:"matchedVia,omitempty"`
 	RequestedRole string `json:"requestedRole,omitempty"`

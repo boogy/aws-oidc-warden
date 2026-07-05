@@ -182,7 +182,7 @@ Three modes controlled by `jwt_validation.mode`:
 
 **API Gateway mode** requires an `aws_apigatewayv2_authorizer` JWT resource pointing at `https://token.actions.githubusercontent.com`. Restrict Lambda invocations to the API Gateway execution role via Lambda resource-based policies.
 
-**ALB mode** verifies the ALB-signed ES256 JWT but does not re-verify the original OIDC signature. Set `alb_expected_signer` to the ALB ARN to prevent cross-ALB token injection.
+**ALB mode** verifies the ALB-signed ES256 JWT but does not re-verify the original OIDC signature. `alb_expected_signer` (the trusted ALB's ARN) is **required** in this mode — config validation fails without it — to prevent cross-ALB token injection.
 
 **Hot-reload note:** The extractor implementation is fixed at Lambda cold start. Changing `jwt_validation.mode` requires a redeployment.
 
@@ -194,7 +194,7 @@ The handler layer provides a unified interface across different deployment optio
 
 ```go
 type RequestProcessor interface {
-    ProcessRequest(ctx context.Context, requestData *RequestData, requestID string, log *slog.Logger) (*types.Credentials, error)
+    ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error)
 }
 ```
 
@@ -254,6 +254,8 @@ type AwsConsumerInterface interface {
     AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
     GetS3Object(bucket, key string) (io.ReadCloser, error)
     GetRole(role string) (*iam.GetRoleOutput, error)
+    GetRoleTags(roleARN string) (map[string]string, error)
+    IsTargetAccountAllowed(roleArn string) (bool, error)
 }
 ```
 
@@ -290,12 +292,15 @@ The caching system provides multiple storage backends for JWKS data:
 
 ```go
 type Cache interface {
-    Get(key string) ([]byte, error)
-    Set(key string, value []byte, ttl time.Duration) error
-    Delete(key string) error
-    Clear() error
+    Get(key string) (*types.JWKS, bool)
+    Set(key string, value *types.JWKS, ttl time.Duration)
 }
 ```
+
+`NewCache(cfg)` selects **one** backend from `cache.type` (`memory`, `dynamodb`,
+or `s3`) — the backends are alternatives, not chained tiers. The DynamoDB and
+S3 backends each keep a small local in-memory layer in front of their remote
+store to cut per-request latency.
 
 #### Memory Cache
 
@@ -348,9 +353,9 @@ owner-bucketed authorization index is built (byte-identical to a linear scan).
 
 **Configuration Sources** (in order of precedence):
 
-1. Environment variables (with `AOW_` prefix)
-2. Configuration file (YAML/JSON/TOML)
-3. S3-stored configuration
+1. Environment variables (with `AOW_` prefix) — re-applied after every remote merge
+2. S3-stored configuration (overlaid on the local config when `s3_config_bucket`/`s3_config_path` are set)
+3. Configuration file (YAML/JSON/TOML)
 4. Default values
 
 **Provider (hot-reload):**
@@ -446,27 +451,26 @@ type Condition struct {
 
 ### 3. Caching Strategy
 
+One backend is selected at startup by `cache.type`; the remote backends keep a
+small local in-memory layer in front of their store:
+
 ```mermaid
 flowchart LR
-    A[Token Validation] --> B{Check Memory Cache}
-    B -->|Hit| C[Return Cached JWKS]
-    B -->|Miss| D{Check DynamoDB Cache}
-    D -->|Hit| E[Update Memory Cache]
-    E --> F[Return Cached JWKS]
-    D -->|Miss| G{Check S3 Cache}
-    G -->|Hit| H[Update Memory & DynamoDB]
-    H --> I[Return Cached JWKS]
-    G -->|Miss| J[Fetch from OIDC Provider]
-    J --> K[Update All Cache Layers]
-    K --> L[Return Fresh JWKS]
+    A[Token Validation] --> B{Backend selected by cache.type}
+    B -->|memory| C[LRU in-memory cache]
+    B -->|dynamodb| D[Local memo layer → DynamoDB table]
+    B -->|s3| E[Local memo layer → S3 objects]
+    C & D & E -->|hit| F[Return cached JWKS]
+    C & D & E -->|miss| G[SSRF-hardened fetch from issuer]
+    G --> H[Store with cache.ttl → return]
 ```
 
 **Cache TTL Strategy:**
 
-- **Memory Cache**: Short TTL (minutes to hours) for hot data
-- **DynamoDB Cache**: Medium TTL (hours) for persistence
-- **S3 Cache**: Long TTL (days) for cold data
-- **Automatic Invalidation**: Based on JWT "iat" (issued at) claims
+- One `cache.ttl` applies to the selected backend (default `1h`).
+- Entries expire by TTL (DynamoDB native TTL; S3 metadata + optional `s3_cleanup`).
+- A signing-key rotation is recovered by a forced, rate-limited JWKS refetch on
+  `kid` miss (`jwks_refetch_cooldown`) — there is no claim-based invalidation.
 
 ## Security Architecture
 
@@ -518,10 +522,12 @@ flowchart TD
 
 **Session Security:**
 
-- Session duration limits (default: 1 hour, max: 12 hours)
+- Session duration limits (default: 1 hour, max: 12 hours; role-chained
+  cross-account sessions clamped to 1 hour)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
-- Automatic credential rotation
+- Credentials are short-lived and expire on their own — no long-lived secrets
+  are ever issued or stored
 
 ### 4. Tag-Based Authorization & Cross-Account
 
@@ -533,8 +539,8 @@ Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a
 2. For each requested role ARN the account ID is parsed from the ARN.
 3. If the target is a different account, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account.
 4. Using spoke credentials, `GetRoleTags` calls `iam:GetRole` on the target role to read its IAM tags.
-5. `TagAuth.Authorize` evaluates the tags: the role must carry at least an `aow/repo` or `aow/repo-owner` tag that matches the OIDC claims; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
-6. If authorized, `AssumeRole` is called (via spoke credentials for cross-account). When `TransitiveSessionTags` is true, `repo`/`ref`/`actor` session tags are marked transitive so they propagate immutably through subsequent role chaining. Cross-account sessions are clamped to 1 hour.
+5. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
+6. If authorized, `AssumeRole` is called (via spoke credentials for cross-account). When `TransitiveSessionTags` is true, every attached session tag (the issuer's `session_tags` spec) is marked transitive so it propagates immutably through subsequent role chaining. Cross-account sessions are clamped to 1 hour.
 
 **Account Allow-List (`IsTargetAccountAllowed`):**
 Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `tag_auth.allowed_accounts`. The hub account is always implicitly allowed. Empty list = any account is allowed (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
@@ -581,19 +587,15 @@ OIDC tokens.
 
 ### 1. Caching Performance
 
-**Cache Hit Rates:**
+JWKS documents change rarely (issuer key rotations), so with any backend and a
+sane `cache.ttl` nearly every request is served from cache; only cold starts
+and key rotations pay the upstream fetch. Relative cost per lookup:
 
-- Memory Cache: >95% for active repositories
-- DynamoDB Cache: >85% for warm data
-- S3 Cache: >70% for cold data
-- Overall System: >98% cache hit rate
-
-**Performance Metrics:**
-
-- Memory Cache Lookup: <1ms
-- DynamoDB Cache Lookup: <10ms
-- S3 Cache Lookup: <50ms
-- JWKS Fetch (cache miss): <200ms
+- Memory: in-process map access (fastest; lost on container recycle)
+- DynamoDB: one-digit-millisecond network hop, shared across containers
+- S3: tens of milliseconds, cheapest at rest for large/cold objects
+- Cache miss: one SSRF-hardened HTTPS fetch to the issuer (singleflight —
+  concurrent misses for one issuer collapse into a single upstream call)
 
 ### 2. Lambda Performance Optimizations
 

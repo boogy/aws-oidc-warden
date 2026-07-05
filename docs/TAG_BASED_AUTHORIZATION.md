@@ -1,10 +1,10 @@
 # Tag-Based Authorization & Cross-Account
 
-Tag-based authorization lets a repository assume an IAM role whose **tags**
-authorize the request, without listing the role in `repo_role_mappings`. It also
+Tag-based authorization lets a workload assume an IAM role whose **tags**
+authorize the request, without listing the role in `role_mappings`. It also
 enables serving roles from **other AWS accounts** through a per-account spoke
 role. The feature is opt-in (`tag_auth.enabled`, default `false`) and **additive**:
-explicit `repo_role_mappings` are evaluated first; tag-based authorization is a
+explicit `role_mappings` are evaluated first; tag-based authorization is a
 fallback used only when no explicit mapping authorizes the requested role.
 
 - [How it works](#how-it-works)
@@ -26,17 +26,19 @@ fallback used only when no explicit mapping authorizes the requested role.
 ![Authorization decision flow](images/tag-auth-decision.svg)
 
 1. The workflow requests a role ARN as usual.
-2. The warden validates the OIDC token and extracts the claims (`repository`,
-   `ref`, `actor`, …).
-3. **Explicit mappings first.** `repo_role_mappings` is evaluated. If a mapping
-   matches the repo, passes its constraints, and lists the requested role, the
-   role is authorized and tag-auth is **skipped entirely**. The mapping's
-   session policy (if any) is applied.
+2. The warden validates the OIDC token, derives the canonical **subject**
+   (GitHub: the `repository` claim), and extracts the verified raw claims
+   (`ref`, `actor`, …).
+3. **Explicit mappings first.** `role_mappings` is evaluated. If a mapping
+   matches the (issuer, subject), passes its conditions, and lists the
+   requested role, the role is authorized and tag-auth is **skipped entirely**.
+   The mapping's session policy (if any) is applied.
 4. **Tag-auth fallback.** Only if step 3 did _not_ authorize the role, and
    `tag_auth.enabled` is `true`, the warden reads the requested role's IAM tags
-   (`iam:GetRole`) and checks them against the claims (see
-   [Conditions](#conditions-multi-dimensional-matching)). If they pass, the role
-   is authorized. Tag-authorized assumptions use **no inline session policy**.
+   (`iam:GetRole`) and checks them against the verified issuer, subject, and
+   claims (see [Conditions](#conditions-multi-dimensional-matching)). If they
+   pass, the role is authorized. Tag-authorized assumptions use **no inline
+   session policy**.
 5. If neither path authorizes the role, the request is denied
    (`ErrRoleNotPermitted`).
 
@@ -50,13 +52,13 @@ this hop. See [Cross-account](#cross-account).
 
 ## Conditions (multi-dimensional matching)
 
-Yes — tag-auth supports conditions equivalent to `repo_role_mappings.constraints`.
-A role can require, for example, **`repo == acme/api` AND `ref == refs/heads/main`**
+Yes — tag-auth supports conditions equivalent to `role_mappings.conditions`.
+A role can require, for example, **`subject == acme/api` AND `ref == refs/heads/main`**
 by carrying both tags:
 
 ```
-aow/repo: "acme/api"
-aow/ref:  "refs/heads/main"
+aow/subject: "acme/api"
+aow/ref:     "refs/heads/main"
 ```
 
 The combining rules:
@@ -67,17 +69,25 @@ The combining rules:
   corresponding claim. Add more tags to narrow access.
 - **OR within a tag** — a tag value is a single value or a **space-separated
   list**; the claim must equal one of them.
-- **Identity gate** — the role must carry at least `aow/repo` **or**
-  `aow/repo-owner` and match it. A role with neither tag is never assumable via
-  tag-auth (prevents an untagged role from being broadly assumable).
-- **Exact matching** — unlike `repo_role_mappings` (which compile anchored
+- **Identity gate** — the role must carry at least one identity tag — the
+  canonical `aow/subject`, or the legacy `aow/repo` / `aow/repo-owner` aliases
+  (GitHub-shaped subjects, retained through the v2 migration window) — and
+  match it. A role with no identity tag is never assumable via tag-auth
+  (prevents an untagged role from being broadly assumable).
+- **Issuer gate (multi-issuer)** — once **more than one** issuer is configured,
+  a role must also carry a matching `aow/issuer` tag or tag-auth fails closed
+  for it: without the tag, tag-auth cannot tell which issuer's identity
+  namespace the role trusts, and one issuer's subject could collide with
+  another's. With a single issuer the tag is optional, but still checked if
+  present.
+- **Exact matching** — unlike `role_mappings` (which compile anchored
   regex), tag values are matched **exactly**. AWS tag values allow only letters,
   digits, spaces, and `_ . : / = + - @` — no regex metacharacters. Use a
   space-list for several specific values, or `aow/repo-owner` for a whole org.
 
-### Equivalence with `repo_role_mappings.constraints`
+### Equivalence with `role_mappings.conditions`
 
-| `constraints` field          | Tag (default prefix) | Matching difference                                                 |
+| `conditions` field           | Tag (default prefix) | Matching difference                                                 |
 | ---------------------------- | -------------------- | ------------------------------------------------------------------- |
 | `branch` (regex on `ref`)    | `aow/branch`         | exact; matches full `ref` **or** short branch name                  |
 | `ref` (regex)                | `aow/ref`            | exact full ref                                                      |
@@ -93,10 +103,12 @@ The combining rules:
 
 Tag keys use a configurable prefix (`tag_auth.tag_prefix`, default `aow/`).
 
-| Tag (default prefix) | Claim checked                    | Notes                                               |
-| -------------------- | -------------------------------- | --------------------------------------------------- |
-| `aow/repo`           | `repository` (e.g. `acme/api`)   | identity; exact or space-list                       |
-| `aow/repo-owner`     | `repository_owner` (e.g. `acme`) | identity; whole org; OR with `aow/repo`             |
+| Tag (default prefix) | Claim checked                       | Notes                                                              |
+| -------------------- | ----------------------------------- | ------------------------------------------------------------------ |
+| `aow/subject`        | canonical subject (any issuer)      | **canonical identity tag**; exact or space-list                    |
+| `aow/issuer`         | verified `iss`                      | **required with >1 configured issuer**; optional with a single one |
+| `aow/repo`           | `repository` (e.g. `acme/api`)      | legacy identity alias (GitHub); exact or space-list                |
+| `aow/repo-owner`     | `repository_owner` (e.g. `acme`)    | legacy identity alias; whole org; OR with `aow/repo`/`aow/subject` |
 | `aow/branch`         | `ref` **or** short branch name   | `main` or `refs/heads/main`                         |
 | `aow/ref`            | `ref`                            | exact full ref                                      |
 | `aow/ref-type`       | `ref_type` (`branch`/`tag`)      | exact or space-list                                 |
@@ -110,13 +122,14 @@ Tag keys use a configurable prefix (`tag_auth.tag_prefix`, default `aow/`).
 A role tagged:
 
 ```
-aow/repo:        "acme/api acme/web"
+aow/subject:     "acme/api acme/web"
 aow/ref:         "refs/heads/main"
 aow/event-name:  "push"
 ```
 
 is assumable by `acme/api` **or** `acme/web`, only on a `push` whose ref is
-exactly `refs/heads/main`.
+exactly `refs/heads/main`. (`aow/repo` works the same way as a legacy alias
+for GitHub-shaped subjects.)
 
 ### Short-form repo tags (`default_org`)
 
@@ -162,13 +175,13 @@ Rules:
 
 ## Precedence: mappings + tags together
 
-When `tag_auth.enabled` is `true` **and** `repo_role_mappings` is also configured,
+When `tag_auth.enabled` is `true` **and** `role_mappings` is also configured,
 both are consulted in this order for the requested role:
 
 ![Precedence: mapping first, then tag fallback](images/tag-auth-precedence.svg)
 
 ```
-explicitlyAllowed = mapping matches repo AND passes constraints AND lists the requested role
+explicitlyAllowed = mapping matches subject AND passes conditions AND lists the requested role
 allowed           = explicitlyAllowed
                     OR (tag_auth.enabled AND requested role's tags authorize the claims)
 deny if not allowed
@@ -176,15 +189,15 @@ deny if not allowed
 
 This is **allow-if-either**, with explicit mappings short-circuiting:
 
-| Explicit mapping result                                     | `tag_auth.enabled` | Role tags authorize? | Outcome              | Session policy   |
-| ----------------------------------------------------------- | ------------------ | -------------------- | -------------------- | ---------------- |
-| Authorizes the role                                         | (any)              | (not checked)        | **Allow**            | from the mapping |
-| No mapping for the repo                                     | `false`            | —                    | **Deny**             | —                |
-| No mapping for the repo                                     | `true`             | yes                  | **Allow**            | none             |
-| No mapping for the repo                                     | `true`             | no                   | **Deny**             | —                |
-| Mapping matches repo but role not listed / constraints fail | `false`            | —                    | **Deny**             | —                |
-| Mapping matches repo but role not listed / constraints fail | `true`             | yes                  | **Allow** (via tags) | none             |
-| Mapping matches repo but role not listed / constraints fail | `true`             | no                   | **Deny**             | —                |
+| Explicit mapping result                                       | `tag_auth.enabled` | Role tags authorize? | Outcome              | Session policy   |
+| ------------------------------------------------------------- | ------------------ | -------------------- | -------------------- | ---------------- |
+| Authorizes the role                                           | (any)              | (not checked)        | **Allow**            | from the mapping |
+| No mapping for the subject                                    | `false`            | —                    | **Deny**             | —                |
+| No mapping for the subject                                    | `true`             | yes                  | **Allow**            | none             |
+| No mapping for the subject                                    | `true`             | no                   | **Deny**             | —                |
+| Mapping matches subject but role not listed / conditions fail | `false`            | —                    | **Deny**             | —                |
+| Mapping matches subject but role not listed / conditions fail | `true`             | yes                  | **Allow** (via tags) | none             |
+| Mapping matches subject but role not listed / conditions fail | `true`             | no                   | **Deny**             | —                |
 
 Key consequences:
 
@@ -200,8 +213,12 @@ Key consequences:
 
 ## Corner cases
 
-- **No identity tag → deny.** A role with neither `aow/repo` nor
-  `aow/repo-owner` is never tag-authorized, even if other `aow/*` tags match.
+- **No identity tag → deny.** A role with none of `aow/subject`, `aow/repo`,
+  or `aow/repo-owner` is never tag-authorized, even if other `aow/*` tags
+  match.
+- **Multi-issuer without `aow/issuer` → deny.** Once a second issuer is
+  configured, a role with no `aow/issuer` tag is unreachable via tag-auth
+  (fails closed) — add the tag when you add the issuer.
 - **Tag read fails → deny (logged, not fatal).** If `iam:GetRole` errors (role
   missing, no permission, spoke assume failed), tag-auth treats the role as not
   authorized and logs a warning; the explicit-mapping result still stands.
@@ -230,10 +247,10 @@ Three behaviors are intentional but easy to misjudge. Review them before enablin
 tag-auth in production:
 
 1. **Tag-auth is an additive fallback, not a tightening.** Enabling it lets a
-   role's `aow/*` tags authorize claims **independently of** `repo_role_mappings`
-   constraints. A role you constrain via a mapping (e.g. `branch: main`) can still
+   role's `aow/*` tags authorize claims **independently of** `role_mappings`
+   conditions. A role you constrain via a mapping (e.g. `branch: main`) can still
    be assumed from any branch if its tags match and it carries no matching
-   `aow/branch` tag. **Do not rely on a mapping constraint alone to _deny_ a role
+   `aow/branch` tag. **Do not rely on a mapping condition alone to _deny_ a role
    that also publishes matching `aow/*` tags.** See
    [Precedence](#precedence-mappings--tags-together).
 
@@ -244,7 +261,7 @@ tag-auth in production:
    [Target account allow-list](#target-account-allow-list).
 
 3. **Tag-authorized roles receive no session policy.** Session policies come only
-   from `repo_role_mappings`; a role authorized via tags is scoped solely by its
+   from `role_mappings`; a role authorized via tags is scoped solely by its
    own IAM permissions. Keep tag-authorized roles least-privilege at the IAM level
    — there is no session-policy backstop.
 
@@ -254,28 +271,30 @@ tag-auth in production:
 
 Authorization tags decide **whether** a role may be assumed; **session tags**
 then travel with the issued credentials so downstream resources can restrict
-access by the calling repo/ref (ABAC). The warden attaches session tags from the
-OIDC claims on **every** `AssumeRole` — both the explicit-mapping path and the
-tag-auth path — via `sts:TagSession`.
+access by the calling subject/ref (ABAC). The warden attaches session tags on
+**every** `AssumeRole` — both the explicit-mapping path and the tag-auth path —
+via `sts:TagSession`. The tag set is **per-issuer and spec-driven**: each
+issuer's `session_tags` map (STS tag key ← raw claim name) decides what is
+attached (see [SESSION_TAGGING.md](SESSION_TAGGING.md)).
 
 ![Session tags enable ABAC downstream](images/tag-auth-abac.svg)
 
-Session tags applied (see [SESSION_TAGGING.md](SESSION_TAGGING.md) for the full
-reference):
+The standard GitHub `session_tags` spec produces:
 
-| Session tag  | Source claim                                  | Example           |
-| ------------ | --------------------------------------------- | ----------------- |
-| `repo`       | `repository` (bare repo name, owner stripped) | `api`             |
-| `repo-owner` | `repository_owner`                            | `acme`            |
-| `ref`        | `ref`                                         | `refs/heads/main` |
-| `ref-type`   | `ref_type`                                    | `branch`          |
-| `event-name` | `event_name`                                  | `push`            |
-| `actor`      | `actor`                                       | `deploy-bot`      |
+| Session tag  | Source claim                       | Example           |
+| ------------ | ---------------------------------- | ----------------- |
+| `repo`       | `repository` (full `owner/repo`)   | `acme/api`        |
+| `repo-owner` | `repository_owner`                 | `acme`            |
+| `ref`        | `ref`                              | `refs/heads/main` |
+| `ref-type`   | `ref_type`                         | `branch`          |
+| `event-name` | `event_name`                       | `push`            |
+| `actor`      | `actor`                            | `deploy-bot`      |
 
-> **Naming note:** the **session** tag `repo` is the _bare_ repo name (`api`),
-> while the **authorization** tag `aow/repo` matches the _full_ `owner/repo`
-> (`acme/api`). Write downstream ABAC conditions against the bare `repo` (and
-> `repo-owner`) session tags, not the `aow/*` authorization tags.
+> **v2 note:** the `repo` session tag carries the **full `owner/repo`** value
+> (the raw `repository` claim) — the same shape the `aow/repo` authorization
+> tag matches. v1 stripped the owner to a bare name; update any ABAC condition
+> still written against a bare repo name (see
+> [SESSION_TAGGING.md](SESSION_TAGGING.md)).
 
 Use these in downstream IAM policies, S3 bucket policies, KMS key policies, or
 SCPs via `aws:PrincipalTag/<key>`:
@@ -287,7 +306,7 @@ SCPs via `aws:PrincipalTag/<key>`:
   "Resource": "arn:aws:s3:::shared-artifacts/*",
   "Condition": {
     "StringEquals": {
-      "aws:PrincipalTag/repo": "api",
+      "aws:PrincipalTag/repo": "acme/api",
       "aws:PrincipalTag/repo-owner": "acme"
     }
   }
@@ -317,9 +336,9 @@ checks):
 ![Role chaining and transitive session tags](images/tag-auth-transitive.svg)
 
 When a workflow assumes a target role that **itself chains to further roles** (via
-`sts:AssumeRole` in the target's permissions), the warden can mark the
-`repo`/`ref`/`actor` session tags as **transitive**, making them immutable and
-propagated to every downstream assumption in the chain.
+`sts:AssumeRole` in the target's permissions), the warden can mark the attached
+session tags as **transitive**, making them immutable and propagated to every
+downstream assumption in the chain.
 
 Enable with `tag_auth.transitive_session_tags: true`.
 
@@ -327,7 +346,7 @@ Enable with `tag_auth.transitive_session_tags: true`.
 
 ```
 Warden (hub) → aow-spoke (cached, UNTAGGED)
-    → Target role (repo/ref/actor session tags set here, transitive=true)
+    → Target role (issuer's session tags set here, transitive=true)
         → Further role (tags propagate, immutable)
 ```
 
@@ -336,9 +355,11 @@ reused across repos. Attaching per-repo tags to the spoke would bleed one repo's
 identity into another repo's session. All per-repo tagging happens at the final
 `AssumeRole` into the target role.
 
-When `transitive_session_tags` is enabled, the warden passes
-`TransitiveTagKeys: [repo, ref, actor]` in the `AssumeRole` call to the target.
-These three keys are fixed (not configurable).
+When `transitive_session_tags` is enabled, the warden marks **every session tag
+it attaches** (the issuer's whole `session_tags` spec — e.g. `repo`, `ref`,
+`actor`, … for the standard GitHub spec) transitive via `TransitiveTagKeys` in
+the `AssumeRole` call to the target. The key set follows the issuer's
+configured `session_tags`; there is no separate transitive-key list.
 
 The **chained session duration is capped at 1 hour** regardless of the target
 role's configured maximum, because AWS limits role-chaining session durations to
@@ -355,9 +376,10 @@ role's configured maximum, because AWS limits role-chaining session durations to
 
 - The target role does **not** chain further — there is no benefit and transitive
   tags add rigidity.
-- The target role (or something downstream) legitimately re-tags `repo`/`ref`/`actor`
-  when assuming other roles. Transitive tags cannot be overridden; the downstream
-  `AssumeRole` call will fail with `AccessDenied`.
+- The target role (or something downstream) legitimately re-tags any of the
+  attached session-tag keys (`repo`, `ref`, `actor`, …) when assuming other
+  roles. Transitive tags cannot be overridden; the downstream `AssumeRole`
+  call will fail with `AccessDenied`.
 
 ### Example: shared target role with ABAC
 
@@ -513,7 +535,7 @@ tag_auth:
   spoke_role_name: "aow-spoke"
   external_id: "" # optional
   spoke_session_duration: "15m"
-  transitive_session_tags: false # set true to mark repo/ref/actor as immutable through role chaining
+  transitive_session_tags: false # set true to mark all attached session tags immutable through role chaining
   allowed_accounts: [] # restrict target accounts; hub always allowed; empty = any
 ```
 

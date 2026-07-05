@@ -241,16 +241,23 @@ The audience requested by `getIDToken(...)` must match the audience configured o
 
 #### Deploying to AWS Lambda
 
-Three deployment modes are available — API Gateway (recommended for production), Lambda URLs (simple setups), and ALB (high traffic). All share the same core logic; only the entry point differs.
+Four Lambda variants are available — API Gateway REST v1 (recommended for production, `self` mode), API Gateway HTTP v2 (`apigw` delegated mode), Lambda URLs (simple setups), and ALB (high traffic). All share the same core logic; only the entry point differs.
 
 **Quickstart with pre-built container images (recommended):**
 
 ```bash
-# API Gateway variant
+# API Gateway (REST v1) variant — self mode
 aws lambda create-function \
   --function-name aws-oidc-warden \
   --package-type Image \
   --code ImageUri=ghcr.io/boogy/aws-oidc-warden:latest \
+  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
+
+# API Gateway (HTTP v2) variant — apigw mode (JWT Authorizer)
+aws lambda create-function \
+  --function-name aws-oidc-warden-apigwv2 \
+  --package-type Image \
+  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:apigatewayv2-latest \
   --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
 
 # ALB variant

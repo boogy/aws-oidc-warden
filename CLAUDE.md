@@ -25,7 +25,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 ## Other folders (no CLAUDE.md of their own)
 
-- `cmd/` — entry points, one per deployment: `apigateway/`, `alb/`, `lambdaurl/`, `local/`. All share core logic via `internal/handler`.
+- `cmd/` — entry points, one per deployment: `apigateway/` (REST v1, self mode), `apigatewayv2/` (HTTP v2, apigw mode), `alb/`, `lambdaurl/`, `local/`. All share core logic via `internal/handler`.
 - `internal/types/` — shared structs: claims, JWKS, credentials, request/response types.
 - `internal/utils/` — helpers; token/credential redaction (`RedactToken`) used before logging.
 - `internal/s3logger/` — buffered S3 audit logging, flushed on `bootstrap.Cleanup()`.
@@ -34,7 +34,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 ## Commands
 
-- `make check` — fmt + lint + test. Run before every commit.
+- `make check` — fmt + lint + vuln + test. Run before every commit.
 - `make test` / `make test-coverage` — tests / HTML coverage.
 - `make run` — local server on :8080 with `example-config.yaml`.
 - `make build-lambda` — all Lambda variants (ARM64). Binary must be named `bootstrap`.
@@ -42,7 +42,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 ## Conventions
 
-- Go 1.25+. Follow effective-Go idioms; structured logging with `log/slog` (never `fmt.Print`).
+- Go 1.26+. Follow effective-Go idioms; structured logging with `log/slog` (never `fmt.Print`).
 - Handle every error explicitly; defer-close all readers/connections.
 - Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
 - Sentinel errors in `internal/handler/types.go`, mapped to HTTP status in the frontend adapters.

@@ -10,6 +10,8 @@ type AwsConsumerInterface interface {
     AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *types.Claims, sessionTags map[string]string) (*types.Credentials, error)
     GetS3Object(bucket, key string) (io.ReadCloser, error)
     GetRole(role string) (*iam.GetRoleOutput, error)
+    GetRoleTags(roleARN string) (map[string]string, error)
+    IsTargetAccountAllowed(roleArn string) (bool, error)
 }
 ```
 

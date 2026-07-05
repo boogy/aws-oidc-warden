@@ -168,7 +168,7 @@ type Cache struct {
 
 // TagAuth enables tag-based role authorization: a role may be assumed when its
 // IAM tags authorize the request's OIDC claims, without an explicit
-// repo_role_mappings entry. Also enables cross-account role assumption via a
+// role_mappings entry. Also enables cross-account role assumption via a
 // per-account spoke role (account ID is parsed from the requested role ARN).
 type TagAuth struct {
 	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
@@ -178,8 +178,9 @@ type TagAuth struct {
 	DefaultOrg           string        `mapstructure:"default_org"            json:"default_org,omitempty"`            // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
 	SpokeSessionDuration time.Duration `mapstructure:"spoke_session_duration" json:"spoke_session_duration,omitempty"` // hub->spoke session length, default 15m
 
-	// TransitiveSessionTags, when true, marks the repo/ref/actor session tags
-	// transitive so they propagate immutably through role chaining. Default off.
+	// TransitiveSessionTags, when true, marks every session tag attached to the
+	// AssumeRole call transitive (see aws.selectTransitiveKeys) so they
+	// propagate immutably through role chaining. Default off.
 	TransitiveSessionTags bool `mapstructure:"transitive_session_tags" json:"transitive_session_tags,omitempty"`
 
 	// AllowedAccounts restricts which member accounts the warden will assume into.

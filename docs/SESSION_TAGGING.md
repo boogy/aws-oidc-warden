@@ -73,11 +73,11 @@ Session tags provide detailed information about the source of AWS API calls:
     "sessionContext": {
       "sessionIssuer": {
         "tags": {
-          "repo": "repo-name",
+          "repo": "my-org/repo-name",
           "actor": "username",
           "ref": "refs/heads/main",
           "event-name": "push",
-          "repo-owner": "owner",
+          "repo-owner": "my-org",
           "ref-type": "branch"
         }
       }
@@ -100,9 +100,9 @@ You can use session tags in IAM policies to restrict access based on GitHub cont
       "Resource": "arn:aws:s3:::my-bucket/*",
       "Condition": {
         "StringEquals": {
-          "aws:PrincipalTag/repo": "repo-name",
+          "aws:PrincipalTag/repo": "my-org/repo-name",
           "aws:PrincipalTag/ref": "refs/heads/main",
-          "aws:PrincipalTag/repo-owner": "owner",
+          "aws:PrincipalTag/repo-owner": "my-org",
           "aws:ResourceTag/owner": "${aws:PrincipalTag/repo}"
         }
       }
@@ -146,19 +146,30 @@ jobs:
 
     steps:
       - name: Get AWS credentials
-        run: |
-          # Request credentials from AWS OIDC Warden
-          RESPONSE=$(curl -X POST https://your-warden-endpoint.com/assume-role \
-            -H "Content-Type: application/json" \
-            -d '{
-              "token": "'${{ github.token }}'",
-              "role": "arn:aws:iam::123456789012:role/GitHubActionsRole"
-            }')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const core = require('@actions/core');
+            // Request an OIDC ID token with the audience configured on the issuer.
+            // (github.token is NOT an OIDC token and will not validate.)
+            const token = await core.getIDToken('sts.amazonaws.com');
 
-          # Extract credentials and set as environment variables
-          export AWS_ACCESS_KEY_ID=$(echo $RESPONSE | jq -r '.credentials.AccessKeyId')
-          export AWS_SECRET_ACCESS_KEY=$(echo $RESPONSE | jq -r '.credentials.SecretAccessKey')
-          export AWS_SESSION_TOKEN=$(echo $RESPONSE | jq -r '.credentials.SessionToken')
+            const response = await fetch('https://your-warden-endpoint.com/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                token: token,
+                role: 'arn:aws:iam::123456789012:role/GitHubActionsRole'
+              })
+            });
+
+            const { data } = await response.json();
+            core.setSecret(data.AccessKeyId);
+            core.setSecret(data.SecretAccessKey);
+            core.setSecret(data.SessionToken);
+            core.exportVariable('AWS_ACCESS_KEY_ID', data.AccessKeyId);
+            core.exportVariable('AWS_SECRET_ACCESS_KEY', data.SecretAccessKey);
+            core.exportVariable('AWS_SESSION_TOKEN', data.SessionToken);
 
       - name: Deploy application
         run: |
@@ -186,11 +197,11 @@ When the above workflow runs, CloudTrail will show detailed session information:
         "accountId": "123456789012",
         "userName": "GitHubActionsRole",
         "tags": {
-          "repo": "repo-name",
+          "repo": "my-org/repo-name",
           "actor": "username",
           "ref": "refs/heads/main",
           "event-name": "push",
-          "repo-owner": "owner",
+          "repo-owner": "my-org",
           "ref-type": "branch"
         }
       },
@@ -224,7 +235,7 @@ Alert when an unexpected repository tries to access your AWS resources:
 ```sql
 SELECT *
 FROM cloudtrail_logs
-WHERE userIdentity.sessionContext.sessionIssuer.tags.repo NOT IN ('repo1', 'repo2')
+WHERE userIdentity.sessionContext.sessionIssuer.tags.repo NOT IN ('my-org/repo1', 'my-org/repo2')
   AND userIdentity.sessionContext.sessionIssuer.tags."repo-owner" NOT IN ('trusted-org1', 'trusted-org2')
   AND eventSource = 'iam.amazonaws.com'
   AND eventName = 'AssumeRole'

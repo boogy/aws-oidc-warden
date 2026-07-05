@@ -78,6 +78,27 @@ role_mappings:
    and audit.
 6. Add `role_mappings` (or a `role_group`) bound to the new `issuer`.
 
+## Delegated modes are single-issuer only
+
+`jwt_validation.mode: apigw` / `alb` trust an upstream (API Gateway JWT
+Authorizer, ALB OIDC) that verified the token against a **single** issuer — the
+upstream cannot tell this service *which* issuer it checked. Both modes
+therefore require **exactly one** entry in `issuers[]`; `NewBootstrap()` fails
+at cold start otherwise (`jwt_validation.mode %q supports exactly one
+configured issuer, got %d`). Multi-issuer configs are `self`-mode only.
+
+## Tag-based authorization across issuers
+
+With tag-based authorization ([TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md))
+the canonical identity tag is `aow/subject`, matched against any issuer's
+canonical subject (`aow/repo`/`aow/repo-owner` remain accepted as legacy
+GitHub-shaped aliases). Once **more than one** issuer is configured, a role
+must also carry a matching `aow/issuer` tag or tag-auth fails closed for it —
+otherwise a role scoped to one issuer's subjects would be reachable by another
+issuer's identically-shaped subject (e.g. a GitHub `owner/repo` colliding with
+a GitLab `group/project`). Add `aow/issuer` to tag-authorized roles **before**
+adding a second issuer.
+
 ## Security notes
 
 - The unverified `iss` is used only for routing; every identity/role decision
