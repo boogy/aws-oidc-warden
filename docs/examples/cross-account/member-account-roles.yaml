@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AWS OIDC Warden — member-account roles for cross-account (hub-and-spoke)
+  usage. Creates the aow-spoke broker role trusted by the hub warden execution
+  role, and one example target role assumable by workloads through the warden.
+  Deploy this once per member account — ideally via CloudFormation StackSets
+  from the org management/delegated-admin account, so every member account is
+  provisioned from one central place.
+
+Parameters:
+  HubAccountId:
+    Type: String
+    AllowedPattern: "^[0-9]{12}$"
+    Description: Account ID of the hub account running the warden.
+
+  HubExecutionRoleName:
+    Type: String
+    Default: aws-oidc-warden-execution-role
+    Description: Name of the warden Lambda execution role in the hub account.
+
+  ExternalId:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: >
+      Shared secret the warden presents when assuming the spoke role. Must
+      match cross_account.external_id in the warden config.
+
+  SpokeRoleName:
+    Type: String
+    Default: aow-spoke
+    Description: Must match cross_account.spoke_role_name in the warden config.
+
+  TargetRolePath:
+    Type: String
+    Default: /aow/
+    Description: >
+      IAM path for warden-assumable target roles. The spoke role's permissions
+      are scoped to this path, so only roles deliberately created under it are
+      reachable through the warden.
+
+Resources:
+  # --------------------------------------------------------------------------
+  # Spoke role: the only principal the hub ever assumes in this account. It can
+  # read tags on, and assume, ONLY roles under ${TargetRolePath}.
+  # --------------------------------------------------------------------------
+  SpokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref SpokeRoleName
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustHubWardenExecutionRole
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${HubAccountId}:role/${HubExecutionRoleName}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Policies:
+        - PolicyName: aow-spoke-broker
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadTargetRoleTags
+                Effect: Allow
+                Action: iam:GetRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role${TargetRolePath}*
+              - Sid: AssumeTargetRoles
+                Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                  - sts:TagSession
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role${TargetRolePath}*
+
+  # --------------------------------------------------------------------------
+  # Example target role: what a CI workload actually receives credentials for.
+  # Trusts ONLY the spoke role. The aow/* tags authorize it via tag-auth; if
+  # you authorize exclusively through role_mappings in the warden config,
+  # omit the Tags block entirely (an untagged role is never tag-authorized).
+  # Replace the permissions policy with what the workload really needs.
+  # --------------------------------------------------------------------------
+  ExampleTargetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: deploy-staging
+      Path: !Ref TargetRolePath
+      MaxSessionDuration: 3600 # cross-account chaining caps sessions at 1h anyway
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustSpokeRole
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt SpokeRole.Arn
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            # Defense-in-depth: even if the warden is misconfigured, this role
+            # only accepts sessions tagged for the acme org.
+            Condition:
+              StringEquals:
+                aws:RequestTag/repo-owner: acme
+      Tags:
+        - Key: aow/issuer
+          Value: https://token.actions.githubusercontent.com
+        - Key: aow/subject
+          Value: acme/api acme/web
+        - Key: aow/ref
+          Value: refs/heads/main
+      Policies:
+        - PolicyName: deploy-staging-permissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ExampleDeployPermissions
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: arn:aws:s3:::acme-staging-artifacts/*
+
+Outputs:
+  SpokeRoleArn:
+    Value: !GetAtt SpokeRole.Arn
+  ExampleTargetRoleArn:
+    Value: !GetAtt ExampleTargetRole.Arn
