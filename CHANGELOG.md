@@ -193,6 +193,14 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - `FindSessionPolicy` runs once per allow decision instead of twice.
 - CI: `build.yml` image-pull retry loop now fails loudly after the last attempt (previously the failure branch checked `attempt -eq 5` inside a 3-iteration loop and never fired).
 - CI: `apigatewayv2` container image is now vulnerability-scanned and listed in the release summary — it was built, signed, and attested but skipped by both.
+- **cache: DynamoDB/S3 writes are now synchronous** — persistent-tier writes (and expired-object deletes) ran in fire-and-forget goroutines that Lambda freezes on handler return, silently losing them; every new container then refetched JWKS from the IdP.
+- cache: unified the S3 item size limit to 512KB on both read and write — the write path previously accepted up to 1MB while the read path rejected anything over 512KB, so items between the two limits were stored but never readable.
+- cache: the memory backend now honors `cache.ttl` and `cache.max_local_size`; both were silently ignored (hardcoded 10m / 100 entries).
+- cache: `cache.s3_cleanup` is now functional — it gates deletion of expired objects discovered on read; previously the flag was parsed but never used (deletion was unconditional).
+- cache: local-tier race fixes — a `Get` racing a `Set` could resurrect a stale value or delete a freshly stored one; local tiers now do the full lookup-and-update under one lock.
+- cache: DynamoDB items with a missing or malformed `Expiration` attribute are treated as expired (fail closed) instead of never expiring.
+- cache: local tiers keep the item's real expiration when repopulated from DynamoDB/S3, instead of extending it by the default TTL.
+- cache: no spurious LRU eviction when overwriting an existing key at capacity.
 
 ### Changed
 
@@ -215,6 +223,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - `RequestProcessor` holds `ClaimsExtractorInterface` instead of `TokenValidatorInterface` directly.
 - `jwt_leeway` / `max_token_lifetime` / `max_token_age` / `max_token_bytes` are read live from the config provider on every `Validate()` call, so a hot-reloaded change takes effect without a Lambda restart; delegated `apigw`/`alb` extractors likewise resolve the issuer spec, time bounds, and `alb_expected_signer` live on each `Extract()`.
 - `normalizeClaims` populates the raw `sub` for every provider, so the audit record's `jwtSub` is present for generic (non-GitHub) issuers too.
+- cache internals: removed unused `RefreshClient`/`Cleanup`/`GetStats` methods; AWS clients sit behind `dynamoDBAPI`/`s3API` interfaces for testability; the package now has a test suite.
 
 ### Dependencies
 

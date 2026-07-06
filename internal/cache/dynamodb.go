@@ -15,6 +15,13 @@ import (
 	gTypes "github.com/boogy/aws-oidc-warden/internal/types"
 )
 
+// dynamoDBAPI is the subset of the DynamoDB client used by the cache,
+// extracted as an interface for testability
+type dynamoDBAPI interface {
+	GetItem(ctx context.Context, params *dynamodb.GetItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
+	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+}
+
 // cacheEntry represents an entry in the local memory cache
 type cacheEntry struct {
 	value      *gTypes.JWKS // Cached JWKS value
@@ -24,11 +31,10 @@ type cacheEntry struct {
 
 // dynamoDBCache implements the Cache interface using DynamoDB
 type dynamoDBCache struct {
-	client       *dynamodb.Client       // DynamoDB client
+	client       dynamoDBAPI            // DynamoDB client
 	tableName    string                 // DynamoDB table name
-	clientMu     sync.RWMutex           // Protects the client during refreshes
 	memCache     map[string]*cacheEntry // Local in-memory cache for frequently accessed items
-	memCacheMu   sync.RWMutex           // Protects the in-memory cache
+	memCacheMu   sync.Mutex             // Protects the in-memory cache
 	maxLocalSize int                    // Maximum number of items in local cache
 	defaultTTL   time.Duration          // Default TTL for cache items
 }
@@ -92,14 +98,8 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 		}
 	}
 
-	client := dynamodb.NewFromConfig(cfg)
-	if client == nil {
-		slog.Error("Failed to create DynamoDB client")
-		return nil, fmt.Errorf("failed to create DynamoDB client")
-	}
-
 	return &dynamoDBCache{
-		client:       client,
+		client:       dynamodb.NewFromConfig(cfg),
 		tableName:    tableName,
 		memCache:     make(map[string]*cacheEntry),
 		maxLocalSize: options.maxLocalSize,
@@ -116,10 +116,10 @@ func (c *dynamoDBCache) Get(key string) (*gTypes.JWKS, bool) {
 	}
 
 	// Not in local cache, try DynamoDB
-	jwks, found := c.getFromDynamoDB(key)
+	jwks, expiration, found := c.getFromDynamoDB(key)
 	if found {
-		// Store in local cache for faster future access
-		c.storeInLocalCache(key, jwks, time.Time{}) // Time will be extracted from DynamoDB entry
+		// Store in local cache with the item's real expiration
+		c.storeInLocalCache(key, jwks, expiration)
 		return jwks, true
 	}
 
@@ -128,38 +128,31 @@ func (c *dynamoDBCache) Get(key string) (*gTypes.JWKS, bool) {
 
 // getFromLocalCache checks the local memory cache
 func (c *dynamoDBCache) getFromLocalCache(key string) (*gTypes.JWKS, bool) {
-	c.memCacheMu.RLock()
-	entry, found := c.memCache[key]
-	c.memCacheMu.RUnlock()
+	c.memCacheMu.Lock()
+	defer c.memCacheMu.Unlock()
 
+	entry, found := c.memCache[key]
 	if !found {
 		return nil, false
 	}
 
 	// Check if the entry is expired
 	if time.Now().After(entry.expiration) {
-		c.memCacheMu.Lock()
 		delete(c.memCache, key)
-		c.memCacheMu.Unlock()
 		return nil, false
 	}
 
 	// Update last access time for LRU
-	c.memCacheMu.Lock()
 	entry.lastAccess = time.Now()
-	c.memCacheMu.Unlock()
 
 	return entry.value, true
 }
 
-// getFromDynamoDB retrieves an item from DynamoDB
-func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, bool) {
+// getFromDynamoDB retrieves an item from DynamoDB, returning the cached JWKS
+// and its expiration time
+func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, time.Time, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
 	defer cancel()
-
-	c.clientMu.RLock()
-	client := c.client
-	c.clientMu.RUnlock()
 
 	input := &dynamodb.GetItemInput{
 		TableName: aws.String(c.tableName),
@@ -168,30 +161,30 @@ func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, bool) {
 		},
 	}
 
-	result, err := client.GetItem(ctx, input)
+	result, err := c.client.GetItem(ctx, input)
 	if err != nil {
 		slog.Error("Failed to get item from DynamoDB",
 			"key", key,
 			"error", err.Error(),
 			"table", c.tableName)
-		return nil, false
+		return nil, time.Time{}, false
 	}
 
 	if result.Item == nil {
 		slog.Debug("Cache miss in DynamoDB", "key", key)
-		return nil, false
+		return nil, time.Time{}, false
 	}
 
 	valueAttr, ok := result.Item["Value"]
 	if !ok {
 		slog.Error("Invalid item format in DynamoDB - missing Value attribute", "key", key)
-		return nil, false
+		return nil, time.Time{}, false
 	}
 
 	valueStr, ok := valueAttr.(*types.AttributeValueMemberS)
 	if !ok {
 		slog.Error("Value is not a string in DynamoDB", "key", key)
-		return nil, false
+		return nil, time.Time{}, false
 	}
 
 	// Check size for security
@@ -200,18 +193,21 @@ func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, bool) {
 			"key", key,
 			"size", len(valueStr.Value),
 			"maxAllowed", Defaults.MaxItemSize)
-		return nil, false
+		return nil, time.Time{}, false
 	}
 
-	// Check expiration if it exists
-	if expirationAttr, ok := result.Item["Expiration"]; ok {
-		if expirationStr, ok := expirationAttr.(*types.AttributeValueMemberS); ok {
-			expiration, err := time.Parse(time.RFC3339, expirationStr.Value)
-			if err == nil && time.Now().After(expiration) {
-				slog.Debug("DynamoDB cache entry expired", "key", key)
-				return nil, false
-			}
-		}
+	// A missing or malformed Expiration attribute is treated as expired
+	// (fail closed) so such items cannot be served forever
+	expiration, err := parseExpiration(result.Item["Expiration"])
+	if err != nil {
+		slog.Warn("Invalid Expiration attribute in DynamoDB cache item, treating as expired",
+			"key", key,
+			"error", err.Error())
+		return nil, time.Time{}, false
+	}
+	if time.Now().After(expiration) {
+		slog.Debug("DynamoDB cache entry expired", "key", key)
+		return nil, time.Time{}, false
 	}
 
 	// Unmarshal JSON string back to JWKS struct
@@ -220,14 +216,28 @@ func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, bool) {
 		slog.Error("Failed to unmarshal JWKS from DynamoDB",
 			"key", key,
 			"error", err.Error())
-		return nil, false
+		return nil, time.Time{}, false
 	}
 
 	slog.Debug("DynamoDB cache hit", "key", key)
-	return &jwks, true
+	return &jwks, expiration, true
 }
 
-// Set stores an item in the DynamoDB cache with the given TTL
+// parseExpiration extracts the RFC3339 expiration from a DynamoDB attribute
+func parseExpiration(attr types.AttributeValue) (time.Time, error) {
+	if attr == nil {
+		return time.Time{}, fmt.Errorf("missing Expiration attribute")
+	}
+	expirationStr, ok := attr.(*types.AttributeValueMemberS)
+	if !ok {
+		return time.Time{}, fmt.Errorf("expiration attribute is not a string")
+	}
+	return time.Parse(time.RFC3339, expirationStr.Value)
+}
+
+// Set stores an item in the DynamoDB cache with the given TTL.
+// The DynamoDB write is synchronous: in Lambda the execution environment is
+// frozen when the handler returns, so a background write could be lost.
 func (c *dynamoDBCache) Set(key string, value *gTypes.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = c.defaultTTL
@@ -237,7 +247,7 @@ func (c *dynamoDBCache) Set(key string, value *gTypes.JWKS, ttl time.Duration) {
 	c.storeInLocalCache(key, value, time.Now().Add(ttl))
 
 	// Then store in DynamoDB for persistence
-	go c.storeInDynamoDB(key, value, ttl)
+	c.storeInDynamoDB(key, value, ttl)
 }
 
 // storeInLocalCache adds or updates an item in the local memory cache
@@ -250,8 +260,8 @@ func (c *dynamoDBCache) storeInLocalCache(key string, value *gTypes.JWKS, expira
 		expiration = time.Now().Add(c.defaultTTL)
 	}
 
-	// Check if we need to evict items
-	if len(c.memCache) >= c.maxLocalSize {
+	// Evict only when adding a new key at capacity; overwrites don't grow the map
+	if _, exists := c.memCache[key]; !exists && len(c.memCache) >= c.maxLocalSize {
 		c.evictLRU()
 	}
 
@@ -262,7 +272,8 @@ func (c *dynamoDBCache) storeInLocalCache(key string, value *gTypes.JWKS, expira
 	}
 }
 
-// evictLRU removes the least recently used item from the local memory cache
+// evictLRU removes the least recently used item from the local memory cache.
+// Caller must hold c.memCacheMu.
 func (c *dynamoDBCache) evictLRU() {
 	var oldestKey string
 	var oldestTime time.Time
@@ -307,10 +318,6 @@ func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time
 	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
 	defer cancel()
 
-	c.clientMu.RLock()
-	client := c.client
-	c.clientMu.RUnlock()
-
 	input := &dynamodb.PutItemInput{
 		TableName: aws.String(c.tableName),
 		Item: map[string]types.AttributeValue{
@@ -323,7 +330,7 @@ func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time
 		},
 	}
 
-	_, err = client.PutItem(ctx, input)
+	_, err = c.client.PutItem(ctx, input)
 	if err != nil {
 		slog.Error("Failed to set item in DynamoDB",
 			"key", key,
@@ -333,25 +340,4 @@ func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time
 	}
 
 	slog.Debug("Cached value in DynamoDB", "key", key, "ttl", ttl, "size", len(valueJSON))
-}
-
-// RefreshClient recreates the DynamoDB client - useful for Lambda environments
-// where clients might need refreshing for long-running instances
-func (c *dynamoDBCache) RefreshClient() error {
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRetryMaxAttempts(Defaults.MaxRetries),
-	)
-	if err != nil {
-		slog.Error("Failed to refresh AWS config for DynamoDB cache", "error", err.Error())
-		return fmt.Errorf("failed to refresh AWS config: %w", err)
-	}
-
-	newClient := dynamodb.NewFromConfig(cfg)
-
-	c.clientMu.Lock()
-	c.client = newClient
-	c.clientMu.Unlock()
-
-	slog.Info("Refreshed DynamoDB client for cache")
-	return nil
 }

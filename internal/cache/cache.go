@@ -22,7 +22,6 @@ type CacheDefaults struct {
 
 	// Cache-specific defaults
 	DynamoDBMaxItemSize int64
-	S3MaxObjectSize     int64
 }
 
 // Defaults provides the default configuration values for all cache implementations
@@ -31,9 +30,8 @@ var Defaults = CacheDefaults{
 	Timeout:             10 * time.Second, // Default timeout for cache operations
 	TTL:                 10 * time.Minute, // Default TTL for cache entries
 	MaxLocalSize:        100,              // Default max local size for in-memory caches
-	MaxItemSize:         512 * 1024,       // Maximum size of a cache item (512KB) for general cache items
-	DynamoDBMaxItemSize: 400 * 1024,       // Maximum item size for DynamoDB (400KB limit) (DynamoDB limit)
-	S3MaxObjectSize:     1024 * 1024,      // Maximum object size for S3 objects (1MB)
+	MaxItemSize:         512 * 1024,       // Maximum size of a cache item (512KB), enforced on both read and write paths
+	DynamoDBMaxItemSize: 400 * 1024,       // Maximum item size for DynamoDB writes (DynamoDB hard limit is 400KB)
 }
 
 // Cache interface defines the methods that all cache implementations must provide
@@ -71,7 +69,10 @@ func NewCache(cfg *config.Config) (Cache, error) {
 
 	switch cacheType {
 	case "memory":
-		return NewMemoryCache(), nil
+		return NewMemoryCache(
+			WithMemoryDefaultTTL(GetConfiguredTTL(cfg)),
+			WithMemoryMaxSize(GetConfiguredMaxLocalSize(cfg)),
+		), nil
 
 	case "dynamodb":
 		if cfg.Cache.DynamoDBTable == "" {
@@ -99,6 +100,7 @@ func NewCache(cfg *config.Config) (Cache, error) {
 			cfg.Cache.S3Prefix,
 			WithDefaultTTL(GetConfiguredTTL(cfg)),
 			WithMaxLocalSize(GetConfiguredMaxLocalSize(cfg)),
+			WithS3Cleanup(cfg.Cache.S3Cleanup),
 		)
 
 	default:
