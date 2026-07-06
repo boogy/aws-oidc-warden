@@ -91,17 +91,24 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USER }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
-      # Image tags come from .ko.yaml (per-build `tags:`), which templates
-      # {{.Git.Tag}} from the pushed `v*` tag. apigateway also carries the bare
-      # <tag>/latest as the default module. No --tags here.
+      # ko has no config-file tag scheme; tags must be passed via --tags on the
+      # CLI (a `tags:` key under .ko.yaml `builds[]` is not a real ko option
+      # and is silently ignored, which is why this used explicit --tags before
+      # #244's refactor). apigateway is the default module and also carries
+      # the bare <tag>/latest.
       - name: Build and push ${{ matrix.module }} to GHCR
         id: ghcr
         env:
           KO_DOCKER_REPO: ${{ env.GHCR_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
+          VERSION: ${{ github.ref_name }}
         run: |
           echo "Building and pushing ${{ matrix.module }} to GHCR..."
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
-          IMAGE=$(ko publish ./cmd/${{ matrix.module }}/ --bare)
+          TAGS="${{ matrix.module }}-$VERSION,${{ matrix.module }}-latest"
+          if [ "${{ matrix.module }}" = "apigateway" ]; then
+            TAGS="$TAGS,$VERSION,latest"
+          fi
+          IMAGE=$(ko publish ./cmd/${{ matrix.module }}/ --bare --tags="$TAGS")
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "digest=${IMAGE##*@}" >> "$GITHUB_OUTPUT"
         timeout-minutes: 15
@@ -110,10 +117,15 @@ jobs:
         id: dockerhub
         env:
           KO_DOCKER_REPO: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/${{ env.REPO_NAME }}
+          VERSION: ${{ github.ref_name }}
         run: |
           echo "Building and pushing ${{ matrix.module }} to Docker Hub..."
           echo "KO_DOCKER_REPO: $KO_DOCKER_REPO"
-          IMAGE=$(ko publish ./cmd/${{ matrix.module }}/ --bare)
+          TAGS="${{ matrix.module }}-$VERSION,${{ matrix.module }}-latest"
+          if [ "${{ matrix.module }}" = "apigateway" ]; then
+            TAGS="$TAGS,$VERSION,latest"
+          fi
+          IMAGE=$(ko publish ./cmd/${{ matrix.module }}/ --bare --tags="$TAGS")
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "digest=${IMAGE##*@}" >> "$GITHUB_OUTPUT"
         timeout-minutes: 15

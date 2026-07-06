@@ -162,8 +162,12 @@ ko-build: verify-ko
 .PHONY: ko-publish
 ko-publish: verify-ko
 	@echo "Publishing container images to $(KO_DOCKER_REPO)..."
-	@# Tags come from .ko.yaml (per-module <module>-<tag>/<module>-latest scheme).
-	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --bare
+	@# ko has no config-file tag scheme; --tags must be passed per module (a
+	@# bare multi-importpath publish would collide all modules onto one image).
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway --bare --tags=apigateway-$(VERSION),apigateway-latest,$(VERSION),latest
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigatewayv2 --bare --tags=apigatewayv2-$(VERSION),apigatewayv2-latest
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/alb --bare --tags=alb-$(VERSION),alb-latest
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/lambdaurl --bare --tags=lambdaurl-$(VERSION),lambdaurl-latest
 
 .PHONY: ko-publish-all
 ko-publish-all: ko-publish
