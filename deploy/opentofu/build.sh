@@ -3,8 +3,9 @@
 # with the 'bootstrap' entry marked executable (required by provided.al2023).
 #
 # Usage: ./build.sh [apigateway|apigatewayv2]
-#   apigateway   (default) — self/alb mode; payload format 1.0
+#   apigateway   (default) — self mode; payload format 1.0
 #   apigatewayv2            — apigw mode (delegated JWT); payload format 2.0
+# (alb mode needs the `alb` binary behind an ALB — not covered by this stack.)
 #
 # Run from anywhere; paths are resolved relative to this script.
 set -euo pipefail

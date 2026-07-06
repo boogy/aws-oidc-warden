@@ -18,11 +18,11 @@ graph TB
         VALIDATOR[Token Validator]
         CACHE[Cache Layer<br/>Memory / DynamoDB / S3]
         CONSUMER[AWS Consumer]
-        CONFIG[Configuration<br/>Repository Mappings & Constraints]
+        CONFIG[Configuration<br/>Issuers, Role Mappings & Conditions]
     end
 
     subgraph "External Services"
-        JWKS[GitHub JWKS<br/>/.well-known/jwks.json]
+        JWKS[Per-Issuer JWKS<br/>e.g. GitHub, GitLab, ...]
         AWS[AWS Services<br/>STS / IAM / S3]
     end
 
@@ -116,7 +116,7 @@ sequenceDiagram
     participant Processor as Request Processor
     participant Validator as Token Validator
     participant Cache as Cache Layer
-    participant JWKS as GitHub JWKS
+    participant JWKS as Issuer JWKS
     participant Consumer as AWS Consumer
     participant STS as AWS STS
 
@@ -124,39 +124,46 @@ sequenceDiagram
     Handler->>Processor: ProcessRequest()
 
     Processor->>Validator: Validate(token)
-    Validator->>Cache: Get JWKS
+    Validator->>Validator: Peek unverified iss (routing only)
+    Validator->>Validator: Registry lookup: spec = registry[iss]
+    Note over Validator: unknown issuer -> deny, no fetch
+    Validator->>Cache: Get JWKS for this issuer
 
     alt Cache Miss
-        Cache->>JWKS: Fetch JWKS
+        Cache->>JWKS: SSRF-hardened fetch (per issuer)
         JWKS-->>Cache: Return JWKS
         Cache-->>Validator: Return JWKS
     else Cache Hit
         Cache-->>Validator: Return cached JWKS
     end
 
-    Validator->>Validator: Verify JWT signature
-    Validator->>Validator: Validate claims
-    Validator-->>Processor: Return claims
+    Validator->>Validator: Verify signature (kid+alg+use pinned)
+    Validator->>Validator: Re-assert verified iss == spec
+    Validator->>Validator: Bounds (exp/iat/nbf, leeway, lifetime/age), audience, required_claims
+    Validator->>Validator: normalize -> canonical subject + raw claims
+    Validator-->>Processor: Return claims {issuer, subject, raw}
 
-    opt tag_auth.enabled
+    opt cross_account.enabled
         Processor->>Consumer: IsTargetAccountAllowed(role)
         Consumer-->>Processor: allowed / denied
     end
 
-    Processor->>Processor: MatchRolesToRepoWithConstraints()
+    Processor->>Processor: AuthorizeRoles(issuer, subject, claims) via owner-bucketed index
 
     opt tag_auth.enabled and explicit match failed
         Processor->>Consumer: GetRoleTags(role)
         Consumer-->>Processor: role IAM tags
-        Processor->>Processor: TagAuth.Authorize(tags, claims)
+        Processor->>Processor: TagAuth.Authorize(tags, claims, issuer, subject)
     end
 
+    Note over Processor: requested role must be in the matched mapping's roles
     Processor->>Processor: Resolve session policy (inline or S3)
-    Processor->>Consumer: AssumeRole()
+    Processor->>Consumer: AssumeRole(role, ..., session_tags spec)
 
-    Consumer->>STS: AssumeRole with session tags
+    Consumer->>STS: AssumeRole with per-issuer session tags
     STS-->>Consumer: Return credentials
     Consumer-->>Processor: Return credentials
+    Processor->>Processor: Audit record (allow) — durable before return if audit_required
     Processor-->>Handler: Return credentials
     Handler-->>Client: HTTP 200 + credentials
 ```
@@ -173,9 +180,27 @@ Three modes controlled by `jwt_validation.mode`:
 
 **Security invariant:** In delegated modes, if no upstream-injected claims arrive (direct Lambda invocation bypass), `Extract()` returns an error wrapping `ErrTokenValidationFailed` → HTTP 401.
 
+> **Trust boundary warning — `apigw` mode has no cryptographic backstop.**
+> In `apigw` mode the Lambda never sees or verifies the original OIDC token's
+> signature; it fully trusts `event.requestContext.authorizer.jwt.claims` as
+> handed to it. The invariant above only rejects an **empty** claims map — it
+> does **not** detect a direct invoke that supplies **forged, non-empty**
+> claims (an arbitrary `iss`/`aud`/`sub`/`exp`), which pass straight through
+> with no signature to check them against. **`lambda:InvokeFunction` on this
+> function is therefore equivalent to full identity impersonation in `apigw`
+> mode** — anyone who can invoke it directly can obtain AWS credentials for
+> any spoofed subject your `role_mappings`/`role_groups`/`tag_auth` would
+> authorize. `alb` mode does not share this gap: the Lambda itself verifies
+> the ALB's ES256 signature over `x-amzn-oidc-data`, so a forged direct
+> invoke fails that check. **Mitigation:** the function's resource-based
+> (invoke) policy must restrict `lambda:InvokeFunction` to the fronting API
+> Gateway's execution/service principal only — never a broader principal.
+> See [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode)
+> for the full write-up.
+
 **API Gateway mode** requires an `aws_apigatewayv2_authorizer` JWT resource pointing at `https://token.actions.githubusercontent.com`. Restrict Lambda invocations to the API Gateway execution role via Lambda resource-based policies.
 
-**ALB mode** verifies the ALB-signed ES256 JWT but does not re-verify the original OIDC signature. Set `alb_expected_signer` to the ALB ARN to prevent cross-ALB token injection.
+**ALB mode** verifies the ALB-signed ES256 JWT but does not re-verify the original OIDC signature. `alb_expected_signer` (the trusted ALB's ARN) is **required** in this mode — config validation fails without it — to prevent cross-ALB token injection.
 
 **Hot-reload note:** The extractor implementation is fixed at Lambda cold start. Changing `jwt_validation.mode` requires a redeployment.
 
@@ -187,7 +212,7 @@ The handler layer provides a unified interface across different deployment optio
 
 ```go
 type RequestProcessor interface {
-    ProcessRequest(ctx context.Context, requestData *RequestData, requestID string, log *slog.Logger) (*types.Credentials, error)
+    ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error)
 }
 ```
 
@@ -212,20 +237,22 @@ The validator component handles all OIDC token validation logic:
 
 ```go
 type TokenValidatorInterface interface {
-    Validate(string) (*types.GithubClaims, error)
-    ParseToken(tokenString string) (*types.GithubClaims, error)
+    Validate(string) (*types.Claims, error)
     FetchJWKS(issuer string) (*types.JWKS, error)
     GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc
 }
 ```
 
-**Validation Process:**
+**Validation Process (multi-issuer, `self` mode):**
 
-1. **JWT Parsing**: Decode and parse the JWT token
-2. **JWKS Retrieval**: Fetch public keys from OIDC provider (with caching); forced refresh on key-miss (rotation recovery)
-3. **Signature Verification**: Verify token signature using RSA (`RS256`/`RS384`/`RS512`) or ECDSA (`ES256`/`ES384`/`ES512`) public keys; `GenKeyFunc` switches on the JWKS key `kty` field (`RSA` → `parseRSAKey`, `EC` → `parseECKey`)
-4. **Claims Validation**: Validate issuer, audience (any match from `audiences` list — full multi-audience check in `Validate()`), expiration, and `repository` claim presence
-5. **Provider-Aware**: Created via `NewTokenValidatorFromProvider`; reads issuer/audiences live from the provider on every `Validate()` call so hot-reloaded config changes take effect immediately without a restart
+1. **Length guard**: reject tokens over `max_token_bytes` before any parse.
+2. **Route**: read the unverified `iss` (routing only) and look it up in the immutable issuer registry (exact match); an unknown issuer denies **before** any JWKS fetch.
+3. **Per-issuer parse**: algorithm allowlist (RS/ES 256–512), `exp` + `iat` required, `WithLeeway`.
+4. **Signature**: verify against that issuer's cached JWKS (SSRF-hardened fetch; forced refresh on key-miss, rate-limited per `(issuer, kid)`); key pinned by `kid` + `alg` + `use=sig` + key-type↔alg-family. Then **re-assert** the verified `iss` equals the matched spec.
+5. **Bounds & claims**: `sub` non-empty, `nbf` (if present), optional lifetime/age caps, audience ANY-match against this issuer's audiences only, `required_claims` present.
+6. **Normalize**: derive the canonical `subject` from the issuer's `claim_mappings` (GitHub default `repository`), populate `claims.Raw` with every verified claim. A token never self-asserts an unmapped subject.
+
+The registry is rebuilt lock-free on config hot-reload (atomic snapshot swap keyed on a `builtFrom` identity check). Delegated `apigw`/`alb` modes run the **same** bounds + normalization via a shared `checkAndNormalizeClaims` path — they are not a weaker path.
 
 **Security Features:**
 
@@ -233,7 +260,7 @@ type TokenValidatorInterface interface {
 - Issuer and multi-audience validation (any expected audience match accepted)
 - Token expiration and `iat` required
 - JWKS URI and issuer URL must use HTTPS (loopback hosts excepted for local dev/tests)
-- Claims extraction and validation; `repository` claim required
+- Claims extraction and validation; each issuer's own `required_claims` list is enforced (GitHub defaults to requiring `repository`)
 
 ### AWS Consumer (`internal/aws/`)
 
@@ -242,32 +269,40 @@ The AWS consumer abstracts all AWS service interactions:
 ```go
 type AwsConsumerInterface interface {
     ReadS3Configuration() error
-    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.GithubClaims) (*types.Credentials, error)
+    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
     GetS3Object(bucket, key string) (io.ReadCloser, error)
     GetRole(role string) (*iam.GetRoleOutput, error)
+    GetRoleTags(roleARN string) (map[string]string, error)
+    IsTargetAccountAllowed(roleArn string) (bool, error)
 }
 ```
 
 **AWS Operations:**
 
 - **Role Assumption**: Use AWS STS to assume target IAM roles
-- **Session Tagging**: Apply GitHub-specific tags to AWS sessions
+- **Session Tagging**: Apply the requesting issuer's `session_tags` spec to AWS sessions
 - **Session Policies**: Apply custom IAM policies to limit permissions
 - **S3 Integration**: Read configuration and session policies from S3
 - **IAM Integration**: Validate role existence and trust relationships
 
 **Session Tags Applied:**
 
+Tags are not hardcoded — each issuer declares its own `session_tags` map (STS
+tag key ← raw claim name), and `BuildSessionTags(rawClaims, tagSpec)` resolves
+that spec against the verified claims of the token that authorized this
+request:
+
 ```go
-tags := []types.Tag{
-    {Key: aws.String("repo"), Value: aws.String(claims.Repository)},
-    {Key: aws.String("actor"), Value: aws.String(claims.Actor)},
-    {Key: aws.String("ref"), Value: aws.String(claims.Ref)},
-    {Key: aws.String("event-name"), Value: aws.String(claims.EventName)},
-    {Key: aws.String("repo-owner"), Value: aws.String(claims.RepositoryOwner)},
-    {Key: aws.String("ref-type"), Value: aws.String(claims.RefType)},
-}
+func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag
 ```
+
+A typical GitHub `session_tags` spec (`repo: repository`, `actor: actor`,
+`ref: ref`, ...) produces the same shape of tags v1 hardcoded, but any issuer
+can define its own key set from its own raw claims (see
+[SESSION_TAGGING.md](SESSION_TAGGING.md)). Invalid keys/values are skipped and
+logged, never sanitized — a tag an ABAC policy sees always carries the exact
+verified claim value. The list is deterministic (sorted by key) and capped at
+50 tags.
 
 ### Caching System (`internal/cache/`)
 
@@ -275,12 +310,15 @@ The caching system provides multiple storage backends for JWKS data:
 
 ```go
 type Cache interface {
-    Get(key string) ([]byte, error)
-    Set(key string, value []byte, ttl time.Duration) error
-    Delete(key string) error
-    Clear() error
+    Get(key string) (*types.JWKS, bool)
+    Set(key string, value *types.JWKS, ttl time.Duration)
 }
 ```
+
+`NewCache(cfg)` selects **one** backend from `cache.type` (`memory`, `dynamodb`,
+or `s3`) — the backends are alternatives, not chained tiers. The DynamoDB and
+S3 backends each keep a small local in-memory layer in front of their remote
+store to cut per-request latency.
 
 #### Memory Cache
 
@@ -309,21 +347,34 @@ The configuration system supports multiple formats and sources:
 
 ```go
 type Config struct {
-    Issuer                string            `mapstructure:"issuer"`
-    Audience              string            `mapstructure:"audience"`
-    RepoRoleMappings      []RepoRoleMapping `mapstructure:"repo_role_mappings"`
+    Issuers               []IssuerConfig    `mapstructure:"issuers"`        // trusted OIDC issuers (v2)
+    DefaultIssuer         string            `mapstructure:"default_issuer"`
+    RoleMappings          []RoleMapping     `mapstructure:"role_mappings"`
+    RoleGroups            []RoleGroup       `mapstructure:"role_groups"`
+    RoleSets              map[string][]string `mapstructure:"role_sets"`
+    ConfigFragments       []string          `mapstructure:"config_fragments"`
     Cache                 *Cache            `mapstructure:"cache"`
     TagAuth               *TagAuth          `mapstructure:"tag_auth"`
+    CrossAccount          *CrossAccount     `mapstructure:"cross_account"`
     ConfigReloadInterval  time.Duration     `mapstructure:"config_reload_interval"`
-    // ... other fields
+    // hardening + logging knobs: jwt_leeway, max_token_lifetime/age/bytes,
+    // jwks_refetch_cooldown, allow_insecure_issuers, log_level,
+    // log_claim_values, audit_required, ... (see docs/CONFIGURATION.md)
 }
 ```
 
+Each `IssuerConfig` carries `issuer`, `provider` (`github`/`generic`),
+`audiences`, optional `jwks_uri`, `claim_mappings`, `required_claims`, and
+`session_tags`. At `Validate()`, `role_mappings`/`role_groups` are resolved to
+their issuer (explicit, `default_issuer`, or the sole issuer), `@role_set`
+aliases are expanded, patterns are anchored + compiled once, and an
+owner-bucketed authorization index is built (byte-identical to a linear scan).
+
 **Configuration Sources** (in order of precedence):
 
-1. Environment variables (with `AOW_` prefix)
-2. Configuration file (YAML/JSON/TOML)
-3. S3-stored configuration
+1. Environment variables (with `AOW_` prefix) — re-applied after every remote merge
+2. S3-stored configuration (overlaid on the local config when `s3_config_bucket`/`s3_config_path` are set)
+3. Configuration file (YAML/JSON/TOML)
 4. Default values
 
 **Provider (hot-reload):**
@@ -335,17 +386,18 @@ type Config struct {
 - `MaybeRefresh(ctx)` — called at the start of every request; no-op unless `config_reload_interval` has elapsed. Uses double-checked locking so at most one S3 fetch runs per interval under concurrent load. Each refresh clones the pristine base config (env/file/defaults), overlays the fetched bytes via `MergeBytes`, re-validates (recompiling all regex patterns), then atomically swaps the result in. Errors are logged and the previous config is retained.
 - `Get()` — atomic load of the current active config; zero-copy, safe for concurrent reads.
 
-The token validator is constructed via `NewTokenValidatorFromProvider`, which reads issuer and audiences from `provider.Get()` on every `Validate()` call so hot-reloaded issuer/audience changes take effect immediately without a Lambda restart.
+The token validator is constructed via `NewTokenValidator(provider, cache)`; it reads the live config from `provider.Get()` and rebuilds its issuer registry on hot-reload (identity-checked snapshot swap) so issuer/audience/mapping changes take effect immediately without a Lambda restart. Beyond the primary S3 overlay, `config_fragments` are merged on refresh with fail-safe reload (a bad fragment retains the last-good config); fragments may only contribute `role_mappings`/`role_groups`/`role_sets`/`default_issuer`. Local filesystem-path fragments are content-hashed (sha256) for change detection and work today; a remote fetcher for `"scheme://"` sources (e.g. `s3://`, keyed on the source's own ETag) is a pluggable seam (`config.WithFragmentFetcher`) that the shipped binaries do not yet install.
 
-**Repository Mapping System:**
+**Authorization Mapping System:**
 
 ```yaml
-repo_role_mappings:
-  - repo: "org/project-.*" # Regex pattern matching
+role_mappings:
+  - subject: "org/project-.*" # Regex pattern matching (canonical subject)
+    # issuer: inherited from default_issuer unless set here
     roles:
       - "arn:aws:iam::123456789012:role/github-actions-role"
-    constraints:
-      branch: "refs/heads/main" # Branch constraints
+    conditions:
+      branch: "refs/heads/main" # regex against the raw 'ref' claim
       actor_matches: ["admin-.*"] # Actor constraints
       event_name: "push" # Event type constraints
     session_policy: | # Inline session policy
@@ -369,10 +421,10 @@ flowchart TD
     E -->|Invalid| F[Return 401/403 Error]
     E -->|Valid| G[Extract Claims]
 
-    G --> GA{tag_auth enabled?}
+    G --> GA{cross_account enabled?}
     GA -->|Yes| GB[IsTargetAccountAllowed]
     GB -->|Denied| GC[Return 403 Error]
-    GB -->|Allowed| H[MatchRolesToRepoWithConstraints]
+    GB -->|Allowed| H[AuthorizeRoles issuer+subject]
     GA -->|No| H
 
     H -->|Explicit match| N[Apply Session Policy]
@@ -387,52 +439,57 @@ flowchart TD
     O -->|Success| Q[Return Credentials]
 ```
 
-### 2. Constraint Validation
+### 2. Condition Validation
 
-The constraint engine supports multiple validation types:
+Every named field and every `Extra` (arbitrary-claim) entry compiles through the
+same anchored-regex mechanism, so a plain string is a widened `==`, not a
+special case:
 
 ```go
-type Constraint struct {
-    Branch       string   `mapstructure:"branch"`        // refs/heads/main
-    Ref          string   `mapstructure:"ref"`           // refs/tags/v.*
-    RefType      string   `mapstructure:"ref_type"`      // branch, tag
-    EventName    string   `mapstructure:"event_name"`    // push, pull_request
-    WorkflowRef  string   `mapstructure:"workflow_ref"`  // .github/workflows/deploy.yml
-    Environment  string   `mapstructure:"environment"`   // production
-    ActorMatches []string `mapstructure:"actor_matches"` // ["admin-.*", "specific-user"]
+type Condition struct {
+    Branch       string            `mapstructure:"branch"`        // checks the raw 'ref' claim
+    Ref          string            `mapstructure:"ref"`           // also checks 'ref' (alias of Branch)
+    RefType      string            `mapstructure:"ref_type"`      // branch, tag
+    EventName    string            `mapstructure:"event_name"`    // push, pull_request
+    WorkflowRef  string            `mapstructure:"workflow_ref"`  // .github/workflows/deploy.yml
+    Environment  string            `mapstructure:"environment"`   // checks the raw 'runner_environment' claim
+    ActorMatches []string          `mapstructure:"actor_matches"` // ["admin-.*", "specific-user"]
+    Extra        map[string]string `mapstructure:",remain"`       // any other raw claim, by name
 }
 ```
 
 **Validation Logic:**
 
-- All specified constraints must be satisfied (AND logic)
-- Regular expressions supported for pattern matching
-- Claims are extracted from the validated JWT token
-- Constraint compilation is cached for performance
+- All specified conditions must be satisfied (AND logic) — this includes a
+  named field and an `Extra` entry that happen to target the same underlying
+  claim; both apply and both must match.
+- Every pattern is auto-anchored (`^(?:pattern)$`) and regex-capable.
+- Claims are extracted from the validated JWT token; `Extra` claim values must
+  be string-typed (a numeric claim like `run_id` never satisfies a condition).
+- Condition compilation happens once, in `Validate()`, never per request.
 
 ### 3. Caching Strategy
 
+One backend is selected at startup by `cache.type`; the remote backends keep a
+small local in-memory layer in front of their store:
+
 ```mermaid
 flowchart LR
-    A[Token Validation] --> B{Check Memory Cache}
-    B -->|Hit| C[Return Cached JWKS]
-    B -->|Miss| D{Check DynamoDB Cache}
-    D -->|Hit| E[Update Memory Cache]
-    E --> F[Return Cached JWKS]
-    D -->|Miss| G{Check S3 Cache}
-    G -->|Hit| H[Update Memory & DynamoDB]
-    H --> I[Return Cached JWKS]
-    G -->|Miss| J[Fetch from OIDC Provider]
-    J --> K[Update All Cache Layers]
-    K --> L[Return Fresh JWKS]
+    A[Token Validation] --> B{Backend selected by cache.type}
+    B -->|memory| C[LRU in-memory cache]
+    B -->|dynamodb| D[Local memo layer → DynamoDB table]
+    B -->|s3| E[Local memo layer → S3 objects]
+    C & D & E -->|hit| F[Return cached JWKS]
+    C & D & E -->|miss| G[SSRF-hardened fetch from issuer]
+    G --> H[Store with cache.ttl → return]
 ```
 
 **Cache TTL Strategy:**
 
-- **Memory Cache**: Short TTL (minutes to hours) for hot data
-- **DynamoDB Cache**: Medium TTL (hours) for persistence
-- **S3 Cache**: Long TTL (days) for cold data
-- **Automatic Invalidation**: Based on JWT "iat" (issued at) claims
+- One `cache.ttl` applies to the selected backend (default `1h`).
+- Entries expire by TTL (DynamoDB native TTL; S3 metadata + optional `s3_cleanup`).
+- A signing-key rotation is recovered by a forced, rate-limited JWKS refetch on
+  `kid` miss (`jwks_refetch_cooldown`) — there is no claim-based invalidation.
 
 ## Security Architecture
 
@@ -454,21 +511,21 @@ flowchart TD
     L --> M[Token Accepted]
 ```
 
-### 2. Repository Authorization
+### 2. Subject-Based Authorization
 
 ```mermaid
 flowchart TD
-    A[Validated Token Claims] --> B[Extract Repository]
-    B --> C{Find Matching Pattern}
+    A[Validated Token Claims] --> B[Derive Canonical Subject]
+    B --> C{Find Matching Subject Pattern<br/>issuer-bound, owner-bucketed index}
     C -->|No Match| D[Access Denied]
-    C -->|Match Found| E[Load Constraints]
-    E --> F{Validate Branch}
+    C -->|Match Found| E[Load Conditions]
+    E --> F{Validate Branch/Ref}
     F -->|Failed| G[Access Denied]
     F -->|Passed| H{Validate Actor}
     H -->|Failed| I[Access Denied]
     H -->|Passed| J{Validate Event}
     J -->|Failed| K[Access Denied]
-    J -->|Passed| L{Validate Environment}
+    J -->|Passed| L{Validate Environment/Extra claims}
     L -->|Failed| M[Access Denied]
     L -->|Passed| N[Authorization Granted]
 ```
@@ -484,26 +541,31 @@ flowchart TD
 
 **Session Security:**
 
-- Session duration limits (default: 1 hour, max: 12 hours)
+- Session duration limits (default: 1 hour, max: 12 hours; whenever the
+  warden's own credentials are a role session — always true on Lambda,
+  same-account assumes included — chaining clamps the issued session to 1
+  hour regardless of target. Only `local` server mode with IAM user
+  credentials can exceed 1 hour, up to the target role's own max, cross-account
+  targets included)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
-- Automatic credential rotation
+- Credentials are short-lived and expire on their own — no long-lived secrets
+  are ever issued or stored
 
 ### 4. Tag-Based Authorization & Cross-Account
 
-Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `repo_role_mappings` matching fails. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup.
+Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `role_mappings` matching fails. Cross-account is a separate opt-in policy gate (`cross_account.enabled`, default `false`): `false` (or the block omitted) hard-blocks **every** cross-account operation — both role assumption and tag reads fail closed with an error, for explicit mappings and tag-auth alike. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup, and [examples/cross-account/](examples/cross-account/) for a worked example.
 
-**Hub/Spoke Flow:**
+**Flow:**
 
-1. The hub (warden's own AWS account) is the central trust anchor.
-2. For each requested role ARN the account ID is parsed from the ARN.
-3. If the target is a different account, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account.
-4. Using spoke credentials, `GetRoleTags` calls `iam:GetRole` on the target role to read its IAM tags.
-5. `TagAuth.Authorize` evaluates the tags: the role must carry at least an `aow/repo` or `aow/repo-owner` tag that matches the OIDC claims; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
-6. If authorized, `AssumeRole` is called (via spoke credentials for cross-account). When `TransitiveSessionTags` is true, `repo`/`ref`/`actor` session tags are marked transitive so they propagate immutably through subsequent role chaining. Cross-account sessions are clamped to 1 hour.
+1. The hub (warden's own AWS account) is the central trust anchor; every role assumption — same-account or cross-account — goes **directly** from the hub's own credentials to the target role, one hop.
+2. For each requested role ARN the account ID is parsed from the ARN. If it differs from the hub and `cross_account.enabled` is not true, the request fails closed.
+3. _(tag-auth only, and only when no explicit mapping already authorized the role)_ If the target account differs from the hub, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`, solely to call `iam:GetRole` on the target role and read its IAM tags. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account. The spoke is never used to assume the target role itself.
+4. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
+5. If authorized, `AssumeRole` is called directly on the target role using the hub's own credentials (never spoke credentials). When `TransitiveSessionTags` is true, every attached session tag (the issuer's `session_tags` spec) is marked transitive so it propagates immutably through subsequent role chaining. Because the hub's credentials are always a role session on Lambda, this assume — same-account included — is clamped to 1 hour; only `local` mode with IAM user credentials avoids the clamp.
 
 **Account Allow-List (`IsTargetAccountAllowed`):**
-Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `tag_auth.allowed_accounts`. The hub account is always implicitly allowed. Empty list = any account is allowed (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
+Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `cross_account.allowed_accounts`. With `cross_account` disabled, only the hub account is allowed. With it enabled, the hub account is always implicitly allowed, and an empty list permits any account (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
 
 **`DefaultOrg` shorthand:**
 When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no `/`) are automatically expanded to `<default_org>/<name>` before comparison, enabling short tag values like `my-service` instead of `org/my-service`.
@@ -520,23 +582,42 @@ When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no
 | Tag matching logic             | [images/tag-auth-matching.svg](images/tag-auth-matching.svg)         |
 | Authorization precedence       | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg)     |
 
+### 5. Residual Risk: Stateless Replay
+
+The validator is fully stateless — there is no `jti`/nonce replay cache. A
+token that is captured before it expires (e.g. exfiltrated from CI logs or a
+compromised runner) remains usable by an attacker for the rest of its
+validity window, and a duplicate `AssumeRole` call with the same token is not
+itself detected as a replay. The hardening knobs bound, but do not eliminate,
+this exposure:
+
+- `max_token_lifetime` / `max_token_age` shrink the window a stolen token
+  stays valid, independent of what the issuer itself set for `exp`.
+- `jwks_refetch_cooldown` and per-`(issuer, kid)` rate limiting stop a replay
+  attempt from being amplified into a JWKS-fetch storm.
+- Structured audit records (`docs/LOGGING.md`) let you detect anomalous
+  reuse after the fact (e.g. the same `jwtSub`/`subject` assuming roles from
+  unexpected source IPs or in an unexpected cadence), even though the service
+  itself does not block it in real time.
+
+If your threat model requires hard replay prevention, put a short-lived,
+single-use token issuance step in front of this service, or rely on the
+short (minutes-scale) validity window GitHub Actions/GitLab CI already give
+OIDC tokens.
+
 ## Performance Architecture
 
 ### 1. Caching Performance
 
-**Cache Hit Rates:**
+JWKS documents change rarely (issuer key rotations), so with any backend and a
+sane `cache.ttl` nearly every request is served from cache; only cold starts
+and key rotations pay the upstream fetch. Relative cost per lookup:
 
-- Memory Cache: >95% for active repositories
-- DynamoDB Cache: >85% for warm data
-- S3 Cache: >70% for cold data
-- Overall System: >98% cache hit rate
-
-**Performance Metrics:**
-
-- Memory Cache Lookup: <1ms
-- DynamoDB Cache Lookup: <10ms
-- S3 Cache Lookup: <50ms
-- JWKS Fetch (cache miss): <200ms
+- Memory: in-process map access (fastest; lost on container recycle)
+- DynamoDB: one-digit-millisecond network hop, shared across containers
+- S3: tens of milliseconds, cheapest at rest for large/cold objects
+- Cache miss: one SSRF-hardened HTTPS fetch to the issuer (singleflight —
+  concurrent misses for one issuer collapse into a single upstream call)
 
 ### 2. Lambda Performance Optimizations
 
@@ -594,7 +675,7 @@ graph LR
 
 ```dockerfile
 # Multi-stage build for optimal image size
-FROM golang:1.21-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 COPY . .
 RUN go mod download
@@ -680,7 +761,7 @@ The Lambda execution role requires the following IAM permissions:
 }
 ```
 
-> `iam:GetRole` is only needed when `tag_auth` is enabled (cross-account role-tag reads via `GetRoleTags`).
+> `iam:GetRole` is only needed when `tag_auth` is enabled (role-tag reads via `GetRoleTags`; performed with spoke credentials only when the role is cross-account — the target `AssumeRole` itself is always direct with the hub's own credentials).
 
 ## References
 

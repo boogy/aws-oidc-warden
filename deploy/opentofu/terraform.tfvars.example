@@ -6,7 +6,7 @@ tags = {
   owner       = "platform-team"
 }
 
-# --- Token validation ---
+# --- Token validation (rendered as a single GitHub Actions issuers[] entry) ---
 issuer    = "https://token.actions.githubusercontent.com"
 audiences = ["sts.amazonaws.com"]
 
@@ -29,37 +29,49 @@ assumable_role_arns = [
   "arn:aws:iam::111122223333:role/github-actions-example",
 ]
 
-# --- Repository -> role mappings ---
-repo_role_mappings = [
+# --- Subject -> role mappings (v2 schema) ---
+# `subject` is the canonical subject (GitHub: the `repository` claim,
+# "owner/repo"); `conditions` are auto-anchored regexes on raw claims (AND-ed).
+role_mappings = [
   {
-    repo  = "my-org/my-repo"
-    roles = ["arn:aws:iam::111122223333:role/github-actions-example"]
-    constraints = {
+    subject = "my-org/my-repo"
+    roles   = ["arn:aws:iam::111122223333:role/github-actions-example"]
+    conditions = {
       branch     = "refs/heads/main"
       event_name = "push"
     }
   },
 ]
 
-# --- Optional tag-based / cross-account authorization ---
-# When enabled with cross-account hub/spoke, add the spoke role to
-# assumable_role_arns above, e.g. "arn:aws:iam::*:role/aow-spoke".
+# --- Optional tag-based authorization ---
 # tag_auth = {
+#   enabled     = true
+#   default_org = "my-org"
+# }
+
+# --- Optional cross-account policy gate ---
+# enabled=true lets the Lambda assume target roles in member accounts
+# directly (one hop) — add those target role ARNs/patterns to
+# assumable_role_arns above, preferring per-account patterns like
+# "arn:aws:iam::111122223333:role/<prefix>*" over "arn:aws:iam::*:role/*".
+# Only add the spoke pattern (e.g. "arn:aws:iam::*:role/aow-spoke") if using
+# cross-account tag_auth, since the spoke is a tag-read broker, not an
+# assume target. enabled=false hard-denies all cross-account operations.
+# cross_account = {
 #   enabled          = true
-#   default_org      = "my-org"
 #   allowed_accounts = ["111122223333", "444455556666"]
 # }
 
 # --- JWT Validation Mode ---
 # "self"  (default) — Lambda validates JWT signature itself using JWKS.
+#            Build with the default: ./deploy/opentofu/build.sh
 # "apigw" — API Gateway JWT Authorizer validates; Lambda reads pre-validated claims
 #            from event.requestContext.authorizer.jwt.claims. Build with:
 #            ./deploy/opentofu/build.sh apigatewayv2
 #            SECURITY: Lambda resource policy restricts invocations to the API GW
 #            (source_arn = execution_arn/*/*) — direct invocations are blocked.
-# "alb"   — ALB OIDC validates; Lambda verifies ALB-signed x-amzn-oidc-data (ES256).
-#            Build with the default: ./deploy/opentofu/build.sh
+# "alb" mode is NOT supported by this stack — it needs the `alb` Lambda binary
+# behind an Application Load Balancer, which this module does not provision.
 jwt_validation_mode = "self"
 # jwt_authorizer_issuer    = "https://token.actions.githubusercontent.com"
 # jwt_authorizer_audiences = ["sts.amazonaws.com"]
-# alb_expected_signer      = "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/my-alb/abc123"

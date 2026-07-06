@@ -86,12 +86,14 @@ func NewBootstrap() (*Bootstrap, error) {
 
 	// Initialize token validator from the provider so hot-reloaded issuer/audience
 	// changes take effect immediately without a Lambda restart.
-	tokenValidator := validator.NewTokenValidatorFromProvider(provider, jwksCache)
+	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 
-	// The extractor is fixed at cold start. Changing jwt_validation.mode at runtime
-	// requires a Lambda redeployment. Hot-reload via Provider only affects fields
-	// read per-request (repo_role_mappings, audiences, etc.).
-	extractor, err := newClaimsExtractor(cfg, tokenValidator)
+	// The extractor's mode is fixed at cold start. Changing jwt_validation.mode
+	// at runtime requires a Lambda redeployment. Delegated extractors still
+	// read the live config from provider on every Extract() call, so
+	// hot-reloaded audiences/claim_mappings/required_claims/jwt_leeway/
+	// alb_expected_signer take effect immediately, like self mode.
+	extractor, err := newClaimsExtractor(provider, tokenValidator)
 	if err != nil {
 		logger.Error("Failed to create claims extractor", slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to create claims extractor: %w", err)
@@ -114,35 +116,71 @@ func NewBootstrap() (*Bootstrap, error) {
 	}, nil
 }
 
-// newClaimsExtractor creates the appropriate ClaimsExtractorInterface based on the configured mode.
-func newClaimsExtractor(cfg *config.Config, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
+// newClaimsExtractor creates the appropriate ClaimsExtractorInterface based on
+// the configured mode. Delegated modes ("apigw"/"alb") trust an upstream that
+// has already verified the token's signature against a single issuer, so v2's
+// multi-issuer registry only applies to "self" mode: a delegated mode
+// requires exactly one configured issuer at startup (checked here as a
+// fail-fast), whose full spec (audiences, claim_mappings, required_claims)
+// plus the same jwt_leeway/max_token_lifetime/max_token_age bounds self mode
+// enforces are used for defense-in-depth re-validation of the pre-validated
+// claims. The delegated extractors themselves read
+// provider live on every Extract() call, so a later hot-reload is not
+// frozen at this startup check.
+func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
+	cfg := provider.Get()
 	mode := cfg.JWTValidation.Mode
-	// Resolve audiences: prefer the slice, fall back to singular field.
-	audiences := cfg.Audiences
-	if len(audiences) == 0 && cfg.Audience != "" {
-		audiences = []string{cfg.Audience}
-	}
 	switch mode {
 	case "self", "":
 		return validator.NewSelfExtractor(v), nil
 	case "apigw":
-		// Pass issuer/audiences for defense-in-depth re-validation of pre-validated claims.
-		return validator.NewAPIGWExtractor(cfg.Issuer, audiences), nil
+		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
+			return nil, err
+		}
+		return validator.NewAPIGWExtractor(provider), nil
 	case "alb":
-		// Pass issuer/audiences for post-signature claim validation.
-		return validator.NewALBExtractor(cfg.JWTValidation.ALBExpectedSigner, cfg.Issuer, audiences), nil
+		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
+			return nil, err
+		}
+		return validator.NewALBExtractor(provider), nil
 	default:
 		return nil, fmt.Errorf("unknown jwt_validation.mode: %q", mode)
 	}
 }
 
+// singleDelegatedIssuer returns the sole configured issuer for a delegated
+// jwt_validation.mode. Delegated modes trust an upstream single-issuer JWT
+// verifier (API Gateway JWT Authorizer, ALB OIDC), so a multi-issuer config
+// is ambiguous in these modes and rejected fail-closed.
+func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfig, error) {
+	if len(cfg.Issuers) != 1 {
+		return nil, fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
+	}
+	return &cfg.Issuers[0], nil
+}
+
 // buildConfigProvider wires the config provider. With an S3 config source it
 // performs an initial fetch+overlay (failing fast on error) and enables
-// per-request lazy hot-reload when ConfigReloadInterval > 0. Without a source it
-// returns a static provider serving the local config.
+// per-request lazy hot-reload when ConfigReloadInterval > 0. Without a source
+// it returns a static provider serving the local config — unless
+// config_fragments are listed, in which case a reloadable provider (with no
+// primary fetch) merges them at startup and re-resolves them per
+// ConfigReloadInterval when > 0.
 func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
 	if cfg.S3ConfigBucket == "" || cfg.S3ConfigPath == "" {
-		return config.NewStaticProvider(cfg), nil
+		// No primary S3 overlay. config_fragments must still be merged: a
+		// static provider never refreshes, so it would silently serve the base
+		// config with every fragment ignored. A reloadable provider with a nil
+		// fetch merges fragments on Refresh (and keeps re-resolving them per
+		// ConfigReloadInterval when > 0).
+		if len(cfg.ConfigFragments) == 0 {
+			return config.NewStaticProvider(cfg), nil
+		}
+		provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil)
+		if err := provider.Refresh(context.Background()); err != nil {
+			return nil, err
+		}
+		return provider, nil
 	}
 
 	bucket, key := cfg.S3ConfigBucket, cfg.S3ConfigPath
@@ -241,23 +279,23 @@ func validateAdapterMode(adapterName, mode string, allowed ...string) {
 // NewAwsApiGatewayFromBootstrap creates a new API Gateway handler using bootstrap
 func NewAwsApiGatewayFromBootstrap(bootstrap *Bootstrap) *AwsApiGateway {
 	validateAdapterMode("apigateway", bootstrap.Config.JWTValidation.Mode, "self")
-	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
+	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
 }
 
 // NewAwsLambdaUrlFromBootstrap creates a new Lambda URL handler using bootstrap
 func NewAwsLambdaUrlFromBootstrap(bootstrap *Bootstrap) *AwsLambdaUrl {
 	validateAdapterMode("lambdaurl", bootstrap.Config.JWTValidation.Mode, "self")
-	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
+	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
 }
 
 // NewAwsApplicationLoadBalancerFromBootstrap creates a new ALB handler using bootstrap
 func NewAwsApplicationLoadBalancerFromBootstrap(bootstrap *Bootstrap) *AwsApplicationLoadBalancer {
 	validateAdapterMode("alb", bootstrap.Config.JWTValidation.Mode, "alb", "self")
-	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
+	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
 }
 
 // NewAwsApiGatewayV2FromBootstrap creates a new HTTP API v2 handler using bootstrap
 func NewAwsApiGatewayV2FromBootstrap(bootstrap *Bootstrap) *AwsApiGatewayV2 {
 	validateAdapterMode("apigatewayv2", bootstrap.Config.JWTValidation.Mode, "apigw")
-	return NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor)
+	return NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
 }

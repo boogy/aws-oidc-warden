@@ -16,15 +16,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// frontendAPIGateway identifies this adapter in audit records/logs.
+const frontendAPIGateway = "apigateway"
+
 // AwsApiGateway handles AWS API Gateway proxy integration requests
 type AwsApiGateway struct {
 	processor *RequestProcessor
 }
 
-// NewAwsApiGateway creates a new API Gateway handler
-func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApiGateway {
+// NewAwsApiGateway creates a new API Gateway handler. audit may be nil (see AuditSink).
+func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink) *AwsApiGateway {
 	return &AwsApiGateway{
-		processor: NewRequestProcessor(provider, consumer, extractor),
+		processor: NewRequestProcessor(provider, consumer, extractor, audit, frontendAPIGateway),
 	}
 }
 
@@ -93,48 +96,15 @@ func (h *AwsApiGateway) unmarshalRequestData(event events.APIGatewayProxyRequest
 
 // respondError formats a response with an error message
 func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode int) (events.APIGatewayProxyResponse, error) {
-	// Extract request ID from context if available
-	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
+	response, statusCode := buildErrorResponse(ctx, err, statusCode)
 
-	// Get processing time if available
-	var processingMS int64
-	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
-		processingMS = time.Since(startTime).Milliseconds()
-	}
-
-	// Map common errors to specific error codes and messages (shared classifier).
-	errCode, errMsg := classifyError(err, &statusCode)
-
-	// Log the error with context
-	slog.Error("Request error",
-		slog.String("requestId", requestID),
-		slog.String("errorCode", errCode),
-		slog.String("error", err.Error()),
-		slog.Int("status", statusCode),
-		slog.Int64("processingMs", processingMS))
-
-	// Create response object with non-redundant error information
-	response := Response{
-		Success:      false,
-		StatusCode:   statusCode,
-		ErrorCode:    errCode,
-		Message:      errMsg,
-		ErrorDetails: err.Error(),
-		RequestID:    requestID,
-		ProcessingMS: processingMS,
-	}
-
-	// Marshall response to JSON
 	jsonResponse, jsonErr := json.Marshal(response)
 	if jsonErr != nil {
 		// Fallback to simple error response if JSON marshalling fails
 		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    ResponseHeaders,
-			Body:       fmt.Sprintf(`{"error": "%s"}`, err.Error()),
+			Body:       fallbackErrorBody,
 		}, nil
 	}
 
@@ -148,37 +118,12 @@ func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode 
 
 // respondJSON formats a successful response with credentials
 func (h *AwsApiGateway) respondJSON(ctx context.Context, credentials *types.Credentials) (events.APIGatewayProxyResponse, error) {
-	// Extract request ID from context if available
-	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
+	response := buildSuccessResponse(ctx, credentials)
 
-	// Get processing time if available
-	var processingMS int64
-	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
-		processingMS = time.Since(startTime).Milliseconds()
-	}
-
-	// Create response object
-	response := Response{
-		Success:      true,
-		StatusCode:   http.StatusOK,
-		Message:      "Token validation successful and role assumed",
-		RequestID:    requestID,
-		ProcessingMS: processingMS,
-		Data:         credentials,
-	}
-
-	// Marshal the response
 	jsonResponse, err := json.Marshal(response)
 	if err != nil {
 		return h.respondError(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError)
 	}
-
-	slog.Debug("Response successful",
-		slog.String("requestId", requestID),
-		slog.Int64("processingMs", processingMS))
 
 	return events.APIGatewayProxyResponse{
 		StatusCode:      http.StatusOK,

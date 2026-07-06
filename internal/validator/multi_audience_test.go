@@ -1,115 +1,120 @@
 package validator_test
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"testing"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// simpleMockCache is a simple mock implementation of the Cache interface for testing
-type simpleMockCache struct{}
+// TestValidate_AudienceMatchTableDriven exercises IssuerConfig.Audiences'
+// ANY-match semantics across a range of configured audience sets and token
+// audiences: any single matching audience must validate, and a token whose
+// audience isn't in the configured set must always be rejected.
+func TestValidate_AudienceMatchTableDriven(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwks := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k1", &key.PublicKey)}}
+	srv := oidcServer(t, func() *types.JWKS { return jwks })
 
-func (m *simpleMockCache) Get(key string) (*types.JWKS, bool) {
-	return nil, false
-}
-
-func (m *simpleMockCache) Set(key string, value *types.JWKS, ttl time.Duration) {
-}
-
-func TestMultiAudienceSupport(t *testing.T) {
 	tests := []struct {
-		name               string
-		configAudiences    []string
-		configAudience     string // Legacy field
-		expectedAudiences  []string
-		shouldUseAudiences bool
+		name                string
+		configuredAudiences []string
+		tokenAudience       string
+		wantErr             bool
 	}{
 		{
-			name:               "Single audience via audiences field",
-			configAudiences:    []string{"sts.amazonaws.com"},
-			expectedAudiences:  []string{"sts.amazonaws.com"},
-			shouldUseAudiences: true,
+			name:                "single configured audience, matching token",
+			configuredAudiences: []string{"sts.amazonaws.com"},
+			tokenAudience:       "sts.amazonaws.com",
+			wantErr:             false,
 		},
 		{
-			name:               "Multiple audiences",
-			configAudiences:    []string{"sts.amazonaws.com", "https://api.company.com", "internal.company.com"},
-			expectedAudiences:  []string{"sts.amazonaws.com", "https://api.company.com", "internal.company.com"},
-			shouldUseAudiences: true,
+			name:                "single configured audience, non-matching token",
+			configuredAudiences: []string{"sts.amazonaws.com"},
+			tokenAudience:       "attacker.example.com",
+			wantErr:             true,
 		},
 		{
-			name:               "Legacy single audience field",
-			configAudience:     "sts.amazonaws.com",
-			expectedAudiences:  []string{"sts.amazonaws.com"},
-			shouldUseAudiences: false,
+			name:                "multiple configured audiences, first matches",
+			configuredAudiences: []string{"sts.amazonaws.com", "https://api.company.com", "internal.company.com"},
+			tokenAudience:       "sts.amazonaws.com",
+			wantErr:             false,
 		},
 		{
-			name:               "Both fields provided - audiences takes precedence",
-			configAudiences:    []string{"primary.audience.com"},
-			configAudience:     "primary.audience.com",
-			expectedAudiences:  []string{"primary.audience.com"},
-			shouldUseAudiences: true,
+			name:                "multiple configured audiences, middle matches",
+			configuredAudiences: []string{"sts.amazonaws.com", "https://api.company.com", "internal.company.com"},
+			tokenAudience:       "https://api.company.com",
+			wantErr:             false,
+		},
+		{
+			name:                "multiple configured audiences, last matches",
+			configuredAudiences: []string{"sts.amazonaws.com", "https://api.company.com", "internal.company.com"},
+			tokenAudience:       "internal.company.com",
+			wantErr:             false,
+		},
+		{
+			name:                "multiple configured audiences, none match",
+			configuredAudiences: []string{"sts.amazonaws.com", "https://api.company.com", "internal.company.com"},
+			tokenAudience:       "not-in-the-list.example.com",
+			wantErr:             true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{
-				Issuer:          "https://token.actions.githubusercontent.com",
-				RoleSessionName: "aws-oidc-warden",
-				Cache:           &config.Cache{TTL: time.Hour},
+			cfg := githubIssuer(srv.URL, tt.configuredAudiences...)
+			require.NoError(t, cfg.Validate())
+
+			v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
+
+			token := signToken(t, key, "k1", srv.URL, tt.tokenAudience)
+			claims, err := v.Validate(token)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, claims)
+				return
 			}
-
-			// Set the appropriate audience fields
-			if tt.shouldUseAudiences || len(tt.configAudiences) > 0 {
-				cfg.Audiences = tt.configAudiences
-			}
-			if tt.configAudience != "" {
-				cfg.Audience = tt.configAudience
-			}
-
-			// Validate config to trigger audience normalization
-			err := cfg.Validate()
-			assert.NoError(t, err)
-
-			// Create validator
-			mockCache := &simpleMockCache{}
-			validator := validator.NewTokenValidator(cfg, mockCache)
-
-			// Verify the validator has the expected audiences
-			assert.Equal(t, tt.expectedAudiences, validator.ExpectedAudiences)
-
-			// Verify backward compatibility field is also set correctly
-			if len(tt.expectedAudiences) > 0 {
-				assert.Equal(t, tt.expectedAudiences[0], validator.ExpectedAudience)
-			}
+			require.NoError(t, err)
+			require.NotNil(t, claims)
+			assert.Equal(t, "owner/repo", claims.Repository)
+			assert.Contains(t, claims.Audience, tt.tokenAudience)
 		})
 	}
 }
 
-func TestAudienceValidationLogic(t *testing.T) {
-	// This test verifies that the validation logic works correctly
-	// with multiple audiences - any matching audience should validate successfully
+// TestValidate_EmptyAudiencesConfiguredDeniesEverything guards against a
+// config-level regression: an issuer with no configured audiences (which
+// config.Validate() itself rejects) must not be reachable at runtime even if
+// it somehow is — audienceMatches denies on an empty expected set, as
+// defense in depth against a mis-cloned config bypassing Validate().
+func TestValidate_EmptyAudiencesConfiguredDeniesEverything(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwks := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k1", &key.PublicKey)}}
+	srv := oidcServer(t, func() *types.JWKS { return jwks })
 
+	// Hand-built, deliberately bypassing config.Validate() (which would
+	// reject an issuer with zero audiences) to test the runtime guard itself.
 	cfg := &config.Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com", "https://api.company.com", "internal.company.com"},
-		RoleSessionName: "aws-oidc-warden",
-		Cache:           &config.Cache{TTL: time.Hour},
+		Issuers: []config.IssuerConfig{
+			{Issuer: srv.URL, Provider: "github", RequiredClaims: []string{"repository"}},
+		},
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
 	}
 
-	err := cfg.Validate()
-	assert.NoError(t, err)
+	v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
 
-	mockCache := &simpleMockCache{}
-	validator := validator.NewTokenValidator(cfg, mockCache)
-
-	// Verify all expected audiences are configured
-	assert.Contains(t, validator.ExpectedAudiences, "sts.amazonaws.com")
-	assert.Contains(t, validator.ExpectedAudiences, "https://api.company.com")
-	assert.Contains(t, validator.ExpectedAudiences, "internal.company.com")
-	assert.Len(t, validator.ExpectedAudiences, 3)
+	token := signToken(t, key, "k1", srv.URL, "sts.amazonaws.com")
+	_, err = v.Validate(token)
+	assert.Error(t, err)
 }

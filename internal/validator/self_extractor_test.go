@@ -13,21 +13,18 @@ import (
 )
 
 type mockTokenValidator struct {
-	claims *types.GithubClaims
+	claims *types.Claims
 	err    error
 }
 
-func (m *mockTokenValidator) Validate(token string) (*types.GithubClaims, error) {
-	return m.claims, m.err
-}
-func (m *mockTokenValidator) ParseToken(token string) (*types.GithubClaims, error) {
+func (m *mockTokenValidator) Validate(token string) (*types.Claims, error) {
 	return m.claims, m.err
 }
 func (m *mockTokenValidator) FetchJWKS(issuer string) (*types.JWKS, error) { return nil, nil }
 func (m *mockTokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc      { return nil }
 
 func TestSelfExtractor_Extract(t *testing.T) {
-	want := &types.GithubClaims{Repository: "org/repo"}
+	want := &types.Claims{Repository: "org/repo"}
 	ex := validator.NewSelfExtractor(&mockTokenValidator{claims: want})
 
 	got, err := ex.Extract(context.Background(), validator.ExtractionInput{Token: "tok"})

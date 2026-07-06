@@ -40,6 +40,7 @@ var (
 	ErrRoleNotPermitted      = errors.New("role not allowed for repository or doesn't meet constraints")
 	ErrAccountNotAllowed     = errors.New("target account is not in the allowed_accounts list")
 	ErrAssumeRoleFailed      = errors.New("failed to assume the requested role")
+	ErrAuditWriteFailed      = errors.New("audit record could not be durably written")
 )
 
 var (
@@ -74,7 +75,8 @@ type Response struct {
 	Message string `json:"message,omitempty"`
 	Data    any    `json:"data,omitempty"`
 
-	// For error responses
-	ErrorCode    string `json:"errorCode,omitempty"`
-	ErrorDetails string `json:"errorDetails,omitempty"`
+	// For error responses. Only the classified code (plus Message) is exposed;
+	// raw internal error detail stays in the server-side logs (see
+	// buildErrorResponse).
+	ErrorCode string `json:"errorCode,omitempty"`
 }

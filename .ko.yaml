@@ -5,7 +5,14 @@ defaultPlatforms:
   - linux/arm64
   - linux/amd64
 
-# AWS Lambda container images require the executable to be named 'bootstrap'
+# AWS Lambda container images require the executable to be named 'bootstrap'.
+#
+# The per-build `tags:` below are the single source of truth for the published
+# image scheme: `<module>-<tag>` / `<module>-latest`, with `apigateway` (the
+# default module) additionally publishing the bare `<tag>` / `latest`. The
+# release workflow and `make ko-publish` rely on these (no `--tags`). Only the
+# local `make ko-build` (to ko.local) overrides with `--tags` so it does not
+# depend on git tag state.
 builds:
   - id: apigateway
     dir: .
@@ -24,10 +31,10 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
     tags:
-      - "{{.Git.Tag}}"
-      - "{{.Git.Tag}}-apigateway"
-      - latest
-      - latest-apigateway
+      - "apigateway-{{.Git.Tag}}"
+      - "apigateway-latest"
+      - "{{.Git.Tag}}" # default module → bare tags
+      - "latest"
 
   - id: apigatewayv2
     dir: .
@@ -46,10 +53,8 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
     tags:
-      - "{{.Git.Tag}}"
-      - "{{.Git.Tag}}-apigatewayv2"
-      - latest
-      - latest-apigatewayv2
+      - "apigatewayv2-{{.Git.Tag}}"
+      - "apigatewayv2-latest"
 
   - id: alb
     dir: .
@@ -68,8 +73,8 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
     tags:
-      - "{{.Git.Tag}}-alb"
-      - latest-alb
+      - "alb-{{.Git.Tag}}"
+      - "alb-latest"
 
   - id: lambdaurl
     dir: .
@@ -88,8 +93,8 @@ builds:
       - -tags=lambda.norpc
       - -trimpath
     tags:
-      - "{{.Git.Tag}}-lambdaurl"
-      - latest-lambdaurl
+      - "lambdaurl-{{.Git.Tag}}"
+      - "lambdaurl-latest"
 
 labels:
   org.opencontainers.image.title: "AWS OIDC Warden"

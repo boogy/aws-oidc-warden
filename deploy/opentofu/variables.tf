@@ -16,15 +16,18 @@ variable "tags" {
 }
 
 # ---- Application config (rendered into config.yaml) ----
+# This stack renders a single GitHub Actions issuer entry into the v2
+# `issuers[]` list. For multi-issuer or non-GitHub providers, manage
+# config.yaml yourself and point AOW_S3_CONFIG_BUCKET/PATH at it.
 variable "issuer" {
   type        = string
-  description = "OIDC issuer URL."
+  description = "OIDC issuer URL (rendered as issuers[0].issuer, provider github)."
   default     = "https://token.actions.githubusercontent.com"
 }
 
 variable "audiences" {
   type        = list(string)
-  description = "Accepted token audiences."
+  description = "Accepted token audiences (rendered as issuers[0].audiences)."
   default     = ["sts.amazonaws.com"]
 }
 
@@ -34,14 +37,19 @@ variable "role_session_name" {
   default     = "aws-oidc-warden"
 }
 
-variable "repo_role_mappings" {
-  description = "Repository-to-role mappings (rendered verbatim into config.yaml)."
+variable "role_mappings" {
+  description = <<-EOT
+    Subject-to-role mappings (v2 schema, rendered verbatim into config.yaml).
+    `subject` is an auto-anchored regex matched against the canonical subject
+    (for GitHub: the `repository` claim, "owner/repo"). `conditions` are
+    auto-anchored regexes against raw verified claims, AND-ed together.
+  EOT
   type = list(object({
-    repo                = string
+    subject             = string
     roles               = list(string)
     session_policy      = optional(string)
     session_policy_file = optional(string)
-    constraints = optional(object({
+    conditions = optional(object({
       branch        = optional(string)
       ref           = optional(string)
       ref_type      = optional(string)
@@ -60,11 +68,19 @@ variable "tag_auth" {
     enabled                 = optional(bool, false)
     tag_prefix              = optional(string, "aow/")
     default_org             = optional(string)
-    spoke_role_name         = optional(string, "aow-spoke")
-    external_id             = optional(string)
-    spoke_session_duration  = optional(string, "15m")
     transitive_session_tags = optional(bool, false)
-    allowed_accounts        = optional(list(string), [])
+  })
+  default = { enabled = false }
+}
+
+variable "cross_account" {
+  description = "Cross-account policy gate. enabled=false hard-denies all cross-account operations. When true, the Lambda assumes target roles in member accounts directly (one hop, no spoke); the spoke role (spoke_role_name) is used only as a tag-read broker (iam:GetRole) when tag_auth is enabled against cross-account targets. external_id applies only to that hub->spoke tag-read hop, never to direct role assumption."
+  type = object({
+    enabled                = optional(bool, false)
+    spoke_role_name        = optional(string, "aow-spoke")
+    external_id            = optional(string)
+    spoke_session_duration = optional(string, "15m")
+    allowed_accounts       = optional(list(string), [])
   })
   default = { enabled = false }
 }
@@ -134,10 +150,14 @@ variable "enable_session_policy_bucket" {
 variable "assumable_role_arns" {
   type        = list(string)
   description = <<-EOT
-    Role ARNs the Lambda may assume (sts:AssumeRole/sts:TagSession). When
-    tag_auth.enabled is true with cross-account hub/spoke, ALSO include the spoke
-    role ARN pattern, e.g. "arn:aws:iam::*:role/aow-spoke", so the hub can reach
-    member accounts. (sts:GetCallerIdentity needs no explicit permission.)
+    Role ARNs the Lambda may assume directly (sts:AssumeRole/sts:TagSession),
+    including target roles in member accounts under cross_account.enabled
+    (direct hub -> target, one hop). Prefer least-privilege per-account
+    patterns, e.g. "arn:aws:iam::<member-account-id>:role/<prefix>*", over
+    "arn:aws:iam::*:role/*". Only include the spoke role pattern (e.g.
+    "arn:aws:iam::*:role/aow-spoke") when using cross-account tag_auth, since
+    the spoke is a tag-read broker (iam:GetRole), not an assume target.
+    (sts:GetCallerIdentity needs no explicit permission.)
   EOT
   default     = []
 }
@@ -157,11 +177,17 @@ variable "force_destroy_buckets" {
 # ---- JWT Validation Mode ----
 variable "jwt_validation_mode" {
   type        = string
-  description = "JWT validation mode: 'self' (default), 'apigw' (delegate to API GW JWT Authorizer), or 'alb' (verify ALB-signed OIDC data header)."
+  description = <<-EOT
+    JWT validation mode: 'self' (default, apigateway binary) or 'apigw'
+    (delegate to the provisioned API GW JWT Authorizer, apigatewayv2 binary).
+    'alb' mode is not supported by this stack: it requires the `alb` Lambda
+    binary behind an Application Load Balancer, which this module does not
+    provision.
+  EOT
   default     = "self"
   validation {
-    condition     = contains(["self", "apigw", "alb"], var.jwt_validation_mode)
-    error_message = "jwt_validation_mode must be 'self', 'apigw', or 'alb'."
+    condition     = contains(["self", "apigw"], var.jwt_validation_mode)
+    error_message = "jwt_validation_mode must be 'self' or 'apigw' ('alb' needs the alb binary + an ALB, not provisioned here)."
   }
 }
 
@@ -175,10 +201,4 @@ variable "jwt_authorizer_audiences" {
   type        = list(string)
   description = "Accepted audiences for the API Gateway JWT Authorizer. Only used when jwt_validation_mode = 'apigw'."
   default     = ["sts.amazonaws.com"]
-}
-
-variable "alb_expected_signer" {
-  type        = string
-  description = "Expected ALB ARN for x-amzn-oidc-data signer validation. Required when jwt_validation_mode = 'alb' to prevent cross-ALB spoofing."
-  default     = ""
 }

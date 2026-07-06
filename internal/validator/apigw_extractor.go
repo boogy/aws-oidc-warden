@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -15,103 +17,102 @@ import (
 // It does NOT verify signatures — that responsibility belongs to API Gateway.
 // If AuthorizerClaims is nil or empty, it rejects the request to prevent
 // direct Lambda invocations that bypass the authorizer.
-// Defense-in-depth: re-validates issuer, audience, and expiry even though
-// API Gateway checks these at authorizer time, guarding against misconfiguration
-// and clock skew between authorization and Lambda invocation.
+// Defense-in-depth: re-validates issuer, audience, expiry, and every other
+// claim self mode checks (sub, iat, nbf, lifetime/age caps, required_claims)
+// through the same checkAndNormalizeClaims path Validate() uses — delegated
+// trust in the upstream signature verification is the only difference from
+// self mode.
 type APIGWExtractor struct {
-	expectedIssuer    string
-	expectedAudiences []string
+	provider *config.Provider
 }
 
-// NewAPIGWExtractor creates an APIGWExtractor that re-validates issuer and audience
-// against the configured values as a defense-in-depth check.
-func NewAPIGWExtractor(issuer string, audiences []string) *APIGWExtractor {
-	return &APIGWExtractor{expectedIssuer: issuer, expectedAudiences: audiences}
+// NewAPIGWExtractor creates an APIGWExtractor for the delegated "apigw"
+// mode's single configured issuer. provider is read on every Extract() call
+// (via resolveDelegatedSpec), so a hot-reloaded audiences/claim_mappings/
+// required_claims/jwt_leeway change takes effect without a restart, matching
+// self mode.
+func NewAPIGWExtractor(provider *config.Provider) *APIGWExtractor {
+	return &APIGWExtractor{provider: provider}
 }
 
-// Extract maps the API Gateway authorizer claims to GithubClaims, re-validating
-// issuer, audience, and expiry for defense in depth.
-func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*types.GithubClaims, error) {
+// Extract maps the API Gateway authorizer claims to types.Claims, re-validating
+// issuer and all of self mode's claim checks for defense in depth.
+func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*types.Claims, error) {
 	if len(input.AuthorizerClaims) == 0 {
 		return nil, fmt.Errorf("no authorizer claims present: request may have bypassed API Gateway JWT Authorizer")
 	}
-	return a.mapAPIGWClaims(input.AuthorizerClaims)
+
+	raw, err := mapClaimsFromStrings(input.AuthorizerClaims)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := a.provider.Get()
+	spec, bounds, err := resolveDelegatedSpec(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Re-validate issuer — guards against a reused or misconfigured JWT
+	// Authorizer, and against a token from a different, unconfigured issuer.
+	iss, err := raw.GetIssuer()
+	if err != nil || iss != spec.Issuer {
+		return nil, fmt.Errorf("iss mismatch: got %q, want %q", iss, spec.Issuer)
+	}
+
+	return checkAndNormalizeClaims(raw, spec, bounds, time.Now())
 }
 
-func (a *APIGWExtractor) mapAPIGWClaims(raw map[string]string) (*types.GithubClaims, error) {
-	repo := raw["repository"]
-	if repo == "" {
-		return nil, fmt.Errorf("missing required claim: repository")
-	}
+// numericClaimKeys are converted from string to float64 before being placed
+// into a jwt.MapClaims: MapClaims.GetExpirationTime/GetIssuedAt/GetNotBefore
+// only parse a float64 or json.Number, never a raw string (see
+// jwt.MapClaims.parseNumericDate). Every other claim stays a string.
+var numericClaimKeys = map[string]bool{"exp": true, "iat": true, "nbf": true}
 
-	// Re-validate issuer — guards against a reused or misconfigured JWT Authorizer.
-	iss := raw["iss"]
-	if iss != a.expectedIssuer {
-		return nil, fmt.Errorf("iss mismatch: got %q, want %q", iss, a.expectedIssuer)
-	}
-
-	// Re-validate audience — at least one must match the configured set.
-	aud := raw["aud"]
-	matched := false
-	for _, want := range a.expectedAudiences {
-		if aud == want {
-			matched = true
-			break
+// mapClaimsFromStrings converts the API Gateway authorizer's
+// map[string]string claims into a jwt.MapClaims suitable for
+// checkAndNormalizeClaims and normalizeClaims.
+func mapClaimsFromStrings(raw map[string]string) (jwt.MapClaims, error) {
+	mc := make(jwt.MapClaims, len(raw))
+	for k, v := range raw {
+		if k == "aud" {
+			mc[k] = parseAuthorizerAudience(v)
+			continue
 		}
-	}
-	if !matched {
-		return nil, fmt.Errorf("aud mismatch: token audience %q not in allowed set %v", aud, a.expectedAudiences)
-	}
-
-	// Re-validate expiry — API Gateway checks exp at auth time; Lambda cold starts
-	// can add enough delay that a short-lived token expires before processing.
-	expUnix, err := strconv.ParseInt(raw["exp"], 10, 64)
-	if err != nil || expUnix == 0 {
-		return nil, fmt.Errorf("missing or unparseable exp claim in authorizer context")
-	}
-	if time.Now().Unix() > expUnix {
-		return nil, fmt.Errorf("token has expired (exp=%d)", expUnix)
-	}
-
-	c := &types.GithubClaims{
-		Sub:                  raw["sub"],
-		Actor:                raw["actor"],
-		ActorID:              raw["actor_id"],
-		BaseRef:              raw["base_ref"],
-		EventName:            raw["event_name"],
-		HeadRef:              raw["head_ref"],
-		JobWorkflowRef:       raw["job_workflow_ref"],
-		JobWorkflowSha:       raw["job_workflow_sha"],
-		Ref:                  raw["ref"],
-		RefProtected:         raw["ref_protected"],
-		RefType:              raw["ref_type"],
-		Repository:           repo,
-		RepositoryID:         raw["repository_id"],
-		RepositoryOwner:      raw["repository_owner"],
-		RepositoryOwnerID:    raw["repository_owner_id"],
-		RepositoryVisibility: raw["repository_visibility"],
-		RunAttempt:           raw["run_attempt"],
-		RunID:                raw["run_id"],
-		RunNumber:            raw["run_number"],
-		RunnerEnvironment:    raw["runner_environment"],
-		Sha:                  raw["sha"],
-		Workflow:             raw["workflow"],
-		WorkflowRef:          raw["workflow_ref"],
-		WorkflowSha:          raw["workflow_sha"],
-	}
-
-	c.Issuer = iss
-	if aud != "" {
-		c.Audience = jwt.ClaimStrings{aud}
-	}
-	c.ExpiresAt = jwt.NewNumericDate(time.Unix(expUnix, 0))
-	if iat, err := strconv.ParseInt(raw["iat"], 10, 64); err == nil {
-		// Reject a future iat, matching self-mode's jwt.WithIssuedAt() check.
-		if time.Now().Unix() < iat {
-			return nil, fmt.Errorf("token iat is in the future (%d)", iat)
+		if !numericClaimKeys[k] {
+			mc[k] = v
+			continue
 		}
-		c.IssuedAt = jwt.NewNumericDate(time.Unix(iat, 0))
+		if v == "" {
+			continue
+		}
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return nil, fmt.Errorf("claim %q is not numeric: %w", k, err)
+		}
+		mc[k] = f
 	}
+	return mc, nil
+}
 
-	return c, nil
+// parseAuthorizerAudience decodes the authorizer's string form of the "aud"
+// claim. A token with a multi-value aud reaches the authorizer context as one
+// bracketed, space-separated string (e.g. "[aud1 aud2]" — the HTTP API JWT
+// Authorizer stringifies array claims), which would otherwise never match a
+// configured audience. A single-value aud (the common case) passes through
+// unchanged; jwt.MapClaims.GetAudience accepts both string and []string.
+//
+// The verbatim string is kept as a candidate alongside the split values, so a
+// single-value aud that legitimately looks bracketed (e.g. "[internal]")
+// still matches an identically-configured audience. Splitting assumes
+// audience values contain no spaces (they are URIs/identifiers in practice);
+// an audience value WITH spaces could fragment into a piece that matches a
+// configured audience — acceptable here because this check is
+// defense-in-depth behind API Gateway's own audience validation, which has
+// already run against the authorizer's configured audience list.
+func parseAuthorizerAudience(v string) any {
+	if len(v) < 2 || v[0] != '[' || v[len(v)-1] != ']' {
+		return v
+	}
+	return append([]string{v}, strings.Fields(v[1:len(v)-1])...)
 }

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-
-	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 const maxBodyBytes = 1024 * 1024
@@ -74,9 +72,11 @@ func ParseRequestBody(body string) (*RequestData, error) {
 
 	var requestData RequestData
 	if err := json.Unmarshal([]byte(body), &requestData); err != nil {
+		// No body preview in the log: a malformed body can still contain a
+		// (partial) bearer token, which must never reach the log stream.
 		slog.Error("Failed to unmarshal request body",
 			slog.String("error", err.Error()),
-			slog.String("bodyPreview", utils.TruncateString(body, 100)))
+			slog.Int("bodyBytes", len(body)))
 		return nil, fmt.Errorf("invalid JSON format: %w", ErrInvalidJSON)
 	}
 

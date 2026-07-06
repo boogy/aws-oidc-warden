@@ -15,7 +15,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 
 ## Pipeline
 
-`MaybeRefresh()` → `extractor.Extract(ctx, input)` → account allow-list guard → `MatchRolesToRepoWithConstraints` → tag-auth fallback → session policy → role assumption.
+`MaybeRefresh()` → `extractor.Extract(ctx, input)` → account allow-list guard (if `CrossAccount.Enabled`) → `cfg.AuthorizeRoles(issuer, subject, claims)` → tag-auth fallback (`cfg.TagAuth.Authorize`) → `cfg.FindSessionPolicy` → `cfg.IssuerSessionTags` → role assumption → audit record.
 
 ## Conventions
 

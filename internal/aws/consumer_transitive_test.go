@@ -16,7 +16,7 @@ import (
 
 func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
 	var captured *sts.AssumeRoleInput
 	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		captured = in
@@ -28,17 +28,35 @@ func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/", TransitiveSessionTags: true}}
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
-	claims := &gtypes.GithubClaims{Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main", EventName: "push"}
+	claims := &gtypes.Claims{
+		Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main", EventName: "push",
+		Raw: map[string]any{"repository": "acme/api", "actor": "deploy-bot", "ref": "refs/heads/main", "event_name": "push"},
+	}
 
-	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims)
+	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
-	assert.ElementsMatch(t, []string{"repo", "ref", "actor"}, captured.TransitiveTagKeys)
+	// All configured session tags are marked transitive, not just repo/ref/actor:
+	// key names are operator-defined per issuer (repo-owner/ref-type are absent
+	// here only because their source claims are empty on this test's Claims).
+	assert.ElementsMatch(t, []string{"repo", "ref", "actor", "event-name"}, captured.TransitiveTagKeys)
+}
+
+// defaultGitHubSessionTagsForTest mirrors config.defaultGitHubIssuer's
+// SessionTags spec (STS tag key -> raw claim name), used by tests that need
+// BuildSessionTags to actually produce repo/ref/actor tags.
+var defaultGitHubSessionTagsForTest = map[string]string{
+	"repo":       "repository",
+	"repo-owner": "repository_owner",
+	"ref":        "ref",
+	"ref-type":   "ref_type",
+	"actor":      "actor",
+	"event-name": "event_name",
 }
 
 func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
 	var captured *sts.AssumeRoleInput
 	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		captured = in
@@ -50,78 +68,131 @@ func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
 	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}} // transitive off
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
-	claims := &gtypes.GithubClaims{Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main"}
+	claims := &gtypes.Claims{
+		Repository: "acme/api", Actor: "deploy-bot", Ref: "refs/heads/main",
+		Raw: map[string]any{"repository": "acme/api", "actor": "deploy-bot", "ref": "refs/heads/main"},
+	}
 
-	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims)
+	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.Empty(t, captured.TransitiveTagKeys)
 }
 
-// TestAssumeRole_CrossAccountClamp verifies that a cross-account (role-chained)
-// assume clamps the session duration to AWS's 1h chaining cap. The target role
-// is assumed via AssumeRoleAs using spoke credentials; capture that input.
-func TestAssumeRole_CrossAccountClamp(t *testing.T) {
-	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+// TestAssumeRoleClampRoleSession verifies that when the warden's own creds
+// are a role session, a requested duration over 1h is clamped to 3600 —
+// regardless of whether the target account is the hub or a cross-account
+// member. Role chaining is a property of the source creds, not the target
+// account: AssumeRole always goes direct hub -> target (1 hop) with hub
+// creds, so the clamp must apply the same way in both cases.
+func TestAssumeRoleClampRoleSession(t *testing.T) {
+	t.Run("same account", func(t *testing.T) {
+		m := new(MockAwsServiceWrapper)
+		m.On("GetCallerIdentityInfo").Return("111111111111", true, nil)
+		var captured *sts.AssumeRoleInput
+		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+			captured = in
+			return true
+		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+			AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"),
+		}}, nil).Once()
 
-	// Hub assumes the spoke role in the target account.
-	spokeExp := time.Now().Add(time.Hour)
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
-		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
-	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
-		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
-		SessionToken: aws.String("ST"), Expiration: &spokeExp,
-	}}, nil).Once()
+		cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}}
+		c := NewAwsConsumer(cfg)
+		c.AWS = m
 
-	// Target role is assumed via AssumeRoleAs; capture its clamped duration.
-	var captured *sts.AssumeRoleInput
-	targetExp := time.Now().Add(time.Hour)
-	m.On("AssumeRoleAs", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
-		captured = in
-		return *in.RoleArn == "arn:aws:iam::222222222222:role/app"
-	}), mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
-		AccessKeyId: aws.String("AK2"), SecretAccessKey: aws.String("SK2"),
-		SessionToken: aws.String("ST2"), Expiration: &targetExp,
-	}}, nil).Once()
+		var requested int32 = 7200
+		_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		require.NotNil(t, captured.DurationSeconds)
+		assert.Equal(t, int32(3600), *captured.DurationSeconds)
+	})
 
-	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{
-		Enabled: true, TagPrefix: "aow/", SpokeRoleName: "aow-spoke",
-		SpokeSessionDuration: 15 * time.Minute,
-	}}
-	c := NewAwsConsumer(cfg)
-	c.AWS = m
+	t.Run("cross account", func(t *testing.T) {
+		m := new(MockAwsServiceWrapper)
+		m.On("GetCallerIdentityInfo").Return("111111111111", true, nil)
+		var captured *sts.AssumeRoleInput
+		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+			captured = in
+			return *in.RoleArn == "arn:aws:iam::222222222222:role/app"
+		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+			AccessKeyId: aws.String("AK2"), SecretAccessKey: aws.String("SK2"), SessionToken: aws.String("ST2"),
+		}}, nil).Once()
 
-	var requested int32 = 7200 // > 1h; must be clamped on the chained assume
-	_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil)
-	require.NoError(t, err)
-	require.NotNil(t, captured)
-	require.NotNil(t, captured.DurationSeconds)
-	assert.Equal(t, int32(3600), *captured.DurationSeconds)
-	m.AssertExpectations(t)
+		cfg := &gtvcfg.Config{
+			TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"},
+			CrossAccount: &gtvcfg.CrossAccount{
+				Enabled: true, SpokeRoleName: "aow-spoke",
+				SpokeSessionDuration: 15 * time.Minute,
+			},
+		}
+		c := NewAwsConsumer(cfg)
+		c.AWS = m
+
+		var requested int32 = 7200 // > 1h; must be clamped
+		_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		require.NotNil(t, captured.DurationSeconds)
+		assert.Equal(t, int32(3600), *captured.DurationSeconds)
+	})
 }
 
-// TestAssumeRole_SameAccountNoClamp verifies the clamp does not apply to a
-// same-account assume (creds == nil): the requested duration is preserved.
-func TestAssumeRole_SameAccountNoClamp(t *testing.T) {
-	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
-	var captured *sts.AssumeRoleInput
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
-		captured = in
-		return true
-	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
-		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"),
-	}}, nil).Once()
+// TestAssumeRoleNoClampIAMUser verifies the clamp does not apply when the
+// warden's own creds are an IAM user (local mode, not role-chained): the
+// requested duration is preserved for both same-account and cross-account
+// (enabled+allowed) targets.
+func TestAssumeRoleNoClampIAMUser(t *testing.T) {
+	t.Run("same account", func(t *testing.T) {
+		m := new(MockAwsServiceWrapper)
+		m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
+		var captured *sts.AssumeRoleInput
+		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+			captured = in
+			return true
+		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+			AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"),
+		}}, nil).Once()
 
-	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}}
-	c := NewAwsConsumer(cfg)
-	c.AWS = m
+		cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}}
+		c := NewAwsConsumer(cfg)
+		c.AWS = m
 
-	var requested int32 = 7200
-	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil)
-	require.NoError(t, err)
-	require.NotNil(t, captured)
-	require.NotNil(t, captured.DurationSeconds)
-	assert.Equal(t, int32(7200), *captured.DurationSeconds)
+		var requested int32 = 7200
+		_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		require.NotNil(t, captured.DurationSeconds)
+		assert.Equal(t, int32(7200), *captured.DurationSeconds)
+	})
+
+	t.Run("cross account", func(t *testing.T) {
+		m := new(MockAwsServiceWrapper)
+		m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
+		var captured *sts.AssumeRoleInput
+		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+			captured = in
+			return *in.RoleArn == "arn:aws:iam::222222222222:role/app"
+		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+			AccessKeyId: aws.String("AK2"), SecretAccessKey: aws.String("SK2"), SessionToken: aws.String("ST2"),
+		}}, nil).Once()
+
+		cfg := &gtvcfg.Config{
+			TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"},
+			CrossAccount: &gtvcfg.CrossAccount{
+				Enabled: true, SpokeRoleName: "aow-spoke",
+				SpokeSessionDuration: 15 * time.Minute,
+			},
+		}
+		c := NewAwsConsumer(cfg)
+		c.AWS = m
+
+		var requested int32 = 7200
+		_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		require.NotNil(t, captured.DurationSeconds)
+		assert.Equal(t, int32(7200), *captured.DurationSeconds)
+	})
 }

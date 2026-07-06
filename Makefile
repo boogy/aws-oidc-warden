@@ -86,7 +86,13 @@ fmt:
 lint:
 	@echo "Running linter..."
 	@command -v golangci-lint >/dev/null 2>&1 || { echo >&2 "golangci-lint not installed"; exit 1; }
-	@golangci-lint run --no-config ./...
+	@golangci-lint run ./...
+
+.PHONY: vuln
+vuln:
+	@echo "Running govulncheck..."
+	@command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@latest
+	@govulncheck ./...
 
 .PHONY: lint-no-tests
 lint-no-tests:
@@ -119,7 +125,7 @@ lint-all:
 	@golangci-lint run --no-config --tests=false --enable-only=bodyclose,errcheck,govet,ineffassign,misspell,staticcheck,unused ./...
 
 .PHONY: check
-check: fmt lint test
+check: fmt lint vuln test
 	@echo "All checks passed!"
 
 # -----------------------------------------------------------------------------
@@ -150,12 +156,14 @@ test-coverage:
 .PHONY: ko-build
 ko-build: verify-ko
 	@echo "Building container images with ko locally..."
+	@# Local override: pin a flat tag so the build never depends on git tag state.
 	@KO_DOCKER_REPO=ko.local ko build ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --tags=$(VERSION),latest
 
 .PHONY: ko-publish
 ko-publish: verify-ko
 	@echo "Publishing container images to $(KO_DOCKER_REPO)..."
-	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --bare --tags=$(VERSION),latest
+	@# Tags come from .ko.yaml (per-module <module>-<tag>/<module>-latest scheme).
+	@KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish ./cmd/apigateway ./cmd/apigatewayv2 ./cmd/alb ./cmd/lambdaurl --bare
 
 .PHONY: ko-publish-all
 ko-publish-all: ko-publish

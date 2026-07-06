@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +22,7 @@ type AwsServiceWrapperInterface interface {
 	AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
 	GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
 	GetCallerAccount() (string, error)
-	AssumeRoleAs(input *sts.AssumeRoleInput, creds aws.CredentialsProvider) (*sts.AssumeRoleOutput, error)
+	GetCallerIdentityInfo() (account string, isRoleSession bool, err error)
 	GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
 	RefreshClients()
 }
@@ -44,8 +45,13 @@ type AwsServiceWrapper struct {
 	defaultTimeout  time.Duration // Default timeout for AWS operations
 
 	// Cached hub identity (from STS GetCallerIdentity)
+	callerMu      sync.Mutex
 	callerAccount string
-	callerOnce    sync.Once
+	callerArn     string
+
+	// getCallerIdentityFn allows tests to inject a fake STS GetCallerIdentity call.
+	// When nil, s.stsClient.GetCallerIdentity is used.
+	getCallerIdentityFn func(ctx context.Context) (*sts.GetCallerIdentityOutput, error)
 }
 
 func NewAwsServiceWrapper() *AwsServiceWrapper {
@@ -198,32 +204,45 @@ func (s *AwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput
 	return output, nil
 }
 
-// GetCallerAccount returns the account ID of the warden's own (hub) identity,
-// fetched once via STS GetCallerIdentity and cached.
-func (s *AwsServiceWrapper) GetCallerAccount() (string, error) {
-	var err error
-	s.callerOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
-		defer cancel()
-		var out *sts.GetCallerIdentityOutput
-		out, err = s.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
-		if err == nil && out.Account != nil {
-			s.callerAccount = *out.Account
-		}
-	})
-	if s.callerAccount == "" && err == nil {
-		err = fmt.Errorf("could not resolve caller account")
-	}
-	return s.callerAccount, err
-}
+// GetCallerIdentityInfo returns the account ID and role-session status of the
+// warden's own (hub) identity, fetched via STS GetCallerIdentity and cached.
+// A failed lookup is not cached, so a later call retries instead of failing forever.
+func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSession bool, err error) {
+	s.callerMu.Lock()
+	defer s.callerMu.Unlock()
 
-// AssumeRoleAs performs sts:AssumeRole using the supplied credentials provider
-// (e.g. spoke credentials) instead of the default hub identity.
-func (s *AwsServiceWrapper) AssumeRoleAs(input *sts.AssumeRoleInput, creds aws.CredentialsProvider) (*sts.AssumeRoleOutput, error) {
+	if s.callerAccount != "" {
+		return s.callerAccount, strings.Contains(s.callerArn, ":assumed-role/"), nil
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
 	defer cancel()
-	client := sts.NewFromConfig(s.cfg, func(o *sts.Options) { o.Credentials = creds })
-	return client.AssumeRole(ctx, input)
+
+	fetch := s.getCallerIdentityFn
+	if fetch == nil {
+		fetch = func(ctx context.Context) (*sts.GetCallerIdentityOutput, error) {
+			return s.stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+		}
+	}
+
+	out, ferr := fetch(ctx)
+	if ferr != nil {
+		slog.Error("Error getting caller identity", slog.String("error", ferr.Error()))
+		return "", false, ferr
+	}
+	if out.Account == nil || out.Arn == nil {
+		return "", false, fmt.Errorf("sts GetCallerIdentity returned incomplete identity")
+	}
+
+	s.callerAccount = *out.Account
+	s.callerArn = *out.Arn
+	return s.callerAccount, strings.Contains(s.callerArn, ":assumed-role/"), nil
+}
+
+// GetCallerAccount returns the account ID of the warden's own (hub) identity.
+func (s *AwsServiceWrapper) GetCallerAccount() (string, error) {
+	account, _, err := s.GetCallerIdentityInfo()
+	return account, err
 }
 
 // GetRoleAs performs iam:GetRole using the supplied credentials provider.

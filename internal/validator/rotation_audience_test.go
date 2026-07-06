@@ -1,6 +1,7 @@
 package validator_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -40,13 +41,19 @@ func jwkFromKey(kid string, pub *rsa.PublicKey) types.JSONWebKey {
 // signToken signs a minimal valid GitHub claims set with the given key/kid.
 func signToken(t *testing.T, key *rsa.PrivateKey, kid, issuer, audience string) string {
 	t.Helper()
-	claims := &types.GithubClaims{
+	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
+			Subject:   "owner/repo",
 			Audience:  jwt.ClaimStrings{audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
+		// Sub (depth-0) is what actually marshals to the "sub" JWT claim --
+		// it shadows RegisteredClaims.Subject for JSON purposes (see
+		// types.Claims doc comment). Set both so intent is clear even though
+		// only Sub round-trips.
+		Sub:        "owner/repo",
 		Repository: "owner/repo",
 		Ref:        "refs/heads/main",
 	}
@@ -65,8 +72,9 @@ func oidcServer(t *testing.T, getJWKS func() *types.JWKS) *httptest.Server {
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
 			_ = json.NewEncoder(w).Encode(struct {
+				Issuer  string `json:"issuer"`
 				JwksURI string `json:"jwks_uri"`
-			}{JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+			}{Issuer: "http://" + r.Host, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
 		case "/jwks":
 			_ = json.NewEncoder(w).Encode(getJWKS())
 		default:
@@ -75,6 +83,21 @@ func oidcServer(t *testing.T, getJWKS func() *types.JWKS) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// githubIssuer builds a single-issuer config trusting issuer for the given
+// audiences with provider "github" and the "repository" claim required.
+// AllowInsecureIssuers is set so the loopback httptest servers used
+// throughout this package's tests aren't rejected by the HTTPS-only default.
+func githubIssuer(issuer string, audiences ...string) *config.Config {
+	return &config.Config{
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: audiences, RequiredClaims: []string{"repository"}},
+		},
+		RoleSessionName:      "aws-oidc-warden",
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
+	}
 }
 
 // TestValidate_NonFirstAudience verifies multi-audience support: a token whose
@@ -87,15 +110,10 @@ func TestValidate_NonFirstAudience(t *testing.T) {
 	jwks := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k1", &key.PublicKey)}}
 	srv := oidcServer(t, func() *types.JWKS { return jwks })
 
-	cfg := &config.Config{
-		Issuer:          srv.URL,
-		Audiences:       []string{"first-aud", "second-aud", "third-aud"},
-		RoleSessionName: "aws-oidc-warden",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
-	}
+	cfg := githubIssuer(srv.URL, "first-aud", "second-aud", "third-aud")
 	require.NoError(t, cfg.Validate())
 
-	v := validator.NewTokenValidator(cfg, cache.NewMemoryCache())
+	v := staticValidator(cfg, cache.NewMemoryCache())
 
 	// Token carries only the THIRD configured audience.
 	token := signToken(t, key, "k1", srv.URL, "third-aud")
@@ -113,19 +131,15 @@ func TestValidate_WrongAudienceRejected(t *testing.T) {
 	jwks := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k1", &key.PublicKey)}}
 	srv := oidcServer(t, func() *types.JWKS { return jwks })
 
-	cfg := &config.Config{
-		Issuer:          srv.URL,
-		Audiences:       []string{"expected-aud"},
-		RoleSessionName: "aws-oidc-warden",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
-	}
+	cfg := githubIssuer(srv.URL, "expected-aud")
 	require.NoError(t, cfg.Validate())
 
-	v := validator.NewTokenValidator(cfg, cache.NewMemoryCache())
+	v := staticValidator(cfg, cache.NewMemoryCache())
 
 	token := signToken(t, key, "k1", srv.URL, "attacker-aud")
 	_, err = v.Validate(token)
 	assert.Error(t, err)
+	assert.True(t, errors.Is(err, validator.ErrInvalidAudience))
 }
 
 // TestValidate_KeyRotationRefetch verifies that a token signed with a freshly
@@ -145,15 +159,11 @@ func TestValidate_KeyRotationRefetch(t *testing.T) {
 		return served
 	})
 
-	cfg := &config.Config{
-		Issuer:          srv.URL,
-		Audiences:       []string{"aud"},
-		RoleSessionName: "aws-oidc-warden",
-		Cache:           &config.Cache{TTL: time.Hour}, // long TTL: stale cache must not block rotation
-	}
+	cfg := githubIssuer(srv.URL, "aud")
+	cfg.Cache = &config.Cache{TTL: time.Hour} // long TTL: stale cache must not block rotation
 	require.NoError(t, cfg.Validate())
 
-	v := validator.NewTokenValidator(cfg, cache.NewMemoryCache())
+	v := staticValidator(cfg, cache.NewMemoryCache())
 
 	// Prime the cache with the old JWKS.
 	_, err = v.Validate(signToken(t, oldKey, "old-kid", srv.URL, "aud"))
@@ -174,15 +184,11 @@ func TestValidate_KeyRotationRefetch(t *testing.T) {
 // TestFetchJWKS_RejectsInsecureIssuer ensures a non-HTTPS, non-loopback issuer
 // is rejected.
 func TestFetchJWKS_RejectsInsecureIssuer(t *testing.T) {
-	cfg := &config.Config{
-		Issuer:          "http://token.example.com",
-		Audiences:       []string{"aud"},
-		RoleSessionName: "aws-oidc-warden",
-		Cache:           &config.Cache{TTL: time.Minute},
-	}
+	cfg := githubIssuer("http://token.example.com", "aud")
+	cfg.Cache = &config.Cache{TTL: time.Minute}
 	require.NoError(t, cfg.Validate())
 
-	v := validator.NewTokenValidator(cfg, cache.NewMemoryCache())
+	v := staticValidator(cfg, cache.NewMemoryCache())
 
 	_, err := v.FetchJWKS("http://token.example.com")
 	require.Error(t, err)
@@ -213,13 +219,16 @@ func ecJwkFromKey(kid string, pub *ecdsa.PublicKey) types.JSONWebKey {
 // signTokenEC signs a minimal valid GitHub claims set with the given EC key.
 func signTokenEC(t *testing.T, key *ecdsa.PrivateKey, kid, issuer, audience string) string {
 	t.Helper()
-	claims := &types.GithubClaims{
+	claims := &types.Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    issuer,
+			Subject:   "owner/repo",
 			Audience:  jwt.ClaimStrings{audience},
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
+		// Sub (depth-0) is what actually marshals to "sub" -- see signToken.
+		Sub:        "owner/repo",
 		Repository: "owner/repo",
 		Ref:        "refs/heads/main",
 	}
@@ -238,15 +247,10 @@ func TestValidate_ECKey_ES256(t *testing.T) {
 	jwks := &types.JWKS{Keys: []types.JSONWebKey{ecJwkFromKey("ec-k1", &key.PublicKey)}}
 	srv := oidcServer(t, func() *types.JWKS { return jwks })
 
-	cfg := &config.Config{
-		Issuer:          srv.URL,
-		Audiences:       []string{"aud"},
-		RoleSessionName: "aws-oidc-warden",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
-	}
+	cfg := githubIssuer(srv.URL, "aud")
 	require.NoError(t, cfg.Validate())
 
-	v := validator.NewTokenValidator(cfg, cache.NewMemoryCache())
+	v := staticValidator(cfg, cache.NewMemoryCache())
 	token := signTokenEC(t, key, "ec-k1", srv.URL, "aud")
 	claims, err := v.Validate(token)
 	require.NoError(t, err)
@@ -256,7 +260,7 @@ func TestValidate_ECKey_ES256(t *testing.T) {
 // TestGenKeyFunc_UnknownKtyReturnsError ensures an unknown or empty kty returns
 // an error (not ErrKeyNotFound) so no spurious JWKS refetch is triggered.
 func TestGenKeyFunc_UnknownKtyReturnsError(t *testing.T) {
-	v := validator.NewTokenValidator(&config.Config{}, nil)
+	v := staticValidator(&config.Config{}, nil)
 
 	for _, kty := range []string{"", "OKP", "oct"} {
 		jwks := &types.JWKS{Keys: []types.JSONWebKey{{KeyID: "k1", KeyType: kty}}}
@@ -268,57 +272,68 @@ func TestGenKeyFunc_UnknownKtyReturnsError(t *testing.T) {
 	}
 }
 
-// TestValidate_HotReloadUpdatesAudience verifies that after a provider hot-reload
-// removes an audience, the validator rejects tokens for that audience.
-func TestValidate_HotReloadUpdatesAudience(t *testing.T) {
+// TestValidate_ConcurrentHotSwap_Race runs many goroutines calling Validate
+// while a config hot-reload swaps the issuer's audience out from under them.
+// Run with -race: the atomic snapshot swap in TokenValidator must never race,
+// and once the swap has completed every subsequent Validate call must observe
+// the new configuration (no stale reads).
+func TestValidate_ConcurrentHotSwap_Race(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
-
 	jwks := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k1", &key.PublicKey)}}
 	srv := oidcServer(t, func() *types.JWKS { return jwks })
 
-	cfg := &config.Config{
-		Issuer:          srv.URL,
-		Audiences:       []string{"allowed-aud", "revoked-aud"},
-		RoleSessionName: "test",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
+	cfgV1 := githubIssuer(srv.URL, "aud-v1")
+	require.NoError(t, cfgV1.Validate())
+
+	// fetch supplies the v2 configuration bytes; MergeBytes overlays them onto
+	// a clone of base (cfgV1) and re-validates, matching how a real remote
+	// config reload behaves.
+	v2JSON := fmt.Sprintf(`{"issuers":[{"issuer":%q,"provider":"github","audiences":["aud-v2"],"required_claims":["repository"]}]}`, srv.URL)
+	provider := config.NewProvider(cfgV1, 0, "json", func(context.Context) ([]byte, error) {
+		return []byte(v2JSON), nil
+	})
+	v := validator.NewTokenValidator(provider, cache.NewMemoryCache())
+
+	tokenV1 := signToken(t, key, "k1", srv.URL, "aud-v1")
+	tokenV2 := signToken(t, key, "k1", srv.URL, "aud-v2")
+
+	const workers = 16
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				// Results are intentionally not asserted per-iteration: which
+				// config a given call observes is a race by construction.
+				// -race is what proves the swap itself is safe.
+				_, _ = v.Validate(tokenV1)
+				_, _ = v.Validate(tokenV2)
+			}
+		}()
 	}
-	require.NoError(t, cfg.Validate())
 
-	provider := config.NewStaticProvider(cfg)
-	v := validator.NewTokenValidatorFromProvider(provider, cache.NewMemoryCache())
+	// Swap the config while the workers are mid-flight.
+	require.NoError(t, provider.Refresh(context.Background()))
 
-	// Token for "revoked-aud" is initially accepted.
-	token := signToken(t, key, "k1", srv.URL, "revoked-aud")
-	_, err = v.Validate(token)
-	require.NoError(t, err, "should accept before audience is revoked")
+	wg.Wait()
 
-	// Simulate hot-reload that removes "revoked-aud".
-	newCfg := &config.Config{
-		Issuer:          srv.URL,
-		Audiences:       []string{"allowed-aud"},
-		RoleSessionName: "test",
-		Cache:           &config.Cache{TTL: 10 * time.Minute},
-	}
-	require.NoError(t, newCfg.Validate())
-	provider2 := config.NewStaticProvider(newCfg)
+	// No-stale-read check: once Refresh has returned, every subsequent call
+	// must observe the new configuration deterministically.
+	_, err = v.Validate(tokenV1)
+	assert.Error(t, err, "aud-v1 must be rejected after hot-reload removed it")
+	assert.True(t, errors.Is(err, validator.ErrInvalidAudience))
 
-	// Use a wrapper to swap the underlying provider config — simulate what
-	// the provider does on hot-reload by creating a new static provider with
-	// the updated config. We test that NewTokenValidatorFromProvider reads
-	// the live config on each call.
-	v2 := validator.NewTokenValidatorFromProvider(provider2, cache.NewMemoryCache())
-
-	token2 := signToken(t, key, "k1", srv.URL, "revoked-aud")
-	_, err = v2.Validate(token2)
-	assert.Error(t, err, "should reject revoked-aud after reload")
-	assert.Contains(t, err.Error(), "audience")
+	claims, err := v.Validate(tokenV2)
+	require.NoError(t, err, "aud-v2 must be accepted after hot-reload")
+	assert.Equal(t, "owner/repo", claims.Repository)
 }
 
 // TestGenKeyFunc_ECKey_MissingCoords ensures an EC key without x/y/crv returns
 // an error rather than constructing a key with zero coordinates.
 func TestGenKeyFunc_ECKey_MissingCoords(t *testing.T) {
-	v := validator.NewTokenValidator(&config.Config{}, nil)
+	v := staticValidator(&config.Config{}, nil)
 
 	jwks := &types.JWKS{Keys: []types.JSONWebKey{{
 		KeyID:   "ec-kid",

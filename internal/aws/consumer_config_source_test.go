@@ -16,14 +16,14 @@ func TestConfigSource_ReflectsLiveConfig(t *testing.T) {
 	member := "arn:aws:iam::222222222222:role/app"
 
 	// Construction-time config allows the member account.
-	base := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{
-		Enabled: true, TagPrefix: "aow/", SpokeRoleName: "aow-spoke",
+	base := &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{
+		Enabled: true, SpokeRoleName: "aow-spoke",
 		AllowedAccounts: []string{"222222222222"},
 	}}
 
 	// Live config (post-reload) removes the member account.
-	live := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{
-		Enabled: true, TagPrefix: "aow/", SpokeRoleName: "aow-spoke",
+	live := &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{
+		Enabled: true, SpokeRoleName: "aow-spoke",
 		AllowedAccounts: []string{"333333333333"},
 	}}
 
@@ -46,14 +46,14 @@ func TestConfigSource_ReflectsLiveConfig(t *testing.T) {
 	assert.False(t, ok, "live config removed the member account; must be rejected")
 }
 
-// TestConfigSource_ToggleEnabled verifies enabling/disabling tag-auth via the
-// live getter is reflected by the consumer's cross-account gate.
+// TestConfigSource_ToggleEnabled verifies enabling/disabling cross-account via
+// the live getter is reflected by the consumer's cross-account gate.
 func TestConfigSource_ToggleEnabled(t *testing.T) {
 	member := "arn:aws:iam::222222222222:role/app"
 
-	disabled := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: false}}
-	enabled := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{
-		Enabled: true, TagPrefix: "aow/", SpokeRoleName: "aow-spoke",
+	disabled := &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: false}}
+	enabled := &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{
+		Enabled: true, SpokeRoleName: "aow-spoke",
 		AllowedAccounts: []string{"333333333333"},
 	}}
 
@@ -65,16 +65,17 @@ func TestConfigSource_ToggleEnabled(t *testing.T) {
 	c.AWS = m
 	c.SetConfigSource(func() *gtvcfg.Config { return current })
 
-	// Disabled: no cross-account path, gate returns true (nothing to enforce).
+	// Disabled: no cross-account path exists, so a member-account target is
+	// rejected (fail closed; only the hub account is reachable).
 	ok, err := c.IsTargetAccountAllowed(member)
 	require.NoError(t, err)
-	assert.True(t, ok)
+	assert.False(t, ok)
 
-	// Reload enables tag-auth with an allow-list excluding the member.
+	// Reload enables cross-account with an allow-list excluding the member.
 	current = enabled
 	ok, err = c.IsTargetAccountAllowed(member)
 	require.NoError(t, err)
-	assert.False(t, ok, "after enabling tag-auth, member not in allow-list must be rejected")
+	assert.False(t, ok, "after enabling cross-account, member not in allow-list must be rejected")
 }
 
 // TestConfigSource_FallsBackToConfig verifies that with no source wired the

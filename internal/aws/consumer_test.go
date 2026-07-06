@@ -3,6 +3,7 @@ package aws
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAwsConsumer_SessionName(t *testing.T) {
@@ -63,6 +65,8 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 	testPolicy := aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`)
 	testDuration := int32(3600)
 
+	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
+
 	// Test case: Successful role assumption
 	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && *input.RoleSessionName == testSessionName
@@ -75,19 +79,19 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, nil)
+	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST", *creds.AccessKeyId)
 
 	// Test case: Empty role ARN
-	creds, err = consumer.AssumeRole("", testSessionName, nil, &testDuration, nil)
+	creds, err = consumer.AssumeRole("", testSessionName, nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "roleArn cannot be empty")
 
 	// Test case: Empty session name
-	creds, err = consumer.AssumeRole(testRoleArn, "", nil, &testDuration, nil)
+	creds, err = consumer.AssumeRole(testRoleArn, "", nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "sessionName cannot be empty")
@@ -104,7 +108,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, testPolicy, &testDuration, nil)
+	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, testPolicy, &testDuration, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST2", *creds.AccessKeyId)
@@ -122,7 +126,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &shortDuration, nil)
+	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &shortDuration, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
@@ -139,7 +143,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &longDuration, nil)
+	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &longDuration, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
@@ -148,7 +152,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		return *input.RoleArn == "arn:aws:iam::123456789012:role/nonexistent"
 	})).Return(nil, errors.New("access denied")).Once()
 
-	creds, err = consumer.AssumeRole("arn:aws:iam::123456789012:role/nonexistent", testSessionName, nil, &testDuration, nil)
+	creds, err = consumer.AssumeRole("arn:aws:iam::123456789012:role/nonexistent", testSessionName, nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "access denied")
@@ -160,7 +164,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		Credentials: nil,
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole("arn:aws:iam::123456789012:role/empty-creds", testSessionName, nil, &testDuration, nil)
+	creds, err = consumer.AssumeRole("arn:aws:iam::123456789012:role/empty-creds", testSessionName, nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "no credentials returned")
@@ -180,43 +184,38 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 	testSessionName := "test-session"
 	testDuration := int32(3600)
 
-	// Create test GitHub claims
-	testClaims := &gtypes.GithubClaims{
-		Repository:      "owner/repo",
-		Actor:           "testuser",
-		Ref:             "refs/heads/main",
-		Workflow:        "CI",
-		EventName:       "push",
-		RunID:           "12345",
-		RunNumber:       "1",
-		RepositoryOwner: "owner",
-		Sha:             "abcd1234",
-		RefType:         "branch",
+	testClaims := &gtypes.Claims{
+		Repository: "owner/repo",
+		Actor:      "testuser",
+		Ref:        "refs/heads/main",
+		Raw: map[string]any{
+			"repository": "owner/repo",
+			"actor":      "testuser",
+			"ref":        "refs/heads/main",
+		},
+	}
+	testSpec := map[string]string{
+		"repo":  "repository",
+		"actor": "actor",
+		"ref":   "ref",
 	}
 
-	// Set up mock to capture the input and verify tags are present
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
-		// For the first call (with claims), verify tags are present
-		if *input.RoleArn == testRoleArn && *input.RoleSessionName == testSessionName {
-			// If this is a call with claims, we expect tags
-			if len(input.Tags) > 0 {
-				// Verify at least some key tags are present
-				tagMap := make(map[string]string)
-				for _, tag := range input.Tags {
-					if tag.Key != nil && tag.Value != nil {
-						tagMap[*tag.Key] = *tag.Value
-					}
-				}
+	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
 
-				// Check for at least the most important tags
-				if tagMap["GitHubRepository"] == "owner/repo" &&
-					tagMap["GitHubActor"] == "testuser" &&
-					tagMap["GitHubRef"] == "refs/heads/main" {
-					return true
-				}
+	// With claims + a session_tags spec, verify the expected tags are attached.
+	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+		if *input.RoleArn != testRoleArn || *input.RoleSessionName != testSessionName {
+			return false
+		}
+		tagMap := make(map[string]string)
+		for _, tag := range input.Tags {
+			if tag.Key != nil && tag.Value != nil {
+				tagMap[*tag.Key] = *tag.Value
 			}
 		}
-		return true // Accept all other calls for this test
+		return tagMap["repo"] == "owner/repo" &&
+			tagMap["actor"] == "testuser" &&
+			tagMap["ref"] == "refs/heads/main"
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: &types.Credentials{
 			AccessKeyId:     aws.String("AKIATEST"),
@@ -226,15 +225,13 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	// Call AssumeRole with GitHub claims
-	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims)
+	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST", *creds.AccessKeyId)
 
-	// Test case: Nil claims (should work without tags)
+	// Nil claims: no tags attached even though a spec is passed.
 	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
-		// Verify no tags are set when claims are nil
 		return input.Tags == nil && *input.RoleArn == testRoleArn
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: &types.Credentials{
@@ -245,7 +242,7 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, nil)
+	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, nil, testSpec)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST2", *creds.AccessKeyId)
@@ -254,100 +251,213 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 	mockAWS.AssertExpectations(t)
 }
 
-func TestCreateSessionTags(t *testing.T) {
-	// Test case: Valid claims
-	claims := &gtypes.GithubClaims{
-		Repository:      "owner/repo",
-		Actor:           "testuser",
-		Ref:             "refs/heads/main",
-		EventName:       "push",
-		RepositoryOwner: "owner",
-		RefType:         "branch",
+func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
+	mockAWS := new(MockAwsServiceWrapper)
+	consumer := &AwsConsumer{
+		AWS: mockAWS,
+		Config: &gtvcfg.Config{
+			TagAuth: &gtvcfg.TagAuth{TransitiveSessionTags: true},
+		},
 	}
 
-	tags := CreateSessionTags(claims)
-	assert.NotNil(t, tags)
-	assert.Greater(t, len(tags), 0)
+	testRoleArn := "arn:aws:iam::123456789012:role/test-role"
+	testSessionName := "test-session"
+	testDuration := int32(3600)
 
-	// Convert to map for easier testing
-	tagMap := make(map[string]string)
-	for _, tag := range tags {
-		if tag.Key != nil && tag.Value != nil {
-			tagMap[*tag.Key] = *tag.Value
-		}
+	testClaims := &gtypes.Claims{
+		Raw: map[string]any{
+			"repository": "owner/repo",
+			"project_id": "my-project",
+		},
+	}
+	// A custom-named tag ("project") alongside the well-known ones: all of
+	// them are operator-configured identity tags and must be marked
+	// transitive, not just the historical repo/ref/actor set.
+	testSpec := map[string]string{
+		"repo":    "repository",
+		"project": "project_id",
 	}
 
-	// Verify expected tags are present with new mappings
-	assert.Equal(t, "repo", tagMap["repo"])           // repository name only
-	assert.Equal(t, "testuser", tagMap["actor"])      // actor
-	assert.Equal(t, "refs/heads/main", tagMap["ref"]) // ref
-	assert.Equal(t, "push", tagMap["event-name"])     // event_name
-	assert.Equal(t, "owner", tagMap["repo-owner"])    // repository owner
-	assert.Equal(t, "branch", tagMap["ref-type"])     // ref_type
+	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
 
-	// Test case: Nil claims
-	tags = CreateSessionTags(nil)
-	assert.Nil(t, tags)
+	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+		return *input.RoleArn == testRoleArn &&
+			len(input.TransitiveTagKeys) == 2 &&
+			assert.ElementsMatch(t, []string{"repo", "project"}, input.TransitiveTagKeys)
+	})).Return(&sts.AssumeRoleOutput{
+		Credentials: &types.Credentials{
+			AccessKeyId:     aws.String("AKIATEST"),
+			SecretAccessKey: aws.String("SECRET"),
+			SessionToken:    aws.String("TOKEN"),
+			Expiration:      nil,
+		},
+	}, nil).Once()
 
-	// Test case: Empty claims
-	emptyClaims := &gtypes.GithubClaims{}
-	tags = CreateSessionTags(emptyClaims)
-	assert.Equal(t, 0, len(tags)) // Should have no tags since all fields are empty
+	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	assert.NoError(t, err)
+	assert.NotNil(t, creds)
 
-	// Test case: Repository name extraction
-	claimsWithDifferentRepo := &gtypes.GithubClaims{
-		Repository:      "my-org/my-awesome-repo",
-		Actor:           "developer",
-		RepositoryOwner: "my-org",
-	}
-	tags = CreateSessionTags(claimsWithDifferentRepo)
-	tagMap = make(map[string]string)
-	for _, tag := range tags {
-		if tag.Key != nil && tag.Value != nil {
-			tagMap[*tag.Key] = *tag.Value
-		}
-	}
-	assert.Equal(t, "my-awesome-repo", tagMap["repo"]) // should extract only repo name
-	assert.Equal(t, "my-org", tagMap["repo-owner"])    // should have full owner
-	assert.Equal(t, "developer", tagMap["actor"])      // should have actor
+	// TransitiveSessionTags off: no transitive keys are set, even with tags present.
+	consumer.Config.TagAuth.TransitiveSessionTags = false
+	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+		return *input.RoleArn == testRoleArn && input.TransitiveTagKeys == nil && len(input.Tags) == 2
+	})).Return(&sts.AssumeRoleOutput{
+		Credentials: &types.Credentials{
+			AccessKeyId:     aws.String("AKIATEST2"),
+			SecretAccessKey: aws.String("SECRET2"),
+			SessionToken:    aws.String("TOKEN2"),
+			Expiration:      nil,
+		},
+	}, nil).Once()
 
-	// Test case: Repository without slash (edge case)
-	claimsNoSlash := &gtypes.GithubClaims{
-		Repository: "standalone-repo",
-		Actor:      "user",
-	}
-	tags = CreateSessionTags(claimsNoSlash)
-	tagMap = make(map[string]string)
-	for _, tag := range tags {
-		if tag.Key != nil && tag.Value != nil {
-			tagMap[*tag.Key] = *tag.Value
-		}
-	}
-	assert.Equal(t, "standalone-repo", tagMap["repo"]) // should use entire string as repo name
+	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	assert.NoError(t, err)
+	assert.NotNil(t, creds)
+
+	mockAWS.AssertExpectations(t)
 }
 
-func TestSanitizeTagValue(t *testing.T) {
-	// Test case: Valid characters
-	result := sanitizeTagValue("valid-tag_value123", 50)
-	assert.Equal(t, "valid-tag_value123", result)
+func TestSelectTransitiveKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		tags []types.Tag
+		want []string
+	}{
+		{
+			name: "no tags",
+			tags: nil,
+			want: []string{},
+		},
+		{
+			name: "well-known and custom-named tags are all included",
+			tags: []types.Tag{
+				{Key: aws.String("repo"), Value: aws.String("owner/repo")},
+				{Key: aws.String("ref"), Value: aws.String("refs/heads/main")},
+				{Key: aws.String("actor"), Value: aws.String("testuser")},
+				{Key: aws.String("project"), Value: aws.String("my-project")},
+			},
+			want: []string{"repo", "ref", "actor", "project"},
+		},
+		{
+			name: "nil keys are skipped",
+			tags: []types.Tag{
+				{Key: nil, Value: aws.String("ignored")},
+				{Key: aws.String("project"), Value: aws.String("my-project")},
+			},
+			want: []string{"project"},
+		},
+	}
 
-	// Test case: Invalid characters (should be removed)
-	result = sanitizeTagValue("invalid$tag&value*", 50)
-	assert.Equal(t, "invalidtagvalue", result)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := selectTransitiveKeys(tt.tags)
+			assert.ElementsMatch(t, tt.want, got)
+		})
+	}
+}
 
-	// Test case: Length truncation
-	longValue := "this-is-a-very-long-tag-value-that-exceeds-the-maximum-length-allowed"
-	result = sanitizeTagValue(longValue, 20)
-	assert.Equal(t, 20, len(result))
-	assert.Equal(t, "this-is-a-very-long-", result)
+func TestBuildSessionTags(t *testing.T) {
+	t.Run("valid spec produces correct tags", func(t *testing.T) {
+		raw := map[string]any{
+			"repository": "owner/repo",
+			"actor":      "testuser",
+			"ref":        "refs/heads/main",
+			"run_number": 7, // non-string claim, must be stringified
+		}
+		spec := map[string]string{
+			"repo":  "repository",
+			"actor": "actor",
+			"ref":   "ref",
+			"run":   "run_number",
+		}
 
-	// Test case: Empty value
-	result = sanitizeTagValue("", 50)
-	assert.Equal(t, "", result)
+		tags := BuildSessionTags(raw, spec)
+		tagMap := make(map[string]string)
+		for _, tag := range tags {
+			tagMap[*tag.Key] = *tag.Value
+		}
 
-	// Test case: Special AWS allowed characters
-	result = sanitizeTagValue("value+with=special:chars/@-.", 50)
-	assert.Equal(t, "value+with=special:chars/@-.", result)
+		assert.Equal(t, map[string]string{
+			"repo":  "owner/repo",
+			"actor": "testuser",
+			"ref":   "refs/heads/main",
+			"run":   "7",
+		}, tagMap)
+	})
+
+	t.Run("nil/empty rawClaims or tagSpec produces no tags", func(t *testing.T) {
+		assert.Nil(t, BuildSessionTags(nil, map[string]string{"repo": "repository"}))
+		assert.Nil(t, BuildSessionTags(map[string]any{"repository": "owner/repo"}, nil))
+	})
+
+	t.Run("missing or empty claim value is skipped, never mangled", func(t *testing.T) {
+		raw := map[string]any{
+			"repository": "owner/repo",
+			"actor":      "", // empty
+			// "ref" absent entirely
+		}
+		spec := map[string]string{
+			"repo":  "repository",
+			"actor": "actor",
+			"ref":   "ref",
+		}
+
+		tags := BuildSessionTags(raw, spec)
+		require.Len(t, tags, 1)
+		assert.Equal(t, "repo", *tags[0].Key)
+		assert.Equal(t, "owner/repo", *tags[0].Value)
+	})
+
+	t.Run("illegal charset value is skipped, never sanitized or truncated", func(t *testing.T) {
+		raw := map[string]any{
+			"repository": "owner/repo",
+			"actor":      "bad;actor$value", // ';' and '$' are outside the STS charset
+		}
+		spec := map[string]string{
+			"repo":  "repository",
+			"actor": "actor",
+		}
+
+		tags := BuildSessionTags(raw, spec)
+		tagMap := make(map[string]string)
+		for _, tag := range tags {
+			tagMap[*tag.Key] = *tag.Value
+		}
+
+		// The invalid tag must be entirely absent, not sanitized/truncated.
+		_, present := tagMap["actor"]
+		assert.False(t, present, "tag with illegal-charset value must be skipped, not mangled")
+		assert.Equal(t, "owner/repo", tagMap["repo"])
+	})
+
+	t.Run("illegal charset key is skipped", func(t *testing.T) {
+		raw := map[string]any{"claim": "value"}
+		spec := map[string]string{"bad key!": "claim"}
+
+		tags := BuildSessionTags(raw, spec)
+		assert.Empty(t, tags)
+	})
+
+	t.Run("over-length value is skipped", func(t *testing.T) {
+		raw := map[string]any{"claim": strings.Repeat("a", maxSessionTagValLen+1)}
+		spec := map[string]string{"tag": "claim"}
+
+		tags := BuildSessionTags(raw, spec)
+		assert.Empty(t, tags)
+	})
+
+	t.Run("more than 50 tags is bounded to 50", func(t *testing.T) {
+		raw := make(map[string]any, 60)
+		spec := make(map[string]string, 60)
+		for i := range 60 {
+			claim := fmt.Sprintf("claim%02d", i)
+			raw[claim] = fmt.Sprintf("value%02d", i)
+			spec[fmt.Sprintf("tag%02d", i)] = claim
+		}
+
+		tags := BuildSessionTags(raw, spec)
+		assert.Len(t, tags, maxSessionTags)
+	})
 }
 
 func TestAwsConsumer_ReadS3Configuration(t *testing.T) {
@@ -425,10 +535,16 @@ func TestAwsConsumer_ReadS3Configuration(t *testing.T) {
 	t.Run("Success case", func(t *testing.T) {
 		mockAWS := new(MockAwsServiceWrapper)
 
-		// Valid configuration JSON for S3
+		// Valid configuration JSON for S3 (v2 issuers[] schema)
 		validConfigJSON := `{
-			"issuer": "https://test-issuer.com",
-			"audience": "test-audience"
+			"issuers": [
+				{
+					"issuer": "https://test-issuer.com",
+					"provider": "generic",
+					"audiences": ["test-audience"],
+					"claim_mappings": {"subject": "sub"}
+				}
+			]
 		}`
 
 		mockAWS.On("GetS3Object", "test-bucket", "test/config.json").Return(
@@ -448,8 +564,9 @@ func TestAwsConsumer_ReadS3Configuration(t *testing.T) {
 
 		err := consumer.ReadS3Configuration()
 		assert.NoError(t, err)
-		assert.Equal(t, "https://test-issuer.com", consumer.Config.Issuer)
-		assert.Equal(t, "test-audience", consumer.Config.Audience)
+		require.Len(t, consumer.Config.Issuers, 1)
+		assert.Equal(t, "https://test-issuer.com", consumer.Config.Issuers[0].Issuer)
+		assert.Equal(t, []string{"test-audience"}, consumer.Config.Issuers[0].Audiences)
 
 		mockAWS.AssertExpectations(t)
 	})

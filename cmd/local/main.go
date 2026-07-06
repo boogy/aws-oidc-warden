@@ -56,16 +56,33 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Config provider shared by the validator and the handler so both read the
+	// same snapshot. Without config_fragments it is static (no reload). With
+	// fragments, a static provider would silently ignore them (fragments only
+	// merge on a provider Refresh), so build a reloadable provider with no
+	// primary fetch: fragments merge once here, and — like the Lambda
+	// bootstrap — are re-resolved per config_reload_interval when it's > 0.
+	var provider *config.Provider
+	if len(cfg.ConfigFragments) > 0 {
+		provider = config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil)
+		if err := provider.Refresh(context.Background()); err != nil {
+			slog.Error("Failed to merge config fragments", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	} else {
+		provider = config.NewStaticProvider(cfg)
+	}
+
 	// Initialize the token validator and wrap it in a SelfExtractor so the local
 	// server always validates JWT signatures itself (no delegated mode).
-	tokenValidator := validator.NewTokenValidator(cfg, jwksCache)
+	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 	extractor := validator.NewSelfExtractor(tokenValidator)
 
 	// Initialize the AWS client
 	awsClient := aws.NewAwsConsumer(cfg)
 
-	// Create the handler function (static config provider — no hot-reload locally)
-	handlerFunc := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), awsClient, extractor).Handler
+	// Create the handler function. No audit sink for the local dev server.
+	handlerFunc := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).Handler
 
 	// Set up HTTP server
 	http.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {

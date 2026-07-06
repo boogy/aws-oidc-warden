@@ -1,0 +1,115 @@
+####################################################################################
+# AWS OIDC Warden — Cross-Account Example
+#
+# One central "hub" account runs the warden; workloads assume roles in many
+# "member" accounts. Every AssumeRole is DIRECT — the warden's own (hub)
+# credentials assume the target role in a single hop, same-account or
+# cross-account alike. cross_account.enabled is a policy gate: it must be
+# true for ANY cross-account operation (assumes and, if tag_auth is used
+# cross-account, tag reads) — leaving it false hard-blocks all of them. The
+# convention-named spoke role (arn:aws:iam::<MEMBER>:role/aow-spoke) exists
+# only to read target-role IAM tags cross-account for tag_auth; it is never
+# used to assume the target role. See README.md in this directory for the
+# IAM roles that make this work.
+#
+# Account layout used throughout this example:
+#   Hub (runs the warden):  111111111111
+#   Member accounts:        222222222222 (staging), 333333333333 (production)
+####################################################################################
+
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: "github"
+    audiences:
+      - "sts.amazonaws.com"
+    required_claims:
+      - "repository"
+    # Session tags travel with every issued credential (hub or member account)
+    # and enable ABAC in downstream policies via aws:PrincipalTag/<key>.
+    session_tags:
+      repo: "repository"
+      repo-owner: "repository_owner"
+      ref: "ref"
+      ref-type: "ref_type"
+      actor: "actor"
+      event-name: "event_name"
+
+role_session_name: aws-oidc-warden
+default_issuer: "https://token.actions.githubusercontent.com"
+
+####################################################################################
+# EXPLICIT MAPPINGS — cross-account role ARNs work exactly like same-account
+# ones: just list the member-account ARN. The warden parses the account ID
+# from the ARN and, with cross_account.enabled and the account allow-listed,
+# assumes it DIRECTLY with its own (hub) credentials — no spoke hop.
+####################################################################################
+role_mappings:
+  # Deploy to staging (member 222222222222) from main branch only.
+  - subject: "acme/api"
+    roles:
+      - arn:aws:iam::222222222222:role/aow/deploy-staging
+    conditions:
+      branch: "refs/heads/main"
+
+  # Deploy to production (member 333333333333) from version tags only,
+  # further restricted by an inline session policy.
+  - subject: "acme/api"
+    roles:
+      - arn:aws:iam::333333333333:role/aow/deploy-production
+    conditions:
+      ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
+      ref_type: "tag"
+    session_policy: >
+      {"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["iam:*","organizations:*"],"Resource":"*"}]}
+
+  # A role in the hub account itself — same-account, plain direct assume.
+  - subject: "acme/tooling"
+    roles:
+      - arn:aws:iam::111111111111:role/aow/ci-readonly
+
+####################################################################################
+# CROSS-ACCOUNT POLICY GATE — enabled: true is REQUIRED for any cross-account
+# operation (assumes via role_mappings above, and tag reads via tag_auth
+# below); leaving it false (or omitting this block) hard-blocks all of them.
+# The assume itself is always direct hub->target, using the warden's own hub
+# credentials — spoke_role_name/external_id below apply only to the separate
+# hub->spoke hop used for cross-account tag reads (tag_auth).
+####################################################################################
+cross_account:
+  enabled: true
+  # Only used if tag_auth reads role tags in a member account.
+  spoke_role_name: "aow-spoke"
+  # Shared secret for the hub->spoke trust policy (sts:ExternalId), used only
+  # for that tag-read hop. Never sent on the hub->target assume — member
+  # target-role trust policies must NOT require sts:ExternalId.
+  external_id: "CHANGE-ME-org-wide-external-id"
+  # Capped at 1h: the hub->spoke hop is a chained session (AWS limit).
+  spoke_session_duration: "15m"
+  # REQUIRED in production: only these member accounts (plus the hub, always
+  # implicitly allowed) are reachable. Empty list = any account, once enabled.
+  allowed_accounts:
+    - "222222222222"
+    - "333333333333"
+
+####################################################################################
+# TAG-BASED AUTHORIZATION (optional) — when enabled, roles tagged aow/* are
+# assumable without a role_mapping (cross-account tag reads go through the
+# spoke role above; the resulting assume is still direct hub->target).
+# Leave disabled to keep the explicit mappings above as the only authorization
+# path.
+####################################################################################
+tag_auth:
+  enabled: false
+  tag_prefix: "aow/"
+  # Mark session tags immutable through any further role chaining by the target.
+  transitive_session_tags: false
+
+####################################################################################
+# Everything below is standard single-account configuration — unchanged by
+# cross-account usage. See ../../CONFIGURATION.md and /example-config.yaml.
+####################################################################################
+log_level: "info"
+cache:
+  type: "memory"
+  ttl: 4h
+session_policy_bucket: "aws-oidc-warden-session-policies"

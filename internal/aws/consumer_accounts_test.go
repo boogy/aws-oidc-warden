@@ -14,9 +14,10 @@ import (
 )
 
 func consumerWithAllowed(m *MockAwsServiceWrapper, allowed []string) *AwsConsumer {
-	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{
-		Enabled: true, TagPrefix: "aow/", SpokeRoleName: "aow-spoke", AllowedAccounts: allowed,
-	}}
+	cfg := &gtvcfg.Config{
+		TagAuth:      &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"},
+		CrossAccount: &gtvcfg.CrossAccount{Enabled: true, SpokeRoleName: "aow-spoke", AllowedAccounts: allowed},
+	}
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
 	return c
@@ -47,9 +48,10 @@ func TestIsTargetAccountAllowed(t *testing.T) {
 }
 
 // TestIsTargetAccountAllowed_EmptyListFailsOpen documents (and locks in) the
-// fail-open default: tag-auth enabled with an empty allowed_accounts permits ANY
-// non-hub member account. Config validation only warns; operators must populate
-// allowed_accounts in production. A future change must not silently flip this.
+// fail-open default: cross-account enabled with an empty allowed_accounts
+// permits ANY non-hub member account. Config validation only warns; operators
+// must populate allowed_accounts in production. A future change must not
+// silently flip this.
 func TestIsTargetAccountAllowed_EmptyListFailsOpen(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
 	m.On("GetCallerAccount").Return("111111111111", nil)
@@ -59,13 +61,22 @@ func TestIsTargetAccountAllowed_EmptyListFailsOpen(t *testing.T) {
 	assert.True(t, ok, "empty allowed_accounts must fail open (any account allowed)")
 }
 
-func TestIsTargetAccountAllowed_TagAuthDisabled(t *testing.T) {
+// TestIsTargetAccountAllowedDisabled locks in the new fail-closed semantics:
+// with cross-account transport disabled, only the hub account is allowed
+// (there is no spoke path to reach any other account).
+func TestIsTargetAccountAllowedDisabled(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	c := NewAwsConsumer(&gtvcfg.Config{}) // TagAuth nil
+	m.On("GetCallerAccount").Return("111111111111", nil)
+	c := NewAwsConsumer(&gtvcfg.Config{}) // CrossAccount nil
 	c.AWS = m
-	ok, err := c.IsTargetAccountAllowed("arn:aws:iam::222222222222:role/app")
+
+	ok, err := c.IsTargetAccountAllowed("arn:aws:iam::111111111111:role/app")
 	require.NoError(t, err)
-	assert.True(t, ok) // no cross-account possible; nothing to gate
+	assert.True(t, ok, "hub account must be allowed even when cross-account is disabled")
+
+	ok, err = c.IsTargetAccountAllowed("arn:aws:iam::222222222222:role/app")
+	require.NoError(t, err)
+	assert.False(t, ok, "member account must be disallowed when cross-account is disabled")
 }
 
 func TestIsTargetAccountAllowed_BadARN(t *testing.T) {
@@ -77,7 +88,7 @@ func TestIsTargetAccountAllowed_BadARN(t *testing.T) {
 }
 
 func TestSpokeCredsFor_BlockedAccount(t *testing.T) {
-	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{
+	cfg := &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{
 		Enabled: true, SpokeRoleName: "aow-spoke", AllowedAccounts: []string{"333333333333"},
 		SpokeSessionDuration: 15 * time.Minute,
 	}}

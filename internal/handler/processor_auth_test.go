@@ -17,14 +17,17 @@ import (
 // stubExtractor always returns an error to simulate extraction failure.
 type stubExtractor struct{ err error }
 
-func (s *stubExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.GithubClaims, error) {
+func (s *stubExtractor) Extract(_ context.Context, _ validator.ExtractionInput) (*types.Claims, error) {
 	return nil, s.err
 }
 
 func TestProcessRequest_TokenValidationErrorIsSentinel(t *testing.T) {
 	cfg := &config.Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers: []config.IssuerConfig{{
+			Issuer:    testIssuer,
+			Provider:  "github",
+			Audiences: []string{"sts.amazonaws.com"},
+		}},
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 	}
@@ -32,7 +35,7 @@ func TestProcessRequest_TokenValidationErrorIsSentinel(t *testing.T) {
 
 	provider := config.NewStaticProvider(cfg)
 	ex := &stubExtractor{err: errors.New("token is expired")}
-	proc := handler.NewRequestProcessor(provider, nil, ex)
+	proc := handler.NewRequestProcessor(provider, nil, ex, nil, "test")
 
 	_, err := proc.ProcessRequest(
 		context.Background(),

@@ -338,6 +338,37 @@ func (l *S3Logger) WriteSingleLog(logData []byte) error {
 	return l.WriteObject(l.s3Config.Bucket, key, compressedData)
 }
 
+// WriteRecord implements handler.AuditSink (duck-typed — no import of the
+// handler package needed for this to satisfy that interface). It persists a
+// single structured audit record immediately, bypassing the batch buffer, so
+// callers enforcing audit_required can await durability before responding
+// with credentials.
+//
+// Unlike WriteSingleLog (which silently no-ops when S3 logging is disabled or
+// the client failed to initialize, since it also backs best-effort request
+// logging), WriteRecord treats "log_to_s3 enabled but no client" as a hard
+// error: a caller that reached this method has already had audit_required
+// gated on log_to_s3+log_bucket at config validation time, so a nil client
+// here means AWS client init failed after a valid config load — that must
+// fail closed, not be swallowed.
+func (l *S3Logger) WriteRecord(_ context.Context, record []byte) error {
+	if l.config.LogToS3 && l.s3Client == nil {
+		return errors.New("s3 audit logger: S3 client not initialized")
+	}
+	return l.WriteSingleLog(record)
+}
+
+// BufferRecord appends a structured audit record to the amortized batch buffer
+// (the same buffer WriteLogToS3 feeds), for the best-effort path when
+// audit_required is false. Unlike WriteRecord it does not force an immediate
+// per-record S3 PutObject; the record is flushed with the batch (BatchSize /
+// MaxBatchAge) or at Cleanup. No-ops when S3 logging is disabled.
+func (l *S3Logger) BufferRecord(record []byte) error {
+	var buf bytes.Buffer
+	buf.Write(record)
+	return l.WriteLogToS3(buf)
+}
+
 // compressGzip compresses the given data using gzip
 func compressGzip(data []byte) ([]byte, error) {
 	var buf bytes.Buffer

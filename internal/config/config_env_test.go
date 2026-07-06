@@ -13,8 +13,7 @@ func TestMergeBytes_EnvVarWinsOverS3Value(t *testing.T) {
 	t.Setenv("AOW_LOG_BUCKET", "env-log-bucket")
 
 	c := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "base-session",
 		Cache:           &Cache{Type: "memory", TTL: 3600000000000},
 	}
@@ -34,8 +33,7 @@ log_bucket: s3-log-bucket
 
 func TestMergeBytes_S3ValueAppliedWhenNoEnvOverride(t *testing.T) {
 	c := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "base-session",
 		Cache:           &Cache{Type: "memory", TTL: 3600000000000},
 	}
@@ -47,45 +45,11 @@ func TestMergeBytes_S3ValueAppliedWhenNoEnvOverride(t *testing.T) {
 	assert.Equal(t, "s3-session", c.RoleSessionName, "S3 value should apply when no env var is set")
 }
 
-func TestMergeBytes_EnvAudiencesWinsOverS3(t *testing.T) {
-	t.Setenv("AOW_AUDIENCES", "a,b")
-
-	c := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
-		RoleSessionName: "base-session",
-		Cache:           &Cache{Type: "memory", TTL: 3600000000000},
-	}
-	require.NoError(t, c.Validate())
-
-	yamlData := []byte(`audiences: [c, d]`)
-	require.NoError(t, c.MergeBytes(yamlData, "yaml"))
-
-	assert.Equal(t, []string{"a", "b"}, c.Audiences, "AOW_AUDIENCES must take precedence over S3 value")
-}
-
-func TestMergeBytes_EnvAudiencesTrimsWhitespace(t *testing.T) {
-	t.Setenv("AOW_AUDIENCES", " a , b , ")
-
-	c := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
-		RoleSessionName: "base-session",
-		Cache:           &Cache{Type: "memory", TTL: 3600000000000},
-	}
-	require.NoError(t, c.Validate())
-
-	require.NoError(t, c.MergeBytes([]byte(`audiences: [c]`), "yaml"))
-
-	assert.Equal(t, []string{"a", "b"}, c.Audiences, "AOW_AUDIENCES elements must be whitespace-trimmed")
-}
-
 func TestMergeBytes_EnvTagAuthDefaultOrgWinsOverS3(t *testing.T) {
 	t.Setenv("AOW_TAG_AUTH_DEFAULT_ORG", "env-org")
 
 	c := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "base-session",
 		Cache:           &Cache{Type: "memory", TTL: 5 * time.Minute},
 		TagAuth:         &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "base-org"},
@@ -102,8 +66,7 @@ func TestMergeBytes_EnvCacheTTLWinsOverS3(t *testing.T) {
 	t.Setenv("AOW_CACHE_TTL", "10m")
 
 	c := &Config{
-		Issuer:          "https://token.actions.githubusercontent.com",
-		Audiences:       []string{"sts.amazonaws.com"},
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "base-session",
 		Cache:           &Cache{Type: "memory", TTL: 5 * time.Minute},
 	}

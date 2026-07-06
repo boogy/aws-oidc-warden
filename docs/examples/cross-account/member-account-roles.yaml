@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AWS OIDC Warden — member-account roles for cross-account usage. Creates one
+  example target role, trusted directly by the hub warden execution role (the
+  warden always assumes target roles in a single hop using its own hub
+  credentials), plus the aow-spoke role used ONLY for cross-account IAM tag
+  reads (iam:GetRole) when tag-based authorization is enabled — never for
+  assuming the target role itself. Deploy this once per member account —
+  ideally via CloudFormation StackSets from the org management/delegated-admin
+  account, so every member account is provisioned from one central place.
+
+Parameters:
+  HubAccountId:
+    Type: String
+    AllowedPattern: "^[0-9]{12}$"
+    Description: Account ID of the hub account running the warden.
+
+  HubExecutionRoleName:
+    Type: String
+    Default: aws-oidc-warden-execution-role
+    Description: Name of the warden Lambda execution role in the hub account.
+
+  ExternalId:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: >
+      Shared secret the warden presents when assuming the spoke role for
+      cross-account tag reads. Must match cross_account.external_id in the
+      warden config. Only applies to the hub->spoke hop — the hub->target
+      assume never carries an external ID.
+
+  SpokeRoleName:
+    Type: String
+    Default: aow-spoke
+    Description: >
+      Must match cross_account.spoke_role_name in the warden config. Only
+      needed when tag_auth reads roles cross-account; delete this resource
+      entirely if you authorize exclusively through role_mappings.
+
+  TargetRolePath:
+    Type: String
+    Default: /aow/
+    Description: >
+      IAM path for warden-assumable target roles. The spoke role's permissions
+      are scoped to this path, so only roles deliberately created under it are
+      reachable through the warden.
+
+Resources:
+  # --------------------------------------------------------------------------
+  # Spoke role: used ONLY so the warden can read IAM tags (iam:GetRole) on
+  # target roles in this account for cross-account tag-based authorization.
+  # It is never assumed as part of issuing credentials — the final AssumeRole
+  # always goes directly from the hub execution role to the target role.
+  # Not needed at all if you authorize exclusively through role_mappings.
+  # --------------------------------------------------------------------------
+  SpokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref SpokeRoleName
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustHubWardenExecutionRole
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${HubAccountId}:role/${HubExecutionRoleName}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Policies:
+        - PolicyName: aow-spoke-tag-reader
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadTargetRoleTags
+                Effect: Allow
+                Action: iam:GetRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role${TargetRolePath}*
+
+  # --------------------------------------------------------------------------
+  # Example target role: what a CI workload actually receives credentials for.
+  # Trusts the HUB EXECUTION ROLE DIRECTLY — the warden assumes this role in
+  # one hop using its own (hub) credentials, never through the spoke. The
+  # aow/* tags authorize it via tag-auth; if you authorize exclusively through
+  # role_mappings in the warden config, omit the Tags block entirely (an
+  # untagged role is never tag-authorized). Replace the permissions policy
+  # with what the workload really needs.
+  # --------------------------------------------------------------------------
+  ExampleTargetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: deploy-staging
+      Path: !Ref TargetRolePath
+      # The warden's own (hub) credentials are always a role session on
+      # Lambda, so role chaining clamps the issued session to 1h regardless
+      # of this value. Only `local` server mode running with IAM user
+      # credentials can obtain a session up to this MaxSessionDuration.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: TrustHubWardenExecutionRole
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${HubAccountId}:role/${HubExecutionRoleName}
+            Action:
+              - sts:AssumeRole
+              - sts:TagSession
+            # Defense-in-depth: even if the warden is misconfigured, this role
+            # only accepts sessions tagged for the acme org. No sts:ExternalId
+            # condition — the warden sends none on this direct hub->target
+            # assume.
+            Condition:
+              StringEquals:
+                aws:RequestTag/repo-owner: acme
+      Tags:
+        - Key: aow/issuer
+          Value: https://token.actions.githubusercontent.com
+        - Key: aow/subject
+          Value: acme/api acme/web
+        - Key: aow/ref
+          Value: refs/heads/main
+      Policies:
+        - PolicyName: deploy-staging-permissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ExampleDeployPermissions
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: arn:aws:s3:::acme-staging-artifacts/*
+
+Outputs:
+  SpokeRoleArn:
+    Value: !GetAtt SpokeRole.Arn
+  ExampleTargetRoleArn:
+    Value: !GetAtt ExampleTargetRole.Arn

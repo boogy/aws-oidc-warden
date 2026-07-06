@@ -17,16 +17,19 @@ import (
 	"github.com/google/uuid"
 )
 
+// frontendALB identifies this adapter in audit records/logs.
+const frontendALB = "alb"
+
 // AwsApplicationLoadBalancer handles AWS Application Load Balancer requests
 type AwsApplicationLoadBalancer struct {
 	processor *RequestProcessor
 	region    string
 }
 
-// NewAwsApplicationLoadBalancer creates a new Application Load Balancer handler
-func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface) *AwsApplicationLoadBalancer {
+// NewAwsApplicationLoadBalancer creates a new Application Load Balancer handler. audit may be nil (see AuditSink).
+func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink) *AwsApplicationLoadBalancer {
 	return &AwsApplicationLoadBalancer{
-		processor: NewRequestProcessor(provider, consumer, extractor),
+		processor: NewRequestProcessor(provider, consumer, extractor, audit, frontendALB),
 		region:    os.Getenv("AWS_REGION"),
 	}
 }
@@ -113,48 +116,15 @@ func (h *AwsApplicationLoadBalancer) unmarshalRequestData(event events.ALBTarget
 
 // respondError formats a response with an error message
 func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error, statusCode int) (events.ALBTargetGroupResponse, error) {
-	// Extract request ID from context if available
-	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
+	response, statusCode := buildErrorResponse(ctx, err, statusCode)
 
-	// Get processing time if available
-	var processingMS int64
-	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
-		processingMS = time.Since(startTime).Milliseconds()
-	}
-
-	// Map common errors to specific error codes and messages (shared classifier).
-	errCode, errMsg := classifyError(err, &statusCode)
-
-	// Log the error with context
-	slog.Error("Request error",
-		slog.String("requestId", requestID),
-		slog.String("errorCode", errCode),
-		slog.String("error", err.Error()),
-		slog.Int("status", statusCode),
-		slog.Int64("processingMs", processingMS))
-
-	// Create response object with non-redundant error information
-	response := Response{
-		Success:      false,
-		StatusCode:   statusCode,
-		ErrorCode:    errCode,
-		Message:      errMsg,
-		ErrorDetails: err.Error(),
-		RequestID:    requestID,
-		ProcessingMS: processingMS,
-	}
-
-	// Marshall response to JSON
 	jsonResponse, jsonErr := json.Marshal(response)
 	if jsonErr != nil {
 		// Fallback to simple error response if JSON marshalling fails
 		return events.ALBTargetGroupResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    ResponseHeaders,
-			Body:       fmt.Sprintf(`{"error": "%s"}`, err.Error()),
+			Body:       fallbackErrorBody,
 		}, nil
 	}
 
@@ -167,37 +137,12 @@ func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error
 
 // respondJSON formats a successful response with credentials
 func (h *AwsApplicationLoadBalancer) respondJSON(ctx context.Context, credentials *types.Credentials) (events.ALBTargetGroupResponse, error) {
-	// Extract request ID from context if available
-	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
+	response := buildSuccessResponse(ctx, credentials)
 
-	// Get processing time if available
-	var processingMS int64
-	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
-		processingMS = time.Since(startTime).Milliseconds()
-	}
-
-	// Create response object
-	response := Response{
-		Success:      true,
-		StatusCode:   http.StatusOK,
-		Message:      "Token validation successful and role assumed",
-		RequestID:    requestID,
-		ProcessingMS: processingMS,
-		Data:         credentials,
-	}
-
-	// Marshal the response
 	jsonResponse, err := json.Marshal(response)
 	if err != nil {
 		return h.respondError(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError)
 	}
-
-	slog.Debug("Response successful",
-		slog.String("requestId", requestID),
-		slog.Int64("processingMs", processingMS))
 
 	return events.ALBTargetGroupResponse{
 		StatusCode: http.StatusOK,

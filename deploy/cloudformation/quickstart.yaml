@@ -21,17 +21,14 @@ Parameters:
   Timeout:
     Type: Number
     Default: 15
-  Issuer:
-    Type: String
-    Default: https://token.actions.githubusercontent.com
-  Audiences:
-    Type: String
-    Default: sts.amazonaws.com
-    Description: Comma-separated audiences.
   ConfigBucket:
     Type: String
     Default: ""
-    Description: S3 bucket holding config.yaml (repo_role_mappings etc). Leave blank to rely on env only.
+    Description: >-
+      S3 bucket holding config.yaml (issuers, role_mappings, etc). Effectively
+      required: v2 has no AOW_ISSUER/AOW_AUDIENCES env vars; without a config
+      object only the zero-config GitHub issuer seed applies and no
+      role_mappings exist, so every request is denied.
   ConfigKey:
     Type: String
     Default: config.yaml
@@ -48,8 +45,11 @@ Parameters:
   JWTValidationMode:
     Type: String
     Default: self
-    AllowedValues: [self, apigw, alb]
-    Description: "self = Lambda validates JWT; apigw = delegate to API GW JWT Authorizer (use apigatewayv2 binary); alb = trust ALB OIDC header."
+    AllowedValues: [self, apigw]
+    Description: >-
+      self = Lambda validates JWT (apigateway binary); apigw = delegate to API
+      GW JWT Authorizer (apigatewayv2 binary). alb mode is not supported by
+      this template (needs the alb binary behind an ALB).
   JWTAuthorizer_Issuer:
     Type: String
     Default: "https://token.actions.githubusercontent.com"
@@ -143,8 +143,6 @@ Resources:
         S3Key: !Ref LambdaCodeKey
       Environment:
         Variables:
-          AOW_ISSUER: !Ref Issuer
-          AOW_AUDIENCES: !Ref Audiences
           AOW_CACHE_TYPE: !If [UseDynamoDB, dynamodb, memory]
           AOW_CACHE_DYNAMODB_TABLE:
             !If [UseDynamoDB, !Sub "${FunctionName}-cache", !Ref "AWS::NoValue"]
