@@ -112,11 +112,15 @@ func (rec *auditRecord) matchedRole() string {
 }
 
 // auditLogAttrs returns the standardized slog attribute set for one
-// decision: requestId, frontend, jwtMode, issuer, provider, jwtSub, subject,
-// audience, decision, reason, matchedRole, accountId, processingMs, stage.
-// Callers append these to their existing log.Error/log.Info call rather than
-// replacing the descriptive message, so the standardized contract is added
-// without renaming unrelated logs.
+// decision: frontend, jwtMode, issuer, provider, jwtSub, subject, audience,
+// decision, reason, matchedRole, accountId, processingMs, stage. requestId is
+// deliberately NOT in this set: every adapter already binds it to the
+// request-scoped logger via slog.With, so adding it here would emit a
+// duplicate "requestId" key in the same JSON log line (the durable audit
+// record keeps its own RequestID field regardless). Callers append these to
+// their existing log.Error/log.Info call rather than replacing the
+// descriptive message, so the standardized contract is added without renaming
+// unrelated logs.
 //
 // logClaimValues gates the same claim VALUES that auditRecord.redact()
 // suppresses for the durable sink (jwtSub, subject, audience) — so when
@@ -130,7 +134,6 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 		jwtSub, subject, audience = "", "", nil
 	}
 	return []any{
-		slog.String("requestId", rec.RequestID),
 		slog.String("frontend", rec.Frontend),
 		slog.String("jwtMode", rec.JWTMode),
 		slog.String("issuer", rec.Issuer),

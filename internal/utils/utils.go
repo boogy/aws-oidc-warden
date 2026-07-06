@@ -59,12 +59,3 @@ func RedactToken(token string, firstN, lastN int) string {
 
 	return first + middle + last
 }
-
-// TruncateString truncates a string to the specified length and adds an ellipsis if truncated
-func TruncateString(s string, maxLength int) string {
-	if len(s) <= maxLength {
-		return s
-	}
-
-	return s[:maxLength-3] + "..."
-}

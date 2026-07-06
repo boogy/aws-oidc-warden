@@ -75,7 +75,8 @@ type Response struct {
 	Message string `json:"message,omitempty"`
 	Data    any    `json:"data,omitempty"`
 
-	// For error responses
-	ErrorCode    string `json:"errorCode,omitempty"`
-	ErrorDetails string `json:"errorDetails,omitempty"`
+	// For error responses. Only the classified code (plus Message) is exposed;
+	// raw internal error detail stays in the server-side logs (see
+	// buildErrorResponse).
+	ErrorCode string `json:"errorCode,omitempty"`
 }

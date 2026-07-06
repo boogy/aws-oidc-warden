@@ -166,6 +166,11 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 
 ### Fixed
 
+- `config_fragments` are now merged when no S3 config source is configured — previously a file-based deployment (or `cmd/local`) listing local-path fragments got a static provider that silently ignored every fragment. Bootstrap now builds a fragment-merging provider (initial merge at startup, re-resolved per `config_reload_interval` when > 0) whenever fragments are listed; an invalid fragment fails startup instead of silently serving the base config.
+- Error responses no longer include the raw internal error string (`errorDetails` removed): JWT-library parse internals, JWKS/discovery/S3 failure detail, and config mismatch text stay in the server-side logs, correlatable via `requestId`. The per-adapter marshal-failure fallback body is a static JSON constant instead of interpolating `err.Error()` unescaped.
+- API Gateway delegated mode (`apigw`) now decodes a bracketed multi-value `aud` (`"[aud1 aud2]"`, the JWT Authorizer's stringified array form) into individual audiences before ANY-match, instead of never matching.
+- The standardized decision log line no longer emits a duplicate `requestId` JSON key (it comes from the request-scoped logger only; the durable audit record keeps its own `requestId` field).
+- Request-body parse failures no longer log a 100-char body preview (a malformed body can contain a partial bearer token); only the parse error and body size are logged.
 - Adapter binaries now fail fast at startup when `jwt_validation.mode` is incompatible with the deployed adapter (panic with a clear message) instead of failing silently per request.
 - ALB public-key cache no longer has a read/write data race and now evicts expired entries on read, preventing unbounded growth of stale keys.
 - ALB and API Gateway delegated modes now enforce token expiration (`exp` required) and reject future-`iat` tokens, matching self-mode strictness.

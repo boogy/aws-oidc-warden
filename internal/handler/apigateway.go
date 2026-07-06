@@ -104,7 +104,7 @@ func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode 
 		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    ResponseHeaders,
-			Body:       fmt.Sprintf(`{"error": "%s"}`, err.Error()),
+			Body:       fallbackErrorBody,
 		}, nil
 	}
 

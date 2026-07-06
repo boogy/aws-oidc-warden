@@ -83,7 +83,7 @@ func (h *AwsApiGatewayV2) respondError(ctx context.Context, err error, statusCod
 		return events.APIGatewayV2HTTPResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    ResponseHeaders,
-			Body:       fmt.Sprintf(`{"error":"%s"}`, err.Error()),
+			Body:       fallbackErrorBody,
 		}, nil
 	}
 	return events.APIGatewayV2HTTPResponse{StatusCode: statusCode, Headers: ResponseHeaders, Body: string(body)}, nil

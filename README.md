@@ -116,11 +116,11 @@ For the full reference — all keys, condition fields, session-policy options, r
 
 The wire contract depends on `jwt_validation.mode` — specifically, **who verifies the token**. The role ARN is always in the JSON body; the token's location differs.
 
-| Mode             | `Authorization` header          | Request body                     | Token verified by            |
-| ---------------- | ------------------------------- | -------------------------------- | ---------------------------- |
-| `self` (default) | none                            | `{"token": "...", "role": "..."}`| This service                 |
-| `apigw`          | `Authorization: Bearer <token>` | `{"role": "..."}`                | API Gateway JWT Authorizer   |
-| `alb`            | none — ALB injects `x-amzn-oidc-data` | `{"role": "..."}`          | ALB OIDC                      |
+| Mode             | `Authorization` header                | Request body                      | Token verified by          |
+| ---------------- | ------------------------------------- | --------------------------------- | -------------------------- |
+| `self` (default) | none                                  | `{"token": "...", "role": "..."}` | This service               |
+| `apigw`          | `Authorization: Bearer <token>`       | `{"role": "..."}`                 | API Gateway JWT Authorizer |
+| `alb`            | none — ALB injects `x-amzn-oidc-data` | `{"role": "..."}`                 | ALB OIDC                   |
 
 > **The token is never sent twice.** In `apigw` mode it lives **only** in the `Authorization` header — a `token` field in the body is ignored (`ParseRoleOnlyRequestBody` reads only `role`), and a missing header makes API Gateway reject the call before this service runs. See [docs/TOKEN_VALIDATION.md §2.1](docs/TOKEN_VALIDATION.md#21-request-contract-per-mode).
 
@@ -210,31 +210,31 @@ jobs:
 **apigw mode variant** — send the token as an `Authorization: Bearer` header (API Gateway's JWT Authorizer validates it) and put only the role in the body:
 
 ```yaml
-      - name: Get AWS credentials via OIDC warden (apigw mode)
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const core = require('@actions/core');
-            const token = await core.getIDToken('sts.amazonaws.com');
+- name: Get AWS credentials via OIDC warden (apigw mode)
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const core = require('@actions/core');
+      const token = await core.getIDToken('sts.amazonaws.com');
 
-            const response = await fetch('https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/verify', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                role: 'arn:aws:iam::123456789012:role/github-actions-role'
-              })
-            });
+      const response = await fetch('https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          role: 'arn:aws:iam::123456789012:role/github-actions-role'
+        })
+      });
 
-            const { data } = await response.json();
-            core.setSecret(data.AccessKeyId);
-            core.setSecret(data.SecretAccessKey);
-            core.setSecret(data.SessionToken);
-            core.exportVariable('AWS_ACCESS_KEY_ID', data.AccessKeyId);
-            core.exportVariable('AWS_SECRET_ACCESS_KEY', data.SecretAccessKey);
-            core.exportVariable('AWS_SESSION_TOKEN', data.SessionToken);
+      const { data } = await response.json();
+      core.setSecret(data.AccessKeyId);
+      core.setSecret(data.SecretAccessKey);
+      core.setSecret(data.SessionToken);
+      core.exportVariable('AWS_ACCESS_KEY_ID', data.AccessKeyId);
+      core.exportVariable('AWS_SECRET_ACCESS_KEY', data.SecretAccessKey);
+      core.exportVariable('AWS_SESSION_TOKEN', data.SessionToken);
 ```
 
 The audience requested by `getIDToken(...)` must match the audience configured on both the API Gateway JWT Authorizer and this service's issuer.
@@ -318,10 +318,12 @@ Both features are opt-in (`tag_auth.enabled` / `cross_account.enabled`, default 
   "requestId": "12258876-a981-452b-a7ae-415f8fa737b6",
   "processingMs": 383,
   "message": "Permission denied for the requested operation",
-  "errorCode": "permission_denied",
-  "errorDetails": "role not allowed for repository or doesn't meet constraints"
+  "errorCode": "permission_denied"
 }
 ```
+
+Error responses carry only the classified `errorCode`/`message`; internal
+error detail stays in the server-side logs, correlatable via `requestId`.
 
 ---
 

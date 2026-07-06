@@ -10,6 +10,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// fallbackErrorBody is the static body every adapter returns if marshaling the
+// Response itself fails (practically unreachable). A constant — never
+// fmt.Sprintf with err.Error() — so an internal error string can neither leak
+// to the caller nor break the JSON structure via unescaped characters.
+const fallbackErrorBody = `{"success":false,"statusCode":500,"errorCode":"internal_error","message":"An internal error occurred"}`
+
 // requestMeta extracts the request ID and elapsed processing time from ctx,
 // as set by each adapter's createRequestContext. Every frontend falls back to
 // a freshly generated UUID when the event carried no request ID (e.g. ALB,
@@ -42,12 +48,16 @@ func buildErrorResponse(ctx context.Context, err error, statusCode int) (Respons
 		slog.Int("status", statusCode),
 		slog.Int64("processingMs", processingMS))
 
+	// The raw err.Error() is logged above but deliberately NOT included in the
+	// response body: internal detail (JWT parse internals, JWKS/discovery/S3
+	// failures, config mismatches) must not reach unauthenticated callers.
+	// Clients get the classified errorCode/message plus the requestId to
+	// correlate with server-side logs.
 	return Response{
 		Success:      false,
 		StatusCode:   statusCode,
 		ErrorCode:    errCode,
 		Message:      errMsg,
-		ErrorDetails: err.Error(),
 		RequestID:    requestID,
 		ProcessingMS: processingMS,
 	}, statusCode

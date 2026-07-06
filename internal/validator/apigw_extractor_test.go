@@ -70,6 +70,66 @@ func TestAPIGWExtractor_Extract(t *testing.T) {
 	assert.Equal(t, "https://token.actions.githubusercontent.com", claims.Issuer)
 }
 
+// TestAPIGWExtractor_BracketedMultiValueAudience covers the HTTP API JWT
+// Authorizer's stringified form of an array aud claim ("[aud1 aud2]"): the
+// extractor must split it back into individual audiences so ANY-match against
+// the issuer's configured audiences still works.
+func TestAPIGWExtractor_BracketedMultiValueAudience(t *testing.T) {
+	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	claims, err := ex.Extract(context.Background(), validator.ExtractionInput{
+		AuthorizerClaims: map[string]string{
+			"iss":        "https://token.actions.githubusercontent.com",
+			"sub":        "repo:org/repo:ref:refs/heads/main",
+			"aud":        "[other.example.com sts.amazonaws.com]",
+			"exp":        "9999999999",
+			"iat":        "1000000000",
+			"repository": "org/repo",
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, []string(claims.Audience), "sts.amazonaws.com")
+}
+
+// TestAPIGWExtractor_BracketedLiteralAudience verifies a single-value aud that
+// legitimately looks bracketed still matches an identically-configured
+// audience: the verbatim string stays a candidate alongside the split values.
+func TestAPIGWExtractor_BracketedLiteralAudience(t *testing.T) {
+	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "[internal]")
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
+		AuthorizerClaims: map[string]string{
+			"iss":        "https://token.actions.githubusercontent.com",
+			"sub":        "repo:org/repo:ref:refs/heads/main",
+			"aud":        "[internal]",
+			"exp":        "9999999999",
+			"iat":        "1000000000",
+			"repository": "org/repo",
+		},
+	})
+	require.NoError(t, err)
+}
+
+// TestAPIGWExtractor_BracketedAudienceNoMatch verifies a bracketed multi-value
+// aud with no configured audience still denies (the split must not widen
+// matching).
+func TestAPIGWExtractor_BracketedAudienceNoMatch(t *testing.T) {
+	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
+	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)
+	_, err := ex.Extract(context.Background(), validator.ExtractionInput{
+		AuthorizerClaims: map[string]string{
+			"iss":        "https://token.actions.githubusercontent.com",
+			"sub":        "repo:org/repo:ref:refs/heads/main",
+			"aud":        "[other.example.com another.example.com]",
+			"exp":        "9999999999",
+			"iat":        "1000000000",
+			"repository": "org/repo",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "aud")
+}
+
 func TestAPIGWExtractor_MissingClaims(t *testing.T) {
 	iss := githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com")
 	ex := newTestAPIGWExtractor(iss, 30*time.Second, 0, 0)

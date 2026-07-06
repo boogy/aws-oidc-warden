@@ -104,7 +104,7 @@ func (h *AwsLambdaUrl) respondError(ctx context.Context, err error, statusCode i
 		return events.LambdaFunctionURLResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    ResponseHeaders,
-			Body:       fmt.Sprintf(`{"error": "%s"}`, err.Error()),
+			Body:       fallbackErrorBody,
 		}, nil
 	}
 

@@ -212,11 +212,21 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, fmt.Errorf("failed to assume role: %w", ErrAssumeRoleFailed))
 	}
 
-	// Log the successful assume role operation
+	// Log the successful assume role operation. STS always populates these
+	// fields in practice, but guard the derefs so a pathological response can
+	// never panic the handler after a successful assume.
+	accessKeyID := ""
+	if credentials.AccessKeyId != nil {
+		accessKeyID = *credentials.AccessKeyId
+	}
+	var credExpiration time.Time
+	if credentials.Expiration != nil {
+		credExpiration = *credentials.Expiration
+	}
 	log.Info("Successfully assumed role",
 		slog.String("role", requestedRole),
-		slog.String("accessKeyId", *credentials.AccessKeyId),
-		slog.Time("expiration", *credentials.Expiration),
+		slog.String("accessKeyId", accessKeyID),
+		slog.Time("expiration", credExpiration),
 		slog.Duration("totalTime", time.Since(startTime)))
 
 	// Fill in the allow-only audit fields: granted role, account, session tag

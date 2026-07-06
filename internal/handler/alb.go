@@ -124,7 +124,7 @@ func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error
 		return events.ALBTargetGroupResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    ResponseHeaders,
-			Body:       fmt.Sprintf(`{"error": "%s"}`, err.Error()),
+			Body:       fallbackErrorBody,
 		}, nil
 	}
 

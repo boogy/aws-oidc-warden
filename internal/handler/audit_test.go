@@ -135,7 +135,10 @@ func TestAudit_LogClaimValuesOff_SuppressesValuesInLogStream(t *testing.T) {
 			cfg := auditTestCfg(t, false, tc.logClaimValues)
 			claims := allowClaims("org/repo")
 			var buf bytes.Buffer
-			log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			// Bind requestId to the logger like every adapter does (slog.With);
+			// auditLogAttrs deliberately does not add it again.
+			log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})).
+				With(slog.String("requestId", "req-logstream"))
 
 			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), &fixedExtractor{claims: claims}, &fakeAuditSink{}, "test-frontend")
 			_, err := proc.ProcessRequest(context.Background(),

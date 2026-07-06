@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/config"
@@ -74,6 +75,10 @@ var numericClaimKeys = map[string]bool{"exp": true, "iat": true, "nbf": true}
 func mapClaimsFromStrings(raw map[string]string) (jwt.MapClaims, error) {
 	mc := make(jwt.MapClaims, len(raw))
 	for k, v := range raw {
+		if k == "aud" {
+			mc[k] = parseAuthorizerAudience(v)
+			continue
+		}
 		if !numericClaimKeys[k] {
 			mc[k] = v
 			continue
@@ -88,4 +93,26 @@ func mapClaimsFromStrings(raw map[string]string) (jwt.MapClaims, error) {
 		mc[k] = f
 	}
 	return mc, nil
+}
+
+// parseAuthorizerAudience decodes the authorizer's string form of the "aud"
+// claim. A token with a multi-value aud reaches the authorizer context as one
+// bracketed, space-separated string (e.g. "[aud1 aud2]" — the HTTP API JWT
+// Authorizer stringifies array claims), which would otherwise never match a
+// configured audience. A single-value aud (the common case) passes through
+// unchanged; jwt.MapClaims.GetAudience accepts both string and []string.
+//
+// The verbatim string is kept as a candidate alongside the split values, so a
+// single-value aud that legitimately looks bracketed (e.g. "[internal]")
+// still matches an identically-configured audience. Splitting assumes
+// audience values contain no spaces (they are URIs/identifiers in practice);
+// an audience value WITH spaces could fragment into a piece that matches a
+// configured audience — acceptable here because this check is
+// defense-in-depth behind API Gateway's own audience validation, which has
+// already run against the authorizer's configured audience list.
+func parseAuthorizerAudience(v string) any {
+	if len(v) < 2 || v[0] != '[' || v[len(v)-1] != ']' {
+		return v
+	}
+	return append([]string{v}, strings.Fields(v[1:len(v)-1])...)
 }

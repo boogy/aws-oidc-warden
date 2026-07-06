@@ -161,11 +161,26 @@ func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfi
 
 // buildConfigProvider wires the config provider. With an S3 config source it
 // performs an initial fetch+overlay (failing fast on error) and enables
-// per-request lazy hot-reload when ConfigReloadInterval > 0. Without a source it
-// returns a static provider serving the local config.
+// per-request lazy hot-reload when ConfigReloadInterval > 0. Without a source
+// it returns a static provider serving the local config — unless
+// config_fragments are listed, in which case a reloadable provider (with no
+// primary fetch) merges them at startup and re-resolves them per
+// ConfigReloadInterval when > 0.
 func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
 	if cfg.S3ConfigBucket == "" || cfg.S3ConfigPath == "" {
-		return config.NewStaticProvider(cfg), nil
+		// No primary S3 overlay. config_fragments must still be merged: a
+		// static provider never refreshes, so it would silently serve the base
+		// config with every fragment ignored. A reloadable provider with a nil
+		// fetch merges fragments on Refresh (and keeps re-resolving them per
+		// ConfigReloadInterval when > 0).
+		if len(cfg.ConfigFragments) == 0 {
+			return config.NewStaticProvider(cfg), nil
+		}
+		provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil)
+		if err := provider.Refresh(context.Background()); err != nil {
+			return nil, err
+		}
+		return provider, nil
 	}
 
 	bucket, key := cfg.S3ConfigBucket, cfg.S3ConfigPath

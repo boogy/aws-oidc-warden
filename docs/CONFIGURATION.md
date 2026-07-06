@@ -250,6 +250,8 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 
 > **Local paths only, for now.** `config.Provider` supports remote (`"scheme://"`, e.g. `s3://`) fragment URIs through an injected `FragmentFetchFunc` (`config.WithFragmentFetcher`), but the shipped binaries (Lambda and `cmd/local`) never install one — `bootstrap.go` calls `config.NewProvider(...)` with no `ProviderOption`s. A `config_fragments` entry with a `scheme://` prefix will hard-fail to fetch in every current deployment. Use local filesystem paths only until a fetcher is wired in.
 
+Fragments do **not** require an S3 config source: with only local-path fragments, they're merged once at startup (an invalid fragment fails startup) and re-resolved per `config_reload_interval` when it's > 0. With an S3 config source they're re-resolved on that same reload cadence.
+
 ```yaml
 config_fragments:
   - "/etc/aws-oidc-warden/fragments/team-platform.yaml"
