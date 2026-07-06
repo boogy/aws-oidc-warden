@@ -140,6 +140,7 @@ checksum:
 
 release:
   draft: false
+  prerelease: auto
 
 changelog:
   sort: asc
