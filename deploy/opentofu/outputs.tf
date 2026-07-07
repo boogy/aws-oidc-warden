@@ -1,6 +1,11 @@
 output "api_endpoint" {
   description = "POST this URL with {\"token\":\"...\",\"role\":\"...\"}."
-  value       = module.apigateway.api_endpoint
+  value       = coalesce(one(module.apigateway[*].api_endpoint), one(module.apigateway_rest[*].api_endpoint))
+}
+
+output "waf_web_acl_arn" {
+  description = "WAF web ACL ARN (rest + enable_waf only), or null."
+  value       = var.enable_waf ? one(module.apigateway_rest[*].web_acl_arn) : null
 }
 
 output "lambda_function_name" {
