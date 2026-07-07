@@ -91,12 +91,12 @@ Build the correct binary before running `tofu apply`:
 
 The endpoint is public. The application already denies tokens from unconfigured issuers with 401 **before any JWKS fetch** (no SSRF surface, minimal CPU), but in `self` mode every request — valid or junk — still invokes the Lambda. Defense is layered; each layer stops traffic the previous one lets through:
 
-| Layer | Stops junk traffic… | Knob |
-| --- | --- | --- |
-| WAF (REST API only) or JWT Authorizer (`apigw` mode) | **before Lambda invocation** | `enable_waf` / `jwt_validation_mode` |
-| API Gateway stage throttling | before invocation, above rate cap | `throttling_burst_limit`, `throttling_rate_limit` |
-| In-app validation (unknown issuer → 401 pre-JWKS) | inside the Lambda, cheaply | always on |
-| Lambda reserved concurrency | caps total concurrent invocations (cost/blast radius) | `lambda_reserved_concurrency` |
+| Layer                                                | Stops junk traffic…                                   | Knob                                              |
+| ---------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| WAF (REST API only) or JWT Authorizer (`apigw` mode) | **before Lambda invocation**                          | `enable_waf` / `jwt_validation_mode`              |
+| API Gateway stage throttling                         | before invocation, above rate cap                     | `throttling_burst_limit`, `throttling_rate_limit` |
+| In-app validation (unknown issuer → 401 pre-JWKS)    | inside the Lambda, cheaply                            | always on                                         |
+| Lambda reserved concurrency                          | caps total concurrent invocations (cost/blast radius) | `lambda_reserved_concurrency`                     |
 
 The pre-invocation layer depends on the API Gateway flavor (`api_gateway_type`), because AWS ties each protection to one flavor:
 
