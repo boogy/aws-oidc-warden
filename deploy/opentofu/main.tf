@@ -104,6 +104,14 @@ resource "aws_s3_object" "config" {
       condition     = !(var.enable_dynamodb_cache && var.enable_s3_cache)
       error_message = "enable_dynamodb_cache and enable_s3_cache are mutually exclusive."
     }
+    precondition {
+      condition     = !(var.jwt_validation_mode == "apigw" && var.api_gateway_type != "http")
+      error_message = "jwt_validation_mode = 'apigw' requires api_gateway_type = 'http' — JWT Authorizers exist only on HTTP APIs (v2)."
+    }
+    precondition {
+      condition     = !(var.enable_waf && var.api_gateway_type != "rest")
+      error_message = "enable_waf requires api_gateway_type = 'rest' — AWS WAF cannot attach to HTTP APIs (v2)."
+    }
   }
 }
 
@@ -124,14 +132,15 @@ module "iam" {
 
 # ---- Lambda ----
 module "lambda" {
-  source             = "./modules/lambda"
-  function_name      = var.name_prefix
-  role_arn           = module.iam.role_arn
-  zip_path           = "${path.module}/dist/function.zip"
-  architecture       = var.lambda_architecture
-  memory_size        = var.lambda_memory_size
-  timeout            = var.lambda_timeout
-  log_retention_days = var.log_retention_days
+  source               = "./modules/lambda"
+  function_name        = var.name_prefix
+  role_arn             = module.iam.role_arn
+  zip_path             = "${path.module}/dist/function.zip"
+  architecture         = var.lambda_architecture
+  memory_size          = var.lambda_memory_size
+  timeout              = var.lambda_timeout
+  log_retention_days   = var.log_retention_days
+  reserved_concurrency = var.lambda_reserved_concurrency
   environment_variables = {
     AOW_S3_CONFIG_BUCKET = module.config_bucket.bucket_id
     AOW_S3_CONFIG_PATH   = local.config_key
@@ -142,7 +151,10 @@ module "lambda" {
 }
 
 # ---- API Gateway ----
+# Exactly one front-end is provisioned, selected by var.api_gateway_type:
+# "http" (v2) supports the JWT Authorizer; "rest" (v1) supports WAF attachment.
 module "apigateway" {
+  count                = var.api_gateway_type == "http" ? 1 : 0
   source               = "./modules/apigateway"
   name                 = var.name_prefix
   lambda_invoke_arn    = module.lambda.invoke_arn
@@ -155,4 +167,20 @@ module "apigateway" {
   # so the two validation layers cannot drift apart in apigw mode.
   jwt_authorizer_issuer    = coalesce(var.jwt_authorizer_issuer, var.issuer)
   jwt_authorizer_audiences = var.jwt_authorizer_audiences != null ? var.jwt_authorizer_audiences : var.audiences
+  throttling_burst_limit   = var.throttling_burst_limit
+  throttling_rate_limit    = var.throttling_rate_limit
+}
+
+module "apigateway_rest" {
+  count                  = var.api_gateway_type == "rest" ? 1 : 0
+  source                 = "./modules/apigateway-rest"
+  name                   = var.name_prefix
+  lambda_invoke_arn      = module.lambda.invoke_arn
+  lambda_function_name   = module.lambda.function_name
+  throttling_burst_limit = var.throttling_burst_limit
+  throttling_rate_limit  = var.throttling_rate_limit
+  enable_waf             = var.enable_waf
+  waf_rate_limit         = var.waf_rate_limit
+  waf_common_rule_set    = var.waf_common_rule_set
+  tags                   = var.tags
 }

@@ -62,12 +62,32 @@ role_mappings = [
 #   allowed_accounts = ["111122223333", "444455556666"]
 # }
 
+# --- Public endpoint hardening ---
+# The endpoint is public; unknown-issuer tokens are denied in-app (401, before
+# any JWKS fetch), but in self mode the Lambda is still INVOKED per request.
+# To reject junk traffic before invocation, pick per issuer count:
+#   single issuer  -> jwt_validation_mode = "apigw" (JWT Authorizer on the HTTP
+#                     API rejects invalid tokens at the gateway; RECOMMENDED)
+#   multi-issuer   -> api_gateway_type = "rest" + enable_waf = true (WAF rate
+#     (self mode)     limiting + managed rules + POST-/verify-only filtering;
+#                     WAF cannot attach to HTTP APIs)
+# No IP allowlisting in either posture: GitHub-hosted runner IP ranges are vast
+# and dynamic, and self-hosted runners can be anywhere.
+# api_gateway_type = "rest"
+# enable_waf       = true
+# waf_rate_limit   = 300 # requests per source IP per 5 min
+# Always-on knobs (both API types):
+# throttling_burst_limit      = 50
+# throttling_rate_limit       = 100
+# lambda_reserved_concurrency = 50 # cap invocation blast radius; -1 = unreserved
+
 # --- JWT Validation Mode ---
 # "self"  (default) — Lambda validates JWT signature itself using JWKS.
 #            Build with the default: ./deploy/opentofu/build.sh
 # "apigw" — API Gateway JWT Authorizer validates; Lambda reads pre-validated claims
 #            from event.requestContext.authorizer.jwt.claims. Build with:
 #            ./deploy/opentofu/build.sh apigatewayv2
+#            Requires api_gateway_type = "http" (JWT Authorizers are HTTP API-only).
 #            SECURITY: Lambda resource policy restricts invocations to the API GW
 #            (source_arn = execution_arn/*/*) — direct invocations are blocked.
 # "alb" mode is NOT supported by this stack — it needs the `alb` Lambda binary

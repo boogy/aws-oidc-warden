@@ -87,6 +87,30 @@ Build the correct binary before running `tofu apply`:
 
 ---
 
+## Hardening the Public Endpoint
+
+The endpoint is public. The application already denies tokens from unconfigured issuers with 401 **before any JWKS fetch** (no SSRF surface, minimal CPU), but in `self` mode every request — valid or junk — still invokes the Lambda. Defense is layered; each layer stops traffic the previous one lets through:
+
+| Layer | Stops junk traffic… | Knob |
+| --- | --- | --- |
+| WAF (REST API only) or JWT Authorizer (`apigw` mode) | **before Lambda invocation** | `enable_waf` / `jwt_validation_mode` |
+| API Gateway stage throttling | before invocation, above rate cap | `throttling_burst_limit`, `throttling_rate_limit` |
+| In-app validation (unknown issuer → 401 pre-JWKS) | inside the Lambda, cheaply | always on |
+| Lambda reserved concurrency | caps total concurrent invocations (cost/blast radius) | `lambda_reserved_concurrency` |
+
+The pre-invocation layer depends on the API Gateway flavor (`api_gateway_type`), because AWS ties each protection to one flavor:
+
+- **HTTP API (v2, `"http"`, default)** — supports the **JWT Authorizer**: with `jwt_validation_mode = "apigw"`, API Gateway validates the token's signature/issuer/audience against JWKS and rejects invalid tokens at the gateway — zero Lambda invocations for junk. Limitation: one issuer per authorizer (delegated mode enforces a single configured issuer). **WAF cannot attach to HTTP APIs.**
+- **REST API (v1, `"rest"`)** — supports **AWS WAF** (`enable_waf = true`): a per-source-IP rate-based rule (`waf_rate_limit`, default 300 req/5 min), `AWSManagedRulesCommonRuleSet`, and a request-shape rule that blocks anything other than `POST /verify`. This is the hardened posture for **multi-issuer `self` mode**, where the JWT Authorizer doesn't fit. Uses the same `apigateway` binary and self-mode request format — no rebuild needed when switching from `"http"` + self.
+
+**Pick per issuer count:** single issuer → `"http"` + `jwt_validation_mode = "apigw"`; multiple issuers → `"rest"` + `enable_waf = true`. Preconditions enforce the valid combinations at plan time.
+
+**No IP allowlisting:** GitHub-hosted runners use vast, constantly-changing Azure IP ranges and self-hosted runners can be anywhere — WAF IP sets or resource policies would break legitimate callers, so neither posture uses them.
+
+The CloudFormation quickstart provisions an HTTP API only; use the OpenTofu stack for the REST + WAF posture.
+
+---
+
 ## Smoke Tests
 
 **Self mode:**

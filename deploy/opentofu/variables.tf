@@ -85,6 +85,66 @@ variable "cross_account" {
   default = { enabled = false }
 }
 
+# ---- Endpoint hardening ----
+variable "api_gateway_type" {
+  type        = string
+  description = <<-EOT
+    API Gateway flavor: 'http' (HTTP API v2, default) or 'rest' (REST API v1).
+    'http' supports the JWT Authorizer (jwt_validation_mode = 'apigw');
+    'rest' supports AWS WAF attachment (enable_waf) for multi-issuer self
+    mode. Both run the same Lambda: 'rest' and 'http'+self use the
+    `apigateway` binary (v1 events; the HTTP API uses payload format 1.0),
+    'http'+apigw uses the `apigatewayv2` binary.
+  EOT
+  default     = "http"
+  validation {
+    condition     = contains(["http", "rest"], var.api_gateway_type)
+    error_message = "api_gateway_type must be 'http' or 'rest'."
+  }
+}
+
+variable "enable_waf" {
+  type        = bool
+  description = <<-EOT
+    Attach an AWS WAFv2 web ACL to the API stage: per-source-IP rate limiting
+    (waf_rate_limit), AWSManagedRulesCommonRuleSet, and a request-shape rule
+    that blocks anything other than POST /verify. Requires api_gateway_type =
+    'rest' (AWS WAF cannot attach to HTTP APIs). No IP allowlisting — GitHub
+    runner IP ranges are vast and dynamic.
+  EOT
+  default     = false
+}
+
+variable "waf_rate_limit" {
+  type        = number
+  description = "WAF rate-based rule: max requests per source IP per 5-minute window. Only used when enable_waf = true."
+  default     = 300
+}
+
+variable "waf_common_rule_set" {
+  type        = bool
+  description = "Include AWSManagedRulesCommonRuleSet in the web ACL. Disable if it false-positives on JWT request bodies. Only used when enable_waf = true."
+  default     = true
+}
+
+variable "throttling_burst_limit" {
+  type        = number
+  description = "API Gateway stage burst limit (concurrent request spikes)."
+  default     = 50
+}
+
+variable "throttling_rate_limit" {
+  type        = number
+  description = "API Gateway stage steady-state rate limit (requests/second)."
+  default     = 100
+}
+
+variable "lambda_reserved_concurrency" {
+  type        = number
+  description = "Reserved concurrent executions for the Lambda — caps the cost/blast radius of unauthenticated floods in self mode. -1 leaves it unreserved."
+  default     = -1
+}
+
 # ---- Lambda sizing ----
 variable "lambda_memory_size" {
   type        = number
