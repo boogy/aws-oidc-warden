@@ -193,12 +193,12 @@ variable "jwt_validation_mode" {
 
 variable "jwt_authorizer_issuer" {
   type        = string
-  description = "OIDC issuer URL for the API Gateway JWT Authorizer. Only used when jwt_validation_mode = 'apigw'."
-  default     = "https://token.actions.githubusercontent.com"
+  description = "OIDC issuer URL for the API Gateway JWT Authorizer. Only used when jwt_validation_mode = 'apigw'. Defaults to var.issuer — set only to diverge from it."
+  default     = null
 }
 
 variable "jwt_authorizer_audiences" {
   type        = list(string)
-  description = "Accepted audiences for the API Gateway JWT Authorizer. Only used when jwt_validation_mode = 'apigw'."
-  default     = ["sts.amazonaws.com"]
+  description = "Accepted audiences for the API Gateway JWT Authorizer. Only used when jwt_validation_mode = 'apigw'. Defaults to var.audiences — set only to diverge from them."
+  default     = null
 }
