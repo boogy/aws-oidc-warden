@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **OpenTofu `api_endpoint` output** — the `$default` stage `invoke_url` ends
+  with a trailing slash, so the output rendered `…amazonaws.com//verify`;
+  HTTP APIs do not normalize double slashes, making the documented smoke-test
+  URL a 404. The slash is now trimmed before appending `/verify`.
+
+### Changed
+
+- **OpenTofu quick-setup guardrails** — a missing `dist/function.zip` now
+  fails `plan` with a clear "run deploy/opentofu/build.sh first" precondition
+  instead of a raw `filebase64sha256` error, and the API Gateway JWT
+  Authorizer (`apigw` mode) now defaults to `var.issuer` / `var.audiences`
+  so the authorizer and the rendered `config.yaml` cannot drift apart
+  (`jwt_authorizer_issuer` / `jwt_authorizer_audiences` remain as explicit
+  overrides).
+
 ## [2.0.0] - 2026-07-02
 
 Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of

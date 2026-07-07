@@ -149,8 +149,10 @@ module "apigateway" {
   lambda_function_name = module.lambda.function_name
   # "apigw" mode: use v2 payload format + provision a JWT Authorizer so API GW
   # validates the token before invoking Lambda (Lambda reads pre-validated claims).
-  payload_format_version   = var.jwt_validation_mode == "apigw" ? "2.0" : "1.0"
-  enable_jwt_authorizer    = var.jwt_validation_mode == "apigw"
-  jwt_authorizer_issuer    = var.jwt_authorizer_issuer
-  jwt_authorizer_audiences = var.jwt_authorizer_audiences
+  payload_format_version = var.jwt_validation_mode == "apigw" ? "2.0" : "1.0"
+  enable_jwt_authorizer  = var.jwt_validation_mode == "apigw"
+  # Authorizer follows the config issuer/audiences unless explicitly overridden,
+  # so the two validation layers cannot drift apart in apigw mode.
+  jwt_authorizer_issuer    = coalesce(var.jwt_authorizer_issuer, var.issuer)
+  jwt_authorizer_audiences = var.jwt_authorizer_audiences != null ? var.jwt_authorizer_audiences : var.audiences
 }

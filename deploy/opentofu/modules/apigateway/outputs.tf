@@ -5,7 +5,9 @@ output "api_id" {
 
 output "api_endpoint" {
   description = "Invoke URL for the verify route."
-  value       = "${aws_apigatewayv2_stage.this.invoke_url}/verify"
+  # invoke_url ends with "/" for the $default stage; trim it so the path is
+  # "/verify", not "//verify" (HTTP APIs do not normalize double slashes).
+  value = "${trimsuffix(aws_apigatewayv2_stage.this.invoke_url, "/")}/verify"
 }
 
 output "jwt_authorizer_id" {

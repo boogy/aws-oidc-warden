@@ -14,7 +14,14 @@ resource "aws_lambda_function" "this" {
   timeout       = var.timeout
 
   filename         = var.zip_path
-  source_code_hash = filebase64sha256(var.zip_path)
+  source_code_hash = fileexists(var.zip_path) ? filebase64sha256(var.zip_path) : null
+
+  lifecycle {
+    precondition {
+      condition     = fileexists(var.zip_path)
+      error_message = "Deployment zip not found (modules/lambda var.zip_path). Run deploy/opentofu/build.sh first — 'build.sh' for self mode, 'build.sh apigatewayv2' for apigw mode."
+    }
+  }
 
   reserved_concurrent_executions = var.reserved_concurrency
 

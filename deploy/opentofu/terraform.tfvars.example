@@ -73,5 +73,7 @@ role_mappings = [
 # "alb" mode is NOT supported by this stack — it needs the `alb` Lambda binary
 # behind an Application Load Balancer, which this module does not provision.
 jwt_validation_mode = "self"
+# The JWT Authorizer follows `issuer`/`audiences` above by default; override
+# only if the authorizer must validate against a different issuer/audiences.
 # jwt_authorizer_issuer    = "https://token.actions.githubusercontent.com"
 # jwt_authorizer_audiences = ["sts.amazonaws.com"]
