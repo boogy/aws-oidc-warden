@@ -1,5 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: AWS OIDC Warden - quick-start (API Gateway + Lambda, optional DynamoDB cache)
+Description: >-
+  AWS OIDC Warden - quick-start. Infra parity with the OpenTofu stack:
+  HTTP API (v2, JWT Authorizer) or REST API (v1, WAF), stage throttling,
+  reserved concurrency, optional DynamoDB/S3 cache, audit-log and
+  session-policy buckets. config.yaml is uploaded manually (only the
+  OpenTofu stack renders it).
 
 Parameters:
   FunctionName:
@@ -21,50 +26,242 @@ Parameters:
   Timeout:
     Type: Number
     Default: 15
+  ReservedConcurrency:
+    Type: Number
+    Default: -1
+    Description: >-
+      Reserved concurrent executions for the Lambda — caps the cost/blast
+      radius of unauthenticated floods in self mode. -1 leaves it unreserved.
   ConfigBucket:
     Type: String
     Default: ""
     Description: >-
-      S3 bucket holding config.yaml (issuers, role_mappings, etc). Effectively
-      required: v2 has no AOW_ISSUER/AOW_AUDIENCES env vars; without a config
-      object only the zero-config GitHub issuer seed applies and no
-      role_mappings exist, so every request is denied.
+      Existing S3 bucket holding config.yaml (issuers, role_mappings, etc).
+      Leave empty to create '<FunctionName>-config-<suffix>' in this stack;
+      either way, upload config.yaml yourself — v2 has no
+      AOW_ISSUER/AOW_AUDIENCES env vars, so without a config object only the
+      zero-config GitHub issuer seed applies and every request is denied.
   ConfigKey:
     Type: String
     Default: config.yaml
+  BucketSuffix:
+    Type: String
+    Default: ""
+    Description: >-
+      Suffix appended to created S3 bucket names for global uniqueness.
+      Empty = use the account ID.
   EnableDynamoDBCache:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
+  EnableS3Cache:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Provision an S3 JWKS cache bucket and set cache type s3.
+  CacheTTL:
+    Type: String
+    Default: 1h
+    Description: JWKS cache TTL (Go duration). Applied when a cache backend is enabled.
+  EnableS3Logs:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Provision an audit-log bucket (90-day lifecycle) and enable log_to_s3.
+  EnableSessionPolicyBucket:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Provision an S3 bucket for session policy files.
+  EnableTagAuth:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Enable tag-based authorization - grants iam:GetRole/iam:ListRoleTags and
+      sets AOW_TAG_AUTH_ENABLED (tag_prefix etc. live in config.yaml).
   AssumableRoleArns:
     Type: CommaDelimitedList
     Description: Role ARNs the Lambda may assume.
   LogLevel:
     Type: String
     Default: info
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+  ApiGatewayType:
+    Type: String
+    Default: http
+    AllowedValues: [http, rest]
+    Description: >-
+      API Gateway flavor: 'http' (HTTP API v2) supports the JWT Authorizer
+      (JWTValidationMode=apigw); 'rest' (REST API v1) supports AWS WAF
+      (EnableWAF) for multi-issuer self mode. Both 'rest' and 'http'+self use
+      the apigateway binary; 'http'+apigw uses the apigatewayv2 binary.
+  EnableWAF:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Attach an AWS WAFv2 web ACL to the API stage: per-source-IP rate
+      limiting, AWSManagedRulesCommonRuleSet, and a request-shape rule that
+      blocks anything other than POST /verify. Requires ApiGatewayType=rest.
+  WAFRateLimit:
+    Type: Number
+    Default: 300
+    Description: WAF rate-based rule - max requests per source IP per 5-minute window.
+  WAFCommonRuleSet:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Include AWSManagedRulesCommonRuleSet in the web ACL. Disable if it
+      false-positives on JWT request bodies.
+  ThrottlingBurstLimit:
+    Type: Number
+    Default: 50
+    Description: API Gateway stage burst limit (concurrent request spikes).
+  ThrottlingRateLimit:
+    Type: Number
+    Default: 100
+    Description: API Gateway stage steady-state rate limit (requests/second).
   JWTValidationMode:
     Type: String
     Default: self
     AllowedValues: [self, apigw]
     Description: >-
       self = Lambda validates JWT (apigateway binary); apigw = delegate to API
-      GW JWT Authorizer (apigatewayv2 binary). alb mode is not supported by
-      this template (needs the alb binary behind an ALB).
-  JWTAuthorizer_Issuer:
+      GW JWT Authorizer (apigatewayv2 binary, ApiGatewayType=http only). alb
+      mode is not supported by this template (needs the alb binary behind an
+      ALB).
+  JWTAuthorizerIssuer:
     Type: String
     Default: "https://token.actions.githubusercontent.com"
     Description: JWT Authorizer issuer URL (used only when JWTValidationMode = apigw).
-  JWTAuthorizer_Audience:
-    Type: String
+  JWTAuthorizerAudiences:
+    Type: CommaDelimitedList
     Default: sts.amazonaws.com
-    Description: JWT Authorizer audience (used only when JWTValidationMode = apigw).
+    Description: JWT Authorizer audiences (used only when JWTValidationMode = apigw).
+
+Rules:
+  WafRequiresRestApi:
+    RuleCondition: !Equals [!Ref EnableWAF, "true"]
+    Assertions:
+      - Assert: !Equals [!Ref ApiGatewayType, rest]
+        AssertDescription: >-
+          EnableWAF requires ApiGatewayType=rest — AWS WAF cannot attach to
+          HTTP APIs (v2).
+  ApigwModeRequiresHttpApi:
+    RuleCondition: !Equals [!Ref JWTValidationMode, apigw]
+    Assertions:
+      - Assert: !Equals [!Ref ApiGatewayType, http]
+        AssertDescription: >-
+          JWTValidationMode=apigw requires ApiGatewayType=http — JWT
+          Authorizers exist only on HTTP APIs (v2).
+  CachesMutuallyExclusive:
+    RuleCondition: !Equals [!Ref EnableDynamoDBCache, "true"]
+    Assertions:
+      - Assert: !Equals [!Ref EnableS3Cache, "false"]
+        AssertDescription: EnableDynamoDBCache and EnableS3Cache are mutually exclusive.
 
 Conditions:
   UseDynamoDB: !Equals [!Ref EnableDynamoDBCache, "true"]
-  HasConfigBucket: !Not [!Equals [!Ref ConfigBucket, ""]]
-  UseJWTAuthorizer: !Equals [!Ref JWTValidationMode, "apigw"]
+  UseS3Cache: !Equals [!Ref EnableS3Cache, "true"]
+  UseAnyCache: !Or [!Condition UseDynamoDB, !Condition UseS3Cache]
+  UseS3Logs: !Equals [!Ref EnableS3Logs, "true"]
+  UseSessionPolicyBucket: !Equals [!Ref EnableSessionPolicyBucket, "true"]
+  UseTagAuth: !Equals [!Ref EnableTagAuth, "true"]
+  CreateConfigBucket: !Equals [!Ref ConfigBucket, ""]
+  HasBucketSuffix: !Not [!Equals [!Ref BucketSuffix, ""]]
+  HasReservedConcurrency: !Not [!Equals [!Ref ReservedConcurrency, -1]]
+  UseRestApi: !Equals [!Ref ApiGatewayType, rest]
+  UseHttpApi: !Not [!Condition UseRestApi]
+  # And-ed with the front-end condition so conditional references stay valid;
+  # the Rules section already rejects the mismatched parameter combinations.
+  UseJWTAuthorizer: !And
+    - !Equals [!Ref JWTValidationMode, "apigw"]
+    - !Condition UseHttpApi
+  UseWAF: !And
+    - !Equals [!Ref EnableWAF, "true"]
+    - !Condition UseRestApi
+  UseCommonRules: !Equals [!Ref WAFCommonRuleSet, "true"]
 
 Resources:
+  # ---- Buckets (mirror deploy/opentofu/modules/s3: private, SSE-AES256) ----
+  ConfigBucketResource:
+    Type: AWS::S3::Bucket
+    Condition: CreateConfigBucket
+    Properties:
+      BucketName: !Sub
+        - "${FunctionName}-config-${Suffix}"
+        - Suffix: !If [HasBucketSuffix, !Ref BucketSuffix, !Ref "AWS::AccountId"]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  CacheBucket:
+    Type: AWS::S3::Bucket
+    Condition: UseS3Cache
+    Properties:
+      BucketName: !Sub
+        - "${FunctionName}-cache-${Suffix}"
+        - Suffix: !If [HasBucketSuffix, !Ref BucketSuffix, !Ref "AWS::AccountId"]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  LogBucket:
+    Type: AWS::S3::Bucket
+    Condition: UseS3Logs
+    Properties:
+      BucketName: !Sub
+        - "${FunctionName}-logs-${Suffix}"
+        - Suffix: !If [HasBucketSuffix, !Ref BucketSuffix, !Ref "AWS::AccountId"]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-objects
+            Status: Enabled
+            ExpirationInDays: 90
+
+  SessionPolicyBucket:
+    Type: AWS::S3::Bucket
+    Condition: UseSessionPolicyBucket
+    Properties:
+      BucketName: !Sub
+        - "${FunctionName}-session-policies-${Suffix}"
+        - Suffix: !If [HasBucketSuffix, !Ref BucketSuffix, !Ref "AWS::AccountId"]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ---- Cache table ----
   CacheTable:
     Type: AWS::DynamoDB::Table
     Condition: UseDynamoDB
@@ -85,8 +282,9 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${FunctionName}"
-      RetentionInDays: 14
+      RetentionInDays: !Ref LogRetentionDays
 
+  # ---- IAM (mirror deploy/opentofu/modules/iam) ----
   ExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -110,6 +308,21 @@ Resources:
                   - "sts:AssumeRole"
                   - "sts:TagSession"
                 Resource: !Ref AssumableRoleArns
+              - Sid: ReadConfig
+                Effect: Allow
+                Action: "s3:GetObject"
+                Resource: !Sub
+                  - "arn:aws:s3:::${Bucket}/*"
+                  - Bucket: !If [CreateConfigBucket, !Ref ConfigBucketResource, !Ref ConfigBucket]
+              - !If
+                - UseTagAuth
+                - Sid: ReadRoleTags
+                  Effect: Allow
+                  Action:
+                    - "iam:GetRole"
+                    - "iam:ListRoleTags"
+                  Resource: "*"
+                - !Ref AWS::NoValue
               - !If
                 - UseDynamoDB
                 - Sid: CacheDynamoDB
@@ -121,13 +334,34 @@ Resources:
                   Resource: !GetAtt CacheTable.Arn
                 - !Ref AWS::NoValue
               - !If
-                - HasConfigBucket
-                - Sid: ReadConfig
+                - UseS3Cache
+                - Sid: CacheS3
+                  Effect: Allow
+                  Action:
+                    - "s3:GetObject"
+                    - "s3:PutObject"
+                    - "s3:DeleteObject"
+                    - "s3:ListBucket"
+                  Resource:
+                    - !GetAtt CacheBucket.Arn
+                    - !Sub "${CacheBucket.Arn}/*"
+                - !Ref AWS::NoValue
+              - !If
+                - UseSessionPolicyBucket
+                - Sid: ReadSessionPolicies
                   Effect: Allow
                   Action: "s3:GetObject"
-                  Resource: !Sub "arn:aws:s3:::${ConfigBucket}/*"
+                  Resource: !Sub "${SessionPolicyBucket.Arn}/*"
+                - !Ref AWS::NoValue
+              - !If
+                - UseS3Logs
+                - Sid: WriteAuditLogs
+                  Effect: Allow
+                  Action: "s3:PutObject"
+                  Resource: !Sub "${LogBucket.Arn}/*"
                 - !Ref AWS::NoValue
 
+  # ---- Lambda ----
   Function:
     Type: AWS::Lambda::Function
     Properties:
@@ -137,25 +371,36 @@ Resources:
       Architectures: [!Ref Architecture]
       MemorySize: !Ref MemorySize
       Timeout: !Ref Timeout
+      ReservedConcurrentExecutions: !If [HasReservedConcurrency, !Ref ReservedConcurrency, !Ref "AWS::NoValue"]
       Role: !GetAtt ExecutionRole.Arn
       Code:
         S3Bucket: !Ref LambdaCodeBucket
         S3Key: !Ref LambdaCodeKey
       Environment:
         Variables:
-          AOW_CACHE_TYPE: !If [UseDynamoDB, dynamodb, memory]
-          AOW_CACHE_DYNAMODB_TABLE:
-            !If [UseDynamoDB, !Sub "${FunctionName}-cache", !Ref "AWS::NoValue"]
-          AOW_S3_CONFIG_BUCKET:
-            !If [HasConfigBucket, !Ref ConfigBucket, !Ref "AWS::NoValue"]
-          AOW_S3_CONFIG_PATH:
-            !If [HasConfigBucket, !Ref ConfigKey, !Ref "AWS::NoValue"]
+          # Cache env vars only when a backend is provisioned here — AOW_* env
+          # beats the S3 config, so an unconditional value would stomp any
+          # cache block in the user's config.yaml (app default is memory).
+          AOW_CACHE_TYPE: !If [UseDynamoDB, dynamodb, !If [UseS3Cache, s3, !Ref "AWS::NoValue"]]
+          AOW_CACHE_DYNAMODB_TABLE: !If [UseDynamoDB, !Sub "${FunctionName}-cache", !Ref "AWS::NoValue"]
+          AOW_CACHE_S3_BUCKET: !If [UseS3Cache, !Ref CacheBucket, !Ref "AWS::NoValue"]
+          AOW_CACHE_S3_PREFIX: !If [UseS3Cache, "jwks/", !Ref "AWS::NoValue"]
+          AOW_CACHE_TTL: !If [UseAnyCache, !Ref CacheTTL, !Ref "AWS::NoValue"]
+          AOW_LOG_TO_S3: !If [UseS3Logs, "true", !Ref "AWS::NoValue"]
+          AOW_LOG_BUCKET: !If [UseS3Logs, !Ref LogBucket, !Ref "AWS::NoValue"]
+          AOW_LOG_PREFIX: !If [UseS3Logs, "audit/", !Ref "AWS::NoValue"]
+          AOW_SESSION_POLICY_BUCKET: !If [UseSessionPolicyBucket, !Ref SessionPolicyBucket, !Ref "AWS::NoValue"]
+          AOW_TAG_AUTH_ENABLED: !If [UseTagAuth, "true", !Ref "AWS::NoValue"]
+          AOW_S3_CONFIG_BUCKET: !If [CreateConfigBucket, !Ref ConfigBucketResource, !Ref ConfigBucket]
+          AOW_S3_CONFIG_PATH: !Ref ConfigKey
           AOW_JWT_VALIDATION_MODE: !Ref JWTValidationMode
           LOG_LEVEL: !Ref LogLevel
     DependsOn: LogGroup
 
+  # ---- HTTP API (v2) front-end ----
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
+    Condition: UseHttpApi
     Properties:
       Name: !Ref FunctionName
       ProtocolType: HTTP
@@ -170,12 +415,12 @@ Resources:
         - $request.header.Authorization
       Name: !Sub "${FunctionName}-jwt"
       JwtConfiguration:
-        Audience:
-          - !Ref JWTAuthorizer_Audience
-        Issuer: !Ref JWTAuthorizer_Issuer
+        Audience: !Ref JWTAuthorizerAudiences
+        Issuer: !Ref JWTAuthorizerIssuer
 
   Integration:
     Type: AWS::ApiGatewayV2::Integration
+    Condition: UseHttpApi
     Properties:
       ApiId: !Ref HttpApi
       IntegrationType: AWS_PROXY
@@ -185,6 +430,7 @@ Resources:
 
   Route:
     Type: AWS::ApiGatewayV2::Route
+    Condition: UseHttpApi
     Properties:
       ApiId: !Ref HttpApi
       RouteKey: POST /verify
@@ -194,10 +440,64 @@ Resources:
 
   Stage:
     Type: AWS::ApiGatewayV2::Stage
+    Condition: UseHttpApi
     Properties:
       ApiId: !Ref HttpApi
       StageName: $default
       AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: !Ref ThrottlingBurstLimit
+        ThrottlingRateLimit: !Ref ThrottlingRateLimit
+
+  # ---- REST API (v1) front-end (mirror deploy/opentofu/modules/apigateway-rest) ----
+  RestApi:
+    Type: AWS::ApiGateway::RestApi
+    Condition: UseRestApi
+    Properties:
+      Name: !Ref FunctionName
+      EndpointConfiguration:
+        Types: [REGIONAL]
+
+  RestVerifyResource:
+    Type: AWS::ApiGateway::Resource
+    Condition: UseRestApi
+    Properties:
+      RestApiId: !Ref RestApi
+      ParentId: !GetAtt RestApi.RootResourceId
+      PathPart: verify
+
+  RestPostVerifyMethod:
+    Type: AWS::ApiGateway::Method
+    Condition: UseRestApi
+    Properties:
+      RestApiId: !Ref RestApi
+      ResourceId: !Ref RestVerifyResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${Function.Arn}/invocations"
+
+  RestDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Condition: UseRestApi
+    DependsOn: RestPostVerifyMethod
+    Properties:
+      RestApiId: !Ref RestApi
+
+  RestStage:
+    Type: AWS::ApiGateway::Stage
+    Condition: UseRestApi
+    Properties:
+      RestApiId: !Ref RestApi
+      DeploymentId: !Ref RestDeployment
+      StageName: v1
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingBurstLimit: !Ref ThrottlingBurstLimit
+          ThrottlingRateLimit: !Ref ThrottlingRateLimit
 
   InvokePermission:
     Type: AWS::Lambda::Permission
@@ -205,11 +505,113 @@ Resources:
       FunctionName: !Ref Function
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+      SourceArn: !Sub
+        - "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiId}/*/*"
+        - ApiId: !If [UseRestApi, !Ref RestApi, !Ref HttpApi]
+
+  # ---- WAF (REST API only; mirror deploy/opentofu/modules/apigateway-rest) ----
+  # No IP sets or geo rules: legitimate callers are GitHub Actions runners,
+  # whose IP ranges are vast and constantly changing (GitHub-hosted) or
+  # arbitrary (self-hosted).
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Condition: UseWAF
+    Properties:
+      Name: !Sub "${FunctionName}-waf"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      Rules:
+        # Drop requests that are not POST /verify — scanners and probes never
+        # reach the Lambda.
+        - Name: request-shape
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            NotStatement:
+              Statement:
+                AndStatement:
+                  Statements:
+                    - ByteMatchStatement:
+                        SearchString: POST
+                        PositionalConstraint: EXACTLY
+                        FieldToMatch:
+                          Method: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+                    - ByteMatchStatement:
+                        SearchString: /verify
+                        PositionalConstraint: STARTS_WITH
+                        FieldToMatch:
+                          UriPath: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${FunctionName}-request-shape"
+            SampledRequestsEnabled: true
+        # Per-source-IP rate cap. Bounds abuse from any single source without
+        # restricting who may call.
+        - Name: rate-limit
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref WAFRateLimit
+              AggregateKeyType: IP
+          VisibilityConfig:
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub "${FunctionName}-rate-limit"
+            SampledRequestsEnabled: true
+        - !If
+          - UseCommonRules
+          - Name: aws-common-rules
+            Priority: 2
+            OverrideAction:
+              None: {}
+            Statement:
+              ManagedRuleGroupStatement:
+                Name: AWSManagedRulesCommonRuleSet
+                VendorName: AWS
+            VisibilityConfig:
+              CloudWatchMetricsEnabled: true
+              MetricName: !Sub "${FunctionName}-common-rules"
+              SampledRequestsEnabled: true
+          - !Ref AWS::NoValue
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${FunctionName}-waf"
+        SampledRequestsEnabled: true
+
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: UseWAF
+    Properties:
+      ResourceArn: !Sub "arn:aws:apigateway:${AWS::Region}::/restapis/${RestApi}/stages/${RestStage}"
+      WebACLArn: !GetAtt WebACL.Arn
 
 Outputs:
   ApiEndpoint:
     Description: Verify endpoint URL.
-    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/verify"
+    Value: !If
+      - UseRestApi
+      - !Sub "https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/v1/verify"
+      - !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/verify"
   FunctionArn:
     Value: !GetAtt Function.Arn
+  ExecutionRoleArn:
+    Description: Warden execution role — target roles must trust it for sts:AssumeRole/sts:TagSession.
+    Value: !GetAtt ExecutionRole.Arn
+  ConfigBucketName:
+    Description: Bucket to upload config.yaml to.
+    Value: !If [CreateConfigBucket, !Ref ConfigBucketResource, !Ref ConfigBucket]
+  WafWebAclArn:
+    Condition: UseWAF
+    Value: !GetAtt WebACL.Arn
+  CacheTableName:
+    Condition: UseDynamoDB
+    Value: !Sub "${FunctionName}-cache"
