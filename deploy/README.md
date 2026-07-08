@@ -1,6 +1,6 @@
 # AWS OIDC Warden — Deployment Guide
 
-Two deployment paths are provided: **OpenTofu** (full-featured, recommended) and **CloudFormation** (quick-start for common cases).
+Two deployment paths are provided: **OpenTofu** and **CloudFormation**. Both provision the same infrastructure (either API Gateway flavor, WAF, throttling, caches, optional buckets); the one functional difference is that OpenTofu also renders and uploads `config.yaml`, while with CloudFormation you upload it yourself.
 
 ## Prerequisites
 
@@ -107,7 +107,7 @@ The pre-invocation layer depends on the API Gateway flavor (`api_gateway_type`),
 
 **No IP allowlisting:** GitHub-hosted runners use vast, constantly-changing Azure IP ranges and self-hosted runners can be anywhere — WAF IP sets or resource policies would break legitimate callers, so neither posture uses them.
 
-The CloudFormation quickstart provisions an HTTP API only; use the OpenTofu stack for the REST + WAF posture.
+Both stacks support both postures: in OpenTofu via `api_gateway_type`/`enable_waf`, in CloudFormation via the `ApiGatewayType`/`EnableWAF` parameters (equivalent assertions run at stack creation).
 
 ---
 
@@ -161,7 +161,7 @@ Override the suffix with `var.bucket_suffix` if your naming convention requires 
 
 ## CloudFormation Quick-Start
 
-For a faster, less-configurable deploy (covers the common self-validation case):
+Infra parity with the OpenTofu stack (both API Gateway flavors, WAF, throttling, reserved concurrency, all cache backends, optional buckets). The one difference: CloudFormation cannot render `config.yaml` — you upload it to the config bucket yourself (step 3).
 
 ### 1. Build and upload the zip
 
@@ -187,9 +187,30 @@ aws cloudformation deploy \
     JWTValidationMode=self
 ```
 
-The `ApiEndpoint` stack output is the verify URL.
+For the hardened multi-issuer posture (REST API + WAF), add:
 
-> CloudFormation covers the common case only, and `ConfigBucket`/`ConfigKey` are effectively required: v2 has no `AOW_ISSUER`/`AOW_AUDIENCES` env vars, so `issuers[]` and `role_mappings` must come from a `config.yaml` you upload separately. Use OpenTofu if you want the config rendered automatically.
+```
+    ApiGatewayType=rest \
+    EnableWAF=true
+```
+
+### 3. Upload config.yaml
+
+By default the stack creates `<FunctionName>-config-<account-id>` (the `ConfigBucketName` output; set `ConfigBucket` to bring your own). `issuers[]` and `role_mappings` must come from this object — v2 has no `AOW_ISSUER`/`AOW_AUDIENCES` env vars, so the stack denies every request until it exists (see `docs/example-config.yaml`):
+
+```bash
+aws s3 cp config.yaml s3://<ConfigBucketName>/config.yaml
+```
+
+The `ApiEndpoint` stack output is the verify URL, and `ExecutionRoleArn` is the role your target roles must trust.
+
+### Parameter mapping
+
+CloudFormation parameters mirror the OpenTofu variables (`ApiGatewayType`, `EnableWAF`, `WAFRateLimit`, `WAFCommonRuleSet`, `ThrottlingBurstLimit`/`ThrottlingRateLimit`, `ReservedConcurrency`, `EnableDynamoDBCache`/`EnableS3Cache`/`CacheTTL`, `EnableS3Logs`, `EnableSessionPolicyBucket`, `EnableTagAuth`, `LogRetentionDays`, `BucketSuffix`), with the same defaults and the same plan-time assertions (WAF↔REST, apigw↔HTTP, cache exclusivity). Not parameters because they live elsewhere:
+
+- `region`/`tags` — set via the AWS CLI (`--region`, `--tags`).
+- `issuer`, `audiences`, `role_mappings`, `tag_auth` details, `cross_account` — belong in the uploaded `config.yaml` (OpenTofu renders these; CloudFormation cannot). `EnableTagAuth` still exists to grant the IAM side (`iam:GetRole`/`iam:ListRoleTags`).
+- `force_destroy_buckets` — no CloudFormation equivalent; empty buckets manually before stack deletion.
 
 ---
 

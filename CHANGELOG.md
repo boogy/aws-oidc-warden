@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Go 1.26.5** — toolchain bump fixing GO-2026-5856 (Encrypted Client Hello
+  privacy leak in `crypto/tls`), reachable via the HTTPS paths the warden
+  uses (JWKS fetch, S3 reads, local server).
+
 ### Fixed
 
 - **OpenTofu `api_endpoint` output** — the `$default` stage `invoke_url` ends
