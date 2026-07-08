@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.1] - 2026-07-08
 
 ### Security
 
@@ -392,7 +392,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.0...HEAD
+[2.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.6...v2.0.0
 [1.3.6]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.5...v1.3.6
 [1.3.5]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.4...v1.3.5
