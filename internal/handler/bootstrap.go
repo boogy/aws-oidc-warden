@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/cache"
@@ -16,6 +17,40 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/boogy/aws-oidc-warden/internal/version"
 )
+
+// jwksWarmPrefetchTimeout bounds the cold-start JWKS warm prefetch. A slow or
+// unreachable issuer must not eat into the Lambda INIT budget — on timeout the
+// prefetch is abandoned and the first request pays the fetch as it did before.
+const jwksWarmPrefetchTimeout = 3 * time.Second
+
+// jwksWarmer is the subset of the token validator warmJWKSCache needs, so the
+// cold-start gating can be tested without standing up a full validator.
+type jwksWarmer interface {
+	WarmPrefetch(ctx context.Context)
+}
+
+// warmJWKSCache prefetches every configured issuer's JWKS during cold start
+// (Lambda INIT) so the first real request doesn't pay a discovery + JWKS fetch
+// inline. It runs the same fetch path Validate() uses — same cache, same TTL,
+// same key parsing and validation — so it changes only *when* a key is fetched,
+// never whether it is trusted.
+//
+// Skipped in delegated modes (apigw/alb), which verify upstream and never
+// consult JWKS; prefetching there would be pure wasted INIT latency.
+//
+// Best-effort by contract: WarmPrefetch logs and swallows its own errors, and
+// the timeout bounds a slow or unreachable issuer so it cannot stall INIT — on
+// timeout the first request simply pays the fetch as it did before.
+// Reports whether a prefetch was attempted.
+func warmJWKSCache(mode string, v jwksWarmer) bool {
+	if mode != "self" || v == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), jwksWarmPrefetchTimeout)
+	defer cancel()
+	v.WarmPrefetch(ctx)
+	return true
+}
 
 // Bootstrap contains all the initialized components needed by handlers
 type Bootstrap struct {
@@ -102,6 +137,7 @@ func NewBootstrap() (*Bootstrap, error) {
 		logger.Warn("JWT validation delegated to upstream",
 			slog.String("mode", cfg.JWTValidation.Mode))
 	}
+	warmJWKSCache(cfg.JWTValidation.Mode, tokenValidator)
 
 	return &Bootstrap{
 		Config:    cfg,

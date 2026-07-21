@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Session policy scoping bound to the granting role** — `FindSessionPolicy`
+  resolved by `(issuer, subject)` only and returned the first-declared mapping
+  matching the subject, ignoring which mapping granted the requested role. A
+  broad, policy-less `role_mapping` declared before a narrow mapping that
+  deliberately scopes a privileged role with a `session_policy` caused that role
+  to be assumed **unscoped**. The lookup is now role- and condition-aware: the
+  scoping policy always comes from the mapping that authorized the role
+  (subject match + conditions satisfied + grants the role). Signature changed to
+  `FindSessionPolicy(issuer, subject, role, claims)`.
+
+- **Hot-reload condition race fixed (authorization bypass)** — a
+  `config_fragment`'s `*Condition` was shared across config snapshots, and each
+  hot reload recompiled it in place (`Validate` → `compileCondition`) while
+  concurrent requests read the served snapshot with no lock. A reader observing
+  the transiently-empty compiled list had all conditions silently pass. Fragment
+  and role-group conditions are now cloned into per-snapshot private memory
+  before compilation, so a reload can never mutate a condition another request
+  is evaluating. Affected configs using `config_reload_interval` +
+  `config_fragments` with `conditions`; base-config conditions were unaffected.
+
+### Performance
+
+- **JWKS warm prefetch on cold start** — `NewBootstrap()` now prefetches every
+  issuer's JWKS during Lambda INIT (self mode only, 3s bounded), so the first
+  request no longer pays an inline OIDC discovery + JWKS fetch. Best-effort:
+  a slow/unreachable issuer is abandoned at the timeout and fetched on demand.
+
 ## [2.0.1] - 2026-07-08
 
 ### Security

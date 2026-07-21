@@ -186,7 +186,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// Attempting to get session policy
-	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, claims.Issuer, claims.Subject)
+	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, claims.Issuer, claims.Subject, requestedRole, claimsMap)
 	if err != nil {
 		rec.Stage = "session_policy"
 		rec.Reason = err.Error()
@@ -259,7 +259,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 // configured) for the audit record's SessionPolicyRef field — computed here,
 // alongside the single cfg.FindSessionPolicy lookup, so callers don't need a
 // second lookup just to label the decision.
-func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject string) (sessionPolicyString *string, policyRef string, err error) {
+func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject, role string, claims map[string]any) (sessionPolicyString *string, policyRef string, err error) {
 	// Start measuring time for this operation
 	opStart := time.Now()
 	defer func() {
@@ -268,7 +268,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject 
 			slog.Duration("duration", time.Since(opStart)))
 	}()
 
-	sessionPolicy, sessionPolicyFile := cfg.FindSessionPolicy(issuer, subject)
+	sessionPolicy, sessionPolicyFile := cfg.FindSessionPolicy(issuer, subject, role, claims)
 
 	// Try to get policy from S3 file if specified
 	if sessionPolicyFile != nil {

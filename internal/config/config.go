@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -830,6 +831,18 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, m.Subject, err)
 		}
 
+		// Clone the condition into effective-private memory BEFORE compiling.
+		// compileCondition mutates *Condition in place (it reslices
+		// cond.compiled to [:0] and re-appends), and a single *Condition can be
+		// shared across snapshots — a config_fragment reuses its parsed
+		// FragmentConfig across hot reloads (provider.applyFragments), and a
+		// role_group shares one Defaults.Conditions across every expanded
+		// subject. Compiling a shared struct in place would race a concurrent
+		// request reading the currently-served snapshot's compiled slice and
+		// could momentarily blank it, silently passing all conditions. Cloning
+		// here guarantees compileCondition only ever writes to a struct owned by
+		// this effective mapping.
+		m.Conditions = cloneCondition(m.Conditions)
 		if err := compileCondition(m.Conditions); err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
 		}
@@ -1023,6 +1036,31 @@ func compileCondition(cond *Condition) error {
 	return nil
 }
 
+// cloneCondition returns a deep copy of c with fresh, unshared compiled state.
+// The input slices/maps (ActorMatches, Extra) are copied so the clone shares no
+// backing storage with c, and the derived compiled/actorPatterns fields are
+// reset to nil so compileCondition rebuilds them into freshly allocated memory
+// rather than reslicing a backing array another snapshot may be reading.
+// Returns nil for a nil input (a mapping with no conditions).
+func cloneCondition(c *Condition) *Condition {
+	if c == nil {
+		return nil
+	}
+	nc := *c
+	nc.compiled = nil
+	nc.actorPatterns = nil
+	if c.ActorMatches != nil {
+		nc.ActorMatches = append([]string(nil), c.ActorMatches...)
+	}
+	if c.Extra != nil {
+		nc.Extra = make(map[string]string, len(c.Extra))
+		for k, v := range c.Extra {
+			nc.Extra[k] = v
+		}
+	}
+	return &nc
+}
+
 // compileAnchoredCondition compiles pattern as an auto-anchored regex,
 // rejecting empty patterns and bare wildcards that would match anything
 // (security conditions must be specific, never `.*`).
@@ -1083,14 +1121,24 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 	return nil
 }
 
-// FindSessionPolicy finds the session policy for a given (issuer, subject)
-// pair. Unlike AuthorizeRoles, this is order-dependent and ignores
-// conditions: it returns the first-declared mapping (by original config
-// order, via RoleMapping.order) whose issuer+subject match, mirroring the
-// pre-v2 first-match-wins behavior. Bucketing into the index is purely a
-// performance detail — every candidate is re-verified against the compiled
-// pattern before being considered a match (index↔linear-scan parity).
-func (c *Config) FindSessionPolicy(issuer, subject string) (*string, *string) {
+// FindSessionPolicy returns the session policy that scopes the assumption of
+// role by (issuer, subject) under claims. The policy is taken from the specific
+// mapping that AUTHORIZED this role — one that matches the subject, satisfies
+// its conditions, AND grants role — never from an unrelated broader mapping
+// that merely shares the subject. This mirrors AuthorizeRoles' match semantics
+// exactly, so a role's scoping policy always travels with the grant.
+//
+// Selecting by subject alone (the pre-fix behavior) dropped the policy of a
+// narrow, deliberately-scoped mapping whenever an earlier-declared broad
+// mapping also matched the subject, causing a privileged role to be assumed
+// unscoped. Among several qualifying mappings the first-declared (lowest order)
+// wins, preserving first-match-wins semantics within the correct candidate set.
+//
+// Returns (nil, nil) when no mapping grants role — e.g. a role authorized via
+// tag-auth, which carries no config-declared session policy. Bucketing into the
+// index is purely a performance detail: every candidate is re-verified against
+// its compiled pattern (index↔linear-scan parity).
+func (c *Config) FindSessionPolicy(issuer, subject, role string, claims map[string]any) (*string, *string) {
 	idx, ok := c.index[issuer]
 	if !ok {
 		return nil, nil
@@ -1099,6 +1147,12 @@ func (c *Config) FindSessionPolicy(issuer, subject string) (*string, *string) {
 	var best *RoleMapping
 	for _, mapping := range candidatesFor(idx, subject) {
 		if mapping.compiledPattern == nil || !mapping.compiledPattern.MatchString(subject) {
+			continue
+		}
+		if !satisfiesConditions(mapping.Conditions, claims) {
+			continue
+		}
+		if !slices.Contains(mapping.Roles, role) {
 			continue
 		}
 		if best == nil || mapping.order < best.order {

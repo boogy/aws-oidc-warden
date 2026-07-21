@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,15 +35,21 @@ func linearAuthorizeRoles(c *Config, issuer, subject string, claims map[string]a
 }
 
 // linearFindSessionPolicy is the brute-force reference for FindSessionPolicy:
-// same first-match-wins (lowest m.order) semantics, but via a full scan of
-// c.effective instead of the index.
-func linearFindSessionPolicy(c *Config, issuer, subject string) (*string, *string) {
+// same match+conditions+grants-role filter and first-match-wins (lowest
+// m.order) semantics, but via a full scan of c.effective instead of the index.
+func linearFindSessionPolicy(c *Config, issuer, subject, role string, claims map[string]any) (*string, *string) {
 	var best *RoleMapping
 	for _, m := range c.effective {
 		if m.Issuer != issuer {
 			continue
 		}
 		if m.compiledPattern == nil || !m.compiledPattern.MatchString(subject) {
+			continue
+		}
+		if !satisfiesConditions(m.Conditions, claims) {
+			continue
+		}
+		if !slices.Contains(m.Roles, role) {
 			continue
 		}
 		if best == nil || m.order < best.order {
@@ -94,6 +101,11 @@ func TestIndexParity(t *testing.T) {
 			Issuer:  issuer,
 			Subject: subject,
 			Roles:   []string{fmt.Sprintf("arn:aws:iam::123456789012:role/role-%d", roleN)},
+			// Distinct per-mapping policy so the role-aware FindSessionPolicy
+			// parity check is non-vacuous: overlapping mappings (an exact
+			// subject and its owner/.* pattern) grant different roles and must
+			// each resolve to their own mapping's policy.
+			SessionPolicy: fmt.Sprintf(`{"Version":"2012-10-17","policyID":%d}`, roleN),
 		})
 		roleN++
 	}
@@ -151,10 +163,16 @@ func TestIndexParity(t *testing.T) {
 			assert.Equalf(t, wantMatched, gotMatched, "AuthorizeRoles matched mismatch for issuer=%s subject=%s", iss, subj)
 			assert.ElementsMatchf(t, wantRoles, gotRoles, "AuthorizeRoles roles mismatch for issuer=%s subject=%s", iss, subj)
 
-			wantPolicy, wantFile := linearFindSessionPolicy(cfg, iss, subj)
-			gotPolicy, gotFile := cfg.FindSessionPolicy(iss, subj)
-			assert.Equalf(t, wantPolicy, gotPolicy, "FindSessionPolicy policy mismatch for issuer=%s subject=%s", iss, subj)
-			assert.Equalf(t, wantFile, gotFile, "FindSessionPolicy file mismatch for issuer=%s subject=%s", iss, subj)
+			// Role-aware policy parity: for each authorized role (plus a role
+			// that no mapping grants) the index path must resolve the same
+			// scoping policy as the linear scan.
+			rolesToCheck := append([]string{"arn:aws:iam::123456789012:role/role-absent"}, gotRoles...)
+			for _, role := range rolesToCheck {
+				wantPolicy, wantFile := linearFindSessionPolicy(cfg, iss, subj, role, nil)
+				gotPolicy, gotFile := cfg.FindSessionPolicy(iss, subj, role, nil)
+				assert.Equalf(t, wantPolicy, gotPolicy, "FindSessionPolicy policy mismatch for issuer=%s subject=%s role=%s", iss, subj, role)
+				assert.Equalf(t, wantFile, gotFile, "FindSessionPolicy file mismatch for issuer=%s subject=%s role=%s", iss, subj, role)
+			}
 		}
 	}
 }
