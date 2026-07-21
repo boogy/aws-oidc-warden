@@ -123,6 +123,15 @@ func TestIndexParity(t *testing.T) {
 			if i%7 == 0 && i+1 < numOwners {
 				addMapping(iss, fmt.Sprintf("%s/special|%s/special", o, owners[i+1]))
 			}
+			// Quantified first slash: the '/' is optional/repeatable, so these
+			// also match slash-less subjects (e.g. "owner0opt-x") whose owner
+			// segment differs from the literal prefix. classifySubject must NOT
+			// bucket them as owner-scoped or candidatesFor would miss those
+			// matches. Only every 5th owner, to bound the count.
+			if i%5 == 0 {
+				addMapping(iss, fmt.Sprintf("%s/?opt-.*", o))
+				addMapping(iss, fmt.Sprintf("%s/*star-.*", o))
+			}
 		}
 		// Fully-generic patterns (subjectAny bucket).
 		addMapping(iss, ".*/shared-repo")
@@ -147,6 +156,13 @@ func TestIndexParity(t *testing.T) {
 		subjects = append(subjects, o+"/repo0", o+"/repo1", o+"/repo-not-listed", o+"/special")
 		if i%7 == 0 && i+1 < numOwners {
 			subjects = append(subjects, owners[i+1]+"/special")
+		}
+		// Slash-less subjects the quantified-first-slash mappings match via the
+		// zero-slash branch: ownerOf is the whole string ("owner0opt-x"), which
+		// differs from the pattern's literal prefix ("owner0"). These are the
+		// subjects that exposed the classifySubject mis-bucketing.
+		if i%5 == 0 {
+			subjects = append(subjects, o+"opt-x", o+"star-y", o+"/opt-x", o+"/star-y")
 		}
 	}
 	subjects = append(subjects, "unrelated/thing", "owner1/anything", "owner2/anything", "x/shared-repo")
