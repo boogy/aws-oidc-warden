@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-07-21
+
+Hardening release closing the last unenforced authorization footgun found by an
+independent verification sweep of the 2.1.0 authorization layer, plus the
+adversarial test suite that sweep produced. One behavior change: a config that
+uses a bare wildcard as a `subject` now fails to load instead of silently
+authorizing everything — see Upgrade notes.
+
+### Security
+
+- **Bare wildcard `subject` patterns are now rejected** — `Validate()` refused a
+  bare `.*`/`.+` in `conditions`, but never applied the same rule to a
+  `role_mapping.subject` or a `role_groups.subjects` entry, even though the
+  subject is the primary identity gate. `subject: ".*"` therefore compiled
+  happily and granted that mapping's roles to **every** subject of the bound
+  issuer — for the default GitHub issuer, every repository in every organization
+  that can mint a token GitHub signs. The documentation has said "keep patterns
+  specific, never `.*`" since 1.x; nothing enforced it. Both paths into the
+  effective mapping set now share one guard (`bareWildcards`), so subjects and
+  conditions can no longer drift apart.
+
+  The check is deliberately literal — it matches the two shapes operators
+  actually type. An equivalent pattern written another way (`(.*)`, `[\s\S]*`)
+  still compiles; this stops the accident, not a determined operator.
+
+### Added
+
+- **Adversarial authorization test suite** — 36 tests across the four security
+  layers, written independently of the existing tests and verified to have teeth
+  by mutation testing (each was confirmed to fail when the fix it covers is
+  removed):
+  - `internal/config/authz_adversarial_test.go` — includes a differential fuzz
+    (400 random configs × 21 adversarial subject patterns × 18 subjects) that
+    diffs the owner-bucketed index against a reference linear scan for both
+    `AuthorizeRoles` and `FindSessionPolicy`. An index false *negative* is
+    fail-open — a policy-bearing mapping dropped from the scan while a broader
+    policy-less one still authorizes yields an unscoped assumption — so this is
+    fuzzed rather than example-tested. Reverting the 2.1.0 `classifySubject` fix
+    makes it re-derive that bug unaided.
+  - `internal/validator/trust_boundary_test.go` — cross-issuer key confusion,
+    `alg:none`, HS256/RSA algorithm confusion, payload splicing, time bounds, and
+    proof that an unconfigured `iss` triggers zero network requests (no SSRF
+    primitive via the `iss` claim).
+  - `internal/aws/assume_adversarial_test.go` — cross-account fail-closed paths,
+    malformed-ARN guard bypass attempts, session-tag charset/limit handling
+    (skipped, never truncated or sanitized), transitive-tag opt-in, duration
+    clamping.
+  - `internal/handler/pipeline_e2e_test.go` — the scoping policy actually reaching
+    STS, every deny path stopping before STS, and a failed or invalid-JSON
+    session-policy file denying rather than assuming unscoped.
+
+### Upgrade notes
+
+- **A config with `subject: ".*"` (or `.+`) will now fail to load.** This is
+  intentional and fail-closed: the service refuses to start rather than run an
+  authorization rule that matches every repository. If you hit this, replace the
+  wildcard with a pattern scoped to the organizations you actually trust (e.g.
+  `myorg/.*`), which continues to work unchanged. Patterns that merely *contain*
+  a wildcard — `org/service-.*`, `myorg/.*`, `.*/shared-lib` — are unaffected;
+  only a subject that is *entirely* `.*` or `.+` is rejected. No mapping in
+  `example-config.yaml` or the shipped documentation used one.
+
 ## [2.1.0] - 2026-07-21
 
 Security-hardening release: three authorization-layer defects found in an audit
@@ -473,6 +535,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.1.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.6...v2.0.0

@@ -826,7 +826,7 @@ func (c *Config) Validate() error {
 		}
 		m.Roles = roles
 
-		m.compiledPattern, err = regexp.Compile("^(?:" + m.Subject + ")$")
+		m.compiledPattern, err = compileAnchoredSubject(m.Subject)
 		if err != nil {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, m.Subject, err)
 		}
@@ -1061,6 +1061,17 @@ func cloneCondition(c *Condition) *Condition {
 	return &nc
 }
 
+// bareWildcards are patterns that match every possible value. They must never
+// gate an authorization decision — as a condition OR as a subject — because
+// they reduce that gate to "always true".
+//
+// This is a literal check on the two shapes operators actually reach for, not
+// a general "does this regex match everything" analysis: that is not something
+// we can decide cheaply, and a determined operator can still write an
+// equivalent pattern (`(.*)`, `.*.*`, `[\s\S]*`). It closes the documented
+// footgun and makes the accident loud; it is not a proof of specificity.
+var bareWildcards = map[string]bool{".*": true, ".+": true}
+
 // compileAnchoredCondition compiles pattern as an auto-anchored regex,
 // rejecting empty patterns and bare wildcards that would match anything
 // (security conditions must be specific, never `.*`).
@@ -1068,8 +1079,23 @@ func compileAnchoredCondition(pattern string) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, errors.New("pattern must not be empty")
 	}
-	if pattern == ".*" || pattern == ".+" {
+	if bareWildcards[pattern] {
 		return nil, fmt.Errorf("pattern %q is too permissive; use a specific pattern", pattern)
+	}
+	return regexp.Compile("^(?:" + pattern + ")$")
+}
+
+// compileAnchoredSubject compiles a role_mapping/role_group subject pattern as
+// an auto-anchored regex. It applies the same bare-wildcard rejection as
+// compileAnchoredCondition: a subject is the primary identity gate, so
+// `subject: ".*"` would grant its roles to every subject of the bound issuer —
+// every repository in every org that can mint a token that issuer signs.
+//
+// The documentation has always said "keep patterns specific, never `.*`";
+// until now nothing enforced it for subjects, only for conditions.
+func compileAnchoredSubject(pattern string) (*regexp.Regexp, error) {
+	if bareWildcards[pattern] {
+		return nil, fmt.Errorf("subject pattern %q is too permissive; it matches every subject for this issuer — use a specific pattern", pattern)
 	}
 	return regexp.Compile("^(?:" + pattern + ")$")
 }

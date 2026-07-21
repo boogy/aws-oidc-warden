@@ -53,7 +53,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 - Never log full tokens/credentials — redact via `internal/utils`.
 - Validate JWT signature, issuer, audience, expiration.
-- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific, never `.*`. Conditions are AND'd.
+- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific. A bare `.*`/`.+` is **rejected by `Validate()`** for both (shared `bareWildcards` guard) — the check is literal, so an equivalent pattern still compiles. Conditions are AND'd.
 - Validate JSON and bound reads (`io.LimitReader`) before processing external input.
 - Never commit credentials/secrets. Sign commits and tags. Do not add a Claude co-author.
 
