@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-07-21
+
+Security-hardening release: three authorization-layer defects found in an audit
+of the token→AssumeRole path, each fixed with a regression test that fails
+before the change. No config-schema or deployment changes — existing configs
+keep working — but authorization behavior is now stricter where the old code was
+wrong (a role that was silently assumed unscoped now carries its intended
+session policy, and conditions can no longer be transiently bypassed), so review
+the Security notes before upgrading.
+
+### Security
+
+- **Session policy scoping bound to the granting role** — `FindSessionPolicy`
+  resolved by `(issuer, subject)` only and returned the first-declared mapping
+  matching the subject, ignoring which mapping granted the requested role. A
+  broad, policy-less `role_mapping` declared before a narrow mapping that
+  deliberately scopes a privileged role with a `session_policy` caused that role
+  to be assumed **unscoped**. The lookup is now role- and condition-aware: the
+  scoping policy always comes from the mapping that authorized the role
+  (subject match + conditions satisfied + grants the role). Signature changed to
+  `FindSessionPolicy(issuer, subject, role, claims)`.
+
+- **Hot-reload condition race fixed (authorization bypass)** — a
+  `config_fragment`'s `*Condition` was shared across config snapshots, and each
+  hot reload recompiled it in place (`Validate` → `compileCondition`) while
+  concurrent requests read the served snapshot with no lock. A reader observing
+  the transiently-empty compiled list had all conditions silently pass. Fragment
+  and role-group conditions are now cloned into per-snapshot private memory
+  before compilation, so a reload can never mutate a condition another request
+  is evaluating. Affected configs using `config_reload_interval` +
+  `config_fragments` with `conditions`; base-config conditions were unaffected.
+
+- **Correct index bucketing for quantified-slash subject patterns** — the
+  authorization index inferred a mapping's owner bucket from the raw text before
+  the first `/`. A subject pattern whose first slash is quantified (e.g.
+  `owner/?repo-.*`, `owner/*repo`) also matches slash-less subjects, so the
+  index could drop a mapping a full scan would find — diverging from the
+  authorize decision and mis-scoping the session policy. Bucketing now uses the
+  compiled pattern's guaranteed literal prefix (`regexp.LiteralPrefix`), so a
+  mapping is owner-scoped only when every match provably starts with `owner/`.
+  Operator-config-only and fail-closed for authorization; no attacker vector.
+
+### Performance
+
+- **JWKS warm prefetch on cold start** — `NewBootstrap()` now prefetches every
+  issuer's JWKS during Lambda INIT (self mode only, 3s bounded), so the first
+  request no longer pays an inline OIDC discovery + JWKS fetch. Best-effort:
+  a slow/unreachable issuer is abandoned at the timeout and fetched on demand.
+
 ## [2.0.1] - 2026-07-08
 
 ### Security
@@ -392,6 +441,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.1.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.6...v2.0.0
 [1.3.6]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.5...v1.3.6

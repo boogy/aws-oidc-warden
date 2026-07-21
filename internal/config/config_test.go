@@ -406,28 +406,38 @@ func TestFindSessionPolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		subject    string
+		role       string
 		wantPolicy *string
 	}{
 		{
 			name:       "exact match",
 			subject:    "org/repo1",
+			role:       "role1",
 			wantPolicy: strPtr("policy1"),
 		},
 		{
 			name:       "regex match",
 			subject:    "org/repo2-staging",
+			role:       "role2",
 			wantPolicy: strPtr("policy2"),
 		},
 		{
 			name:       "no match",
 			subject:    "org/repo3",
+			role:       "role1",
+			wantPolicy: nil,
+		},
+		{
+			name:       "subject matches but role not granted by that mapping",
+			subject:    "org/repo1",
+			role:       "role2",
 			wantPolicy: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			policy, policyFile := cfg.FindSessionPolicy(iss, tt.subject)
+			policy, policyFile := cfg.FindSessionPolicy(iss, tt.subject, tt.role, nil)
 
 			if tt.wantPolicy == nil {
 				assert.Nil(t, policy)

@@ -38,7 +38,7 @@ func buildAuthzIndex(mappings []*RoleMapping) authzIndex {
 			idx[m.Issuer] = bucket
 		}
 
-		owner, class := classifySubject(m.Subject)
+		owner, class := classifySubject(m.Subject, m.compiledPattern)
 		switch class {
 		case subjectExact:
 			bucket.exact[m.Subject] = append(bucket.exact[m.Subject], m)
@@ -62,36 +62,36 @@ const (
 )
 
 // classifySubject inspects a subject pattern (a regex, auto-anchored at
-// compile time) and decides which index bucket it belongs in:
+// compile time — compiled is its RoleMapping.compiledPattern) and decides
+// which index bucket it belongs in:
 //   - a pattern that is a literal string (no regex metacharacters) can only
 //     ever match that exact string, so it goes in the exact bucket keyed by
 //     itself;
-//   - a pattern whose segment before the first '/' is a literal string (the
-//     common "owner/repo-pattern" shape) goes in the byOwner bucket keyed by
-//     that literal owner, since it can only match subjects under that owner;
+//   - a pattern where EVERY match provably starts with a literal "owner/"
+//     segment goes in the byOwner bucket keyed by that owner, since it can only
+//     match subjects under that owner;
 //   - anything else is fully generic and must always be scanned.
-func classifySubject(pattern string) (owner string, class subjectClass) {
+//
+// The byOwner decision is made from the compiled program's guaranteed literal
+// prefix (regexp.LiteralPrefix), NOT from string surgery on the raw pattern.
+// byOwner[owner] is only correct if every subject the pattern can match starts
+// with "owner/" — otherwise candidatesFor, which keys on ownerOf(subject),
+// would miss matches. LiteralPrefix returns the literal string every match must
+// begin with, so bucketing by the text before its first '/' is sound. This
+// correctly demotes shapes that a naive "text before the first '/'" scan got
+// wrong: a quantified first slash ("myorg/?prod-.*" → prefix "myorg", which can
+// match "myorgprod-x" with no slash) and top-level alternation ("a/b|c/d" →
+// prefix ""), both of which fall through to the conservative "any" bucket.
+func classifySubject(pattern string, compiled *regexp.Regexp) (owner string, class subjectClass) {
 	if isLiteral(pattern) {
 		return "", subjectExact
 	}
 
-	// Alternation ("|") has the lowest precedence in RE2, so it can span the
-	// whole pattern even when the text before the first '/' looks like a
-	// literal "owner" prefix: "a/b|c/d" actually means "(a/b)|(c/d)" and can
-	// match "c/d", which does not start with "a/". Classifying that as
-	// byOwner["a"] would make candidatesFor miss it for a query subject of
-	// "c/d" (owner "c"), silently dropping a match a linear scan would find.
-	// Any top-level alternation therefore forces
-	// the conservative "any" bucket — an over-approximation that only costs
-	// performance, never correctness.
-	if strings.ContainsRune(pattern, '|') {
-		return "", subjectAny
-	}
-
-	if i := strings.IndexByte(pattern, '/'); i >= 0 {
-		left := pattern[:i]
-		if isLiteral(left) {
-			return left, subjectOwner
+	if compiled != nil {
+		if prefix, _ := compiled.LiteralPrefix(); prefix != "" {
+			if i := strings.IndexByte(prefix, '/'); i >= 0 {
+				return prefix[:i], subjectOwner
+			}
 		}
 	}
 	return "", subjectAny
