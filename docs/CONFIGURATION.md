@@ -130,7 +130,11 @@ role_groups:
 
 `conditions.branch` and `conditions.ref` both check the raw `ref` claim (`refs/heads/main`, `refs/tags/v1.2.3`, ...) — this is intentional, not a bug; use whichever name reads better for your pattern.
 
-Authorization is evaluated by `Config.AuthorizeRoles(issuer, subject, claims)`, which unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping; `Config.FindSessionPolicy(issuer, subject)` separately picks the first-declared match (config order) for the session policy, ignoring conditions — this mirrors the pre-v2 first-match-wins session-policy behavior.
+Authorization is evaluated by `Config.AuthorizeRoles(issuer, subject, claims)`, which unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping. `Config.FindSessionPolicy(issuer, subject, role, claims)` then picks the session policy using the **same** match semantics, so a role's scoping policy always travels with the grant: the policy comes from a mapping that matches the subject, satisfies its conditions, **and** lists the role being assumed. Where several mappings qualify, the first-declared (config order) wins.
+
+> **Ordering foot-gun.** "First-declared wins" applies only among mappings that actually grant the requested role. If a broad mapping grants a role with **no** `session_policy` and a later, narrower mapping grants that *same* role *with* one, the broad mapping wins on order and the role is assumed **unscoped** — the narrow mapping's policy never applies. This matches the union semantics of `AuthorizeRoles` (the broad entry did explicitly grant the role), but it is rarely what you intend. Declare the scoped mapping first, or don't grant a policy-scoped role from a broader policy-less entry.
+>
+> Before v2.1.0 this lookup ignored both the requested role and conditions, so an unrelated broad mapping that merely shared the *subject* could strip a privileged role's session policy. See the [2.1.0 changelog](../CHANGELOG.md).
 
 ### Owner-bucketed index
 

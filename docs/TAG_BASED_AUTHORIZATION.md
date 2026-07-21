@@ -215,7 +215,11 @@ This is **allow-if-either**, with explicit mappings short-circuiting:
 Key consequences:
 
 - A mapping that **authorizes** the role always wins and supplies the session
-  policy. Tag-auth never overrides or tightens a mapping.
+  policy. Tag-auth never overrides or tightens a mapping. The policy comes from
+  the mapping that authorized *this role* (subject match + conditions satisfied +
+  grants the role); if several qualify, the first-declared wins — see the
+  ordering foot-gun in
+  [CONFIGURATION.md](CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets).
 - A mapping that **fails** (role not listed, or constraints not satisfied) does
   **not** hard-deny when tag-auth is enabled — the request falls through to the
   tag check. Tag-auth can therefore _broaden_ access beyond what mappings allow.
