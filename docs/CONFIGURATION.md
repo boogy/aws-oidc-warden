@@ -126,7 +126,7 @@ role_groups:
 | `role_sets`     | (new)                | Named `[]string` ARN lists; reference as `"@name"` inside any `roles` list. Resolved once at `Validate()`, before the requested-role gate.                        |
 | `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.  |
 
-`subject` is matched with the same auto-anchored-regex semantics `repo` used (`^(?:pattern)$`) — keep patterns specific; a bare `.*`/`.+` is rejected wherever it's used as a security condition (`conditions` fields), though `subject` itself has no such restriction beyond anchoring.
+`subject` is matched with the same auto-anchored-regex semantics `repo` used (`^(?:pattern)$`) — keep patterns specific. A bare `.*`/`.+` is rejected by `Validate()` wherever it gates an authorization decision: both in `conditions` fields and as a `subject` (including `role_groups.subjects`), since a wildcard subject would grant its roles to every subject of the bound issuer. The check is literal, so an equivalent pattern written another way (`(.*)`, `[\s\S]*`) still compiles — it stops the accident, not a determined operator.
 
 `conditions.branch` and `conditions.ref` both check the raw `ref` claim (`refs/heads/main`, `refs/tags/v1.2.3`, ...) — this is intentional, not a bug; use whichever name reads better for your pattern.
 
