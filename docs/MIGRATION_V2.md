@@ -7,19 +7,19 @@ This is a breaking release — work through the checklist below before upgrading
 
 ## Rename table
 
-| v1                                                 | v2                                             |
-| -------------------------------------------------- | ---------------------------------------------- |
-| top-level `issuer` / `audience` / `audiences`      | `issuers[]` entries (`issuer`, `audiences`, …) |
-| `AOW_ISSUER` / `AOW_AUDIENCE` / `AOW_AUDIENCES`    | removed (configure `issuers[]`)                |
-| `repo_role_mappings`                               | `role_mappings`                                |
-| mapping key `repo:`                                | `subject:`                                     |
-| mapping key `constraints:`                         | `conditions:`                                  |
-| `repo_role_groups`                                 | `role_groups`                                  |
-| Go `types.GithubClaims`                            | `types.Claims`                                 |
-| Go `CreateSessionTags(claims)`                     | `BuildSessionTags(rawClaims, tagSpec)`         |
-| Go `MatchRolesToRepoWithConstraints(repo, claims)` | `AuthorizeRoles(issuer, subject, claims)`      |
-| Go `FindSessionPolicyForRepo(repo)`                | `FindSessionPolicy(issuer, subject)`           |
-| Go `MatchRolesToRepo`                              | removed                                        |
+| v1                                                 | v2                                                 |
+| -------------------------------------------------- | -------------------------------------------------- |
+| top-level `issuer` / `audience` / `audiences`      | `issuers[]` entries (`issuer`, `audiences`, …)     |
+| `AOW_ISSUER` / `AOW_AUDIENCE` / `AOW_AUDIENCES`    | removed (configure `issuers[]`)                    |
+| `repo_role_mappings`                               | `role_mappings`                                    |
+| mapping key `repo:`                                | `subject:`                                         |
+| mapping key `constraints:`                         | `conditions:`                                      |
+| `repo_role_groups`                                 | `role_groups`                                      |
+| Go `types.GithubClaims`                            | `types.Claims`                                     |
+| Go `CreateSessionTags(claims)`                     | `BuildSessionTags(rawClaims, tagSpec)`             |
+| Go `MatchRolesToRepoWithConstraints(repo, claims)` | `AuthorizeRoles(issuer, subject, claims)`          |
+| Go `FindSessionPolicyForRepo(repo)`                | `FindSessionPolicy(issuer, subject, role, claims)` |
+| Go `MatchRolesToRepo`                              | removed                                            |
 
 ## Config: before → after
 

@@ -611,7 +611,11 @@ OIDC tokens.
 
 JWKS documents change rarely (issuer key rotations), so with any backend and a
 sane `cache.ttl` nearly every request is served from cache; only cold starts
-and key rotations pay the upstream fetch. Relative cost per lookup:
+and key rotations pay the upstream fetch. In `self` mode even the cold start is
+usually covered: `NewBootstrap()` warm-prefetches every configured issuer's JWKS
+during Lambda INIT (best-effort, 3s-bounded), so the first request normally
+finds the key already cached. A slow or unreachable issuer is abandoned at the
+timeout and fetched inline on first use. Relative cost per lookup:
 
 - Memory: in-process map access (fastest; lost on container recycle)
 - DynamoDB: one-digit-millisecond network hop, shared across containers
