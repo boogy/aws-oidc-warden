@@ -47,6 +47,38 @@ the Security notes before upgrading.
   mapping is owner-scoped only when every match provably starts with `owner/`.
   Operator-config-only and fail-closed for authorization; no attacker vector.
 
+### Upgrade notes
+
+Two consequences of the session-policy fix above. Neither is a new code change;
+both describe behavior as shipped in 2.1.0, called out because they can be
+observed as a difference in production.
+
+- **Tag-authorized roles now correctly receive no session policy.** Session
+  policies have always been documented as coming only from `role_mappings`, with
+  a tag-authorized role "scoped solely by its own IAM permissions" (see
+  `docs/TAG_BASED_AUTHORIZATION.md` → Security model & foot-guns #3). Because the
+  pre-fix lookup keyed on `(issuer, subject)` alone, a role authorized via
+  `tag_auth` could nevertheless pick up the session policy of an unrelated
+  mapping that merely matched the same subject. The role-aware lookup removes
+  that accident, so the code now matches the documented contract. If you run
+  `tag_auth` alongside `role_mappings` carrying `session_policy`, tag-authorized
+  sessions that were incidentally being scoped no longer are — confirm those
+  roles are least-privilege at the IAM level, which is the documented
+  expectation. `tag_auth.enabled` defaults to `false`, so this affects opt-in
+  configurations only.
+
+- **`session_policy` selection remains order-sensitive among mappings that grant
+  the same role.** First-declared still wins, but the candidate set is now
+  correctly narrowed to mappings that actually grant the requested role and
+  satisfy their conditions. One consequence survives and is worth auditing: if a
+  broad mapping grants a role with **no** `session_policy` and a later, narrower
+  mapping grants that *same* role *with* one, the broad mapping wins on order and
+  the role is assumed **unscoped**. This is consistent with the union semantics of
+  `AuthorizeRoles` — the broad entry did explicitly grant the role — and is
+  unchanged from previous releases, but it is rarely intended. Declare the scoped
+  mapping first, or avoid granting a policy-scoped role from a broader,
+  policy-less entry. See `docs/CONFIGURATION.md`.
+
 ### Performance
 
 - **JWKS warm prefetch on cold start** — `NewBootstrap()` now prefetches every
