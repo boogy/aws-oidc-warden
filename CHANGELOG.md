@@ -5,7 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-07-21
+
+Security-hardening release: three authorization-layer defects found in an audit
+of the token→AssumeRole path, each fixed with a regression test that fails
+before the change. No config-schema or deployment changes — existing configs
+keep working — but authorization behavior is now stricter where the old code was
+wrong (a role that was silently assumed unscoped now carries its intended
+session policy, and conditions can no longer be transiently bypassed), so review
+the Security notes before upgrading.
 
 ### Security
 
@@ -28,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before compilation, so a reload can never mutate a condition another request
   is evaluating. Affected configs using `config_reload_interval` +
   `config_fragments` with `conditions`; base-config conditions were unaffected.
+
+- **Correct index bucketing for quantified-slash subject patterns** — the
+  authorization index inferred a mapping's owner bucket from the raw text before
+  the first `/`. A subject pattern whose first slash is quantified (e.g.
+  `owner/?repo-.*`, `owner/*repo`) also matches slash-less subjects, so the
+  index could drop a mapping a full scan would find — diverging from the
+  authorize decision and mis-scoping the session policy. Bucketing now uses the
+  compiled pattern's guaranteed literal prefix (`regexp.LiteralPrefix`), so a
+  mapping is owner-scoped only when every match provably starts with `owner/`.
+  Operator-config-only and fail-closed for authorization; no attacker vector.
 
 ### Performance
 
@@ -423,6 +441,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.1.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.6...v2.0.0
 [1.3.6]: https://github.com/boogy/aws-oidc-warden/compare/v1.3.5...v1.3.6
