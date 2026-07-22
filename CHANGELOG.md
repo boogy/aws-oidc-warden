@@ -50,13 +50,15 @@ the act that installs the new keys.
   `Validate()` gates the `audit_required` → `log_to_s3` pairing within a single
   config.
 
-- **Durable audit records follow a hot-reloaded `log_bucket`** — the bucket was
-  captured at construction, so rotating `log_bucket` by reload (e.g. to a
-  locked-down bucket during an incident) kept writing to the previous bucket
-  while `WriteRecord` reported success: a write that "succeeded" somewhere the
-  operator no longer intended. `S3Logger` now takes a live-config source
-  (`SetConfigSource`, the same seam `AwsConsumer` already uses) and resolves the
-  bucket per write.
+- **S3 writes follow a hot-reloaded `log_bucket`** — the bucket was captured at
+  construction, so rotating `log_bucket` by reload (e.g. to a locked-down bucket
+  during an incident) kept writing to the previous bucket while the write
+  reported success: it "succeeded" somewhere the operator no longer intended.
+  `S3Logger` now takes a live-config source (`SetConfigSource`, the same seam
+  `AwsConsumer` already uses) and resolves the bucket per write. **Every** write
+  path uses it — durable audit, batched, and single — since honoring the live
+  value in only one would split records across two buckets on a rotation, which
+  is worse for forensics than consistently using either.
 
   **Known residuals.** (a) A reload that enables `audit_required` from a boot
   config with `log_to_s3: false` now correctly refuses every request
