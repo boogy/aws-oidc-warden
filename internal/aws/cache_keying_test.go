@@ -275,11 +275,12 @@ func TestAudit_SpokeCacheHitStillRevalidatesAllowList(t *testing.T) {
 }
 
 // TestAudit_RoleTagCacheHitBypassesAccountChecks documents that a warm
-// roleTagCache entry is returned without re-running the cross-account /
-// allow-list checks. This is safe only because the processor gates every
-// request on IsTargetAccountAllowed before reaching GetRoleTags; the test
-// pins the (bounded, 60s) behavior so a future refactor notices it.
-func TestAudit_RoleTagCacheHitBypassesAccountChecks(t *testing.T) {
+// roleTagCache entry must NOT be served once the account that permitted it has
+// been revoked. The account is authorized against the live config before the
+// cache is consulted, so revocation takes effect on the next request rather
+// than lingering for the cache TTL — and this layer no longer depends on the
+// processor happening to call IsTargetAccountAllowed earlier in the pipeline.
+func TestAudit_RoleTagCacheRevocationIsImmediate(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
 	m.On("GetCallerAccount").Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
@@ -313,12 +314,35 @@ func TestAudit_RoleTagCacheHitBypassesAccountChecks(t *testing.T) {
 	// Revoke the account entirely (cross-account off).
 	live = &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}}
 
-	tags, err := c.GetRoleTags("arn:aws:iam::222222222222:role/app")
-	require.NoError(t, err, "warm entry served without re-checking config")
-	assert.Equal(t, "acme/api", tags["aow/repo"])
+	// The cache is still warm and well inside its TTL, so only the account
+	// re-check can reject this.
+	_, err = c.GetRoleTags("arn:aws:iam::222222222222:role/app")
+	require.Error(t, err, "a revoked account must not be served from a warm cache entry")
+	assert.Contains(t, err.Error(), "target account is not allowed")
 
-	// ...but bounded by the TTL: after 60s it fails closed.
+	// Still rejected after the TTL, i.e. the entry never becomes serveable again.
 	clock = base.Add(roleTagCacheTTL + time.Second)
 	_, err = c.GetRoleTags("arn:aws:iam::222222222222:role/app")
-	require.Error(t, err, "after the TTL the revoked config must fail closed")
+	require.Error(t, err, "revoked account must stay rejected past the TTL")
+}
+
+// Revoking cross-account must not break tag reads for the warden's OWN account:
+// IsTargetAccountAllowed permits the hub whether or not cross-account is on.
+func TestAudit_RoleTagHubAccountUnaffectedByCrossAccountRevocation(t *testing.T) {
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetRole", mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+		Tags: []iamtypes.Tag{{Key: aws.String("aow/repo"), Value: aws.String("acme/hub")}},
+	}}, nil).Once()
+
+	// Cross-account is OFF from the start.
+	live := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}}
+	c := NewAwsConsumer(live)
+	c.SetConfigSource(func() *gtvcfg.Config { return live })
+	c.AWS = m
+	c.now = time.Now
+
+	tags, err := c.GetRoleTags("arn:aws:iam::111111111111:role/deploy")
+	require.NoError(t, err, "hub-account tag reads must work with cross-account disabled")
+	assert.Equal(t, "acme/hub", tags["aow/repo"])
 }

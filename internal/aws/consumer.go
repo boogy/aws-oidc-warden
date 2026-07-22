@@ -448,6 +448,30 @@ const roleTagCacheTTL = 60 * time.Second
 // key→value map. When the role lives in a different account than the warden,
 // the read is performed with spoke credentials assumed in that account.
 func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
+	// Authorize the target account against the LIVE config before consulting
+	// the cache. A cached entry must never outlive the policy that permitted
+	// it: reading the cache first meant that for up to roleTagCacheTTL after an
+	// operator revoked an account, a warm entry kept handing back that
+	// account's tags for tag-based authorization to act on.
+	//
+	// spokeCredsFor already validates before ITS cache, so checking first makes
+	// the two caches in this file follow one rule. It also removes this layer's
+	// dependence on ProcessRequest happening to call IsTargetAccountAllowed
+	// earlier in the pipeline — a cross-package ordering nothing enforces, and
+	// the only reason the stale window was previously unreachable.
+	//
+	// IsTargetAccountAllowed encodes the same policy the checks below the cache
+	// enforce (cross-account disabled ⇒ hub only; otherwise the allow-list), so
+	// this tightens *when* the decision is made, not what it decides. Cost is a
+	// string parse plus an in-process-cached GetCallerAccount.
+	allowed, err := a.IsTargetAccountAllowed(roleARN)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, fmt.Errorf("refusing to read tags for role %s: target account is not allowed", roleARN)
+	}
+
 	a.mu.Lock()
 	if c, ok := a.roleTagCache[roleARN]; ok && a.now().Before(c.expires) {
 		// Copy before releasing the lock: handing out the cached map itself

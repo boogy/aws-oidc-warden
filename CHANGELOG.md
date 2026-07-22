@@ -107,6 +107,18 @@ the act that installs the new keys.
   A companion test pins that public addresses and the `100.64.0.0/10` boundaries
   are **not** over-blocked.
 
+- **`GetRoleTags` authorizes the target account before consulting its cache** —
+  the role-tag cache was read first, so for up to `roleTagCacheTTL` (60s) after
+  an operator revoked an account, a warm entry kept handing back that account's
+  IAM tags for tag-based authorization to act on. Revocation now takes effect on
+  the next request. `spokeCredsFor` already validated before *its* cache, so the
+  two caches in that file now follow one rule; more importantly, this layer no
+  longer depends on `ProcessRequest` happening to call `IsTargetAccountAllowed`
+  earlier in the pipeline — a cross-package ordering nothing enforces, and the
+  only reason the stale window was previously unreachable. The check applies the
+  same policy the post-cache path already enforced, so it changes *when* the
+  decision is made, not what it decides.
+
 - **`GetRoleAs` rejects a nil credentials provider** — it would otherwise leave
   the hub credentials in place and read a same-named role in the **hub** account
   while the caller believed it read a member account's. Unreachable via its one
