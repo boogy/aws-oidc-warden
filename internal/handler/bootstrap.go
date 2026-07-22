@@ -118,6 +118,10 @@ func NewBootstrap() (*Bootstrap, error) {
 	// Initialize S3Logger from the resolved config so log_bucket/log_prefix
 	// overrides in the S3 config are honored.
 	s3log := s3logger.NewS3Logger(provider.Get())
+	// Durable audit writes resolve log_bucket from the live config, so rotating
+	// it via hot reload takes effect instead of silently writing to the bucket
+	// captured at cold start (same pattern as consumer.SetConfigSource above).
+	s3log.SetConfigSource(provider.Get)
 
 	// Initialize token validator from the provider so hot-reloaded issuer/audience
 	// changes take effect immediately without a Lambda restart.

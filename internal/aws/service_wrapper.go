@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -156,8 +157,11 @@ func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeR
 
 	// Security: Validate external ID if provided
 	if input.ExternalId != nil && len(*input.ExternalId) < 2 {
+		// Log the length, never the value: ExternalId is a shared secret. The
+		// value is worthless at this length, but printing a configured secret
+		// is a pattern that must not be copied to a path where it isn't.
 		slog.Warn("Suspicious short external ID provided",
-			slog.String("externalId", *input.ExternalId),
+			slog.Int("externalIdLength", len(*input.ExternalId)),
 			slog.String("roleArn", *input.RoleArn))
 		return nil, fmt.Errorf("invalid external ID length")
 	}
@@ -176,19 +180,38 @@ func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeR
 	return output, nil
 }
 
+// validateRoleNameLength enforces IAM's 64-character cap on a role NAME.
+//
+// The cap applies to the name only — a role identifier may carry a path
+// (`/team/sub/Name`, up to 512 chars), and the name is the final segment. So
+// the length is measured after the last '/', exactly as ParseRoleARN derives
+// the name; measuring the whole string would reject a perfectly valid role
+// with a deep path and a short name.
+//
+// The previous behavior TRUNCATED an over-long value to 64 characters and
+// looked that up instead, reading the tags of a DIFFERENT role than the caller
+// named — the wrong reflex on a security-relevant lookup, since tag-based
+// authorization reads these tags. Reject rather than coerce, mirroring the rule
+// BuildSessionTags already follows.
+func validateRoleNameLength(roleName string) error {
+	name := roleName
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	if len(name) > 64 {
+		return fmt.Errorf("role name %q exceeds the IAM maximum of 64 characters (got %d)", name, len(name))
+	}
+	return nil
+}
+
 func (s *AwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
 	defer cancel()
 
 	slog.Debug("Getting IAM role", "roleName", *input.RoleName)
 
-	// Sanitize role name input if needed (though AWS SDK should do this)
-	if len(*input.RoleName) > 64 {
-		truncatedName := (*input.RoleName)[:64]
-		slog.Warn("Role name exceeds maximum length, truncating",
-			"originalLength", len(*input.RoleName),
-			"truncatedName", truncatedName)
-		input.RoleName = &truncatedName
+	if err := validateRoleNameLength(*input.RoleName); err != nil {
+		return nil, err
 	}
 
 	output, err := s.iamClient.GetRole(ctx, input)
@@ -247,6 +270,15 @@ func (s *AwsServiceWrapper) GetCallerAccount() (string, error) {
 
 // GetRoleAs performs iam:GetRole using the supplied credentials provider.
 func (s *AwsServiceWrapper) GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
+	// A nil provider would leave the hub credentials in place and silently read
+	// a same-named role in the HUB account while the caller believes it read a
+	// member account's — the confused deputy GetRoleTags guards against. Its one
+	// caller only reaches here with non-nil creds, so this is unreachable today;
+	// it is enforced here so the guarantee does not depend on that caller.
+	if creds == nil {
+		return nil, errors.New("GetRoleAs requires explicit credentials; refusing to fall back to hub credentials")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
 	defer cancel()
 	client := iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })

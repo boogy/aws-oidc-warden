@@ -52,9 +52,16 @@ var (
 		"arn:aws-cn:iam::",     // AWS China
 	}
 
-	// ResponseHeaders common headers to include in all API responses
+	// ResponseHeaders common headers to include in all API responses.
+	//
+	// A 200 here carries live AWS credentials, so it must never be stored by
+	// anything on the path. The handlers do not inspect the HTTP method — a GET
+	// is processed identically to a POST — so the usual "caches don't store POST
+	// responses by default" reasoning cannot be relied on: no-store states the
+	// requirement explicitly rather than inheriting it from the method.
 	ResponseHeaders = map[string]string{
-		"Content-Type": "application/json",
+		"Content-Type":  "application/json",
+		"Cache-Control": "no-store",
 	}
 )
 

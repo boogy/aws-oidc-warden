@@ -246,6 +246,16 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 			return nil, fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, maxFragmentBytes)
 		}
 
+		// Integrity pin is checked on EVERY cycle, before the cache-hit branch.
+		// Checking it only on the "changed" path meant a cache hit (etag ==
+		// prevETag) skipped it entirely, so a pin newly added or rotated to
+		// quarantine already-applied fragment content was silently inert — the
+		// content stayed live precisely in the incident-response case the pin
+		// exists for.
+		if expected, pinned := cfg.ConfigFragmentChecksums[uri]; pinned && expected != etag {
+			return nil, fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
+		}
+
 		var frag *FragmentConfig
 		if prev != nil && etag == prevETag {
 			// Unchanged since the last successful apply — reuse the cached
@@ -256,9 +266,6 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 		} else {
 			if data == nil {
 				return nil, fmt.Errorf("config_fragments: %q: fetch returned no data for a changed fragment", uri)
-			}
-			if expected, pinned := cfg.ConfigFragmentChecksums[uri]; pinned && expected != etag {
-				return nil, fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
 			}
 			frag, err = parseFragment(data, FormatFromPath(uri), uri)
 			if err != nil {
