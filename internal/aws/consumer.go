@@ -527,7 +527,13 @@ func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 	a.mu.Lock()
 	a.roleTagCache[roleARN] = cachedTags{tags: tags, expires: a.now().Add(roleTagCacheTTL)}
 	a.mu.Unlock()
-	return tags, nil
+
+	// Return a copy here too, not just on the cache-hit path above: `tags` is
+	// the map now living in the cache, so handing it to the caller that happened
+	// to MISS would leave that one caller able to corrupt the entry every later
+	// request reads. Both paths must be non-aliasing or the guarantee is only
+	// half there.
+	return maps.Clone(tags), nil
 }
 
 // RoleHasTag checks if an IAM role has a specific tag key and value

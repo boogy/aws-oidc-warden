@@ -125,9 +125,10 @@ the act that installs the new keys.
   caller; the guarantee no longer depends on that caller.
 
 - **`GetRoleTags` returns a copy of its cached tag map** — it handed out the
-  cached map itself, so any caller that mutated it would poison every later
-  authorization decision for that role. The sole caller only reads, so this is
-  defensive, but the failure mode would be silent and cross-request.
+  cached map itself on **both** the hit and miss paths, so any caller that
+  mutated the result would poison every later authorization decision for that
+  role. The sole caller only reads, so this is defensive, but the failure mode
+  would be silent and cross-request.
 
 ### Added
 

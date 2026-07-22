@@ -132,13 +132,15 @@ func TestAudit_APIGatewayHandler_SuccessResponseHeadersAndBody(t *testing.T) {
 	assert.Equal(t, float64(200), got["statusCode"])
 	assert.NotContains(t, resp.Body, "eyJhbGciOiJSUzI1NiJ9")
 
-	// Report which cache-relevant headers are present on a credential response.
-	for _, hdr := range []string{"Cache-Control", "Pragma", "Access-Control-Allow-Origin"} {
-		if v, ok := resp.Headers[hdr]; ok {
-			t.Logf("header %s=%q", hdr, v)
-		} else {
-			t.Logf("header %s ABSENT", hdr)
-		}
-	}
+	// A 200 carries live AWS credentials, so it must not be storable. The
+	// handlers never inspect the HTTP method, so "caches don't store POST
+	// responses" cannot be relied on — the header has to be explicit.
+	assert.Equal(t, "no-store", resp.Headers["Cache-Control"],
+		"a credential-bearing response must be marked no-store")
+
+	// No CORS is emitted at all, so there is no Origin reflection to abuse.
+	// Asserted so that adding CORS to a credentialed endpoint is a deliberate act.
+	assert.NotContains(t, resp.Headers, "Access-Control-Allow-Origin")
+	assert.NotContains(t, resp.Headers, "Access-Control-Allow-Credentials")
 	assert.Contains(t, strings.ToLower(resp.Headers["Content-Type"]), "json")
 }

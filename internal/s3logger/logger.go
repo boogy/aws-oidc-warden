@@ -140,13 +140,16 @@ func (l *S3Logger) liveConfig() *gtvcfg.Config {
 	return l.config
 }
 
-// auditBucket returns the bucket a durable audit record must be written to,
-// preferring the live config's log_bucket over the snapshot captured at
-// construction. Without this, rotating log_bucket via hot reload (e.g. to a
-// locked-down bucket during an incident) kept writing to the previous bucket
-// while WriteRecord reported success — the write "succeeded" somewhere the
-// operator no longer intended.
-func (l *S3Logger) auditBucket() string {
+// targetBucket returns the bucket every write goes to, preferring the live
+// config's log_bucket over the snapshot captured at construction. Without this,
+// rotating log_bucket via hot reload (e.g. to a locked-down bucket during an
+// incident) kept writing to the previous bucket while the write reported
+// success — it "succeeded" somewhere the operator no longer intended.
+//
+// Used by EVERY write path, not just the durable audit one: if only WriteRecord
+// honored the live value, a rotation would split records across two buckets,
+// which is worse for forensics than consistently using either one.
+func (l *S3Logger) targetBucket() string {
 	if c := l.liveConfig(); c != nil && c.LogBucket != "" {
 		return c.LogBucket
 	}
@@ -250,7 +253,7 @@ func (l *S3Logger) flushBatch() error {
 	}
 
 	// Write compressed logs to S3
-	err = l.WriteObject(l.s3Config.Bucket, key, compressedData)
+	err = l.WriteObject(l.targetBucket(), key, compressedData)
 	if err != nil {
 		return err
 	}
@@ -370,7 +373,7 @@ func (l *S3Logger) WriteSingleLog(logData []byte) error {
 	}
 
 	key := l.generateS3Key()
-	return l.WriteObject(l.s3Config.Bucket, key, compressedData)
+	return l.WriteObject(l.targetBucket(), key, compressedData)
 }
 
 // WriteRecord implements handler.AuditSink (duck-typed — no import of the
@@ -404,7 +407,7 @@ func (l *S3Logger) WriteRecord(_ context.Context, record []byte) error {
 		return fmt.Errorf("failed to compress audit record: %w", err)
 	}
 
-	return l.WriteObject(l.auditBucket(), l.generateS3Key(), compressedData)
+	return l.WriteObject(l.targetBucket(), l.generateS3Key(), compressedData)
 }
 
 // BufferRecord appends a structured audit record to the amortized batch buffer
