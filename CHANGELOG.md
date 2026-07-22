@@ -5,6 +5,148 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-07-22
+
+Findings from a whole-codebase security review that covered the packages the
+2.1.0/2.1.1 sweeps had not reached (`internal/cache`, `internal/s3logger`, the
+SSRF/JWKS fetch path, fragment integrity, and the AWS spoke/tag caches). Every
+fix is mutation-tested — each was confirmed to fail its regression test when the
+fix is removed. Three behavior changes; see Upgrade notes.
+
+No authorization bypass was found. The two most consequential properties were
+re-confirmed rather than changed: the SSRF block is enforced at **dial** time
+against the already-resolved IP (so DNS rebinding is structurally prevented, not
+merely time-windowed) and on every redirect hop; and the JWKS refetch limiter
+cannot be used to pin a stale key set after a rotation, because a forced refetch
+that the limiter *allows* write-through repairs the cache — spending the slot is
+the act that installs the new keys.
+
+### Upgrade notes
+
+- **Enable `audit_required` by redeploy, not by hot reload.** With the fail-open
+  closed, a reload that turns on `audit_required` from a boot config with
+  `log_to_s3: false` leaves the sink with no S3 client, and every request now
+  fails closed until a cold start. Previously it silently returned credentials
+  with no audit record.
+- **The SSRF guard blocks more ranges.** If a JWKS or issuer host resolves into
+  `100.64.0.0/10` or `0.0.0.0/8`, or is reached through the NAT64 well-known
+  prefix, it will now be refused. Public issuers are unaffected; `allow_insecure_issuers`
+  still relaxes loopback only.
+- **`iam:GetRole` rejects a role whose name exceeds 64 characters** instead of
+  truncating it. Such a name never denoted a real role, so a request that
+  previously "worked" was already reading the wrong role's tags.
+
+### Security
+
+- **`audit_required` no longer fails open after a hot reload** — `S3Logger`
+  captures the `*config.Config` handed to it at bootstrap, but the hot-reload
+  provider swaps in a **new** `Config` on every refresh, so that snapshot could
+  disagree with the live config the processor reads. `WriteRecord` gated on the
+  stale snapshot's `LogToS3`, so a reload that turned on `audit_required` +
+  `log_to_s3` left it a silent no-op that **returned success** — credentials
+  were released with no audit record, the exact inverse of `audit_required`'s
+  fail-closed contract. Durability now rests on whether an S3 client actually
+  exists, and `WriteRecord` never no-ops. Static deployments were unaffected:
+  `Validate()` gates the `audit_required` → `log_to_s3` pairing within a single
+  config.
+
+- **Durable audit records follow a hot-reloaded `log_bucket`** — the bucket was
+  captured at construction, so rotating `log_bucket` by reload (e.g. to a
+  locked-down bucket during an incident) kept writing to the previous bucket
+  while `WriteRecord` reported success: a write that "succeeded" somewhere the
+  operator no longer intended. `S3Logger` now takes a live-config source
+  (`SetConfigSource`, the same seam `AwsConsumer` already uses) and resolves the
+  bucket per write.
+
+  **Known residuals.** (a) A reload that enables `audit_required` from a boot
+  config with `log_to_s3: false` now correctly refuses every request
+  (fail-closed) until a cold start rather than silently leaking — enable it by
+  redeploy, not reload. (b) The best-effort `BufferRecord` path still consults
+  the boot snapshot, so records are dropped when `log_to_s3` is enabled only by
+  reload; that path is explicitly best-effort and never gates credentials.
+
+- **`config_fragments` checksum pins are enforced on every refresh** — the pin
+  was compared only on the "changed" path, so a cache hit (`etag == prevETag`)
+  skipped it entirely and a pin newly added or rotated to quarantine
+  already-applied fragment content was silently inert — precisely the
+  incident-response case pinning exists for. Cold starts always enforced it,
+  which bounded the exposure.
+
+- **`iam:GetRole` no longer truncates an over-long role name** — a name longer
+  than IAM's 64-character maximum was silently truncated and the lookup ran
+  against the truncated name, reading the tags of a *different* role than the
+  ARN named. Since those tags drive tag-based authorization, silently rewriting
+  the identifier is the wrong reflex; it is now rejected. Not exploitable (an
+  over-long name never denotes a real role, and the subsequent `AssumeRole` uses
+  the full ARN), but it matches the "skip/reject, never coerce" rule
+  `BuildSessionTags` already follows. The cap is measured on the role **name**
+  — the segment after the last `/` — because a role identifier may carry a path
+  (`/team/sub/Name`); measuring the whole string would reject a valid role with
+  a deep path and a short name.
+
+- **`ExternalId` is no longer logged** — the too-short-external-ID rejection
+  path logged the value. Only reachable for a one-character secret, so nothing
+  meaningful leaked, but it printed a configured shared secret.
+
+- **`Cache-Control: no-store` on all API responses** — a 200 carries live AWS
+  credentials. The handlers do not inspect the HTTP method (a GET is processed
+  identically to a POST), so the usual "caches don't store POST responses"
+  reasoning could not be relied on; the requirement is now stated explicitly
+  rather than inherited from the method.
+
+- **SSRF guard covers IPv6 carrier forms and the remaining reserved IPv4
+  ranges** — `isBlockedIP` saw through only the IPv4-mapped `::ffff:x.x.x.x`
+  form. It now also resolves the deprecated IPv4-compatible `::x.x.x.x` form and
+  the NAT64 well-known prefix `64:ff9b::/96` (which a NAT64 gateway rewrites to
+  the embedded IPv4, loopback and link-local included), and blocks
+  `100.64.0.0/10` (RFC 6598 shared address space, used by AWS for ECS `awsvpc`
+  and EKS pod networking) and `0.0.0.0/8`. None was exploitable — reaching any
+  required controlling DNS for an already-trusted issuer, and the
+  IPv4-compatible forms are unroutable — but the guard already blocked RFC1918,
+  so leaving these open was an inconsistency rather than a considered exception.
+  A companion test pins that public addresses and the `100.64.0.0/10` boundaries
+  are **not** over-blocked.
+
+- **`GetRoleAs` rejects a nil credentials provider** — it would otherwise leave
+  the hub credentials in place and read a same-named role in the **hub** account
+  while the caller believed it read a member account's. Unreachable via its one
+  caller; the guarantee no longer depends on that caller.
+
+- **`GetRoleTags` returns a copy of its cached tag map** — it handed out the
+  cached map itself, so any caller that mutated it would poison every later
+  authorization decision for that role. The sole caller only reads, so this is
+  defensive, but the failure mode would be silent and cross-request.
+
+### Added
+
+- **Config-load warning for implicit issuer binding** — a mapping that declares
+  no `issuer` binds to `default_issuer`. With one configured issuer that is
+  unambiguous; once a second exists, those mappings silently move into whichever
+  namespace `default_issuer` names — so a remote overlay that adds an issuer
+  **and** sets `default_issuer` in one merge re-homes every previously-implicit
+  grant with no redeploy, moving a GitHub-bound grant to another IdP. Fragments
+  are already guarded (`mergeFragment` requires a base-defined, non-conflicting
+  `default_issuer`); the primary overlay was not, so `Validate()` now warns.
+
+- **Config-load warning for unscoped role grants** — when the lowest-`order`
+  mapping granting a role carries no `session_policy` but a higher-order one
+  does, `Validate()` now warns, because `FindSessionPolicy` is lowest-order-wins
+  and the scoped policy is silently dropped. This is most acute across the
+  `role_mappings`/`role_groups` boundary: `Validate()` appends every
+  `role_mapping` before every `role_group`, so a `role_group`'s session policy
+  can **never** outrank a policy-less `role_mapping` for the same role, and —
+  unlike the intra-`role_mappings` case — no file ordering can fix it. The
+  selection rule itself is unchanged and remains pinned by
+  `TestOrderWinsAmongMappingsGrantingTheSameRole`; this makes the footgun loud
+  rather than changing authorization semantics.
+
+- **Regression tests for the reviewed areas** — JWKS cache issuer isolation and
+  concurrency (`internal/cache`), SSRF guard depth proving the block is enforced
+  at **dial** time and on every redirect hop (`internal/validator`), role-tag /
+  spoke-credential cache keying and expiry (`internal/aws`), fragment integrity
+  and merge scoping (`internal/config`), and the `audit_required` contract
+  (`internal/handler`, `internal/s3logger`).
+
 ## [2.1.1] - 2026-07-21
 
 Hardening release closing the last unenforced authorization footgun found by an
@@ -535,6 +677,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.2.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.0...v2.0.1

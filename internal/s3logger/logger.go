@@ -71,15 +71,20 @@ type S3LoggerConfig struct {
 
 // S3Logger implements the LoggerInterface for writing logs to S3
 type S3Logger struct {
-	config      *gtvcfg.Config
-	s3Client    s3ClientInterface
-	batchBuffer *bytes.Buffer   // Internal buffer for batching
-	logBatch    [][]byte        // Batch of logs waiting to be written
-	mu          sync.Mutex      // Mutex for thread safety
-	batchTimer  *time.Timer     // Timer for batch flushing
-	ctx         context.Context // Context for S3 operations
-	cancel      context.CancelFunc
-	timeNow     func() time.Time // For testing time-dependent code
+	config *gtvcfg.Config
+	// configSource is a live-config getter (config.Provider.Get), mirroring
+	// AwsConsumer.SetConfigSource. config above is only the boot-time snapshot;
+	// the hot-reload provider swaps in a new *Config, so anything read from the
+	// snapshot silently keeps a value the operator has since changed.
+	configSource func() *gtvcfg.Config
+	s3Client     s3ClientInterface
+	batchBuffer  *bytes.Buffer   // Internal buffer for batching
+	logBatch     [][]byte        // Batch of logs waiting to be written
+	mu           sync.Mutex      // Mutex for thread safety
+	batchTimer   *time.Timer     // Timer for batch flushing
+	ctx          context.Context // Context for S3 operations
+	cancel       context.CancelFunc
+	timeNow      func() time.Time // For testing time-dependent code
 
 	// Configuration options
 	s3Config S3LoggerConfig
@@ -116,6 +121,36 @@ func NewS3Logger(cfg *gtvcfg.Config) *S3Logger {
 	}
 
 	return logger
+}
+
+// SetConfigSource wires a live-config getter (e.g. config.Provider.Get) so
+// values that can change at runtime are read per-write instead of from the
+// boot-time snapshot. Optional: with no source wired the snapshot is used,
+// which is correct for static and test setups.
+func (l *S3Logger) SetConfigSource(fn func() *gtvcfg.Config) { l.configSource = fn }
+
+// liveConfig returns the currently active config, falling back to the
+// construction-time snapshot when no source is wired or it yields nil.
+func (l *S3Logger) liveConfig() *gtvcfg.Config {
+	if l.configSource != nil {
+		if c := l.configSource(); c != nil {
+			return c
+		}
+	}
+	return l.config
+}
+
+// auditBucket returns the bucket a durable audit record must be written to,
+// preferring the live config's log_bucket over the snapshot captured at
+// construction. Without this, rotating log_bucket via hot reload (e.g. to a
+// locked-down bucket during an incident) kept writing to the previous bucket
+// while WriteRecord reported success — the write "succeeded" somewhere the
+// operator no longer intended.
+func (l *S3Logger) auditBucket() string {
+	if c := l.liveConfig(); c != nil && c.LogBucket != "" {
+		return c.LogBucket
+	}
+	return l.s3Config.Bucket
 }
 
 // initS3Client initializes the S3 client
@@ -346,16 +381,30 @@ func (l *S3Logger) WriteSingleLog(logData []byte) error {
 //
 // Unlike WriteSingleLog (which silently no-ops when S3 logging is disabled or
 // the client failed to initialize, since it also backs best-effort request
-// logging), WriteRecord treats "log_to_s3 enabled but no client" as a hard
-// error: a caller that reached this method has already had audit_required
-// gated on log_to_s3+log_bucket at config validation time, so a nil client
-// here means AWS client init failed after a valid config load — that must
-// fail closed, not be swallowed.
+// logging), WriteRecord NEVER no-ops: reaching it means the caller is
+// enforcing audit_required and will hand out credentials only if this returns
+// nil, so "nothing was written" must surface as an error.
+//
+// The durability decision deliberately rests on whether an S3 client actually
+// exists — NOT on l.config. l.config is the *config.Config captured when the
+// logger was constructed at bootstrap; the hot-reload provider swaps in a NEW
+// Config on refresh, so this snapshot can permanently disagree with the live
+// config the processor reads. Gating on the stale snapshot's LogToS3 meant a
+// reload that turned audit_required+log_to_s3 ON left this a silent no-op that
+// returned success, and credentials were released with no audit record — the
+// exact inverse of audit_required's fail-closed contract. It also bypasses
+// WriteSingleLog for the same reason: that helper re-checks the same snapshot.
 func (l *S3Logger) WriteRecord(_ context.Context, record []byte) error {
-	if l.config.LogToS3 && l.s3Client == nil {
+	if l.s3Client == nil {
 		return errors.New("s3 audit logger: S3 client not initialized")
 	}
-	return l.WriteSingleLog(record)
+
+	compressedData, err := compressGzip(record)
+	if err != nil {
+		return fmt.Errorf("failed to compress audit record: %w", err)
+	}
+
+	return l.WriteObject(l.auditBucket(), l.generateS3Key(), compressedData)
 }
 
 // BufferRecord appends a structured audit record to the amortized batch buffer

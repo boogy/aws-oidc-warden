@@ -786,6 +786,10 @@ func (c *Config) Validate() error {
 	if len(c.Issuers) == 1 {
 		soleIssuer = c.Issuers[0].Issuer
 	}
+	// implicitlyBound counts mappings that got their issuer from default_issuer
+	// rather than declaring one, while more than one issuer is configured — see
+	// the warning emitted after the effective set is built.
+	implicitlyBound := 0
 	resolveIssuer := func(explicit string) (string, error) {
 		switch {
 		case explicit != "":
@@ -794,6 +798,9 @@ func (c *Config) Validate() error {
 			}
 			return explicit, nil
 		case c.DefaultIssuer != "":
+			if len(c.Issuers) > 1 {
+				implicitlyBound++
+			}
 			return c.DefaultIssuer, nil
 		case soleIssuer != "":
 			return soleIssuer, nil
@@ -878,7 +885,23 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// A mapping that declares no issuer binds to default_issuer. With a single
+	// configured issuer that is unambiguous, but once a second issuer exists
+	// the same mappings silently move into whichever namespace default_issuer
+	// names — so an overlay that adds an issuer AND sets default_issuer in one
+	// merge re-homes every previously-implicit grant, with no redeploy. Fragments
+	// are guarded against this (mergeFragment requires a base-defined,
+	// non-conflicting default_issuer); the primary overlay is not, so surface it.
+	if implicitlyBound > 0 {
+		slog.Warn("mappings are bound to default_issuer while multiple issuers are configured; "+
+			"set an explicit issuer on each mapping to pin it",
+			slog.Int("mappingCount", implicitlyBound),
+			slog.String("defaultIssuer", c.DefaultIssuer),
+			slog.Int("issuerCount", len(c.Issuers)))
+	}
+
 	c.index = buildAuthzIndex(c.effective)
+	warnUnscopedRoleGrants(c.effective)
 
 	// Calculate the average number of roles per mapping for more efficient memory allocation
 	totalRoles := 0
@@ -1098,6 +1121,61 @@ func compileAnchoredSubject(pattern string) (*regexp.Regexp, error) {
 		return nil, fmt.Errorf("subject pattern %q is too permissive; it matches every subject for this issuer — use a specific pattern", pattern)
 	}
 	return regexp.Compile("^(?:" + pattern + ")$")
+}
+
+// warnUnscopedRoleGrants logs a warning for every (issuer, role) that is
+// granted by more than one effective mapping where the LOWEST-order grant
+// carries no session policy but some higher-order grant does.
+//
+// FindSessionPolicy is lowest-order-wins among the mappings that grant a role,
+// so in that shape the deliberately-scoped mapping's policy is silently
+// dropped and the role is assumed unscoped. Within role_mappings the operator
+// can fix this by reordering, but across the role_mappings/role_groups
+// boundary they CANNOT: appendEffective assigns order by append sequence and
+// every role_mapping is appended before every role_group, so a role_group's
+// session policy can never outrank a policy-less role_mapping for the same
+// role no matter how the file is written.
+//
+// The selection rule itself is deliberate and pinned by
+// TestOrderWinsAmongMappingsGrantingTheSameRole, so this makes the footgun
+// loud at config-load time rather than changing authorization semantics.
+// Subject overlap is not computed (regex intersection is not decidable
+// cheaply); sharing a role is a deliberate over-approximation, since a role
+// granted twice with inconsistent scoping is worth surfacing regardless.
+func warnUnscopedRoleGrants(effective []*RoleMapping) {
+	type grant struct{ lowest, scoped *RoleMapping }
+	grants := make(map[string]*grant)
+
+	for _, m := range effective {
+		hasPolicy := m.SessionPolicy != "" || m.SessionPolicyFile != ""
+		for _, role := range m.Roles {
+			key := m.Issuer + "\x00" + role
+			g, ok := grants[key]
+			if !ok {
+				g = &grant{}
+				grants[key] = g
+			}
+			if g.lowest == nil || m.order < g.lowest.order {
+				g.lowest = m
+			}
+			if hasPolicy && (g.scoped == nil || m.order < g.scoped.order) {
+				g.scoped = m
+			}
+		}
+	}
+
+	for key, g := range grants {
+		if g.scoped == nil || g.lowest == nil || g.lowest == g.scoped {
+			continue
+		}
+		issuer, role, _ := strings.Cut(key, "\x00")
+		slog.Warn("role is granted by an unscoped mapping that outranks a scoped one; "+
+			"the session policy will NOT be applied when both match",
+			slog.String("issuer", issuer),
+			slog.String("role", role),
+			slog.String("winningSubject", g.lowest.Subject),
+			slog.String("ignoredPolicySubject", g.scoped.Subject))
+	}
 }
 
 // satisfiesConditions reports whether claims satisfy every AND'd condition

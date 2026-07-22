@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"regexp"
 	"slices"
 	"sync"
@@ -449,8 +450,14 @@ const roleTagCacheTTL = 60 * time.Second
 func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 	a.mu.Lock()
 	if c, ok := a.roleTagCache[roleARN]; ok && a.now().Before(c.expires) {
+		// Copy before releasing the lock: handing out the cached map itself
+		// lets any caller that mutates it poison every later authorization
+		// decision for this role. The sole caller (TagAuth.Authorize) only
+		// reads, so this is defensive — but nothing enforces that, and the
+		// failure mode is silent and cross-request.
+		tags := maps.Clone(c.tags)
 		a.mu.Unlock()
-		return c.tags, nil
+		return tags, nil
 	}
 	a.mu.Unlock()
 
