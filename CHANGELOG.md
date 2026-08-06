@@ -40,6 +40,18 @@ affected: both gaps were reachable only from the local dev server or with
   Low impact (needs `log_level: debug`, and the value is a repository path rather
   than a secret), but a documented control that did not hold.
 
+### Added
+
+- Regression test for the hot-reload promise itself
+  (`TestHotReload_AuthorizationDecisionFollowsRemoteConfig`): a role withdrawn
+  from the remote config stops being assumable, and one added becomes
+  assumable, on the next request — no redeploy, no cold start — while a config
+  that fails `Validate()` leaves the last-good grants in place. Config-level
+  reload was already covered, but nothing asserted that a reload changes the
+  authorization **outcome** through `ProcessRequest`; neutralizing its leading
+  `provider.MaybeRefresh(ctx)` call now fails the test instead of silently
+  serving the cold-start config forever.
+
 ### Removed
 
 - Dead code, each confirmed unreferenced via the Go language server before
