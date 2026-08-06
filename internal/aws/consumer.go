@@ -585,35 +585,3 @@ func (a *AwsConsumer) GetS3Object(bucket, key string) (io.ReadCloser, error) {
 
 	return a.AWS.GetS3Object(bucket, key)
 }
-
-// GetSessionPolicyFromS3 retrieves the IAM session policy from S3
-func (a *AwsConsumer) GetSessionPolicyFromS3(bucket, prefix string) (string, error) {
-	if bucket == "" {
-		return "", errors.New("bucket name cannot be empty")
-	}
-
-	if prefix == "" {
-		return "", errors.New("object prefix cannot be empty")
-	}
-
-	content, err := a.AWS.GetS3Object(bucket, prefix)
-	if err != nil {
-		return "", fmt.Errorf("failed to get session policy from S3: %w", err)
-	}
-	defer func() {
-		if cerr := content.Close(); cerr != nil {
-			slog.Error("Error closing S3 session policy object", "error", cerr)
-		}
-	}()
-
-	data, err := io.ReadAll(content)
-	if err != nil {
-		return "", fmt.Errorf("unable to read policy from S3: %w", err)
-	}
-
-	if len(data) == 0 {
-		return "", errors.New("empty policy document retrieved from S3")
-	}
-
-	return string(data), nil
-}

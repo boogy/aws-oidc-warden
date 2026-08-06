@@ -150,6 +150,18 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 	}
 }
 
+// subjectAttr returns the canonical subject as a log attribute, blanked when
+// cfg.LogClaimValues is false. Every log site outside the audit record that
+// wants to name the subject must go through this, so the gate holds across the
+// whole log stream and not just the decision line (auditLogAttrs applies the
+// identical blanking to the audit attrs).
+func subjectAttr(cfg *config.Config, subject string) slog.Attr {
+	if !cfg.LogClaimValues {
+		return slog.String("subject", "")
+	}
+	return slog.String("subject", subject)
+}
+
 // recordDecision is the single terminal point for a decision: it redacts rec
 // per cfg.LogClaimValues, emits the ONE standardized decision log line
 // from the redacted record — so the log stream and the durable sink are keyed
@@ -162,7 +174,10 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 // (batched, see AuditSink).
 //
 // Callers must set rec.Decision before calling. A nil sink still emits the log
-// line (only the durable write is skipped). When cfg.AuditRequired is true, a
+// line; the durable write is skipped, which is only acceptable when
+// cfg.AuditRequired is false — with it set, an absent sink is an unmet
+// requirement, not an absent one, and is reported as ErrAuditWriteFailed the
+// same as a failed write. When cfg.AuditRequired is true, a missing sink or a
 // marshal or write failure is returned as an error wrapping
 // ErrAuditWriteFailed, and the caller must fail the request closed rather than
 // return credentials; when false, the failure is logged and swallowed so the
@@ -180,6 +195,14 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	}
 
 	if r.audit == nil {
+		// audit_required promises credentials are never returned unless the
+		// decision was durably recorded. With no sink wired there is nothing to
+		// record to, so the promise cannot be kept — fail closed rather than
+		// silently degrade to log-only. config.Validate() cannot catch this: it
+		// sees log_to_s3/log_bucket, not whether the caller passed a sink.
+		if cfg.AuditRequired {
+			return fmt.Errorf("%w: audit_required is set but no audit sink is configured", ErrAuditWriteFailed)
+		}
 		return nil
 	}
 

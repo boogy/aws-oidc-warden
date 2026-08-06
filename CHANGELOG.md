@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] - 2026-08-06
+
+A follow-up review pass over the areas 2.2.0 changed. Both fixes are
+mutation-tested — each was confirmed to fail its regression test when the fix is
+removed. No authorization bypass was found, and no released deployment was
+affected: both gaps were reachable only from the local dev server or with
+`log_level: debug`.
+
+### Security
+
+- **`audit_required` no longer fails open when no audit sink is wired.** 2.2.0
+  closed the case where the sink existed but held a stale config; the case where
+  no sink was passed at all still degraded silently to log-only. `recordDecision`
+  returned early on a nil sink *before* consulting `cfg.AuditRequired`, so
+  `audit_required: true` was ignored and credentials were returned with no
+  durable record. `config.Validate()` cannot catch this — it sees `log_to_s3` and
+  `log_bucket`, not whether the constructor was handed a sink. A missing sink is
+  now treated as an unmet requirement rather than an absent one and reported as
+  `ErrAuditWriteFailed`. Reachable only via `cmd/local` (the only entry point
+  that passes `nil`; the four Lambda variants always pass `bootstrap.S3Logger`,
+  which was already fail-closed), and `cmd/local` is not a published artifact —
+  `ko publish` ships only the Lambda variants.
+
+- **`log_claim_values: false` now holds in `getSessionPolicy`'s debug logs.**
+  Three debug sites emitted the canonical subject through the **package-level**
+  `slog` with no `cfg.LogClaimValues` gate, so at `log_level: debug` the subject
+  appeared in the log stream while the audit record correctly suppressed it. They
+  now go through the request-scoped logger and a shared `subjectAttr` gate that
+  applies the same blanking as `auditLogAttrs`. The pre-existing log-stream
+  suppression test could not catch this: a package-level `slog` call writes past
+  the logger the test installed, so the leak landed outside the captured buffer —
+  the regression test now also asserts these lines *reach* the request logger.
+  Low impact (needs `log_level: debug`, and the value is a repository path rather
+  than a secret), but a documented control that did not hold.
+
+### Removed
+
+- Dead code, each confirmed unreferenced via the Go language server before
+  removal: `AwsConsumer.GetSessionPolicyFromS3` (never on
+  `AwsConsumerInterface`, referenced only by its own test, and the one remaining
+  unbounded `io.ReadAll` on an S3 body — the live path uses
+  `GetS3Object` + `io.LimitReader`), and the four unused `(*S3Logger).With…`
+  builder methods, which duplicated the functional options in `test_helpers.go`
+  that tests actually use. `utils.RedactToken` and `config.WithFragmentFetcher`
+  were also audited and **kept** — the latter is used by seven tests, and the
+  former is retained as the documented helper for the case where a log site must
+  carry token material (no site does; the docs no longer claim otherwise).
+
+### Changed
+
+- AWS SDK v2 dependency bumps (`aws-sdk-go-v2` 1.43.2 → 1.43.4, `config`
+  1.32.33 → 1.32.35, `credentials` 1.19.32 → 1.19.34, `dynamodb` 1.62.2 →
+  1.63.1, `iam` 1.57.0 → 1.58.1, `s3` 1.106.2 → 1.106.5, `sts` 1.45.2 → 1.45.4,
+  `smithy-go` 1.27.5 → 1.27.6, plus transitive `// indirect` updates).
+
+## [2.2.1] - 2026-07-30
+
+Maintenance release: dependency and CI-action updates only. No code changes, so
+no behavior change and nothing to do on upgrade.
+
+### Changed
+
+- AWS SDK v2 and transitive dependency bumps (`go.mod`/`go.sum`).
+- CI action bumps: `actions/checkout` 7.0.0 → 7.0.1,
+  `docker/login-action` 4.4.0 → 4.5.1, and
+  `github/codeql-action` (`init`/`autobuild`/`analyze`) 4.37.1 → 4.37.3.
+
 ## [2.2.0] - 2026-07-22
 
 Findings from a whole-codebase security review that covered the packages the
@@ -692,6 +759,8 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.2.2]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.1...v2.2.2
+[2.2.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.1.1...v2.2.0
 [2.1.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.0.1...v2.1.0

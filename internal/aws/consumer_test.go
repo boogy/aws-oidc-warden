@@ -1,7 +1,6 @@
 package aws
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -755,76 +754,6 @@ func TestAwsConsumer_GetS3Object(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, reader)
 	assert.Contains(t, err.Error(), "access denied")
-
-	mockAWS.AssertExpectations(t)
-}
-
-func TestAwsConsumer_GetSessionPolicyFromS3(t *testing.T) {
-	mockAWS := new(MockAwsServiceWrapper)
-	consumer := &AwsConsumer{
-		AWS:    mockAWS,
-		Config: &gtvcfg.Config{},
-	}
-
-	bucket := "policy-bucket"
-	prefix := "policies/test-policy.json"
-	policyJSON := `{
-		"Version": "2012-10-17",
-		"Statement": [
-			{
-				"Effect": "Allow",
-				"Action": "s3:ListBucket",
-				"Resource": "*"
-			}
-		]
-	}`
-
-	// Success case
-	mockAWS.On("GetS3Object", bucket, prefix).Return(
-		NewMockReadCloser(policyJSON), nil,
-	).Once()
-
-	policy, err := consumer.GetSessionPolicyFromS3(bucket, prefix)
-	assert.NoError(t, err)
-	assert.Equal(t, policyJSON, policy)
-
-	// Error case - empty bucket
-	policy, err = consumer.GetSessionPolicyFromS3("", prefix)
-	assert.Error(t, err)
-	assert.Empty(t, policy)
-	assert.Contains(t, err.Error(), "bucket name cannot be empty")
-
-	// Error case - empty prefix
-	policy, err = consumer.GetSessionPolicyFromS3(bucket, "")
-	assert.Error(t, err)
-	assert.Empty(t, policy)
-	assert.Contains(t, err.Error(), "object prefix cannot be empty")
-
-	// Error case - AWS error
-	mockAWS.On("GetS3Object", bucket, "error-policy").Return(
-		nil, errors.New("access denied"),
-	).Once()
-
-	policy, err = consumer.GetSessionPolicyFromS3(bucket, "error-policy")
-	assert.Error(t, err)
-	assert.Empty(t, policy)
-	assert.Contains(t, err.Error(), "failed to get session policy from S3")
-
-	// Error case - read error
-	mockReadCloser := MockReadCloser{
-		Reader: bytes.NewReader([]byte{}),
-		CloseFunc: func() error {
-			return nil
-		},
-	}
-	mockAWS.On("GetS3Object", bucket, "read-error").Return(
-		mockReadCloser, nil,
-	).Once()
-
-	policy, err = consumer.GetSessionPolicyFromS3(bucket, "read-error")
-	assert.Error(t, err)
-	assert.Empty(t, policy)
-	assert.Contains(t, err.Error(), "empty policy document retrieved from S3")
 
 	mockAWS.AssertExpectations(t)
 }
