@@ -27,7 +27,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 - `cmd/` — entry points, one per deployment: `apigateway/` (REST v1, self mode), `apigatewayv2/` (HTTP v2, apigw mode), `alb/`, `lambdaurl/`, `local/`. All share core logic via `internal/handler`.
 - `internal/types/` — shared structs: claims, JWKS, credentials, request/response types.
-- `internal/utils/` — helpers; token/credential redaction (`RedactToken`) used before logging.
+- `internal/utils/` — helpers; `RedactToken` is the redaction helper to use if a log site ever needs to carry token material. No current log site does — the pipeline keeps tokens out of logs entirely rather than logging them redacted (see `ParseRequestBody`, which deliberately logs no body preview), so `RedactToken` has no callers by design.
 - `internal/s3logger/` — buffered S3 audit logging, flushed on `bootstrap.Cleanup()`.
 - `internal/version/` — build/version metadata.
 - `docs/` — `ARCHITECTURE.md`, `CONFIGURATION.md`, `SESSION_TAGGING.md`. `example-config.yaml` is the full config reference.

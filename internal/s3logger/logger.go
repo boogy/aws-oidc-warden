@@ -437,30 +437,3 @@ func compressGzip(data []byte) ([]byte, error) {
 
 	return buf.Bytes(), nil
 }
-
-// WithMaxRetries sets the maximum number of retries for S3 operations
-func (l *S3Logger) WithMaxRetries(retries int) *S3Logger {
-	l.s3Config.MaxRetries = retries
-	return l
-}
-
-// WithBatchSize sets the number of logs to batch before writing to S3
-func (l *S3Logger) WithBatchSize(size int) *S3Logger {
-	l.s3Config.BatchSize = size
-	return l
-}
-
-// WithMaxBatchAge sets the maximum time to wait before writing a batch
-func (l *S3Logger) WithMaxBatchAge(age time.Duration) *S3Logger {
-	l.s3Config.MaxBatchAge = age
-	return l
-}
-
-// WithExtraTag adds an extra tag to S3 objects
-func (l *S3Logger) WithExtraTag(key, value string) *S3Logger {
-	if l.s3Config.ExtraTags == nil {
-		l.s3Config.ExtraTags = make(map[string]string)
-	}
-	l.s3Config.ExtraTags[key] = value
-	return l
-}

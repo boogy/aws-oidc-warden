@@ -186,7 +186,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// Attempting to get session policy
-	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, claims.Issuer, claims.Subject, requestedRole, claimsMap)
+	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, log, claims.Issuer, claims.Subject, requestedRole, claimsMap)
 	if err != nil {
 		rec.Stage = "session_policy"
 		rec.Reason = err.Error()
@@ -259,12 +259,12 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 // configured) for the audit record's SessionPolicyRef field — computed here,
 // alongside the single cfg.FindSessionPolicy lookup, so callers don't need a
 // second lookup just to label the decision.
-func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject, role string, claims map[string]any) (sessionPolicyString *string, policyRef string, err error) {
+func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger, issuer, subject, role string, claims map[string]any) (sessionPolicyString *string, policyRef string, err error) {
 	// Start measuring time for this operation
 	opStart := time.Now()
 	defer func() {
-		slog.Debug("getSessionPolicy operation completed",
-			slog.String("subject", subject),
+		log.Debug("getSessionPolicy operation completed",
+			subjectAttr(cfg, subject),
 			slog.Duration("duration", time.Since(opStart)))
 	}()
 
@@ -276,7 +276,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject,
 
 		sessionPolicyData, err := r.consumer.GetS3Object(cfg.S3SessionPolicyBucket, *sessionPolicyFile)
 		if err != nil {
-			slog.Error("Failed to read session policy file",
+			log.Error("Failed to read session policy file",
 				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
@@ -286,14 +286,14 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject,
 		// Read the content and ensure the reader is closed
 		defer func() {
 			if err := sessionPolicyData.Close(); err != nil {
-				slog.Error("Failed to close session policy data reader", "error", err)
+				log.Error("Failed to close session policy data reader", "error", err)
 			}
 		}()
 
 		// Limit the size of policy files that can be read
 		policyBytes, err := io.ReadAll(io.LimitReader(sessionPolicyData, 1024*1024)) // 1MB limit
 		if err != nil {
-			slog.Error("Failed to read session policy data",
+			log.Error("Failed to read session policy data",
 				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
@@ -303,7 +303,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject,
 		// Validate that the policy is valid JSON
 		var jsonCheck any
 		if err := json.Unmarshal(policyBytes, &jsonCheck); err != nil {
-			slog.Error("Invalid JSON in session policy file",
+			log.Error("Invalid JSON in session policy file",
 				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
@@ -314,8 +314,8 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject,
 		policy := string(policyBytes)
 		sessionPolicyString = &policy
 
-		slog.Debug("Session policy loaded from S3",
-			slog.String("subject", subject),
+		log.Debug("Session policy loaded from S3",
+			subjectAttr(cfg, subject),
 			slog.String("bucket", cfg.S3SessionPolicyBucket),
 			slog.String("key", *sessionPolicyFile),
 			slog.Int("policySize", len(policy)))
@@ -325,8 +325,8 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, issuer, subject,
 	if sessionPolicy != nil {
 		sessionPolicyString = sessionPolicy
 		policyRef = "inline"
-		slog.Debug("Using inline session policy",
-			slog.String("subject", subject),
+		log.Debug("Using inline session policy",
+			subjectAttr(cfg, subject),
 			slog.Int("policySize", len(*sessionPolicy)))
 	}
 
