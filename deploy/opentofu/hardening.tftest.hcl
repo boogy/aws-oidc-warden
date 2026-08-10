@@ -99,3 +99,39 @@ run "waf_requires_rest_api" {
 
   expect_failures = [aws_s3_object.config]
 }
+
+# (e) Regression guard: multi-issuer self mode must remain deployable. Every
+# var.issuers entry's route_key is null in self mode, so the distinct-route_key
+# precondition must not fire, and self mode provisions zero JWT authorizers and
+# zero per-issuer routes (the Lambda validates signatures itself).
+run "self_mode_multi_issuer_plans" {
+  command = plan
+
+  variables {
+    issuers = {
+      github = {
+        issuer       = "https://token.actions.githubusercontent.com"
+        audiences    = ["sts.amazonaws.com"]
+        provider     = "github"
+        session_tags = { repo = "repository" }
+      }
+      other = {
+        issuer         = "https://example.com"
+        audiences      = ["sts.amazonaws.com"]
+        provider       = "generic"
+        session_tags   = { sub = "sub" }
+        claim_mappings = { subject = "sub" }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(module.apigateway[0].jwt_authorizer_ids) == 0
+    error_message = "Self mode must provision zero JWT authorizers, even with multiple var.issuers entries."
+  }
+
+  assert {
+    condition     = length(module.apigateway[0].route_endpoints) == 0
+    error_message = "Self mode must provision zero per-issuer routes, even with multiple var.issuers entries."
+  }
+}
