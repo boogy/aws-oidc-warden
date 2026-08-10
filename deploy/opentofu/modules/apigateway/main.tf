@@ -57,13 +57,24 @@ resource "aws_apigatewayv2_route" "open" {
   authorization_type = "NONE"
 }
 
-# Existing self-mode deployments carry this route at the old address. apigw
-# deployments need `tofu state mv` instead (see deploy/opentofu/README.md) —
-# a moved block is static and cannot cover both target addresses.
+# Existing self-mode deployments carry this route at the old address.
 moved {
   from = aws_apigatewayv2_route.this
   to   = aws_apigatewayv2_route.open[0]
 }
+
+# Existing apigw-mode deployments (single issuer) carry the old authorizer and
+# route at aws_apigatewayv2_authorizer.jwt[0] and aws_apigatewayv2_route.this.
+# A `moved` block is static and cannot target an arbitrary map key, so a
+# for_each migration needs a manual `tofu state mv` per resource before the
+# first apply against this version, e.g. (where "github" is the map key the
+# operator chose for that issuer in var.jwt_authorizers / var.issuers):
+#
+#   tofu state mv 'module.apigateway.aws_apigatewayv2_authorizer.jwt[0]' 'module.apigateway.aws_apigatewayv2_authorizer.jwt["github"]'
+#   tofu state mv 'module.apigateway.aws_apigatewayv2_route.this' 'module.apigateway.aws_apigatewayv2_route.jwt["github"]'
+#
+# Without these moves, the plan destroys the old authorizer/route and creates
+# new ones — a replacement, not a rename in place.
 
 resource "aws_apigatewayv2_stage" "this" {
   api_id      = aws_apigatewayv2_api.this.id
