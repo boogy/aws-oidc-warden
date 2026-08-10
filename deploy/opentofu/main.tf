@@ -14,29 +14,60 @@ locals {
   cache_table_name           = "${var.name_prefix}-cache"
   config_key                 = "config.yaml"
 
+  # The singular issuer/audiences shorthand renders as one GitHub entry, and in
+  # apigw mode keeps today's single route (var.route_key). Setting var.issuers
+  # replaces the shorthand entirely — the two are mutually exclusive, enforced
+  # by a precondition on aws_s3_object.config.
+  issuers_shorthand = {
+    github = {
+      issuer          = coalesce(var.issuer, "https://token.actions.githubusercontent.com")
+      audiences       = coalesce(var.audiences, ["sts.amazonaws.com"])
+      provider        = "github"
+      required_claims = ["repository"]
+      claim_mappings  = null
+      jwks_uri        = null
+      route_key       = var.jwt_validation_mode == "apigw" ? var.route_key : null
+      # Standard GitHub session-tag spec (STS tag key <- raw claim name).
+      # NOTE: the `repo` tag carries the full "owner/repo" value in v2.
+      session_tags = {
+        repo       = "repository"
+        repo-owner = "repository_owner"
+        ref        = "ref"
+        ref-type   = "ref_type"
+        actor      = "actor"
+        event-name = "event_name"
+      }
+    }
+  }
+
+  issuers_effective = var.issuers != null ? var.issuers : local.issuers_shorthand
+
+  # Authorizers exist only in apigw mode; self mode gets one open route.
+  # jwt_authorizer_issuer/_audiences still override the authorizer on the
+  # shorthand path, so an authorizer can validate against a different
+  # issuer/audiences than the app config (documented escape hatch).
+  jwt_authorizers = var.jwt_validation_mode == "apigw" ? {
+    for k, v in local.issuers_effective : k => {
+      issuer    = var.issuers == null ? coalesce(var.jwt_authorizer_issuer, v.issuer) : v.issuer
+      audiences = var.issuers == null && var.jwt_authorizer_audiences != null ? var.jwt_authorizer_audiences : v.audiences
+      route_key = v.route_key
+    }
+  } : {}
+
   # Rendered application configuration (v2 schema: issuers[] + role_mappings).
   # Unset optional object attributes render as YAML nulls, which the service
   # treats as absent.
   app_config = merge(
     {
-      issuers = [
-        {
-          issuer          = var.issuer
-          provider        = "github"
-          audiences       = var.audiences
-          required_claims = ["repository"]
-          # Standard GitHub session-tag spec (STS tag key <- raw claim name).
-          # NOTE: the `repo` tag carries the full "owner/repo" value in v2.
-          session_tags = {
-            repo       = "repository"
-            repo-owner = "repository_owner"
-            ref        = "ref"
-            ref-type   = "ref_type"
-            actor      = "actor"
-            event-name = "event_name"
-          }
-        }
-      ]
+      issuers = [for k in sort(keys(local.issuers_effective)) : {
+        issuer          = local.issuers_effective[k].issuer
+        provider        = local.issuers_effective[k].provider
+        audiences       = local.issuers_effective[k].audiences
+        required_claims = local.issuers_effective[k].required_claims
+        claim_mappings  = local.issuers_effective[k].claim_mappings
+        jwks_uri        = local.issuers_effective[k].jwks_uri
+        session_tags    = local.issuers_effective[k].session_tags
+      }]
       role_session_name = var.role_session_name
       cache = merge(
         { type = local.cache_type, ttl = var.cache_ttl },
@@ -112,6 +143,30 @@ resource "aws_s3_object" "config" {
       condition     = !(var.enable_waf && var.api_gateway_type != "rest")
       error_message = "enable_waf requires api_gateway_type = 'rest' — AWS WAF cannot attach to HTTP APIs (v2)."
     }
+    precondition {
+      condition     = var.issuers == null || (var.issuer == null && var.audiences == null)
+      error_message = "var.issuers and the singular var.issuer/var.audiences are mutually exclusive — pick one source of truth."
+    }
+    precondition {
+      condition     = var.issuers == null || (var.jwt_authorizer_issuer == null && var.jwt_authorizer_audiences == null)
+      error_message = "jwt_authorizer_issuer/jwt_authorizer_audiences apply only to the singular issuer shorthand; with var.issuers each entry's own issuer/audiences drive its authorizer."
+    }
+    precondition {
+      condition     = var.issuers == null || var.jwt_validation_mode != "apigw" || alltrue([for k, v in var.issuers : v.route_key != null])
+      error_message = "jwt_validation_mode = 'apigw' requires every var.issuers entry to set route_key."
+    }
+    precondition {
+      condition     = var.issuers == null || var.jwt_validation_mode == "apigw" || alltrue([for k, v in var.issuers : v.route_key == null])
+      error_message = "route_key applies only to apigw mode; self mode serves one route on var.route_key."
+    }
+    precondition {
+      condition     = var.issuers == null || length(distinct([for k, v in var.issuers : v.route_key])) == length(var.issuers)
+      error_message = "Each var.issuers entry needs a distinct route_key."
+    }
+    precondition {
+      condition     = var.jwt_validation_mode != "apigw" || length(local.issuers_effective) <= 10
+      error_message = "API Gateway allows at most 10 JWT Authorizers per HTTP API; split across two APIs beyond that."
+    }
   }
 }
 
@@ -159,16 +214,14 @@ module "apigateway" {
   name                 = var.name_prefix
   lambda_invoke_arn    = module.lambda.invoke_arn
   lambda_function_name = module.lambda.function_name
-  # "apigw" mode: use v2 payload format + provision a JWT Authorizer so API GW
-  # validates the token before invoking Lambda (Lambda reads pre-validated claims).
+  # "apigw" mode: v2 payload format + one JWT Authorizer and route per issuer,
+  # so API GW validates the token before invoking Lambda (which then reads the
+  # pre-validated claims and resolves the matching issuer spec).
   payload_format_version = var.jwt_validation_mode == "apigw" ? "2.0" : "1.0"
-  enable_jwt_authorizer  = var.jwt_validation_mode == "apigw"
-  # Authorizer follows the config issuer/audiences unless explicitly overridden,
-  # so the two validation layers cannot drift apart in apigw mode.
-  jwt_authorizer_issuer    = coalesce(var.jwt_authorizer_issuer, var.issuer)
-  jwt_authorizer_audiences = var.jwt_authorizer_audiences != null ? var.jwt_authorizer_audiences : var.audiences
-  throttling_burst_limit   = var.throttling_burst_limit
-  throttling_rate_limit    = var.throttling_rate_limit
+  jwt_authorizers        = local.jwt_authorizers
+  route_key              = var.route_key
+  throttling_burst_limit = var.throttling_burst_limit
+  throttling_rate_limit  = var.throttling_rate_limit
 }
 
 module "apigateway_rest" {

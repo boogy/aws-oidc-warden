@@ -21,14 +21,57 @@ variable "tags" {
 # config.yaml yourself and point AOW_S3_CONFIG_BUCKET/PATH at it.
 variable "issuer" {
   type        = string
-  description = "OIDC issuer URL (rendered as issuers[0].issuer, provider github)."
-  default     = "https://token.actions.githubusercontent.com"
+  description = "OIDC issuer URL (rendered as a single github issuers[] entry). Mutually exclusive with var.issuers. Null uses the GitHub Actions default."
+  default     = null
 }
 
 variable "audiences" {
   type        = list(string)
-  description = "Accepted token audiences (rendered as issuers[0].audiences)."
-  default     = ["sts.amazonaws.com"]
+  description = "Accepted token audiences for var.issuer. Mutually exclusive with var.issuers."
+  default     = null
+}
+
+variable "issuers" {
+  description = <<-EOT
+    Trusted issuers keyed by short name. Drives the rendered app config
+    `issuers[]` and, in apigw mode, one JWT Authorizer + one route per entry.
+    Leave unset to use the singular `issuer`/`audiences` shorthand, which
+    renders a single GitHub Actions issuer (today's behavior).
+
+    `provider` and `session_tags` are required per entry on purpose: inheriting
+    GitHub's defaults for a non-GitHub issuer fails later with a confusing
+    claim-mapping error instead of at plan time.
+
+    `route_key` ("<METHOD> <path>", e.g. "POST /github") is required in apigw
+    mode and must be omitted in self mode, which serves one route on
+    var.route_key.
+  EOT
+  type = map(object({
+    issuer          = string
+    audiences       = list(string)
+    provider        = string
+    session_tags    = map(string)
+    route_key       = optional(string)
+    claim_mappings  = optional(map(string))
+    required_claims = optional(list(string))
+    jwks_uri        = optional(string)
+  }))
+  default = null
+
+  validation {
+    condition     = var.issuers == null ? true : alltrue([for k, v in var.issuers : contains(["github", "generic"], v.provider)])
+    error_message = "Each issuer's provider must be \"github\" or \"generic\"."
+  }
+
+  validation {
+    condition     = var.issuers == null ? true : alltrue([for k, v in var.issuers : length(v.audiences) > 0])
+    error_message = "Each issuer must declare at least one audience."
+  }
+
+  validation {
+    condition     = var.issuers == null ? true : alltrue([for k, v in var.issuers : v.route_key == null || length(split(" ", v.route_key)) == 2])
+    error_message = "route_key must be \"<METHOD> <path>\", e.g. \"POST /github\"."
+  }
 }
 
 variable "role_session_name" {
@@ -86,6 +129,12 @@ variable "cross_account" {
 }
 
 # ---- Endpoint hardening ----
+variable "route_key" {
+  type        = string
+  description = "Route key (\"<METHOD> <path>\") for the single verify route: self mode, and the apigw singular-issuer shorthand."
+  default     = "POST /verify"
+}
+
 variable "api_gateway_type" {
   type        = string
   description = <<-EOT

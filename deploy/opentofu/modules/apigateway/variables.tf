@@ -43,22 +43,19 @@ variable "payload_format_version" {
   default     = "1.0"
 }
 
-variable "enable_jwt_authorizer" {
-  type        = bool
-  description = "Provision an API Gateway JWT Authorizer (jwt_validation_mode = 'apigw'). Requires payload_format_version = '2.0'."
-  default     = false
-}
-
-variable "jwt_authorizer_issuer" {
-  type        = string
-  description = "OIDC issuer URL for the JWT Authorizer."
-  default     = "https://token.actions.githubusercontent.com"
-}
-
-variable "jwt_authorizer_audiences" {
-  type        = list(string)
-  description = "Accepted audiences for the JWT Authorizer."
-  default     = ["sts.amazonaws.com"]
+variable "jwt_authorizers" {
+  description = <<-EOT
+    JWT Authorizers to provision, keyed by short issuer name. Each entry gets
+    its own authorizer and its own route pointing at the shared Lambda
+    integration. Empty (the default) means self mode: one open route on
+    var.route_key, with the Lambda doing full validation.
+  EOT
+  type = map(object({
+    issuer    = string
+    audiences = list(string)
+    route_key = string
+  }))
+  default = {}
 }
 
 variable "tags" {
