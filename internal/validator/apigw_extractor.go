@@ -26,11 +26,11 @@ type APIGWExtractor struct {
 	provider *config.Provider
 }
 
-// NewAPIGWExtractor creates an APIGWExtractor for the delegated "apigw"
-// mode's single configured issuer. provider is read on every Extract() call
-// (via resolveDelegatedSpec), so a hot-reloaded audiences/claim_mappings/
-// required_claims/jwt_leeway change takes effect without a restart, matching
-// self mode.
+// NewAPIGWExtractor creates an APIGWExtractor over the configured issuers.
+// provider is read on every Extract() call (and the spec is resolved per
+// request from the verified iss), so a hot-reloaded issuer set, audiences,
+// claim_mappings, required_claims or jwt_leeway change takes effect without a
+// restart, matching self mode.
 func NewAPIGWExtractor(provider *config.Provider) *APIGWExtractor {
 	return &APIGWExtractor{provider: provider}
 }
@@ -48,16 +48,21 @@ func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*typ
 	}
 
 	cfg := a.provider.Get()
-	spec, bounds, err := resolveDelegatedSpec(cfg)
+
+	// Resolve the spec from the issuer the upstream verified. API Gateway
+	// forwards authorizer claims only after checking the signature AND an
+	// exact issuer match against that route's authorizer, so iss here is
+	// upstream-verified rather than self-asserted — the same property self
+	// mode gets from verifying the signature locally. An iss with no config
+	// entry is denied outright, never resolved to another issuer's spec, so a
+	// reused or misconfigured authorizer fails closed.
+	iss, err := raw.GetIssuer()
+	if err != nil || iss == "" {
+		return nil, fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
+	}
+	spec, bounds, err := resolveIssuerSpec(cfg, iss)
 	if err != nil {
 		return nil, err
-	}
-
-	// Re-validate issuer — guards against a reused or misconfigured JWT
-	// Authorizer, and against a token from a different, unconfigured issuer.
-	iss, err := raw.GetIssuer()
-	if err != nil || iss != spec.Issuer {
-		return nil, fmt.Errorf("iss mismatch: got %q, want %q", iss, spec.Issuer)
 	}
 
 	return checkAndNormalizeClaims(raw, spec, bounds, time.Now())
