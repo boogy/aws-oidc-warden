@@ -55,36 +55,38 @@ locals {
   } : {}
 
   # Rendered application configuration (v2 schema: issuers[] + role_mappings).
-  # Unset optional object attributes render as YAML nulls, which the service
-  # treats as absent.
-  app_config = merge(
-    {
-      issuers = [for k in sort(keys(local.issuers_effective)) : {
-        issuer          = local.issuers_effective[k].issuer
-        provider        = local.issuers_effective[k].provider
-        audiences       = local.issuers_effective[k].audiences
-        required_claims = local.issuers_effective[k].required_claims
-        claim_mappings  = local.issuers_effective[k].claim_mappings
-        jwks_uri        = local.issuers_effective[k].jwks_uri
-        session_tags    = local.issuers_effective[k].session_tags
-      }]
-      role_session_name = var.role_session_name
-      cache = merge(
-        { type = local.cache_type, ttl = var.cache_ttl },
-        var.enable_dynamodb_cache ? { dynamodb_table = local.cache_table_name } : {},
-        var.enable_s3_cache ? { s3_bucket = local.cache_bucket_name, s3_prefix = "jwks/" } : {},
-      )
-      role_mappings = var.role_mappings
-    },
-    var.enable_s3_logs ? { log_to_s3 = true, log_bucket = local.log_bucket_name, log_prefix = "audit/" } : {},
-    var.enable_session_policy_bucket ? { session_policy_bucket = local.session_policy_bucket_name } : {},
-    var.tag_auth.enabled ? { tag_auth = var.tag_auth } : {},
-    var.cross_account.enabled ? { cross_account = var.cross_account } : {},
-    # Render jwt_validation block only when not using the default "self" mode.
-    var.jwt_validation_mode != "self" ? {
-      jwt_validation = { mode = var.jwt_validation_mode }
-    } : {},
-  )
+  # Every key is unconditional so both branches of every ternary share the
+  # same type (avoids e.g. log_to_s3 coercing to the string "true"); disabled
+  # features render explicit nulls/false, which the service treats as absent.
+  app_config = {
+    issuers = [for k in sort(keys(local.issuers_effective)) : {
+      issuer          = local.issuers_effective[k].issuer
+      provider        = local.issuers_effective[k].provider
+      audiences       = local.issuers_effective[k].audiences
+      required_claims = local.issuers_effective[k].required_claims
+      claim_mappings  = local.issuers_effective[k].claim_mappings
+      jwks_uri        = local.issuers_effective[k].jwks_uri
+      session_tags    = local.issuers_effective[k].session_tags
+    }]
+    role_session_name = var.role_session_name
+    role_mappings     = var.role_mappings
+    cache = {
+      type           = local.cache_type
+      ttl            = var.cache_ttl
+      dynamodb_table = var.enable_dynamodb_cache ? local.cache_table_name : null
+      s3_bucket      = var.enable_s3_cache ? local.cache_bucket_name : null
+      s3_prefix      = var.enable_s3_cache ? "jwks/" : null
+    }
+    log_to_s3             = var.enable_s3_logs
+    log_bucket            = var.enable_s3_logs ? local.log_bucket_name : null
+    log_prefix            = var.enable_s3_logs ? "audit/" : null
+    session_policy_bucket = var.enable_session_policy_bucket ? local.session_policy_bucket_name : null
+    tag_auth              = var.tag_auth
+    cross_account         = var.cross_account
+    jwt_validation        = { mode = var.jwt_validation_mode }
+  }
+
+  rendered_config = templatefile("${path.module}/templates/config.yaml.tftpl", { cfg = local.app_config })
 }
 
 # ---- Buckets ----
@@ -127,7 +129,7 @@ module "dynamodb" {
 resource "aws_s3_object" "config" {
   bucket       = module.config_bucket.bucket_id
   key          = local.config_key
-  content      = yamlencode(local.app_config)
+  content      = local.rendered_config
   content_type = "application/x-yaml"
 
   lifecycle {
@@ -166,6 +168,10 @@ resource "aws_s3_object" "config" {
     precondition {
       condition     = var.jwt_validation_mode != "apigw" || length(local.issuers_effective) <= 10
       error_message = "API Gateway allows at most 10 JWT Authorizers per HTTP API; split across two APIs beyond that."
+    }
+    precondition {
+      condition     = jsonencode(yamldecode(local.rendered_config)) == jsonencode(local.app_config)
+      error_message = "Rendered config.yaml does not round-trip to local.app_config — templates/config.yaml.tftpl has drifted from the config structure."
     }
   }
 }

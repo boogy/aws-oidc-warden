@@ -1,0 +1,89 @@
+# Managed by OpenTofu — do not edit by hand.
+role_session_name: "${cfg.role_session_name}"
+
+issuers:
+%{ for iss in cfg.issuers ~}
+  - issuer: "${iss.issuer}"
+    provider: "${iss.provider}"
+    audiences:
+%{ for a in iss.audiences ~}
+      - "${a}"
+%{ endfor ~}
+    required_claims: ${iss.required_claims == null ? "null" : (length(iss.required_claims) == 0 ? "[]" : "")}
+%{ if iss.required_claims != null ~}
+%{ for c in iss.required_claims ~}
+      - "${c}"
+%{ endfor ~}
+%{ endif ~}
+    claim_mappings: ${iss.claim_mappings == null ? "null" : (length(iss.claim_mappings) == 0 ? "{}" : "")}
+%{ if iss.claim_mappings != null ~}
+%{ for k in sort(keys(iss.claim_mappings)) ~}
+      ${k}: "${iss.claim_mappings[k]}"
+%{ endfor ~}
+%{ endif ~}
+    jwks_uri: ${iss.jwks_uri == null ? "null" : "\"${iss.jwks_uri}\""}
+    session_tags:
+%{ for k in sort(keys(iss.session_tags)) ~}
+      ${k}: "${iss.session_tags[k]}"
+%{ endfor ~}
+%{ endfor ~}
+
+cache:
+  type: "${cfg.cache.type}"
+  ttl: "${cfg.cache.ttl}"
+  dynamodb_table: ${cfg.cache.dynamodb_table == null ? "null" : "\"${cfg.cache.dynamodb_table}\""}
+  s3_bucket: ${cfg.cache.s3_bucket == null ? "null" : "\"${cfg.cache.s3_bucket}\""}
+  s3_prefix: ${cfg.cache.s3_prefix == null ? "null" : "\"${cfg.cache.s3_prefix}\""}
+
+jwt_validation:
+  mode: "${cfg.jwt_validation.mode}"
+
+log_to_s3: ${cfg.log_to_s3}
+log_bucket: ${cfg.log_bucket == null ? "null" : "\"${cfg.log_bucket}\""}
+log_prefix: ${cfg.log_prefix == null ? "null" : "\"${cfg.log_prefix}\""}
+session_policy_bucket: ${cfg.session_policy_bucket == null ? "null" : "\"${cfg.session_policy_bucket}\""}
+
+tag_auth:
+  enabled: ${cfg.tag_auth.enabled}
+  tag_prefix: "${cfg.tag_auth.tag_prefix}"
+  default_org: ${cfg.tag_auth.default_org == null ? "null" : "\"${cfg.tag_auth.default_org}\""}
+  transitive_session_tags: ${cfg.tag_auth.transitive_session_tags}
+
+cross_account:
+  enabled: ${cfg.cross_account.enabled}
+  spoke_role_name: "${cfg.cross_account.spoke_role_name}"
+  external_id: ${cfg.cross_account.external_id == null ? "null" : "\"${cfg.cross_account.external_id}\""}
+  spoke_session_duration: "${cfg.cross_account.spoke_session_duration}"
+  allowed_accounts: ${length(cfg.cross_account.allowed_accounts) == 0 ? "[]" : ""}
+%{ for acct in cfg.cross_account.allowed_accounts ~}
+    - "${acct}"
+%{ endfor ~}
+
+role_mappings: ${length(cfg.role_mappings) == 0 ? "[]" : ""}
+%{ for m in cfg.role_mappings ~}
+  - subject: "${m.subject}"
+    roles:
+%{ for r in m.roles ~}
+      - "${r}"
+%{ endfor ~}
+    session_policy: ${m.session_policy == null ? "null" : "|-"}
+%{ if m.session_policy != null ~}
+      ${indent(6, m.session_policy)}
+%{ endif ~}
+    session_policy_file: ${m.session_policy_file == null ? "null" : "\"${m.session_policy_file}\""}
+    conditions: ${m.conditions == null ? "null" : ""}
+%{ if m.conditions != null ~}
+      branch: ${m.conditions.branch == null ? "null" : "\"${m.conditions.branch}\""}
+      ref: ${m.conditions.ref == null ? "null" : "\"${m.conditions.ref}\""}
+      ref_type: ${m.conditions.ref_type == null ? "null" : "\"${m.conditions.ref_type}\""}
+      event_name: ${m.conditions.event_name == null ? "null" : "\"${m.conditions.event_name}\""}
+      workflow_ref: ${m.conditions.workflow_ref == null ? "null" : "\"${m.conditions.workflow_ref}\""}
+      environment: ${m.conditions.environment == null ? "null" : "\"${m.conditions.environment}\""}
+      actor_matches: ${m.conditions.actor_matches == null ? "null" : (length(m.conditions.actor_matches) == 0 ? "[]" : "")}
+%{ if m.conditions.actor_matches != null ~}
+%{ for a in m.conditions.actor_matches ~}
+        - "${a}"
+%{ endfor ~}
+%{ endif ~}
+%{ endif ~}
+%{ endfor ~}
