@@ -158,15 +158,17 @@ func NewBootstrap() (*Bootstrap, error) {
 
 // newClaimsExtractor creates the appropriate ClaimsExtractorInterface based on
 // the configured mode. Delegated modes ("apigw"/"alb") trust an upstream that
-// has already verified the token's signature against a single issuer, so v2's
-// multi-issuer registry only applies to "self" mode: a delegated mode
-// requires exactly one configured issuer at startup (checked here as a
-// fail-fast), whose full spec (audiences, claim_mappings, required_claims)
-// plus the same jwt_leeway/max_token_lifetime/max_token_age bounds self mode
-// enforces are used for defense-in-depth re-validation of the pre-validated
-// claims. The delegated extractors themselves read
-// provider live on every Extract() call, so a later hot-reload is not
-// frozen at this startup check.
+// has already verified the token's signature, and use the matched issuer's
+// full spec (audiences, claim_mappings, required_claims) plus the same
+// jwt_leeway/max_token_lifetime/max_token_age bounds self mode enforces for
+// defense-in-depth re-validation of the pre-validated claims.
+//
+// The two delegated modes differ in issuer cardinality. "apigw" supports many:
+// an HTTP API can carry one JWT Authorizer per route, each pinned to its own
+// issuer, so the extractor resolves the spec per request from the verified
+// iss. "alb" trusts a single OIDC IdP, so a multi-issuer config is ambiguous
+// there and is rejected as a fail-fast. Both extractors read provider live on
+// every Extract() call, so a later hot-reload is not frozen at startup.
 func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
 	cfg := provider.Get()
 	mode := cfg.JWTValidation.Mode
@@ -174,9 +176,9 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 	case "self", "":
 		return validator.NewSelfExtractor(v), nil
 	case "apigw":
-		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
-			return nil, err
-		}
+		// No single-issuer check: each route's JWT Authorizer pins its own
+		// issuer and forwards the verified iss, so the extractor resolves the
+		// matching spec per request.
 		return validator.NewAPIGWExtractor(provider), nil
 	case "alb":
 		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
