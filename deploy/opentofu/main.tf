@@ -160,7 +160,7 @@ resource "aws_s3_object" "config" {
       error_message = "route_key applies only to apigw mode; self mode serves one route on var.route_key."
     }
     precondition {
-      condition     = var.issuers == null || length(distinct([for k, v in var.issuers : v.route_key])) == length(var.issuers)
+      condition     = var.issuers == null || var.jwt_validation_mode != "apigw" || length(distinct([for k, v in var.issuers : v.route_key])) == length(var.issuers)
       error_message = "Each var.issuers entry needs a distinct route_key."
     }
     precondition {

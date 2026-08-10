@@ -72,6 +72,11 @@ variable "issuers" {
     condition     = var.issuers == null ? true : alltrue([for k, v in var.issuers : v.route_key == null || length(split(" ", v.route_key)) == 2])
     error_message = "route_key must be \"<METHOD> <path>\", e.g. \"POST /github\"."
   }
+
+  validation {
+    condition     = var.issuers == null ? true : alltrue([for k, v in var.issuers : v.provider != "generic" || try(v.claim_mappings["subject"], "") != ""])
+    error_message = "Each \"generic\" issuer must set claim_mappings.subject — the service requires it at boot for non-github issuers."
+  }
 }
 
 variable "role_session_name" {
