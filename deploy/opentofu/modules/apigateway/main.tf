@@ -12,30 +12,57 @@ resource "aws_apigatewayv2_integration" "this" {
   payload_format_version = var.payload_format_version
 }
 
-# JWT Authorizer: provisioned only when jwt_validation_mode = "apigw".
-# API Gateway validates the JWT against the issuer JWKS before invoking Lambda;
-# claims arrive in event.requestContext.authorizer.jwt.claims (format 2.0).
+# JWT Authorizers: one per configured issuer, provisioned only in apigw mode.
+# API Gateway validates the JWT against the issuer's JWKS before invoking
+# Lambda; claims arrive in event.requestContext.authorizer.jwt.claims (format
+# 2.0). AWS allows at most 10 authorizers per HTTP API — the root module
+# enforces that as a precondition.
 resource "aws_apigatewayv2_authorizer" "jwt" {
-  count            = var.enable_jwt_authorizer ? 1 : 0
+  for_each = var.jwt_authorizers
+
   api_id           = aws_apigatewayv2_api.this.id
   authorizer_type  = "JWT"
   identity_sources = ["$request.header.Authorization"]
-  name             = "${var.name}-jwt"
+  name             = "${var.name}-${each.key}"
 
   jwt_configuration {
-    audience = var.jwt_authorizer_audiences
-    issuer   = var.jwt_authorizer_issuer
+    audience = each.value.audiences
+    issuer   = each.value.issuer
   }
 }
 
-resource "aws_apigatewayv2_route" "this" {
+# apigw mode: one route per issuer, each pinned to that issuer's authorizer.
+# A token presented to another issuer's route is rejected by API Gateway
+# before the Lambda is invoked.
+resource "aws_apigatewayv2_route" "jwt" {
+  for_each = var.jwt_authorizers
+
+  api_id    = aws_apigatewayv2_api.this.id
+  route_key = each.value.route_key
+  target    = "integrations/${aws_apigatewayv2_integration.this.id}"
+
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.jwt[each.key].id
+}
+
+# self mode: a single open route — the Lambda validates signatures itself and
+# is multi-issuer aware, so no per-issuer split is needed.
+resource "aws_apigatewayv2_route" "open" {
+  count = length(var.jwt_authorizers) == 0 ? 1 : 0
+
   api_id    = aws_apigatewayv2_api.this.id
   route_key = var.route_key
   target    = "integrations/${aws_apigatewayv2_integration.this.id}"
 
-  # Attach JWT authorizer when provisioned; NONE otherwise (Lambda does self-validation).
-  authorization_type = var.enable_jwt_authorizer ? "JWT" : "NONE"
-  authorizer_id      = var.enable_jwt_authorizer ? aws_apigatewayv2_authorizer.jwt[0].id : null
+  authorization_type = "NONE"
+}
+
+# Existing self-mode deployments carry this route at the old address. apigw
+# deployments need `tofu state mv` instead (see deploy/opentofu/README.md) —
+# a moved block is static and cannot cover both target addresses.
+moved {
+  from = aws_apigatewayv2_route.this
+  to   = aws_apigatewayv2_route.open[0]
 }
 
 resource "aws_apigatewayv2_stage" "this" {

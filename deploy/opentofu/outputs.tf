@@ -1,6 +1,11 @@
 output "api_endpoint" {
-  description = "POST this URL with {\"token\":\"...\",\"role\":\"...\"}."
-  value       = coalesce(one(module.apigateway[*].api_endpoint), one(module.apigateway_rest[*].api_endpoint))
+  description = "POST this URL with {\"token\":\"...\",\"role\":\"...\"}. Null in apigw mode — see route_endpoints."
+  value       = try(coalesce(one(module.apigateway[*].api_endpoint), one(module.apigateway_rest[*].api_endpoint)), null)
+}
+
+output "route_endpoints" {
+  description = "Per-issuer invoke URLs in apigw mode, keyed by issuer name; empty otherwise."
+  value       = one(module.apigateway[*].route_endpoints) != null ? one(module.apigateway[*].route_endpoints) : {}
 }
 
 output "waf_web_acl_arn" {
