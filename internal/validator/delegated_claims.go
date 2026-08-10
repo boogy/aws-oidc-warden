@@ -106,11 +106,42 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 // resolveDelegatedSpec returns the sole configured issuer's spec plus the live
 // time bounds for a delegated mode, from the current config. Fails closed if
 // the config is not exactly one issuer (matches the bootstrap fail-fast).
+//
+// Used by alb mode only: an ALB has exactly one OIDC IdP, so a multi-issuer
+// config is genuinely ambiguous there. apigw mode resolves per request via
+// resolveIssuerSpec instead, because each route's JWT authorizer pins its own
+// issuer and forwards the verified iss.
 func resolveDelegatedSpec(cfg *config.Config) (*issuerSpec, claimBounds, error) {
 	if len(cfg.Issuers) != 1 {
 		return nil, claimBounds{}, fmt.Errorf("delegated jwt_validation mode requires exactly one configured issuer, got %d", len(cfg.Issuers))
 	}
-	spec := newIssuerSpec(&cfg.Issuers[0])
-	b := claimBounds{leeway: cfg.LeewayOrDefault(), maxLifetime: cfg.MaxTokenLifetime, maxAge: cfg.MaxTokenAge}
-	return spec, b, nil
+	return newIssuerSpec(&cfg.Issuers[0]), boundsFrom(cfg), nil
+}
+
+// resolveIssuerSpec returns the spec for the exact issuer iss, plus the live
+// time bounds. Exact match only — no normalization, mirroring buildSnapshot's
+// registry keying and config.Validate's duplicate-issuer check. An issuer with
+// no config entry is denied with ErrUnknownIssuer rather than falling back to
+// any other issuer's spec.
+//
+// A linear scan is deliberate: issuer counts are in the single digits (API
+// Gateway allows at most 10 authorizers per HTTP API), so a map built per
+// request would cost more than it saves.
+func resolveIssuerSpec(cfg *config.Config, iss string) (*issuerSpec, claimBounds, error) {
+	for i := range cfg.Issuers {
+		if cfg.Issuers[i].Issuer == iss {
+			return newIssuerSpec(&cfg.Issuers[i]), boundsFrom(cfg), nil
+		}
+	}
+	return nil, claimBounds{}, fmt.Errorf("%w: %q", ErrUnknownIssuer, iss)
+}
+
+// boundsFrom reads the time-bound knobs live from cfg, so a hot-reloaded
+// jwt_leeway/max_token_lifetime/max_token_age applies without a restart.
+func boundsFrom(cfg *config.Config) claimBounds {
+	return claimBounds{
+		leeway:      cfg.LeewayOrDefault(),
+		maxLifetime: cfg.MaxTokenLifetime,
+		maxAge:      cfg.MaxTokenAge,
+	}
 }
