@@ -68,10 +68,12 @@ moved {
 # A `moved` block is static and cannot target an arbitrary map key, so a
 # for_each migration needs a manual `tofu state mv` per resource before the
 # first apply against this version, e.g. (where "github" is the map key the
-# operator chose for that issuer in var.jwt_authorizers / var.issuers):
+# operator chose for that issuer in var.jwt_authorizers / var.issuers; the
+# leading [0] is the root module's `count` on this module call, not part of
+# the for_each migration):
 #
-#   tofu state mv 'module.apigateway.aws_apigatewayv2_authorizer.jwt[0]' 'module.apigateway.aws_apigatewayv2_authorizer.jwt["github"]'
-#   tofu state mv 'module.apigateway.aws_apigatewayv2_route.this' 'module.apigateway.aws_apigatewayv2_route.jwt["github"]'
+#   tofu state mv 'module.apigateway[0].aws_apigatewayv2_authorizer.jwt[0]' 'module.apigateway[0].aws_apigatewayv2_authorizer.jwt["github"]'
+#   tofu state mv 'module.apigateway[0].aws_apigatewayv2_route.this' 'module.apigateway[0].aws_apigatewayv2_route.jwt["github"]'
 #
 # Without these moves, the plan destroys the old authorizer/route and creates
 # new ones — a replacement, not a rename in place.
