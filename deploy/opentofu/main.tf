@@ -46,12 +46,17 @@ locals {
   # jwt_authorizer_issuer/_audiences still override the authorizer on the
   # shorthand path, so an authorizer can validate against a different
   # issuer/audiences than the app config (documented escape hatch).
+  # Entries missing route_key are filtered out rather than passed through:
+  # the "requires route_key" precondition on aws_s3_object.config is what
+  # rejects that misconfiguration (blocking apply), so this filter exists
+  # only to keep a bad entry from reaching modules/apigateway's route_key
+  # string interpolation, which has no null guard.
   jwt_authorizers = var.jwt_validation_mode == "apigw" ? {
     for k, v in local.issuers_effective : k => {
       issuer    = var.issuers == null ? coalesce(var.jwt_authorizer_issuer, v.issuer) : v.issuer
       audiences = var.issuers == null && var.jwt_authorizer_audiences != null ? var.jwt_authorizer_audiences : v.audiences
       route_key = v.route_key
-    }
+    } if v.route_key != null
   } : {}
 
   # Rendered application configuration (v2 schema: issuers[] + role_mappings).
