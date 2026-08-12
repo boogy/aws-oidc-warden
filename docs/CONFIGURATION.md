@@ -232,7 +232,7 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 | `AOW_JWT_VALIDATION_MODE`                | `jwt_validation.mode`                | JWT validation mode (`"self"`, `"apigw"`, or `"alb"`)                                 | `"self"`                                    |
 | `AOW_JWT_VALIDATION_ALB_EXPECTED_SIGNER` | `jwt_validation.alb_expected_signer` | ARN of the trusted ALB; **required** in ALB mode to prevent cross-ALB token injection | (empty, startup fails if unset in alb mode) |
 
-> **Multi-issuer restriction**: `apigw` and `alb` modes trust an upstream that has already verified the token against a single issuer, so both modes require **exactly one** entry in `issuers` — `NewBootstrap()` fails at cold start otherwise (`jwt_validation.mode %q supports exactly one configured issuer, got %d`). Multi-issuer configs are `self`-mode only. See [MULTI_ISSUER.md](MULTI_ISSUER.md#delegated-modes-are-single-issuer-only).
+> **Multi-issuer restriction**: `alb` mode trusts an upstream (ALB OIDC) that has already verified the token against a single issuer, so it requires **exactly one** entry in `issuers` — `NewBootstrap()` fails at cold start otherwise (`jwt_validation.mode %q supports exactly one configured issuer, got %d`). `apigw` mode has no such restriction: each route's JWT Authorizer pins its own issuer, and `APIGWExtractor` resolves the matching `issuers` entry per request from the authorizer-verified `iss` claim, so `issuers` may hold any number of entries in `apigw` mode. See [MULTI_ISSUER.md](MULTI_ISSUER.md#alb-mode-is-single-issuer-only).
 
 > **Trust boundary warning**: in `apigw` mode, `lambda:InvokeFunction` on this
 > function is equivalent to full identity impersonation — the service trusts

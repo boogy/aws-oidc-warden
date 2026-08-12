@@ -86,7 +86,7 @@ Populate only the `ExtractionInput` fields relevant to the configured mode:
 **Implementations:**
 
 - `SelfExtractor` — default; wraps `TokenValidatorInterface.Validate()`. Full JWKS signature + claims verification, multi-issuer aware.
-- `APIGWExtractor` — reads pre-validated `map[string]string` claims from API Gateway HTTP API v2 JWT Authorizer. Rejects if `AuthorizerClaims` is nil (bypass guard). No signature verification.
+- `APIGWExtractor` — reads pre-validated `map[string]string` claims from API Gateway HTTP API v2 JWT Authorizer. Rejects if `AuthorizerClaims` is nil (bypass guard). No signature verification. Resolves the matching issuer spec per request by exact match against the authorizer-verified `iss` claim (`resolveIssuerSpec`); an issuer with no config entry fails closed with `ErrUnknownIssuer` rather than falling back to another issuer's spec.
 - `ALBExtractor` — fetches ALB EC public key via HTTPS, verifies ES256 JWT from `x-amzn-oidc-data`. Validates the `ALBExpectedSigner` ARN (required in `alb` mode by `config.Validate()`). Use `WithALBKeyEndpoint` to override in tests. Caches keys for 5 minutes to avoid per-request latency.
 
-The factory `newClaimsExtractor(provider, validator)` in `bootstrap.go` selects the implementation from `cfg.JWTValidation.Mode` (delegated modes additionally require exactly one configured issuer at cold start).
+The factory `newClaimsExtractor(provider, validator)` in `bootstrap.go` selects the implementation from `cfg.JWTValidation.Mode`. Only `alb` mode additionally requires exactly one configured issuer at cold start (`singleDelegatedIssuer`) — an ALB has exactly one OIDC IdP, so a multi-issuer config is genuinely ambiguous there. `apigw` mode has no such restriction: each route's JWT Authorizer pins its own issuer, so `APIGWExtractor` resolves the spec per request instead of at cold start.

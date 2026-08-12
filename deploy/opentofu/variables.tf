@@ -16,9 +16,10 @@ variable "tags" {
 }
 
 # ---- Application config (rendered into config.yaml) ----
-# This stack renders a single GitHub Actions issuer entry into the v2
-# `issuers[]` list. For multi-issuer or non-GitHub providers, manage
-# config.yaml yourself and point AOW_S3_CONFIG_BUCKET/PATH at it.
+# By default this stack renders a single GitHub Actions issuer entry into the
+# v2 `issuers[]` list. For multiple issuers or non-GitHub providers, set
+# var.issuers instead — the module renders its config.yaml too, no hand
+# management needed.
 variable "issuer" {
   type        = string
   description = "OIDC issuer URL (rendered as a single github issuers[] entry). Mutually exclusive with var.issuers. Null uses the GitHub Actions default."
