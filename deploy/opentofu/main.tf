@@ -92,6 +92,26 @@ locals {
   }
 
   rendered_config = templatefile("${path.module}/templates/config.yaml.tftpl", { cfg = local.app_config })
+
+  # The drift precondition below compares local.app_config against a
+  # yamldecode() of local.rendered_config. session_policy is exempt from that
+  # comparison's trailing-whitespace sensitivity: the template's `|-` block
+  # scalar strips all trailing newlines on decode, but a heredoc-sourced
+  # policy always ends in one, so an unnormalized compare would report
+  # spurious drift on semantically identical content. trimspace() (not
+  # trimsuffix, which only strips a single newline) normalizes both sides;
+  # every other field is still compared byte-for-byte.
+  rendered_config_decoded = yamldecode(local.rendered_config)
+  app_config_for_drift_check = merge(local.app_config, {
+    role_mappings = [for m in local.app_config.role_mappings : merge(m, {
+      session_policy = m.session_policy == null ? null : trimspace(m.session_policy)
+    })]
+  })
+  rendered_config_decoded_for_drift_check = merge(local.rendered_config_decoded, {
+    role_mappings = [for m in local.rendered_config_decoded.role_mappings : merge(m, {
+      session_policy = m.session_policy == null ? null : trimspace(m.session_policy)
+    })]
+  })
 }
 
 # ---- Buckets ----
@@ -175,7 +195,7 @@ resource "aws_s3_object" "config" {
       error_message = "API Gateway allows at most 10 JWT Authorizers per HTTP API; split across two APIs beyond that."
     }
     precondition {
-      condition     = jsonencode(yamldecode(local.rendered_config)) == jsonencode(local.app_config)
+      condition     = jsonencode(local.rendered_config_decoded_for_drift_check) == jsonencode(local.app_config_for_drift_check)
       error_message = "Rendered config.yaml does not round-trip to local.app_config — templates/config.yaml.tftpl has drifted from the config structure."
     }
   }

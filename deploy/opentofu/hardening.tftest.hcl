@@ -300,3 +300,29 @@ run "self_mode_single_open_route" {
     error_message = "Self mode must serve the single verify route."
   }
 }
+
+# (l) Regression guard: a heredoc-sourced session_policy always ends in a
+# newline, which the template's `|-` block scalar strips on decode. The drift
+# precondition must tolerate that (session_policy trailing whitespace is the
+# only exemption in the comparison) instead of failing the plan on
+# semantically identical content.
+run "session_policy_heredoc_trailing_newline" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject        = "myorg/myrepo"
+        roles          = ["arn:aws:iam::111122223333:role/deploy"]
+        session_policy = <<-EOT
+          {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}
+        EOT
+      }
+    ]
+  }
+
+  assert {
+    condition     = length(yamldecode(aws_s3_object.config.content).role_mappings) == 1
+    error_message = "The rendered config must include the heredoc-sourced role mapping despite its trailing-newline session_policy."
+  }
+}
