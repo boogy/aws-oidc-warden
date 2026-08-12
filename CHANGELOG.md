@@ -5,9 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.0] - 2026-08-12
 
-OpenTofu deployment stack: multi-issuer support in `apigw` mode.
+Multi-issuer support in `apigw` validation mode, end to end. The service now
+resolves the issuer per request from the JWT Authorizer's verified `iss` claim
+instead of requiring exactly one configured issuer, and the OpenTofu stack
+provisions one authorizer and one route per issuer on a single API Gateway.
+`alb` mode is unchanged and still requires exactly one issuer — an ALB has one
+OIDC IdP, so a multi-issuer config is genuinely ambiguous there.
+
+Existing single-issuer deployments are unaffected at the config level: the
+singular `issuer`/`audiences` shorthand still works and existing configs boot
+unchanged. Existing **`apigw`** OpenTofu deployments need a one-time state
+migration before the first apply — see Breaking Changes.
 
 ### Added
 
@@ -123,6 +133,20 @@ OpenTofu deployment stack: multi-issuer support in `apigw` mode.
   See the "Upgrading" section of [deploy/opentofu/README.md](deploy/opentofu/README.md)
   for the exact commands. Self-mode deploys need no action — a `moved` block
   handles that migration automatically.
+- **CloudFormation `apigw` deploys where `JWTAuthorizerIssuer` diverges from
+  the uploaded `config.yaml`'s issuer now 401 every request instead of
+  working.** Before this release, `apigw` mode resolved the sole configured
+  issuer's spec regardless of the token's `iss`, so a mismatched
+  `JWTAuthorizerIssuer` still worked; `resolveIssuerSpec`
+  (`internal/validator/delegated_claims.go`) now requires an exact match, so
+  a divergent value means every request fails with `ErrUnknownIssuer`. The
+  CloudFormation template cannot detect this at deploy time (it never sees
+  inside the uploaded `config.yaml`), so the stack creates and deploys fine
+  and the break surfaces only as 401s at request time. Affects only
+  CloudFormation `apigw` deploys whose `JWTAuthorizerIssuer` parameter
+  doesn't match their `issuers[].issuer`; verify the two match before
+  upgrading. `JWTAuthorizerIssuer`'s parameter description and
+  [deploy/README.md](deploy/README.md) now say so explicitly.
 - **A remote config payload with `issuers: null` now fails to boot instead of
   silently trusting the GitHub Actions issuer.** `MergeBytes`'s replace-the-
   seed guard used `v.InConfig("issuers")`, which returns `false` for an
@@ -133,6 +157,16 @@ OpenTofu deployment stack: multi-issuer support in `apigw` mode.
   required" check applies. Unreachable from this Terraform stack (which
   emits `[]`, never `null`); only a hand-written or non-Terraform S3 config
   could hit it.
+
+### Changed
+
+- **Dependencies** — AWS SDK for Go v2 patch bumps across the board
+  (`aws-sdk-go-v2` 1.43.4 → 1.43.5, `config` 1.32.35 → 1.32.36, `credentials`
+  1.19.34 → 1.19.35, `dynamodb` 1.63.1 → 1.63.2, `iam` 1.58.1 → 1.58.2, `s3`
+  1.106.5 → 1.107.1, `sts` 1.45.4 → 1.45.5, `smithy-go` 1.27.6 → 1.27.7, plus
+  the transitive `internal/*` modules), and `golang.org/x/text` 0.40.0 →
+  0.41.0. No API changes; `go mod verify`, `govulncheck` and the full test
+  suite pass unchanged.
 
 ## [2.2.2] - 2026-08-06
 
@@ -900,6 +934,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.1.1...v2.2.0
