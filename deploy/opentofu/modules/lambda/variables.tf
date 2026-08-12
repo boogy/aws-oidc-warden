@@ -25,6 +25,17 @@ variable "expected_variant" {
   EOT
 }
 
+variable "check_variant" {
+  type        = bool
+  description = <<-EOT
+    Enforce the expected_variant precondition. Callers should leave this at
+    the default true; the root module's var.check_lambda_variant exists
+    only so hardening.tftest.hcl can turn it off for itself, since that
+    suite plans multiple jwt_validation_mode values against one build/marker.
+  EOT
+  default     = true
+}
+
 variable "architecture" {
   type        = string
   description = "Lambda architecture: arm64 or x86_64."

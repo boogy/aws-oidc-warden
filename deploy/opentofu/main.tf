@@ -243,6 +243,7 @@ module "lambda" {
   role_arn             = module.iam.role_arn
   zip_path             = "${path.module}/dist/function.zip"
   expected_variant     = var.jwt_validation_mode == "apigw" ? "apigatewayv2" : "apigateway"
+  check_variant        = var.check_lambda_variant
   architecture         = var.lambda_architecture
   memory_size          = var.lambda_memory_size
   timeout              = var.lambda_timeout

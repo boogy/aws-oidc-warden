@@ -31,7 +31,15 @@ resource "aws_lambda_function" "this" {
       error_message = "Deployment zip not found (modules/lambda var.zip_path). Run deploy/opentofu/build.sh first — 'build.sh' for self mode, 'build.sh apigatewayv2' for apigw mode."
     }
     precondition {
-      condition     = local.actual_variant == null || local.actual_variant == var.expected_variant
+      # var.check_variant defaults to true for every real deployment.
+      # hardening.tftest.hcl sets the root var.check_lambda_variant (and so
+      # this) to false: that suite plans multiple jwt_validation_mode values
+      # against one build/marker, so a single expected_variant can never
+      # match every run — the guard is structurally untestable there, not
+      # weakened for a real deploy. (Manually verified instead: write
+      # dist/variant with the wrong variant, plan in the mismatched mode,
+      # observe this precondition's error.)
+      condition     = !var.check_variant || local.actual_variant == null || local.actual_variant == var.expected_variant
       error_message = "Packaged Lambda binary variant (${coalesce(local.actual_variant, "unknown")}) does not match the variant jwt_validation_mode requires (${var.expected_variant}). Rebuild with 'deploy/opentofu/build.sh ${var.expected_variant}'."
     }
   }
