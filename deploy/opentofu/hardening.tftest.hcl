@@ -494,9 +494,11 @@ run "regex_backslash_dot_plans" {
   }
 }
 
-# (s) A subject with "\b" (regex word boundary) plans clean either way, but
-# unescaped it decodes to a literal backspace byte (YAML's own "\b" escape) —
-# a silently corrupted pattern and a permanent deny. Must survive byte-exact.
+# (s) A subject with "\b" (regex word boundary) must plan clean, and the
+# subject must survive byte-exact. Before the fix, unescaped "\b" decodes as
+# YAML's own backspace escape, so the drift precondition's yamldecode()
+# mismatches the rendered value against the config object and fails the
+# plan — same failure shape as (r), not a silent corruption.
 run "regex_word_boundary_survives_roundtrip" {
   command = plan
 
