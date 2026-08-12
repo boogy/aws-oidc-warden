@@ -125,6 +125,8 @@ role_mappings = [
 jwt_validation_mode = "self"
 # The JWT Authorizer follows `issuer`/`audiences` above by default; override
 # only if the authorizer must validate against a different issuer/audiences.
+# Only valid with the singular issuer/audiences shorthand — rejected at plan
+# time if var.issuers is set, since each entry there drives its own authorizer.
 # jwt_authorizer_issuer    = "https://token.actions.githubusercontent.com"
 # jwt_authorizer_audiences = ["sts.amazonaws.com"]
 
