@@ -50,6 +50,40 @@ OpenTofu deployment stack: multi-issuer support in `apigw` mode.
   declares an `issuers` key, so each issuer decodes onto a fresh struct;
   config fragments (`config_fragments`) are unaffected — they never touch
   `issuers`.
+- **A backslash in any rendered config value broke `tofu plan`.** The
+  `config.yaml` template interpolated strings straight into double-quoted YAML
+  scalars with no escaping, so an ordinary anchored regex — `myorg/repo\.git`
+  in a `subject`, `\.yml` in a `workflow_ref` condition — failed the
+  drift precondition's `yamldecode` with "unknown escape character". Every
+  interpolated scalar now goes through `jsonencode`, which emits valid escaped
+  YAML. Keys inside `claim_mappings`/`session_tags` are quoted as a result;
+  all structural keys stay unquoted.
+- **A mismatched Lambda binary variant panicked on every invocation instead
+  of failing at plan time.** `jwt_validation_mode` and the packaged binary
+  (`build.sh apigateway` vs `apigatewayv2`) were unlinked — `validateAdapterMode`
+  (`internal/handler/bootstrap.go`) only catches the mismatch at cold start.
+  `build.sh` now records the variant it built next to the zip
+  (`dist/variant`); `modules/lambda` compares it against the
+  `jwt_validation_mode`-derived `expected_variant` in a plan-time
+  precondition. A pre-existing zip with no marker is treated as unknown and
+  passes — this is a deliberate weakening so upgrading doesn't break a
+  working deploy.
+- **The `jwt_authorizer_issuer`/`jwt_authorizer_audiences` escape hatch could
+  silently deny every request.** `apigw` mode's `resolveIssuerSpec`
+  (`internal/validator/delegated_claims.go`) requires the JWT Authorizer's
+  verified `iss` to exactly match an `issuers[]` entry; a documented
+  "escape hatch" that let `jwt_authorizer_issuer` diverge from the app
+  config's issuer therefore guaranteed `ErrUnknownIssuer` on every request.
+  Added a plan-time precondition rejecting issuer divergence.
+  `jwt_authorizer_audiences` may still diverge, but only in the safe
+  (narrowing) direction — `variables.tf` now documents that distinction
+  precisely instead of describing both as an unconditional escape hatch.
+- **`var.route_key` accepted `null` and any string.** `nullable = false` and
+  a `"<METHOD> <path>"` format validation now match the checks
+  `var.issuers[*].route_key` already had.
+- **`var.role_mappings` accepted an empty `roles` list**, which plans clean
+  and then dies at boot (`internal/config/config.go`). Added a validation
+  block requiring at least one role per mapping.
 
 ### Breaking Changes
 
