@@ -175,6 +175,10 @@ resource "aws_s3_object" "config" {
       error_message = "var.issuers and the singular var.issuer/var.audiences are mutually exclusive — pick one source of truth."
     }
     precondition {
+      condition     = length(local.issuers_effective) > 0
+      error_message = "At least one issuer is required — the service rejects a config with zero issuers at boot (internal/config/config.go). Set var.issuers to a non-empty map, or leave it null to use the var.issuer/var.audiences shorthand."
+    }
+    precondition {
       condition     = var.issuers == null || (var.jwt_authorizer_issuer == null && var.jwt_authorizer_audiences == null)
       error_message = "jwt_authorizer_issuer/jwt_authorizer_audiences apply only to the singular issuer shorthand; with var.issuers each entry's own issuer/audiences drive its authorizer."
     }

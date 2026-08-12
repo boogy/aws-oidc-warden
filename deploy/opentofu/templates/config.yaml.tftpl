@@ -1,14 +1,16 @@
 # Managed by OpenTofu — do not edit by hand.
 role_session_name: "${cfg.role_session_name}"
 
-issuers:
+issuers:${length(cfg.issuers) == 0 ? " []" : ""}
 %{ for iss in cfg.issuers ~}
   - issuer: "${iss.issuer}"
     provider: "${iss.provider}"
-    audiences:
+    audiences: ${iss.audiences == null ? "null" : (length(iss.audiences) == 0 ? "[]" : "")}
+%{ if iss.audiences != null ~}
 %{ for a in iss.audiences ~}
       - "${a}"
 %{ endfor ~}
+%{ endif ~}
     required_claims: ${iss.required_claims == null ? "null" : (length(iss.required_claims) == 0 ? "[]" : "")}
 %{ if iss.required_claims != null ~}
 %{ for c in iss.required_claims ~}
@@ -22,10 +24,12 @@ issuers:
 %{ endfor ~}
 %{ endif ~}
     jwks_uri: ${iss.jwks_uri == null ? "null" : "\"${iss.jwks_uri}\""}
-    session_tags:
+    session_tags: ${iss.session_tags == null ? "null" : (length(iss.session_tags) == 0 ? "{}" : "")}
+%{ if iss.session_tags != null ~}
 %{ for k in sort(keys(iss.session_tags)) ~}
       ${k}: "${iss.session_tags[k]}"
 %{ endfor ~}
+%{ endif ~}
 %{ endfor ~}
 
 cache:
@@ -62,10 +66,12 @@ cross_account:
 role_mappings: ${length(cfg.role_mappings) == 0 ? "[]" : ""}
 %{ for m in cfg.role_mappings ~}
   - subject: "${m.subject}"
-    roles:
+    roles: ${m.roles == null ? "null" : (length(m.roles) == 0 ? "[]" : "")}
+%{ if m.roles != null ~}
 %{ for r in m.roles ~}
       - "${r}"
 %{ endfor ~}
+%{ endif ~}
     session_policy: ${m.session_policy == null ? "null" : "|-"}
 %{ if m.session_policy != null ~}
       ${indent(6, m.session_policy)}
