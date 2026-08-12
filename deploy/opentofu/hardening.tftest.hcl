@@ -43,6 +43,13 @@ mock_provider "aws" {
 
 variables {
   region = "eu-west-1"
+
+  # This suite plans jwt_validation_mode = "self" and "apigw" against one
+  # local dist/function.zip, so no single dist/variant marker value could
+  # ever satisfy modules/lambda's variant-vs-mode precondition across every
+  # run. Turn the check off here only — a real deployment leaves
+  # var.check_lambda_variant at its default (true).
+  check_lambda_variant = false
 }
 
 # (a) Defaults: HTTP API only, no REST/WAF resources.
@@ -564,4 +571,36 @@ run "role_mapping_requires_non_empty_roles" {
   }
 
   expect_failures = [var.role_mappings]
+}
+
+# (w) roles = null (as opposed to []) must hit the same validation message,
+# not crash length() with an opaque "argument must not be null" before the
+# message above is ever shown.
+run "role_mapping_rejects_null_roles" {
+  command = plan
+
+  variables {
+    role_mappings = [{ subject = "myorg/myrepo", roles = null }]
+  }
+
+  expect_failures = [var.role_mappings]
+}
+
+# (x) The same null-crash shape existed on var.issuers' audiences validation
+# — fix it the same way.
+run "issuer_rejects_null_audiences" {
+  command = plan
+
+  variables {
+    issuers = {
+      github = {
+        issuer       = "https://token.actions.githubusercontent.com"
+        audiences    = null
+        provider     = "github"
+        session_tags = { repo = "repository" }
+      }
+    }
+  }
+
+  expect_failures = [var.issuers]
 }

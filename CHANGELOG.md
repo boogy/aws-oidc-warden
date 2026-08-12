@@ -84,6 +84,18 @@ OpenTofu deployment stack: multi-issuer support in `apigw` mode.
 - **`var.role_mappings` accepted an empty `roles` list**, which plans clean
   and then dies at boot (`internal/config/config.go`). Added a validation
   block requiring at least one role per mapping.
+- **The Lambda-variant guard broke `tofu test` for anyone who had actually
+  run `build.sh`.** The suite plans `jwt_validation_mode = "self"` and
+  `"apigw"` against one local `dist/function.zip`/marker, so no single
+  `expected_variant` could satisfy every run once the marker existed. Added
+  `var.check_lambda_variant` (default `true`, enforced for every real
+  deploy); `hardening.tftest.hcl` sets it `false` for itself only, with the
+  reason documented next to both the variable and the precondition.
+- **`roles = null` / `audiences = null` hit an opaque `length(): argument
+  must not be null` instead of the intended validation message.** Both
+  fields are required (non-`optional`) list types, but Terraform still
+  accepts an explicit `null`. Added a `!= null` guard ahead of `length()` on
+  `var.role_mappings[*].roles` and `var.issuers[*].audiences`.
 
 ### Breaking Changes
 

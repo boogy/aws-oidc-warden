@@ -65,7 +65,7 @@ variable "issuers" {
   }
 
   validation {
-    condition     = var.issuers == null ? true : alltrue([for k, v in var.issuers : length(v.audiences) > 0])
+    condition     = var.issuers == null ? true : alltrue([for k, v in var.issuers : v.audiences != null && length(v.audiences) > 0])
     error_message = "Each issuer must declare at least one audience."
   }
 
@@ -118,7 +118,7 @@ variable "role_mappings" {
   default = []
 
   validation {
-    condition     = alltrue([for m in var.role_mappings : length(m.roles) > 0])
+    condition     = alltrue([for m in var.role_mappings : m.roles != null && length(m.roles) > 0])
     error_message = "Each role_mappings entry needs at least one role — an empty roles list plans clean but the service refuses to boot (internal/config/config.go)."
   }
 }
@@ -252,6 +252,19 @@ variable "lambda_architecture" {
   type        = string
   description = "Lambda architecture: arm64 or x86_64."
   default     = "arm64"
+}
+
+variable "check_lambda_variant" {
+  type        = bool
+  description = <<-EOT
+    Enforce that the packaged Lambda binary variant matches
+    jwt_validation_mode (see modules/lambda's precondition). Leave this at
+    the default true for every real deployment — it exists only so
+    hardening.tftest.hcl, which plans multiple jwt_validation_mode values
+    against one build/marker, can turn the check off for itself; a real
+    deploy has exactly one mode and must not disable it.
+  EOT
+  default     = true
 }
 
 variable "log_retention_days" {
