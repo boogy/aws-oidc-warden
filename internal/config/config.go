@@ -626,7 +626,15 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 	// issuer lands at that index. A payload that omits issuers entirely still
 	// leaves the existing set untouched, matching the "only keys present in
 	// data are overwritten" contract documented above.
-	if v.InConfig("issuers") {
+	//
+	// v.InConfig("issuers") is not enough: it returns false for an explicitly
+	// null value (viper's lookup can't tell "absent" from "present but nil"
+	// apart), so "issuers: null" would fall through to the additive merge
+	// above and silently keep trusting the GitHub seed. AllKeys() flattens
+	// from the raw parsed map instead of doing a nil-checked lookup, so it
+	// still reports "issuers" as declared — Validate() then rejects the
+	// resulting empty set instead of booting open.
+	if slices.Contains(v.AllKeys(), "issuers") {
 		c.Issuers = nil
 	}
 

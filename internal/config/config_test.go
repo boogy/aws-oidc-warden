@@ -841,3 +841,33 @@ func TestGoldenMultiIssuerConfigBoots(t *testing.T) {
 	assert.True(t, matched)
 	assert.Equal(t, []string{"arn:aws:iam::111122223333:role/github-actions-example"}, roles)
 }
+
+// TestMergeBytesExplicitNullIssuersRejectsSeed pins the other half of the
+// same "issuers declared ⇒ replace the seed" invariant: v.InConfig("issuers")
+// returns false for an explicitly null value (viper can't tell "absent" from
+// "present but nil" apart), so "issuers: null" used to fall through to the
+// additive merge, keep the zero-config GitHub seed, and boot open trusting
+// GitHub Actions tokens. It must now be treated as declared, same as any
+// other value, and rejected by Validate()'s zero-issuers check.
+func TestMergeBytesExplicitNullIssuersRejectsSeed(t *testing.T) {
+	viper.Reset()
+	once = sync.Once{}
+
+	origName := os.Getenv("CONFIG_NAME")
+	defer func() {
+		if origName == "" {
+			_ = os.Unsetenv("CONFIG_NAME")
+		} else {
+			_ = os.Setenv("CONFIG_NAME", origName)
+		}
+	}()
+	t.Setenv("CONFIG_NAME", "nonexistent-config-file")
+
+	c := &Config{}
+	require.NoError(t, c.LoadConfig())
+	require.Len(t, c.Issuers, 1) // the GitHub seed, the trap this test pins.
+
+	err := c.MergeBytes([]byte("issuers: null\n"), "yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one issuer is required")
+}
