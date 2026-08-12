@@ -32,4 +32,10 @@ chmod 755 "${STAGE_DIR}/bootstrap"
 # zip from inside the stage dir so the archive contains 'bootstrap' at its root,
 # with the executable bit retained (archive_file cannot do this).
 ( cd "${STAGE_DIR}" && zip -X -q "${DIST_DIR}/function.zip" bootstrap )
+
+# Record which variant is packaged so modules/lambda can catch a mismatch
+# against jwt_validation_mode at plan time instead of every invocation
+# panicking (internal/handler/bootstrap.go's validateAdapterMode).
+printf '%s' "${VARIANT}" > "${DIST_DIR}/variant"
+
 echo "Packaged ${DIST_DIR}/function.zip (variant: ${VARIANT})"

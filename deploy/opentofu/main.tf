@@ -43,9 +43,16 @@ locals {
   issuers_effective = var.issuers != null ? var.issuers : local.issuers_shorthand
 
   # Authorizers exist only in apigw mode; self mode gets one open route.
-  # jwt_authorizer_issuer/_audiences still override the authorizer on the
-  # shorthand path, so an authorizer can validate against a different
-  # issuer/audiences than the app config (documented escape hatch).
+  # jwt_authorizer_audiences may diverge from the app config's audiences on
+  # the shorthand path, but only in the safe direction: a token must satisfy
+  # both the authorizer's list and the app config's ANY-match check, so a
+  # narrower authorizer list can only narrow acceptance, never widen it.
+  # jwt_authorizer_issuer may NOT diverge — apigw mode requires an exact
+  # match between the authorizer-verified iss and issuers[].issuer
+  # (internal/validator's resolveIssuerSpec), so a different
+  # jwt_authorizer_issuer here would make every request fail at runtime with
+  # ErrUnknownIssuer. A precondition on aws_s3_object.config rejects that
+  # combination at plan time.
   # Entries missing route_key are filtered out rather than passed through:
   # the "requires route_key" precondition on aws_s3_object.config is what
   # rejects that misconfiguration (blocking apply), so this filter exists
@@ -188,6 +195,10 @@ resource "aws_s3_object" "config" {
       error_message = "jwt_authorizer_issuer/jwt_authorizer_audiences apply only to the singular issuer shorthand; with var.issuers each entry's own issuer/audiences drive its authorizer."
     }
     precondition {
+      condition     = var.jwt_validation_mode != "apigw" || var.jwt_authorizer_issuer == null || var.jwt_authorizer_issuer == local.issuers_shorthand.github.issuer
+      error_message = "jwt_authorizer_issuer must match the app config's issuer (var.issuer, or its GitHub Actions default) — the JWT Authorizer's verified iss must exist in issuers[], or every apigw request fails at runtime with ErrUnknownIssuer. jwt_authorizer_audiences may still diverge (safe direction only)."
+    }
+    precondition {
       condition     = var.issuers == null || var.jwt_validation_mode != "apigw" || alltrue([for k, v in var.issuers : v.route_key != null])
       error_message = "jwt_validation_mode = 'apigw' requires every var.issuers entry to set route_key."
     }
@@ -231,6 +242,7 @@ module "lambda" {
   function_name        = var.name_prefix
   role_arn             = module.iam.role_arn
   zip_path             = "${path.module}/dist/function.zip"
+  expected_variant     = var.jwt_validation_mode == "apigw" ? "apigatewayv2" : "apigateway"
   architecture         = var.lambda_architecture
   memory_size          = var.lambda_memory_size
   timeout              = var.lambda_timeout

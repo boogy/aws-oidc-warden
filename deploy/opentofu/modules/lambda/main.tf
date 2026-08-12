@@ -1,3 +1,12 @@
+locals {
+  # build.sh writes the variant it packaged next to the zip (see its
+  # comment). A missing marker means the zip predates this check — that
+  # must not break an existing working deploy, so a missing marker is
+  # treated as "unknown, assume compatible" rather than a mismatch.
+  variant_marker_path = "${dirname(var.zip_path)}/variant"
+  actual_variant      = fileexists(local.variant_marker_path) ? trimspace(file(local.variant_marker_path)) : null
+}
+
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/aws/lambda/${var.function_name}"
   retention_in_days = var.log_retention_days
@@ -20,6 +29,10 @@ resource "aws_lambda_function" "this" {
     precondition {
       condition     = fileexists(var.zip_path)
       error_message = "Deployment zip not found (modules/lambda var.zip_path). Run deploy/opentofu/build.sh first — 'build.sh' for self mode, 'build.sh apigatewayv2' for apigw mode."
+    }
+    precondition {
+      condition     = local.actual_variant == null || local.actual_variant == var.expected_variant
+      error_message = "Packaged Lambda binary variant (${coalesce(local.actual_variant, "unknown")}) does not match the variant jwt_validation_mode requires (${var.expected_variant}). Rebuild with 'deploy/opentofu/build.sh ${var.expected_variant}'."
     }
   }
 
