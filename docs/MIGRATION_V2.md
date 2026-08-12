@@ -84,8 +84,9 @@ on `default_issuer`.
    member-account ARNs with `tag_auth` off (assumes go direct hub→target; the
    spoke role is only a tag-read broker for cross-account tag-auth). If you
    used tag-auth cross-account in v1, enable **both** blocks.
-7. **Delegated modes.** `apigw`/`alb` now require **exactly one** configured
-   issuer.
+7. **Delegated modes.** `alb` still requires **exactly one** configured
+   issuer; `apigw` now supports multiple, one per route via per-route JWT
+   Authorizers. See [MULTI_ISSUER.md](MULTI_ISSUER.md) for the detail.
 8. **snake_case S3/JSON config.** `PascalCase` keys are rejected (carried over
    from the prior release).
 9. **Go embedders.** Update any code using the renamed types/functions above;

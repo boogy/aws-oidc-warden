@@ -191,9 +191,11 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 }
 
 // singleDelegatedIssuer returns the sole configured issuer for a delegated
-// jwt_validation.mode. Delegated modes trust an upstream single-issuer JWT
-// verifier (API Gateway JWT Authorizer, ALB OIDC), so a multi-issuer config
-// is ambiguous in these modes and rejected fail-closed.
+// jwt_validation.mode. Used by alb mode only: an ALB has exactly one OIDC
+// IdP, so a multi-issuer config is ambiguous there and rejected fail-closed.
+// apigw mode resolves per request via resolveIssuerSpec instead, because
+// each route's JWT Authorizer pins its own issuer and forwards the verified
+// iss.
 func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfig, error) {
 	if len(cfg.Issuers) != 1 {
 		return nil, fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))

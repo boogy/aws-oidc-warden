@@ -79,6 +79,8 @@ issuers:
 
 This only happens when there is **no** configuration source whatsoever. If a config file (or S3 object) _is_ present but declares an empty `issuers` list, `Validate()` hard-fails — the seed never masks a misconfigured file.
 
+An `issuers` key declared anywhere — a config file, or a hot-reloaded S3/remote payload — is authoritative: it replaces the existing `issuers` list outright rather than merging onto it entry-by-entry. This matters for hand-written or remotely served configs, since it means a payload's own issuer entries are never silently backfilled with the zero-config seed's GitHub defaults.
+
 > **Breaking change**: the seeded `repo` session tag now carries the **full `owner/repo`** string (the raw `repository` claim, unmodified), not the bare repo name v1 produced by stripping the owner. See [SESSION_TAGGING.md](SESSION_TAGGING.md) and [MIGRATION_V2.md](MIGRATION_V2.md).
 
 ## Authorization: role_mappings, role_groups, role_sets

@@ -47,15 +47,18 @@ delegated mode can never be a weaker validator than self mode.
 | Mode             | Who verifies the signature             | Multi-issuer?         | Adapter          | Use when                                                         |
 | ---------------- | -------------------------------------- | --------------------- | ---------------- | ---------------------------------------------------------------- |
 | `self` (default) | This service                           | **Yes**               | `SelfExtractor`  | Direct token submission (API Gateway REST, Lambda URL, ALB body) |
-| `apigw`          | API Gateway HTTP API v2 JWT Authorizer | No (exactly 1 issuer) | `APIGWExtractor` | You front the service with an API Gateway JWT Authorizer         |
+| `apigw`          | API Gateway HTTP API v2 JWT Authorizer | **Yes** (per-route)   | `APIGWExtractor` | You front the service with an API Gateway JWT Authorizer         |
 | `alb`            | Application Load Balancer OIDC         | No (exactly 1 issuer) | `ALBExtractor`   | You front the service with ALB OIDC (`x-amzn-oidc-data`)         |
 
 **Delegated modes trust an upstream for _signature verification only_.** They
 still independently re-validate issuer, audience, expiry, `nbf`, `iat`,
 lifetime/age caps, and `required_claims`, and still derive the canonical subject
-themselves. They require **exactly one** configured issuer and fail closed
-otherwise (a delegated verifier cannot tell the service _which_ issuer it
-checked). Multi-issuer is a `self`-mode capability.
+themselves. `alb` requires **exactly one** configured issuer and fails closed
+otherwise — the ALB has exactly one OIDC IdP configured and cannot tell this
+service _which_ issuer it checked. `apigw` has no such restriction: each
+route's JWT Authorizer pins that route to its issuer and forwards the
+upstream-verified `iss` claim, so the service resolves the matching issuer
+spec per request from that claim instead.
 
 > **Bypass guard:** in a delegated mode, if the upstream injects no claims, the
 > extractor returns an error wrapping `ErrTokenValidationFailed` rather than
