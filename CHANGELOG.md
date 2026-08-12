@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+OpenTofu deployment stack: multi-issuer support in `apigw` mode.
+
+### Added
+
+- **Multi-issuer `apigw` mode** — `jwt_validation.mode: apigw` no longer
+  requires exactly one configured issuer. Each entry in `issuers[]` gets its
+  own API Gateway JWT Authorizer and route, resolved at runtime by the
+  token's authorizer-verified `iss` claim; a token presented to another
+  issuer's route is rejected by API Gateway before the Lambda is invoked.
+  `alb` mode is unchanged and still requires exactly one issuer.
+- **`issuers` Terraform variable** (`deploy/opentofu/variables.tf`) — a map of
+  issuer name to `issuer`/`provider`/`audiences`/`session_tags`/`route_key`
+  (plus optional `claim_mappings`/`required_claims`/`jwks_uri`), alternative to
+  the singular `issuer`/`audiences` shorthand. Drives both the rendered
+  `config.yaml` and, in `apigw` mode, the per-issuer authorizers/routes.
+- **`config.yaml` is now rendered from a template** (`templates/config.yaml.tftpl`)
+  with unquoted YAML keys, instead of `jsonencode`'d values — readable in the
+  S3 console and in diffs. A plan-time precondition compares the rendered file
+  against the config object to catch template drift.
+
+### Fixed
+
+- **`aws_iam_role_policy` count fix** (`874ea91`) — kept the resource's `count`
+  known at plan time so `tofu plan` no longer fails against a fresh account.
+
+### Breaking Changes
+
+- **Existing `apigw`-mode deploys need a manual state migration.** The single
+  issuer's authorizer and route move from fixed addresses
+  (`aws_apigatewayv2_authorizer.jwt[0]` / `aws_apigatewayv2_route.this`) to
+  ones keyed by issuer name — a `moved` block cannot target an arbitrary map
+  key, so this requires `tofu state mv` before the first `tofu apply` against
+  this version, or the plan destroys and recreates the authorizer and route.
+  See the "Upgrading" section of [deploy/opentofu/README.md](deploy/opentofu/README.md)
+  for the exact commands. Self-mode deploys need no action — a `moved` block
+  handles that migration automatically.
+
 ## [2.2.2] - 2026-08-06
 
 A follow-up review pass over the areas 2.2.0 changed. Both fixes are

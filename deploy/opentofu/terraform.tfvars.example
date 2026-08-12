@@ -6,9 +6,36 @@ tags = {
   owner       = "platform-team"
 }
 
+# STS role session name, visible in CloudTrail on every AssumeRole.
+# role_session_name = "aws-oidc-warden"
+
 # --- Token validation (rendered as a single GitHub Actions issuers[] entry) ---
 issuer    = "https://token.actions.githubusercontent.com"
 audiences = ["sts.amazonaws.com"]
+
+# --- Multi-issuer (alternative to the singular issuer/audiences above) ---
+# Mutually exclusive with `issuer`/`audiences`. In apigw mode each entry gets
+# its own JWT Authorizer on its own route, so one API can serve several
+# issuers. `provider` and `session_tags` are required per entry; `route_key` is
+# required in apigw mode and must be omitted in self mode.
+# issuers = {
+#   github = {
+#     issuer       = "https://token.actions.githubusercontent.com"
+#     audiences    = ["sts.amazonaws.com"]
+#     provider     = "github"
+#     route_key    = "POST /github"
+#     session_tags = { repo = "repository", repo-owner = "repository_owner", ref = "ref", actor = "actor" }
+#   }
+#   gitlab = {
+#     issuer          = "https://gitlab.com"
+#     audiences       = ["aws-oidc-warden"]
+#     provider        = "generic"
+#     route_key       = "POST /gitlab"
+#     claim_mappings  = { subject = "project_path" }
+#     required_claims = ["project_path"]
+#     session_tags    = { project = "project_path" }
+#   }
+# }
 
 # --- Cache: choose at most one backend (memory if both false) ---
 enable_dynamodb_cache = true
@@ -65,12 +92,15 @@ role_mappings = [
 # --- Public endpoint hardening ---
 # The endpoint is public; unknown-issuer tokens are denied in-app (401, before
 # any JWKS fetch), but in self mode the Lambda is still INVOKED per request.
-# To reject junk traffic before invocation, pick per issuer count:
-#   single issuer  -> jwt_validation_mode = "apigw" (JWT Authorizer on the HTTP
-#                     API rejects invalid tokens at the gateway; RECOMMENDED)
-#   multi-issuer   -> api_gateway_type = "rest" + enable_waf = true (WAF rate
-#     (self mode)     limiting + managed rules + POST-/verify-only filtering;
-#                     WAF cannot attach to HTTP APIs)
+# To reject junk traffic before invocation:
+#   jwt_validation_mode = "apigw" -> one JWT Authorizer per issuer rejects
+#     invalid tokens at the gateway before Lambda is invoked (RECOMMENDED).
+#     Works with a single issuer or several (see the issuers example above;
+#     API Gateway allows at most 10 authorizers per HTTP API).
+#   api_gateway_type = "rest" + enable_waf = true -> WAF rate limiting +
+#     managed rules + POST-/verify-only filtering (self mode only — WAF
+#     cannot attach to HTTP APIs). Use this when you want per-source-IP rate
+#     limiting rather than per-route token validation.
 # No IP allowlisting in either posture: GitHub-hosted runner IP ranges are vast
 # and dynamic, and self-hosted runners can be anywhere.
 # api_gateway_type = "rest"
@@ -97,3 +127,4 @@ jwt_validation_mode = "self"
 # only if the authorizer must validate against a different issuer/audiences.
 # jwt_authorizer_issuer    = "https://token.actions.githubusercontent.com"
 # jwt_authorizer_audiences = ["sts.amazonaws.com"]
+
