@@ -471,3 +471,95 @@ run "multi_issuer_role_mapping_boots_with_default_issuer" {
     error_message = "The rendered config must carry default_issuer."
   }
 }
+
+# (r) A subject with an escaped dot — ordinary regex authoring, e.g. matching a
+# literal ".git" suffix — must not fail the plan. Before the fix, the
+# unescaped "\." interpolated into a double-quoted YAML scalar broke
+# yamldecode() in the drift precondition with "unknown escape character".
+run "regex_backslash_dot_plans" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject = "myorg/myrepo\\.git"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+      },
+    ]
+  }
+
+  assert {
+    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].subject == "myorg/myrepo\\.git"
+    error_message = "A subject containing an escaped dot must round-trip through config.yaml unchanged."
+  }
+}
+
+# (s) A subject with "\b" (regex word boundary) plans clean either way, but
+# unescaped it decodes to a literal backspace byte (YAML's own "\b" escape) —
+# a silently corrupted pattern and a permanent deny. Must survive byte-exact.
+run "regex_word_boundary_survives_roundtrip" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject = "^myorg/repo\\b.*x$"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+      },
+    ]
+  }
+
+  assert {
+    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].subject == "^myorg/repo\\b.*x$"
+    error_message = "A subject containing \\b must round-trip as the literal backslash+b, not a YAML backspace control byte."
+  }
+}
+
+# (t) A jwt_authorizer_issuer diverging from the app config's issuer must be
+# rejected at plan time — apigw mode requires the authorizer's verified iss
+# to exist in issuers[] (resolveIssuerSpec), so a divergent value would make
+# every request fail at runtime with ErrUnknownIssuer.
+run "jwt_authorizer_issuer_divergence_rejected" {
+  command = plan
+
+  variables {
+    jwt_validation_mode   = "apigw"
+    issuer                = "https://token.actions.githubusercontent.com"
+    audiences             = ["sts.amazonaws.com"]
+    jwt_authorizer_issuer = "https://example.com"
+  }
+
+  expect_failures = [aws_s3_object.config]
+}
+
+# (u) jwt_authorizer_audiences MAY diverge from the app config's audiences —
+# only in the safe direction (narrower authorizer acceptance), so this must
+# plan clean, unlike a diverging jwt_authorizer_issuer.
+run "jwt_authorizer_audiences_divergence_allowed" {
+  command = plan
+
+  variables {
+    jwt_validation_mode      = "apigw"
+    issuer                   = "https://token.actions.githubusercontent.com"
+    audiences                = ["sts.amazonaws.com", "extra-audience"]
+    jwt_authorizer_audiences = ["sts.amazonaws.com"]
+  }
+
+  assert {
+    condition     = length(module.apigateway[0].jwt_authorizer_ids) == 1
+    error_message = "A narrower jwt_authorizer_audiences must still provision the authorizer."
+  }
+}
+
+# (v) An empty roles list plans clean but the service refuses to boot
+# (internal/config/config.go) — reject it at plan time via var.role_mappings'
+# own validation instead.
+run "role_mapping_requires_non_empty_roles" {
+  command = plan
+
+  variables {
+    role_mappings = [{ subject = "myorg/myrepo", roles = [] }]
+  }
+
+  expect_failures = [var.role_mappings]
+}
