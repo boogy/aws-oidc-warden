@@ -616,6 +616,20 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 		return fmt.Errorf("failed to parse %s configuration: %w", format, err)
 	}
 
+	// A payload that declares issuers must fully replace c.Issuers before
+	// decoding, not merge onto it: mapstructure decodes issuers[i] onto
+	// whatever IssuerConfig already occupies that index (e.g. the zero-config
+	// GitHub seed — see defaultGitHubIssuer), and a null/omitted
+	// required_claims or session_tags in the payload is then "kept" (slice)
+	// or additively merged (map) rather than treated as unset — silently
+	// inheriting the seed's GitHub required_claims/session_tags onto whatever
+	// issuer lands at that index. A payload that omits issuers entirely still
+	// leaves the existing set untouched, matching the "only keys present in
+	// data are overwritten" contract documented above.
+	if v.InConfig("issuers") {
+		c.Issuers = nil
+	}
+
 	if err := v.Unmarshal(c); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}

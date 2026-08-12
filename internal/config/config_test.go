@@ -779,3 +779,65 @@ func TestJWTValidationConfig(t *testing.T) {
 		})
 	}
 }
+
+// TestGoldenMultiIssuerConfigBoots pins the real boot path against the two
+// findings that slipped through it: a multi-issuer config where a
+// role_mappings entry has neither `issuer` nor `default_issuer` (the golden
+// fixture supplies both, one per mapping) must validate, and the zero-config
+// GitHub seed must not leak its required_claims/session_tags into issuers[0]
+// via MergeBytes. testdata/golden_multi_issuer_config.yaml is the same shape
+// deploy/opentofu/templates/config.yaml.tftpl renders; LoadConfig() then
+// MergeBytes() is exactly what internal/config/provider.go does for the S3
+// config source.
+func TestGoldenMultiIssuerConfigBoots(t *testing.T) {
+	viper.Reset()
+	once = sync.Once{}
+
+	origName := os.Getenv("CONFIG_NAME")
+	defer func() {
+		if origName == "" {
+			_ = os.Unsetenv("CONFIG_NAME")
+		} else {
+			_ = os.Setenv("CONFIG_NAME", origName)
+		}
+	}()
+	t.Setenv("CONFIG_NAME", "nonexistent-config-file")
+
+	c := &Config{}
+	require.NoError(t, c.LoadConfig())
+	// LoadConfig seeded the zero-config GitHub issuer — the trap this test pins.
+	require.Len(t, c.Issuers, 1)
+
+	data, err := os.ReadFile("testdata/golden_multi_issuer_config.yaml")
+	require.NoError(t, err)
+	require.NoError(t, c.MergeBytes(data, "yaml"))
+
+	// Exactly what the golden file declared, nothing leaked from the seed.
+	want := []IssuerConfig{
+		{
+			Issuer:        "https://acme.example.com",
+			Provider:      "generic",
+			Audiences:     []string{"aws-oidc-warden"},
+			ClaimMappings: map[string]string{"subject": "project_path"},
+			SessionTags:   map[string]string{"project": "project_path"},
+		},
+		{
+			Issuer:      "https://token.actions.githubusercontent.com",
+			Provider:    "github",
+			Audiences:   []string{"sts.amazonaws.com"},
+			SessionTags: map[string]string{"repo": "repository"},
+		},
+	}
+	assert.Equal(t, want, c.Issuers)
+
+	// Both role_mappings resolved against a real issuer — one via its own
+	// `issuer`, the other via `default_issuer` — proving neither was
+	// rejected by the "issuer must be set explicitly" boot failure.
+	matched, roles := c.AuthorizeRoles("https://acme.example.com", "acme-org/service-a", nil)
+	assert.True(t, matched)
+	assert.Equal(t, []string{"arn:aws:iam::111122223333:role/acme-deploy"}, roles)
+
+	matched, roles = c.AuthorizeRoles("https://token.actions.githubusercontent.com", "my-org/my-repo", nil)
+	assert.True(t, matched)
+	assert.Equal(t, []string{"arn:aws:iam::111122223333:role/github-actions-example"}, roles)
+}

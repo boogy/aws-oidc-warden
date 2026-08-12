@@ -31,6 +31,25 @@ OpenTofu deployment stack: multi-issuer support in `apigw` mode.
 
 - **`aws_iam_role_policy` count fix** (`874ea91`) — kept the resource's `count`
   known at plan time so `tofu plan` no longer fails against a fresh account.
+- **Multi-issuer + `role_mappings` rendered a config the service refused to
+  boot.** `var.role_mappings` had no `issuer` attribute and nothing rendered
+  `default_issuer`, so `tofu plan`/`apply` succeeded but every Lambda
+  invocation then failed cold start (`internal/config/config.go`'s "issuer
+  must be set explicitly" error) once more than one issuer was configured.
+  Added `issuer` to `var.role_mappings` and a new `var.default_issuer`, both
+  rendered into `config.yaml`, plus a precondition that catches the missing
+  combination at plan time.
+- **The zero-config GitHub seed could leak its `required_claims`/
+  `session_tags` into a hand-written or Terraform-rendered issuer.**
+  `MergeBytes` decoded an S3/remote config onto the existing `Issuers` slice,
+  so a `null`/partial `required_claims`/`session_tags` for `issuers[0]`
+  inherited the built-in GitHub defaults (mapstructure merges maps and keeps
+  existing values on `null`) instead of being treated as unset — a
+  non-GitHub issuer could end up with GitHub's session tags attached to its
+  STS sessions. `MergeBytes` now replaces `Issuers` outright when the payload
+  declares an `issuers` key, so each issuer decodes onto a fresh struct;
+  config fragments (`config_fragments`) are unaffected — they never touch
+  `issuers`.
 
 ### Breaking Changes
 

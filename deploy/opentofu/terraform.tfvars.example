@@ -59,9 +59,14 @@ assumable_role_arns = [
 # --- Subject -> role mappings (v2 schema) ---
 # `subject` is the canonical subject (GitHub: the `repository` claim,
 # "owner/repo"); `conditions` are auto-anchored regexes on raw claims (AND-ed).
+# `issuer` (the issuer URL, not a var.issuers map key) is required once more
+# than one issuer is configured (see the multi-issuer block above), unless
+# default_issuer is set — the service refuses to boot otherwise. With the
+# single-issuer shorthand active (as below) it's optional.
 role_mappings = [
   {
     subject = "my-org/my-repo"
+    issuer  = "https://token.actions.githubusercontent.com"
     roles   = ["arn:aws:iam::111122223333:role/github-actions-example"]
     conditions = {
       branch     = "refs/heads/main"

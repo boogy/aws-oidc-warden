@@ -365,3 +365,109 @@ run "empty_session_tags_is_valid" {
     error_message = "An issuer's session_tags must round-trip to an empty map, not null."
   }
 }
+
+# (o) Multi-issuer + role_mappings with no per-mapping issuer and no
+# default_issuer must fail at plan time — the service refuses to boot this
+# combination (internal/config/config.go), so it must never reach apply.
+run "multi_issuer_role_mapping_requires_issuer_or_default" {
+  command = plan
+
+  variables {
+    issuers = {
+      github = {
+        issuer       = "https://token.actions.githubusercontent.com"
+        audiences    = ["sts.amazonaws.com"]
+        provider     = "github"
+        session_tags = { repo = "repository" }
+      }
+      gitlab = {
+        issuer         = "https://gitlab.com"
+        audiences      = ["aws-oidc-warden"]
+        provider       = "generic"
+        claim_mappings = { subject = "project_path" }
+        session_tags   = { project = "project_path" }
+      }
+    }
+    role_mappings = [
+      {
+        subject = "my-org/my-repo"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+      },
+    ]
+  }
+
+  expect_failures = [aws_s3_object.config]
+}
+
+# (p) The same multi-issuer + role_mappings combination boots once each
+# mapping either carries its own issuer or default_issuer is set — the
+# combination CRITICAL #1 found broken (clean plan, dead cold start).
+run "multi_issuer_role_mapping_boots_with_issuer" {
+  command = plan
+
+  variables {
+    issuers = {
+      github = {
+        issuer       = "https://token.actions.githubusercontent.com"
+        audiences    = ["sts.amazonaws.com"]
+        provider     = "github"
+        session_tags = { repo = "repository" }
+      }
+      gitlab = {
+        issuer         = "https://gitlab.com"
+        audiences      = ["aws-oidc-warden"]
+        provider       = "generic"
+        claim_mappings = { subject = "project_path" }
+        session_tags   = { project = "project_path" }
+      }
+    }
+    role_mappings = [
+      {
+        subject = "my-org/my-repo"
+        issuer  = "https://token.actions.githubusercontent.com"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+      },
+    ]
+  }
+
+  assert {
+    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].issuer == "https://token.actions.githubusercontent.com"
+    error_message = "The rendered role_mappings entry must carry its issuer."
+  }
+}
+
+# (q) Same combination, satisfied via default_issuer instead of a per-mapping
+# issuer — the precondition must accept either.
+run "multi_issuer_role_mapping_boots_with_default_issuer" {
+  command = plan
+
+  variables {
+    default_issuer = "https://gitlab.com"
+    issuers = {
+      github = {
+        issuer       = "https://token.actions.githubusercontent.com"
+        audiences    = ["sts.amazonaws.com"]
+        provider     = "github"
+        session_tags = { repo = "repository" }
+      }
+      gitlab = {
+        issuer         = "https://gitlab.com"
+        audiences      = ["aws-oidc-warden"]
+        provider       = "generic"
+        claim_mappings = { subject = "project_path" }
+        session_tags   = { project = "project_path" }
+      }
+    }
+    role_mappings = [
+      {
+        subject = "my-org/my-repo"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+      },
+    ]
+  }
+
+  assert {
+    condition     = yamldecode(aws_s3_object.config.content).default_issuer == "https://gitlab.com"
+    error_message = "The rendered config must carry default_issuer."
+  }
+}

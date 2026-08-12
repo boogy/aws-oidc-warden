@@ -74,6 +74,7 @@ locals {
       session_tags    = local.issuers_effective[k].session_tags
     }]
     role_session_name = var.role_session_name
+    default_issuer    = var.default_issuer
     role_mappings     = var.role_mappings
     cache = {
       type           = local.cache_type
@@ -177,6 +178,10 @@ resource "aws_s3_object" "config" {
     precondition {
       condition     = length(local.issuers_effective) > 0
       error_message = "At least one issuer is required — the service rejects a config with zero issuers at boot (internal/config/config.go). Set var.issuers to a non-empty map, or leave it null to use the var.issuer/var.audiences shorthand."
+    }
+    precondition {
+      condition     = length(local.issuers_effective) <= 1 || var.default_issuer != null || alltrue([for m in var.role_mappings : m.issuer != null])
+      error_message = "Multiple issuers are configured — every role_mappings entry needs its own issuer, or set var.default_issuer, or the service refuses to boot (internal/config/config.go)."
     }
     precondition {
       condition     = var.issuers == null || (var.jwt_authorizer_issuer == null && var.jwt_authorizer_audiences == null)

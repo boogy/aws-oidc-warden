@@ -92,9 +92,16 @@ variable "role_mappings" {
     `subject` is an auto-anchored regex matched against the canonical subject
     (for GitHub: the `repository` claim, "owner/repo"). `conditions` are
     auto-anchored regexes against raw verified claims, AND-ed together.
+
+    `issuer` binds this mapping to one issuer's `issuer` URL (not its
+    `var.issuers` map key) and is required once more than one issuer is
+    configured, unless `var.default_issuer` is set — the service refuses to
+    boot otherwise (internal/config/config.go). With a single issuer it is
+    optional; that sole issuer applies regardless.
   EOT
   type = list(object({
     subject             = string
+    issuer              = optional(string)
     roles               = list(string)
     session_policy      = optional(string)
     session_policy_file = optional(string)
@@ -109,6 +116,17 @@ variable "role_mappings" {
     }))
   }))
   default = []
+}
+
+variable "default_issuer" {
+  type        = string
+  description = <<-EOT
+    Issuer (the `issuer` URL, not a `var.issuers` map key) inherited by any
+    role_mappings entry that omits its own `issuer`. Required when more than
+    one issuer is configured and any mapping omits `issuer`; with a single
+    issuer this is optional — that sole issuer applies regardless.
+  EOT
+  default     = null
 }
 
 variable "tag_auth" {
