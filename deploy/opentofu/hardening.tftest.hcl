@@ -326,3 +326,42 @@ run "session_policy_heredoc_trailing_newline" {
     error_message = "The rendered config must include the heredoc-sourced role mapping despite its trailing-newline session_policy."
   }
 }
+
+# (m) An empty var.issuers map satisfies every route_key precondition
+# vacuously (alltrue([]) and 0 == 0 are both true), so nothing else stops a
+# zero-issuer apigw deploy — which the service refuses to boot regardless.
+run "apigw_rejects_empty_issuers" {
+  command = plan
+
+  variables {
+    jwt_validation_mode = "apigw"
+    issuer              = null
+    audiences           = null
+    issuers             = {}
+  }
+
+  expect_failures = [aws_s3_object.config]
+}
+
+# (n) An issuer with no session tags is an ordinary, valid config — it must
+# not trip the config.yaml round-trip check. The template previously rendered
+# an empty session_tags map as a bare key (decodes to null, not {}).
+run "empty_session_tags_is_valid" {
+  command = plan
+
+  variables {
+    issuers = {
+      github = {
+        issuer       = "https://token.actions.githubusercontent.com"
+        audiences    = ["sts.amazonaws.com"]
+        provider     = "github"
+        session_tags = {}
+      }
+    }
+  }
+
+  assert {
+    condition     = yamldecode(aws_s3_object.config.content).issuers[0].session_tags == {}
+    error_message = "An issuer's session_tags must round-trip to an empty map, not null."
+  }
+}
