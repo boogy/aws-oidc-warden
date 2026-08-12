@@ -96,6 +96,21 @@ OpenTofu deployment stack: multi-issuer support in `apigw` mode.
   fields are required (non-`optional`) list types, but Terraform still
   accepts an explicit `null`. Added a `!= null` guard ahead of `length()` on
   `var.role_mappings[*].roles` and `var.issuers[*].audiences`.
+- **The multi-issuer/`role_mappings` precondition (round 1) checked only
+  that an `issuer`/`default_issuer` value was *present*, never that it was
+  one of the configured issuers** — and short-circuited entirely with a
+  single issuer, exactly where round 1 also hardcoded a mapping `issuer`
+  into `terraform.tfvars.example`'s default single-issuer state. An
+  operator (e.g. GHES/self-hosted) who edited the top-level `issuer` without
+  touching the mapping's got a clean plan and a dead cold start on a URL
+  they never typed (`internal/config/config.go`'s issuer-membership checks).
+  Added two additive preconditions on `aws_s3_object.config` — deliberately
+  without the single-issuer short-circuit — checking `var.default_issuer`
+  and every `role_mappings[*].issuer` against the actual configured issuer
+  set. Commented out the hardcoded mapping `issuer` in
+  `terraform.tfvars.example`'s single-issuer default (redundant there; that
+  sole issuer applies regardless), so the trap can't be sprung by editing
+  `issuer` alone.
 
 ### Breaking Changes
 
@@ -108,6 +123,16 @@ OpenTofu deployment stack: multi-issuer support in `apigw` mode.
   See the "Upgrading" section of [deploy/opentofu/README.md](deploy/opentofu/README.md)
   for the exact commands. Self-mode deploys need no action — a `moved` block
   handles that migration automatically.
+- **A remote config payload with `issuers: null` now fails to boot instead of
+  silently trusting the GitHub Actions issuer.** `MergeBytes`'s replace-the-
+  seed guard used `v.InConfig("issuers")`, which returns `false` for an
+  explicit `null` (viper can't distinguish "absent" from "present but nil"),
+  so `issuers: null` fell through to the additive merge and kept the
+  zero-config GitHub seed — fail-**open**. It is now treated as declared,
+  same as any other value, so `Validate()`'s "at least one issuer is
+  required" check applies. Unreachable from this Terraform stack (which
+  emits `[]`, never `null`); only a hand-written or non-Terraform S3 config
+  could hit it.
 
 ## [2.2.2] - 2026-08-06
 

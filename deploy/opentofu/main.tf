@@ -191,6 +191,22 @@ resource "aws_s3_object" "config" {
       error_message = "Multiple issuers are configured — every role_mappings entry needs its own issuer, or set var.default_issuer, or the service refuses to boot (internal/config/config.go)."
     }
     precondition {
+      # Deliberately no "<= 1" short-circuit: with a single issuer, an
+      # unrelated var.default_issuer is just as much a boot-time rejection
+      # (internal/config/config.go:783) as with several — the short-circuit
+      # above exists only for the "is one set at all" question, not this
+      # "is it a real one" question.
+      condition     = var.default_issuer == null || contains([for k, v in local.issuers_effective : v.issuer], var.default_issuer)
+      error_message = "var.default_issuer (${coalesce(var.default_issuer, "null")}) is not one of the configured issuers — the service rejects it at boot (internal/config/config.go). Configured issuers come from var.issuers, or the var.issuer shorthand if var.issuers is unset."
+    }
+    precondition {
+      # Same reasoning: no short-circuit on issuer count. A mapping's issuer
+      # is checked against internal/config/config.go:797 regardless of how
+      # many issuers are configured, including exactly one.
+      condition     = alltrue([for m in var.role_mappings : m.issuer == null || contains([for k, v in local.issuers_effective : v.issuer], m.issuer)])
+      error_message = "role_mappings issuer(s) not among the configured issuers: ${jsonencode(distinct([for m in var.role_mappings : m.issuer if m.issuer != null && !contains([for k, v in local.issuers_effective : v.issuer], m.issuer)]))} — the service rejects these at boot (internal/config/config.go). Configured issuers come from var.issuers, or the var.issuer shorthand if var.issuers is unset."
+    }
+    precondition {
       condition     = var.issuers == null || (var.jwt_authorizer_issuer == null && var.jwt_authorizer_audiences == null)
       error_message = "jwt_authorizer_issuer/jwt_authorizer_audiences apply only to the singular issuer shorthand; with var.issuers each entry's own issuer/audiences drive its authorizer."
     }

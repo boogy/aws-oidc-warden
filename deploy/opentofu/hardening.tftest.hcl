@@ -604,3 +604,58 @@ run "issuer_rejects_null_audiences" {
 
   expect_failures = [var.issuers]
 }
+
+# (y) var.default_issuer must be one of the configured issuers, not merely
+# present — internal/config/config.go:783 rejects a value that isn't.
+run "default_issuer_must_be_configured" {
+  command = plan
+
+  variables {
+    issuers = {
+      github = {
+        issuer       = "https://token.actions.githubusercontent.com"
+        audiences    = ["sts.amazonaws.com"]
+        provider     = "github"
+        route_key    = "POST /github"
+        session_tags = { repo = "repository" }
+      }
+      gitlab = {
+        issuer         = "https://gitlab.com"
+        audiences      = ["aws-oidc-warden"]
+        provider       = "generic"
+        route_key      = "POST /gitlab"
+        claim_mappings = { subject = "project_path" }
+        session_tags   = { project = "project_path" }
+      }
+    }
+    default_issuer = "https://not-a-configured-issuer.example"
+    role_mappings = [
+      { subject = "myorg/myrepo", roles = ["arn:aws:iam::111122223333:role/deploy"] },
+    ]
+    jwt_validation_mode = "apigw"
+    api_gateway_type    = "http"
+  }
+
+  expect_failures = [aws_s3_object.config]
+}
+
+# (z) A role_mappings entry's issuer must be one of the configured issuers —
+# with a SINGLE issuer, since that is the case the "<= 1" short-circuit on
+# the presence-only precondition hides, and the reason this finding is
+# Important rather than Minor (a GHES operator who edits var.issuer but not
+# this mapping would otherwise get a clean plan and a dead cold start).
+run "role_mapping_issuer_must_be_configured_single_issuer" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject = "myorg/myrepo"
+        issuer  = "https://github.mycorp.example/_services/token"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+      },
+    ]
+  }
+
+  expect_failures = [aws_s3_object.config]
+}
