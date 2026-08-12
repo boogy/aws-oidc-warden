@@ -137,7 +137,12 @@ Parameters:
   JWTAuthorizerIssuer:
     Type: String
     Default: "https://token.actions.githubusercontent.com"
-    Description: JWT Authorizer issuer URL (used only when JWTValidationMode = apigw).
+    Description: >-
+      JWT Authorizer issuer URL (used only when JWTValidationMode = apigw).
+      Must exactly match an issuers[].issuer entry in the config.yaml you
+      upload to the config bucket (this template cannot see inside that
+      object to check it for you) — a mismatch is not caught at deploy time;
+      every request 401s with ErrUnknownIssuer once the Lambda is invoked.
   JWTAuthorizerAudiences:
     Type: CommaDelimitedList
     Default: sts.amazonaws.com

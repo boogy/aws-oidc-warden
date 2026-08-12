@@ -58,7 +58,7 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 
 ## How config.yaml is delivered
 
-`main.tf` renders a v2 config — `var.issuer`/`var.audiences` as a single GitHub `issuers[]` entry, `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. The Lambda receives two env vars at startup:
+`main.tf` renders a v2 config — `var.issuers` (or, if unset, the `var.issuer`/`var.audiences` shorthand rendered as a single GitHub `issuers[]` entry), `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. The Lambda receives two env vars at startup:
 
 - `AOW_S3_CONFIG_BUCKET` — bucket name
 - `AOW_S3_CONFIG_PATH` — object key (`config.yaml`)
@@ -69,10 +69,10 @@ On startup the Lambda fetches and parses this file. All complex configuration (r
 
 ## JWT Validation Mode
 
-| Mode                | `jwt_validation_mode` | Binary         | Infra provisioned          | Request format                                                                     |
-| ------------------- | --------------------- | -------------- | -------------------------- | ---------------------------------------------------------------------------------- |
-| **Self** (default)  | `"self"`              | `apigateway`   | No extra infra             | `POST /verify` body: `{"token":"<jwt>","role":"<arn>"}`                            |
-| **API GW delegate** | `"apigw"`             | `apigatewayv2` | JWT Authorizer on HTTP API | `POST /verify` with `Authorization: Bearer <jwt>` header; body: `{"role":"<arn>"}` |
+| Mode                | `jwt_validation_mode` | Binary         | Infra provisioned                                                             | Request format                                                                     |
+| ------------------- | --------------------- | -------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| **Self** (default)  | `"self"`              | `apigateway`   | No extra infra                                                                | `POST /verify` body: `{"token":"<jwt>","role":"<arn>"}`                            |
+| **API GW delegate** | `"apigw"`             | `apigatewayv2` | One JWT Authorizer + route per configured issuer (`var.issuers`), on HTTP API | `POST /verify` with `Authorization: Bearer <jwt>` header; body: `{"role":"<arn>"}` |
 
 > **ALB mode is not supported by this stack.** `jwt_validation.mode: "alb"` requires the `alb` Lambda binary (`make build-alb`) deployed behind an Application Load Balancer, which neither the OpenTofu module nor the CloudFormation template provisions. The `apigateway` binary refuses to start in `alb` mode.
 
@@ -91,19 +91,19 @@ Build the correct binary before running `tofu apply`:
 
 The endpoint is public. The application already denies tokens from unconfigured issuers with 401 **before any JWKS fetch** (no SSRF surface, minimal CPU), but in `self` mode every request — valid or junk — still invokes the Lambda. Defense is layered; each layer stops traffic the previous one lets through:
 
-| Layer                                                | Stops junk traffic…                                   | Knob                                              |
-| ---------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
-| WAF (REST API only) or JWT Authorizer (`apigw` mode) | **before Lambda invocation**                          | `enable_waf` / `jwt_validation_mode`              |
-| API Gateway stage throttling                         | before invocation, above rate cap                     | `throttling_burst_limit`, `throttling_rate_limit` |
-| In-app validation (unknown issuer → 401 pre-JWKS)    | inside the Lambda, cheaply                            | always on                                         |
-| Lambda reserved concurrency                          | caps total concurrent invocations (cost/blast radius) | `lambda_reserved_concurrency`                     |
+| Layer                                                                           | Stops junk traffic…                                   | Knob                                              |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| WAF (REST API only) or JWT Authorizer (`apigw` mode, one per configured issuer) | **before Lambda invocation**                          | `enable_waf` / `jwt_validation_mode`              |
+| API Gateway stage throttling                                                    | before invocation, above rate cap                     | `throttling_burst_limit`, `throttling_rate_limit` |
+| In-app validation (unknown issuer → 401 pre-JWKS)                               | inside the Lambda, cheaply                            | always on                                         |
+| Lambda reserved concurrency                                                     | caps total concurrent invocations (cost/blast radius) | `lambda_reserved_concurrency`                     |
 
 The pre-invocation layer depends on the API Gateway flavor (`api_gateway_type`), because AWS ties each protection to one flavor:
 
-- **HTTP API (v2, `"http"`, default)** — supports the **JWT Authorizer**: with `jwt_validation_mode = "apigw"`, API Gateway validates the token's signature/issuer/audience against JWKS and rejects invalid tokens at the gateway — zero Lambda invocations for junk. Limitation: one issuer per authorizer (delegated mode enforces a single configured issuer). **WAF cannot attach to HTTP APIs.**
-- **REST API (v1, `"rest"`)** — supports **AWS WAF** (`enable_waf = true`): a per-source-IP rate-based rule (`waf_rate_limit`, default 300 req/5 min), `AWSManagedRulesCommonRuleSet`, and a request-shape rule that blocks anything other than `POST /verify`. This is the hardened posture for **multi-issuer `self` mode**, where the JWT Authorizer doesn't fit. Uses the same `apigateway` binary and self-mode request format — no rebuild needed when switching from `"http"` + self.
+- **HTTP API (v2, `"http"`, default)** — supports the **JWT Authorizer**: with `jwt_validation_mode = "apigw"`, API Gateway provisions one authorizer and route per configured issuer (`var.issuers`), each validating that issuer's tokens against its own JWKS and rejecting everything else at the gateway — zero Lambda invocations for junk, from one issuer or several. Limit: AWS caps authorizers at 10 per HTTP API (default quota, raisable via Service Quotas); a `precondition` enforces this at plan time — beyond that, split across two APIs. **WAF cannot attach to HTTP APIs.**
+- **REST API (v1, `"rest"`)** — supports **AWS WAF** (`enable_waf = true`): a per-source-IP rate-based rule (`waf_rate_limit`, default 300 req/5 min), `AWSManagedRulesCommonRuleSet`, and a request-shape rule that blocks anything other than `POST /verify`. This is the hardened posture for **`self` mode** (any issuer count), where the JWT Authorizer doesn't apply. Uses the same `apigateway` binary and self-mode request format — no rebuild needed when switching from `"http"` + self.
 
-**Pick per issuer count:** single issuer → `"http"` + `jwt_validation_mode = "apigw"`; multiple issuers → `"rest"` + `enable_waf = true`. Preconditions enforce the valid combinations at plan time.
+**Pick per mode:** using `jwt_validation_mode = "apigw"` (any issuer count, up to the 10-authorizer limit above) → `"http"`; staying on `self` mode → `"rest"` + `enable_waf = true` for the pre-invocation layer. Preconditions enforce the valid combinations at plan time.
 
 **No IP allowlisting:** GitHub-hosted runners use vast, constantly-changing Azure IP ranges and self-hosted runners can be anywhere — WAF IP sets or resource policies would break legitimate callers, so neither posture uses them.
 
@@ -203,6 +203,8 @@ aws s3 cp config.yaml s3://<ConfigBucketName>/config.yaml
 ```
 
 The `ApiEndpoint` stack output is the verify URL, and `ExecutionRoleArn` is the role your target roles must trust.
+
+**`JWTValidationMode=apigw` note:** this template provisions exactly **one** JWT Authorizer, from the `JWTAuthorizerIssuer`/`JWTAuthorizerAudiences` parameters — it has no way to see inside the `config.yaml` you upload, so nothing checks that `JWTAuthorizerIssuer` actually matches one of your `issuers[].issuer` entries. If it doesn't, the stack still deploys and the endpoint still comes up, but every request 401s with `ErrUnknownIssuer` (the authorizer's verified `iss` has to exist in `issuers[]`). Multi-issuer `apigw` (one authorizer/route per issuer) needs the OpenTofu stack instead — this template stays single-issuer.
 
 ### Parameter mapping
 
