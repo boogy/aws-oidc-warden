@@ -11,13 +11,13 @@ issuers:${length(cfg.issuers) == 0 ? " []" : ""}
       - "${a}"
 %{ endfor ~}
 %{ endif ~}
-    required_claims: ${iss.required_claims == null ? "null" : (length(iss.required_claims) == 0 ? "[]" : "")}
+    required_claims:${iss.required_claims == null ? " null" : (length(iss.required_claims) == 0 ? " []" : "")}
 %{ if iss.required_claims != null ~}
 %{ for c in iss.required_claims ~}
       - "${c}"
 %{ endfor ~}
 %{ endif ~}
-    claim_mappings: ${iss.claim_mappings == null ? "null" : (length(iss.claim_mappings) == 0 ? "{}" : "")}
+    claim_mappings:${iss.claim_mappings == null ? " null" : (length(iss.claim_mappings) == 0 ? " {}" : "")}
 %{ if iss.claim_mappings != null ~}
 %{ for k in sort(keys(iss.claim_mappings)) ~}
       ${k}: "${iss.claim_mappings[k]}"
@@ -58,12 +58,12 @@ cross_account:
   spoke_role_name: "${cfg.cross_account.spoke_role_name}"
   external_id: ${cfg.cross_account.external_id == null ? "null" : "\"${cfg.cross_account.external_id}\""}
   spoke_session_duration: "${cfg.cross_account.spoke_session_duration}"
-  allowed_accounts: ${length(cfg.cross_account.allowed_accounts) == 0 ? "[]" : ""}
+  allowed_accounts:${length(cfg.cross_account.allowed_accounts) == 0 ? " []" : ""}
 %{ for acct in cfg.cross_account.allowed_accounts ~}
     - "${acct}"
 %{ endfor ~}
 
-role_mappings: ${length(cfg.role_mappings) == 0 ? "[]" : ""}
+role_mappings:${length(cfg.role_mappings) == 0 ? " []" : ""}
 %{ for m in cfg.role_mappings ~}
   - subject: "${m.subject}"
     roles:${m.roles == null ? " null" : (length(m.roles) == 0 ? " []" : "")}
@@ -85,7 +85,7 @@ role_mappings: ${length(cfg.role_mappings) == 0 ? "[]" : ""}
       event_name: ${m.conditions.event_name == null ? "null" : "\"${m.conditions.event_name}\""}
       workflow_ref: ${m.conditions.workflow_ref == null ? "null" : "\"${m.conditions.workflow_ref}\""}
       environment: ${m.conditions.environment == null ? "null" : "\"${m.conditions.environment}\""}
-      actor_matches: ${m.conditions.actor_matches == null ? "null" : (length(m.conditions.actor_matches) == 0 ? "[]" : "")}
+      actor_matches:${m.conditions.actor_matches == null ? " null" : (length(m.conditions.actor_matches) == 0 ? " []" : "")}
 %{ if m.conditions.actor_matches != null ~}
 %{ for a in m.conditions.actor_matches ~}
         - "${a}"
