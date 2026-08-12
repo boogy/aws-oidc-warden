@@ -1,5 +1,6 @@
 # Managed by OpenTofu — do not edit by hand.
 role_session_name: "${cfg.role_session_name}"
+default_issuer: ${cfg.default_issuer == null ? "null" : "\"${cfg.default_issuer}\""}
 
 issuers:${length(cfg.issuers) == 0 ? " []" : ""}
 %{ for iss in cfg.issuers ~}
@@ -66,6 +67,7 @@ cross_account:
 role_mappings:${length(cfg.role_mappings) == 0 ? " []" : ""}
 %{ for m in cfg.role_mappings ~}
   - subject: "${m.subject}"
+    issuer: ${m.issuer == null ? "null" : "\"${m.issuer}\""}
     roles:${m.roles == null ? " null" : (length(m.roles) == 0 ? " []" : "")}
 %{ if m.roles != null ~}
 %{ for r in m.roles ~}

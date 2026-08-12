@@ -1,0 +1,75 @@
+# Golden config.yaml — byte-for-byte what deploy/opentofu/templates/config.yaml.tftpl
+# renders for a two-issuer deploy (var.issuers with a non-github issuer
+# sorting before "github", plus var.role_mappings/var.default_issuer). Used by
+# TestGoldenMultiIssuerConfigBoots to pin the LoadConfig()+MergeBytes() boot
+# path against both findings it caught: a multi-issuer config with no
+# `issuer`/`default_issuer` on a role mapping (refused to boot), and the
+# zero-config GitHub seed leaking required_claims/session_tags into
+# issuers[0] (silent ABAC tag leak).
+role_session_name: "test-session"
+default_issuer: "https://token.actions.githubusercontent.com"
+
+issuers:
+  - issuer: "https://acme.example.com"
+    provider: "generic"
+    audiences:
+      - "aws-oidc-warden"
+    required_claims: null
+    claim_mappings:
+      subject: "project_path"
+    jwks_uri: null
+    session_tags:
+      project: "project_path"
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: "github"
+    audiences:
+      - "sts.amazonaws.com"
+    required_claims: null
+    claim_mappings: null
+    jwks_uri: null
+    session_tags:
+      repo: "repository"
+
+cache:
+  type: "memory"
+  ttl: "1h"
+  dynamodb_table: null
+  s3_bucket: null
+  s3_prefix: null
+
+jwt_validation:
+  mode: "self"
+
+log_to_s3: false
+log_bucket: null
+log_prefix: null
+session_policy_bucket: null
+
+tag_auth:
+  enabled: false
+  tag_prefix: "aow/"
+  default_org: null
+  transitive_session_tags: false
+
+cross_account:
+  enabled: false
+  spoke_role_name: "aow-spoke"
+  external_id: null
+  spoke_session_duration: "15m"
+  allowed_accounts: []
+
+role_mappings:
+  - subject: "acme-org/service-a"
+    issuer: "https://acme.example.com"
+    roles:
+      - "arn:aws:iam::111122223333:role/acme-deploy"
+    session_policy: null
+    session_policy_file: null
+    conditions: null
+  - subject: "my-org/my-repo"
+    issuer: null
+    roles:
+      - "arn:aws:iam::111122223333:role/github-actions-example"
+    session_policy: null
+    session_policy_file: null
+    conditions: null
