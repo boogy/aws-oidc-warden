@@ -13,6 +13,18 @@ variable "zip_path" {
   description = "Path to the prebuilt deployment zip (must contain an executable 'bootstrap')."
 }
 
+variable "expected_variant" {
+  type        = string
+  description = <<-EOT
+    Binary variant ("apigateway" or "apigatewayv2") required by the
+    configured jwt_validation_mode — see build.sh's usage comment and
+    internal/handler/bootstrap.go's validateAdapterMode. Compared against
+    build.sh's recorded variant marker (dirname(zip_path)/variant) so a
+    mismatched binary fails the plan instead of panicking on every
+    invocation.
+  EOT
+}
+
 variable "architecture" {
   type        = string
   description = "Lambda architecture: arm64 or x86_64."

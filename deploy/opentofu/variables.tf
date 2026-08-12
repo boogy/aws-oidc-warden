@@ -116,6 +116,11 @@ variable "role_mappings" {
     }))
   }))
   default = []
+
+  validation {
+    condition     = alltrue([for m in var.role_mappings : length(m.roles) > 0])
+    error_message = "Each role_mappings entry needs at least one role — an empty roles list plans clean but the service refuses to boot (internal/config/config.go)."
+  }
 }
 
 variable "default_issuer" {
@@ -157,6 +162,18 @@ variable "route_key" {
   type        = string
   description = "Route key (\"<METHOD> <path>\") for the single verify route: self mode, and the apigw singular-issuer shorthand."
   default     = "POST /verify"
+  # route_key = null in apigw shorthand mode drops the entry from
+  # local.jwt_authorizers and steers this value toward the open route's
+  # module input instead — an opaque, deep null-required-argument failure
+  # rather than a clean one. nullable = false substitutes the default here
+  # instead (an explicit null falls back to it, same as leaving the argument
+  # unset), so an accidental null gets the safe default route_key rather
+  # than a confusing error several modules downstream.
+  nullable = false
+  validation {
+    condition     = length(split(" ", var.route_key)) == 2
+    error_message = "route_key must be \"<METHOD> <path>\", e.g. \"POST /verify\"."
+  }
 }
 
 variable "api_gateway_type" {
@@ -326,12 +343,27 @@ variable "jwt_validation_mode" {
 
 variable "jwt_authorizer_issuer" {
   type        = string
-  description = "OIDC issuer URL for the API Gateway JWT Authorizer. Only used when jwt_validation_mode = 'apigw'. Defaults to var.issuer — set only to diverge from it."
+  description = <<-EOT
+    OIDC issuer URL for the API Gateway JWT Authorizer. Only used when
+    jwt_validation_mode = 'apigw'. Must match var.issuer (or its GitHub
+    Actions default) exactly — apigw mode requires the authorizer's
+    verified `iss` to exist in the app config's issuers[], so a divergent
+    value makes every request fail at runtime with ErrUnknownIssuer
+    (rejected at plan time instead, by a precondition on aws_s3_object.config).
+  EOT
   default     = null
 }
 
 variable "jwt_authorizer_audiences" {
   type        = list(string)
-  description = "Accepted audiences for the API Gateway JWT Authorizer. Only used when jwt_validation_mode = 'apigw'. Defaults to var.audiences — set only to diverge from them."
+  description = <<-EOT
+    Accepted audiences for the API Gateway JWT Authorizer. Only used when
+    jwt_validation_mode = 'apigw'. Defaults to var.audiences; may diverge
+    from it, but only in the safe direction — a token must satisfy both the
+    authorizer's list (checked first, at the gateway) and the app config's
+    ANY-match audiences check (checked again in the Lambda), so a narrower
+    authorizer list can only narrow acceptance, never widen what the app
+    config alone would accept.
+  EOT
   default     = null
 }
