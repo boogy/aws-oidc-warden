@@ -167,6 +167,11 @@ migration before the first apply — see Breaking Changes.
   the transitive `internal/*` modules), and `golang.org/x/text` 0.40.0 →
   0.41.0. No API changes; `go mod verify`, `govulncheck` and the full test
   suite pass unchanged.
+- **Go toolchain** — 1.26.5 → 1.26.6, fixing 6 stdlib vulnerabilities
+  (`net/url` `resolvePath`, `crypto/tls` post-handshake message limits,
+  `net/http` H2C `ReadHeaderTimeout`, `encoding/xml` and `encoding/asn1`
+  recursion guards, `golang.org/x/net` idna punycode validation).
+  `govulncheck ./...` now reports no vulnerabilities.
 
 ## [2.2.2] - 2026-08-06
 
