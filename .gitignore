@@ -66,6 +66,7 @@ config.yaml
 docs/plans/
 prd.md
 
+.claude/settings.local.json
 docs/superpowers/
 .superpowers/
 docs/plans/
