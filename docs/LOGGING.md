@@ -18,7 +18,7 @@ disable decision logging itself.
 | `log_level`                 | `AOW_LOG_LEVEL`                     | `info`  | `debug` / `info` / `warn` / `error`; **validated but not wired to the running handler** — see note below                                                                               |
 | `LOG_LEVEL` (no `AOW_`)     | `LOG_LEVEL`                         | `info`  | the env var that actually sets `slog` verbosity at bootstrap (Lambda), or `-log-level` in `cmd/local`                                                                                  |
 | `log_claim_values`          | `AOW_LOG_CLAIM_VALUES`              | `false` | when false, claim **values** are suppressed in both logs and audit records (names/decision/reason kept)                                                                                |
-| `audit_required`            | `AOW_AUDIT_REQUIRED`                | `false` | when true, an allow decision's audit record is written **before** credentials are returned; a write failure denies the request (fail-closed). Requires `log_to_s3=true` + `log_bucket` |
+| `audit_required`            | `AOW_AUDIT_REQUIRED`                | `true`  | when true, an allow decision's audit record is written **before** credentials are returned; a write failure denies the request (fail-closed). Requires `log_to_s3=true` + `log_bucket` — until both are set this is a no-op (warning logged at boot), so it does not force S3 to be configured |
 | `log_to_s3`                 | `AOW_LOG_TO_S3`                     | `false` | persist logs/audit records to S3                                                                                                                                                       |
 | `log_bucket` / `log_prefix` | `AOW_LOG_BUCKET` / `AOW_LOG_PREFIX` | —       | S3 destination                                                                                                                                                                         |
 
@@ -36,8 +36,21 @@ Always present: `requestId`, `frontend`, `jwtMode`, `decision` (`allow`/`deny`),
 `sessionPolicyRef`, `expiry`.
 
 Claim **values** — `jwtSub` (raw `sub`), `subject` (canonical identity),
-`audience`, and resolved `sessionTags` — appear only when
+`audience`, resolved `sessionTags`, and `claims` — appear only when
 `log_claim_values=true`. `sessionTagKeys` (names only) are always present.
+
+`claims` answers "who did this", on **both** allow and deny records. For
+`provider: github` issuers it carries a curated set: `repository`,
+`repository_owner`, `repository_visibility`, `ref`, `ref_type`, `event_name`,
+`actor`, `workflow_ref`, `job_workflow_ref`, `sha`, `run_id`, `run_attempt`,
+`runner_environment`. The low-signal IDs (`actor_id`, `repository_id`,
+`run_number`, `*_sha`) and PR-only `base_ref`/`head_ref` are omitted — under
+`audit_required` each record is its own S3 object, so record size is a
+per-request cost. For every other issuer it carries the claims that issuer's
+own `claim_mappings` reference, since a generic issuer has no fixed claim
+vocabulary to curate against. Values are formatted exactly as session tag
+values are, so a claim reported here and the same claim attached as a session
+tag can never disagree.
 
 Records are built with `encoding/json`, which escapes control characters, so a
 claim value containing newlines cannot forge a log line or break the record.
@@ -47,6 +60,47 @@ claim value containing newlines cannot forge a log line or break the record.
 > `slog` handler, whose level is fixed at bootstrap from the bare `LOG_LEVEL`
 > env var (Lambda) or the `-log-level` flag (`cmd/local`). To change verbosity,
 > set `LOG_LEVEL` / `-log-level`, not `AOW_LOG_LEVEL`.
+
+## Source IP trust model
+
+`sourceIp` is audit metadata. Authorization never consults it: access is decided
+entirely by the verified OIDC token, so a forged IP grants nothing. What a forged
+IP can do is misattribute an entry in the audit trail, which matters because that
+trail is the compliance artifact. `sourceIpFrom` records which of the two
+sources below produced the value, so provenance is never inferred.
+
+| Frontend | `sourceIpFrom` | Trust |
+|---|---|---|
+| API Gateway HTTP (v2) | `frontend` | Attested by AWS. `requestContext.http.sourceIp` is observed by the platform and cannot be set by the caller. |
+| API Gateway REST (v1) | `frontend` | Attested by AWS (`requestContext.identity.sourceIp`). |
+| Lambda Function URL | `frontend` | Attested by AWS. |
+| ALB | `x-forwarded-for` | **Client-supplied.** ALB provides no source-IP field, so the value comes from the `X-Forwarded-For` header. |
+
+For ALB the **rightmost** hop is used, not the leftmost. ALB appends the TCP peer
+it actually observed to whatever `X-Forwarded-For` the client already sent, so in
+`1.2.3.4, 203.0.113.7` the client supplied `1.2.3.4` and the load balancer
+appended `203.0.113.7`. Every entry left of the last one is caller-controlled;
+taking the leftmost would log precisely the value an attacker chose.
+
+Verifying the JWT does not make this header trustworthy. Token verification
+authenticates the workflow identity carried *inside* the token; `X-Forwarded-For`
+is a network-layer header the caller sets independently, and nothing in the token
+attests to it.
+
+**Topology caveat (ALB only).** The rightmost hop is the client's IP only when
+the ALB is the internet-facing edge. Put a CloudFront distribution or a second
+load balancer in front and the rightmost hop becomes that proxy's address, with
+the client's real IP one or more entries to its left. The service does not guess
+at a trusted-hop count, so in that topology `sourceIp` identifies the proxy, not
+the caller. If you need per-client IPs there, terminate the trust decision in the
+proxy layer.
+
+**Recommended posture.** Use API Gateway HTTP (v2) with
+`jwt_validation_mode: "apigw"`. This is the most secure of the supported
+frontends on two independent axes: the source IP is platform-attested, so no
+client-supplied header is ever trusted and the caveat above cannot apply; and a
+JWT Authorizer rejects invalid tokens at the gateway before the Lambda is
+invoked. The OpenTofu stack does not provision an ALB at all.
 
 ## Security signals (for SIEM)
 
@@ -58,15 +112,18 @@ storms), fragment-rejected keys, account-not-allowed, and assume-role failure.
 
 ## Durability note (Lambda)
 
-With `audit_required=false` (the default, best-effort), every decision record
-is appended to the amortized batch buffer — the same one `WriteLogToS3` feeds
-— and flushed by size (`BatchSize`), age (`MaxBatchAge`), or `Cleanup()`.
-Batched flushing runs on a timer that is frozen between Lambda invocations, so
-buffered records can be lost at container reclaim. When you need a guaranteed
-trail, set `audit_required=true`: each decision record is written
-synchronously (bypassing the batch buffer) before the credential response, and
-a write failure fails the request closed. Treat container-shutdown flushing as
-a best-effort backstop only.
+With `audit_required=false`, every decision record is appended to the
+amortized batch buffer — the same one `WriteLogToS3` feeds — and flushed by
+size (`BatchSize`), age (`MaxBatchAge`), or `Cleanup()`. Batched flushing runs
+on a timer that is frozen between Lambda invocations, so buffered records can
+be lost at container reclaim. `audit_required` defaults to `true`, so once
+`log_to_s3`+`log_bucket` are configured you get the guaranteed trail by
+default: each decision record is written synchronously (bypassing the batch
+buffer) before the credential response, and a write failure fails the request
+closed. Until `log_to_s3`+`log_bucket` are configured, `audit_required=true`
+is a no-op (a warning is logged at boot) and decisions fall back to the
+batched path above. Treat container-shutdown flushing as a best-effort
+backstop only.
 
 ## Production hardening recommendation
 
@@ -78,13 +135,18 @@ log_bucket: "your-audit-bucket" # object-lock / WORM + restrictive bucket policy
 audit_required: true # deny rather than issue credentials with no audit record
 ```
 
-The default (`audit_required: false`) favors availability and zero-dependency
-startup: it never blocks credential issuance on S3, and it lets the service run
-with no S3 bucket configured. It is the right default for local/dev and for
-deployments that treat CloudWatch Logs as the system of record. It is **not**
-the recommended posture when the audit trail is a compliance or security
-control — there, a lost or unwritten record must fail the request, which is
-exactly what `audit_required: true` guarantees. Point CloudWatch alerts at
+`audit_required` defaults to `true`, but the declared intent is never mutated
+— enforcement is derived fresh from the active config snapshot on every call
+via `AuditEnforced()`, so it stays a no-op (decisions still log to CloudWatch,
+a warning is logged at boot) until `log_to_s3`+`log_bucket` are also
+configured, which lets local/dev and deployments with no S3 bucket configured
+still get zero-dependency startup for free. Because enforcement is re-derived
+rather than resolved once at boot, supplying `log_to_s3`+`log_bucket` via a hot
+reload engages the fail-closed guarantee immediately, with no restart and no
+need to restate `audit_required`: a lost or unwritten record must fail the
+request, which is exactly what `audit_required: true` (the default)
+guarantees. Set `audit_required: false` explicitly to opt out of the
+fail-closed behavior even with S3 logging configured. Point CloudWatch alerts at
 `errorCode=audit_write_failed` so a failing sink is paged, not silently
 tolerated.
 
