@@ -67,7 +67,30 @@ Parameters:
     Type: String
     Default: "false"
     AllowedValues: ["true", "false"]
-    Description: Provision an audit-log bucket (90-day lifecycle) and enable log_to_s3.
+    Description: >-
+      Provision an audit-log bucket (90-day lifecycle) and enable log_to_s3.
+      Implied by AuditRequired (default true), which needs a durable
+      destination — set AuditRequired to false to opt out of both.
+  LogClaimValues:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Include claim VALUES in logs and audit records: canonical subject, raw
+      sub, audience, resolved session tags, and the per-issuer claims object
+      (repository/ref/event_name/actor for GitHub). Without this an audit
+      record names the decision and the role but not who made the request.
+      Set false to keep identities out of the log stream.
+  AuditRequired:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Write each allow decision's audit record to S3 synchronously, BEFORE
+      credentials are returned; a write failure denies the request
+      (fail-closed). Implies EnableS3Logs, since the guarantee needs a bucket
+      to write to. Set false for the best-effort batched trail, which in Lambda
+      can lose buffered records at container reclaim.
   EnableSessionPolicyBucket:
     Type: String
     Default: "false"
@@ -173,7 +196,12 @@ Conditions:
   UseDynamoDB: !Equals [!Ref EnableDynamoDBCache, "true"]
   UseS3Cache: !Equals [!Ref EnableS3Cache, "true"]
   UseAnyCache: !Or [!Condition UseDynamoDB, !Condition UseS3Cache]
-  UseS3Logs: !Equals [!Ref EnableS3Logs, "true"]
+  UseAuditRequired: !Equals [!Ref AuditRequired, "true"]
+  UseS3Logs:
+    !Or [
+      !Equals [!Ref EnableS3Logs, "true"],
+      !Equals [!Ref AuditRequired, "true"],
+    ]
   UseSessionPolicyBucket: !Equals [!Ref EnableSessionPolicyBucket, "true"]
   UseTagAuth: !Equals [!Ref EnableTagAuth, "true"]
   CreateConfigBucket: !Equals [!Ref ConfigBucket, ""]
@@ -362,7 +390,11 @@ Resources:
                 - UseS3Logs
                 - Sid: WriteAuditLogs
                   Effect: Allow
-                  Action: "s3:PutObject"
+                  # Enumerated rather than s3:PutObject* so the writer cannot
+                  # alter object-lock retention on its own audit records.
+                  Action:
+                    - "s3:PutObject"
+                    - "s3:PutObjectTagging"
                   Resource: !Sub "${LogBucket.Arn}/*"
                 - !Ref AWS::NoValue
 
@@ -391,6 +423,8 @@ Resources:
           AOW_CACHE_S3_BUCKET: !If [UseS3Cache, !Ref CacheBucket, !Ref "AWS::NoValue"]
           AOW_CACHE_S3_PREFIX: !If [UseS3Cache, "jwks/", !Ref "AWS::NoValue"]
           AOW_CACHE_TTL: !If [UseAnyCache, !Ref CacheTTL, !Ref "AWS::NoValue"]
+          AOW_AUDIT_REQUIRED: !If [UseAuditRequired, "true", "false"]
+          AOW_LOG_CLAIM_VALUES: !Ref LogClaimValues
           AOW_LOG_TO_S3: !If [UseS3Logs, "true", !Ref "AWS::NoValue"]
           AOW_LOG_BUCKET: !If [UseS3Logs, !Ref LogBucket, !Ref "AWS::NoValue"]
           AOW_LOG_PREFIX: !If [UseS3Logs, "audit/", !Ref "AWS::NoValue"]
