@@ -22,12 +22,12 @@ import (
 // cycle. A nil AuditSink is always safe: recordDecision no-ops the write and
 // only emits the standardized log line.
 //
-// Two write paths, chosen by cfg.AuditRequired (see recordDecision):
-//   - WriteRecord: synchronous, batch-bypassing. Used only when audit_required
-//     is true, so a failure can fail the request closed before credentials are
-//     returned.
+// Two write paths, chosen by cfg.AuditEnforced() (see recordDecision):
+//   - WriteRecord: synchronous, batch-bypassing. Used only when audit is
+//     enforced, so a failure can fail the request closed before credentials
+//     are returned.
 //   - BufferRecord: best-effort, appended to the amortized batch buffer
-//     (flushed by size/age/cleanup). Used when audit_required is false, so an
+//     (flushed by size/age/cleanup). Used when audit is not enforced, so an
 //     ordinary decision never blocks on a synchronous S3 PUT.
 type AuditSink interface {
 	WriteRecord(ctx context.Context, record []byte) error
@@ -75,6 +75,12 @@ type auditRecord struct {
 	SessionTags      map[string]string `json:"sessionTags,omitempty"`
 	SessionPolicyRef string            `json:"sessionPolicyRef,omitempty"`
 
+	// Claims answers "who did this" in the audit trail: the identifying claims
+	// behind the decision (repository/ref/event_name/actor for GitHub, the
+	// issuer's mapped claims otherwise). Claim VALUES, so populated only when
+	// LogClaimValues is on and cleared by redact() alongside subject/jwtSub.
+	Claims map[string]string `json:"claims,omitempty"`
+
 	Expiry *time.Time `json:"expiry,omitempty"`
 
 	// ProcessingMS is per-request wall-clock time (per-stage granularity is not
@@ -99,6 +105,7 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.Subject = ""
 	rec.Audience = nil
 	rec.SessionTags = nil
+	rec.Claims = nil
 }
 
 // matchedRole is the role the decision pertains to, for the standardized
@@ -170,14 +177,14 @@ func subjectAttr(cfg *config.Config, subject string) slog.Attr {
 // JSON record (never string concatenation — encoding/json escapes control
 // characters, so a claim value with embedded newlines/control chars cannot
 // break the record structure or inject a fake log line): synchronously via
-// WriteRecord when cfg.AuditRequired, otherwise best-effort via BufferRecord
+// WriteRecord when cfg.AuditEnforced(), otherwise best-effort via BufferRecord
 // (batched, see AuditSink).
 //
 // Callers must set rec.Decision before calling. A nil sink still emits the log
 // line; the durable write is skipped, which is only acceptable when
-// cfg.AuditRequired is false — with it set, an absent sink is an unmet
+// cfg.AuditEnforced() is false — with it true, an absent sink is an unmet
 // requirement, not an absent one, and is reported as ErrAuditWriteFailed the
-// same as a failed write. When cfg.AuditRequired is true, a missing sink or a
+// same as a failed write. When cfg.AuditEnforced() is true, a missing sink or a
 // marshal or write failure is returned as an error wrapping
 // ErrAuditWriteFailed, and the caller must fail the request closed rather than
 // return credentials; when false, the failure is logged and swallowed so the
@@ -200,7 +207,7 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 		// record to, so the promise cannot be kept — fail closed rather than
 		// silently degrade to log-only. config.Validate() cannot catch this: it
 		// sees log_to_s3/log_bucket, not whether the caller passed a sink.
-		if cfg.AuditRequired {
+		if cfg.AuditEnforced() {
 			return fmt.Errorf("%w: audit_required is set but no audit sink is configured", ErrAuditWriteFailed)
 		}
 		return nil
@@ -209,13 +216,13 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	data, err := json.Marshal(rec)
 	if err != nil {
 		log.Error("failed to marshal audit record", slog.String("error", err.Error()))
-		if cfg.AuditRequired {
+		if cfg.AuditEnforced() {
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, err)
 		}
 		return nil
 	}
 
-	if cfg.AuditRequired {
+	if cfg.AuditEnforced() {
 		if werr := r.audit.WriteRecord(ctx, data); werr != nil {
 			log.Error("failed to write audit record", slog.String("error", werr.Error()))
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, werr)
@@ -232,7 +239,7 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 }
 
 // finalizeDeny records a deny decision (redaction + best-effort/durable audit
-// write per cfg.AuditRequired) and returns the error the caller should
+// write per cfg.AuditEnforced()) and returns the error the caller should
 // propagate: origErr unchanged, unless a required audit write itself failed,
 // in which case ErrAuditWriteFailed is folded in alongside it so both are
 // visible via errors.Is.
@@ -245,7 +252,7 @@ func (r *RequestProcessor) finalizeDeny(ctx context.Context, log *slog.Logger, c
 }
 
 // finalizeAllow records an allow decision. The audit write happens
-// synchronously, before this returns, so cfg.AuditRequired's durability
+// synchronously, before this returns, so cfg.AuditEnforced()'s durability
 // guarantee (write-before-credentials) is satisfied by ordinary control flow:
 // a required write failure returns (nil, error) — no credentials are ever
 // handed back to the caller.
@@ -309,6 +316,82 @@ func sessionTagKeyNames(tagSpec map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// githubAuditClaims are the GitHub Actions claims worth carrying in an audit
+// record: who acted (actor), on what (repository, repository_owner,
+// repository_visibility), from where (ref, ref_type, sha), and via which
+// workflow run (event_name, workflow_ref, job_workflow_ref, run_id,
+// run_attempt, runner_environment). The low-signal numeric IDs
+// (actor_id/repository_id/run_number/*_sha) and PR-only base_ref/head_ref are
+// left out: under audit_required every record is its own S3 object, so record
+// size is a per-request cost.
+var githubAuditClaims = []string{
+	"actor",
+	"event_name",
+	"job_workflow_ref",
+	"ref",
+	"ref_type",
+	"repository",
+	"repository_owner",
+	"repository_visibility",
+	"run_attempt",
+	"run_id",
+	"runner_environment",
+	"sha",
+	"workflow_ref",
+}
+
+// auditClaims resolves the identifying claims behind a decision for the audit
+// record. GitHub issuers use the curated githubAuditClaims list; every other
+// issuer uses the claims its own claim_mappings reference, which is the only
+// claim set the operator has actually declared meaningful for that issuer
+// (a generic issuer has no fixed claim vocabulary to curate against).
+//
+// Values are read from the verified raw claim set and formatted the same way
+// BuildSessionTags formats session tag values, so a claim reported here and
+// the same claim attached as a session tag can never disagree. Callers must
+// only populate the record when cfg.LogClaimValues permits claim values.
+func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) map[string]string {
+	if len(rawClaims) == 0 {
+		return nil
+	}
+
+	var names []string
+	if issuerProvider(cfg, issuer) == "github" {
+		names = githubAuditClaims
+	} else {
+		for _, claimName := range issuerClaimMappings(cfg, issuer) {
+			names = append(names, claimName)
+		}
+		sort.Strings(names)
+	}
+
+	out := make(map[string]string, len(names))
+	for _, name := range names {
+		raw, ok := rawClaims[name]
+		if !ok || raw == nil {
+			continue
+		}
+		if value := fmt.Sprintf("%v", raw); value != "" {
+			out[name] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// issuerClaimMappings returns an issuer's claim_mappings (canonical field ->
+// raw claim name), or nil when the issuer is unknown/unmapped.
+func issuerClaimMappings(cfg *config.Config, issuer string) map[string]string {
+	for i := range cfg.Issuers {
+		if cfg.Issuers[i].Issuer == issuer {
+			return cfg.Issuers[i].ClaimMappings
+		}
+	}
+	return nil
 }
 
 // resolvedSessionTags computes the actual STS session tag values that would
