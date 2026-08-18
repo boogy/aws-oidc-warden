@@ -564,7 +564,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("allow_insecure_issuers", false)
 	viper.SetDefault("log_level", defaultLogLevel)
 	viper.SetDefault("log_claim_values", false)
-	viper.SetDefault("audit_required", false)
+	viper.SetDefault("audit_required", true)
 
 	// Explicitly bind all config keys to environment variables. Driven by
 	// envBindings (see below) so this list and reapplyEnvOverrides cannot
@@ -687,6 +687,17 @@ func (c *Config) LeewayOrDefault() time.Duration {
 	return *c.JWTLeeway
 }
 
+// AuditEnforced reports whether the durable, fail-closed audit contract is
+// actually in force: the operator asked for it AND there is a destination to
+// write to. Derived per call rather than resolved once into AuditRequired,
+// because a hot reload can supply log_to_s3/log_bucket after boot and the
+// guarantee must engage at that point without the operator restating
+// audit_required. Callers gating credential issuance must use this, never
+// AuditRequired (which carries only the declared intent).
+func (c *Config) AuditEnforced() bool {
+	return c.AuditRequired && c.LogToS3 && c.LogBucket != ""
+}
+
 // Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
 	if len(c.Issuers) == 0 {
@@ -798,7 +809,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("log_level must be one of debug/info/warn/error, got %q", c.LogLevel)
 	}
 	if c.AuditRequired && (!c.LogToS3 || c.LogBucket == "") {
-		return errors.New("audit_required requires log_to_s3=true and log_bucket to be configured")
+		// Warn, but never write back: Provider.refresh clones the pristine
+		// base, so a mutation here is permanent and a later reload that
+		// supplies log_to_s3+log_bucket could never re-engage enforcement
+		// (fail-open). AuditEnforced() re-derives per snapshot instead.
+		slog.Warn("audit_required is set but log_to_s3/log_bucket are not configured; " +
+			"the durable audit trail is inactive until both are set (decisions still log to CloudWatch)")
 	}
 
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {

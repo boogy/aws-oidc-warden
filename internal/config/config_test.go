@@ -326,6 +326,58 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// TestAuditEnforced_DerivedNotMutated pins that audit_required is never
+// written back to. Validate() previously downgraded it to false when no
+// bucket was configured; because Provider.refresh clones the pristine base,
+// that downgrade was permanent and a later reload supplying log_to_s3 +
+// log_bucket could never re-engage the fail-closed guarantee.
+func TestAuditEnforced_DerivedNotMutated(t *testing.T) {
+	base := func() Config {
+		return Config{
+			Issuers:         singleIssuer("https://issuer.com", "aud"),
+			RoleSessionName: "s",
+			AuditRequired:   true,
+		}
+	}
+
+	t.Run("no bucket: declared intent preserved, not enforced", func(t *testing.T) {
+		cfg := base()
+		require.NoError(t, cfg.Validate())
+		assert.True(t, cfg.AuditRequired, "declared value must survive Validate()")
+		assert.False(t, cfg.AuditEnforced(), "cannot enforce without a destination")
+	})
+
+	t.Run("bucket configured: enforced", func(t *testing.T) {
+		cfg := base()
+		cfg.LogToS3 = true
+		cfg.LogBucket = "audit-bucket"
+		require.NoError(t, cfg.Validate())
+		assert.True(t, cfg.AuditEnforced())
+	})
+
+	t.Run("explicitly disabled: never enforced", func(t *testing.T) {
+		cfg := base()
+		cfg.AuditRequired = false
+		cfg.LogToS3 = true
+		cfg.LogBucket = "audit-bucket"
+		require.NoError(t, cfg.Validate())
+		assert.False(t, cfg.AuditEnforced())
+	})
+
+	// The regression that motivated this task.
+	t.Run("reload supplying the bucket re-engages enforcement", func(t *testing.T) {
+		cfg := base()
+		require.NoError(t, cfg.Validate())
+		require.False(t, cfg.AuditEnforced())
+
+		require.NoError(t, cfg.MergeBytes([]byte(
+			"log_to_s3: true\nlog_bucket: audit-bucket\n"), "yaml"))
+
+		assert.True(t, cfg.AuditEnforced(),
+			"bucket is now configured; enforcement must engage without restating audit_required")
+	})
+}
+
 // TestJWTLeewayExplicitZero verifies that an explicit jwt_leeway: 0 is
 // distinguishable from unset and is preserved as-is (not coerced to the
 // default), since JWTLeeway is a *time.Duration (nil = unset).
