@@ -13,7 +13,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
-	"github.com/google/uuid"
 )
 
 // frontendLambdaURL identifies this adapter in audit records/logs.
@@ -37,17 +36,27 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
+	frontendRequestID, _ := ctx.Value(FrontendRequestIDContextKey).(string)
+	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
+	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
 	// Add request ID and additional data to all logs for this request
 	log := slog.With(
 		slog.String("requestId", requestID),
-		slog.String("rawPath", event.RawPath),
+		slog.String("frontendRequestId", frontendRequestID),
+		slog.String("path", event.RawPath),
 		slog.String("method", event.RequestContext.HTTP.Method),
-		slog.String("sourceIp", event.RequestContext.HTTP.SourceIP),
+		slog.String("sourceIp", sourceIP),
 		slog.String("userAgent", event.RequestContext.HTTP.UserAgent),
 		slog.String("requestTime", event.RequestContext.Time),
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
+	// The attested case is the norm here; only surface provenance when it's
+	// not the platform-attested value, so an anomaly is visible without a
+	// constant "sourceIpFrom=frontend" on every line.
+	if sourceIPFrom != "" && sourceIPFrom != ipSourceFrontend {
+		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
+	}
 
 	// Parse request data
 	requestData, err := h.unmarshalRequestData(event)
@@ -69,19 +78,18 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 
 // createRequestContext creates an enhanced context with request tracking information
 func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.LambdaFunctionURLRequest) (context.Context, context.CancelFunc) {
-	// Generate a request ID if not available from the event
-	requestID := event.RequestContext.RequestID
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
+	requestID, frontendRequestID := resolveRequestID(ctx, event.RequestContext.RequestID)
+	sourceIP, sourceIPFrom := clientIP(event.RequestContext.HTTP.SourceIP, event.Headers)
 
 	// Start request timer
 	startTime := time.Now()
 
 	// Add request tracking information using context keys
 	ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
+	ctx = context.WithValue(ctx, FrontendRequestIDContextKey, frontendRequestID)
 	ctx = context.WithValue(ctx, StartTimeContextKey, startTime)
-	ctx = context.WithValue(ctx, SourceIPContextKey, event.RequestContext.HTTP.SourceIP)
+	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
+	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
 	ctx = context.WithValue(ctx, UserAgentContextKey, event.RequestContext.HTTP.UserAgent)
 
 	// Create a context with timeout. The caller must invoke the returned cancel

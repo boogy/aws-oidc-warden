@@ -13,7 +13,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
-	"github.com/google/uuid"
 )
 
 // frontendAPIGatewayV2 identifies this adapter in audit records/logs.
@@ -36,14 +35,24 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
+	frontendRequestID, _ := ctx.Value(FrontendRequestIDContextKey).(string)
+	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
+	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
 	log := slog.With(
 		slog.String("requestId", requestID),
+		slog.String("frontendRequestId", frontendRequestID),
 		slog.String("path", event.RawPath),
 		slog.String("method", event.RequestContext.HTTP.Method),
-		slog.String("sourceIp", event.RequestContext.HTTP.SourceIP),
+		slog.String("sourceIp", sourceIP),
 		slog.String("userAgent", event.RequestContext.HTTP.UserAgent),
 	)
+	// The attested case is the norm here; only surface provenance when it's
+	// not the platform-attested value, so an anomaly is visible without a
+	// constant "sourceIpFrom=frontend" on every line.
+	if sourceIPFrom != "" && sourceIPFrom != ipSourceFrontend {
+		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
+	}
 
 	requestData, err := ParseRoleOnlyRequestBody(event.Body)
 	if err != nil {
@@ -65,13 +74,13 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 }
 
 func (h *AwsApiGatewayV2) createRequestContext(ctx context.Context, event events.APIGatewayV2HTTPRequest) (context.Context, context.CancelFunc) {
-	requestID := event.RequestContext.RequestID
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
+	requestID, frontendRequestID := resolveRequestID(ctx, event.RequestContext.RequestID)
+	sourceIP, sourceIPFrom := clientIP(event.RequestContext.HTTP.SourceIP, event.Headers)
 	ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
+	ctx = context.WithValue(ctx, FrontendRequestIDContextKey, frontendRequestID)
 	ctx = context.WithValue(ctx, StartTimeContextKey, time.Now())
-	ctx = context.WithValue(ctx, SourceIPContextKey, event.RequestContext.HTTP.SourceIP)
+	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
+	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
 	ctx = context.WithValue(ctx, UserAgentContextKey, event.RequestContext.HTTP.UserAgent)
 	return context.WithTimeout(ctx, DefaultTimeout)
 }
