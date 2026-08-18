@@ -7,7 +7,6 @@ import (
 	"time"
 
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
-	"github.com/google/uuid"
 )
 
 // fallbackErrorBody is the static body every adapter returns if marshaling the
@@ -17,14 +16,12 @@ import (
 const fallbackErrorBody = `{"success":false,"statusCode":500,"errorCode":"internal_error","message":"An internal error occurred"}`
 
 // requestMeta extracts the request ID and elapsed processing time from ctx,
-// as set by each adapter's createRequestContext. Every frontend falls back to
-// a freshly generated UUID when the event carried no request ID (e.g. ALB,
-// or a proxy that doesn't set one) so responses/logs always have one.
+// as set by each adapter's createRequestContext via resolveRequestID. No
+// fallback here: every adapter sets RequestIDContextKey unconditionally, so
+// minting a second UUID on empty would let a response report an ID that
+// appears in no log line.
 func requestMeta(ctx context.Context) (requestID string, processingMS int64) {
 	requestID, _ = ctx.Value(RequestIDContextKey).(string)
-	if requestID == "" {
-		requestID = uuid.New().String()
-	}
 	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
 		processingMS = time.Since(startTime).Milliseconds()
 	}

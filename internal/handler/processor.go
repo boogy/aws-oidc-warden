@@ -47,7 +47,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	cfg := r.provider.Get()
 
 	jwtMode := inputMode(input)
-	log.Debug("Extracting claims", slog.String("mode", jwtMode))
+	log.Debug("Extracting claims", slog.String("jwtMode", jwtMode))
 
 	// rec accumulates the fields for this request's audit record/standardized
 	// log attrs. Built up as more is learned; finalizeDeny/finalizeAllow do the
@@ -58,6 +58,8 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		JWTMode:       jwtMode,
 		RequestedRole: requestData.Role,
 	}
+	rec.SourceIP, _ = ctx.Value(SourceIPContextKey).(string)
+	rec.SourceIPFrom, _ = ctx.Value(SourceIPSourceContextKey).(string)
 	elapsed := func() int64 {
 		if startTime.IsZero() {
 			return 0
@@ -86,6 +88,13 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	rec.JWTSub = claims.Sub
 	rec.Subject = claims.Subject
 	rec.Audience = claimsAudience(claims)
+	// Identifying claims ("who did this") are attached here, before the
+	// authorization stages, so a deny record carries them too — a denied
+	// attempt is exactly when you need to know who made it. redact() drops
+	// them when log_claim_values is off.
+	if cfg.LogClaimValues {
+		rec.Claims = auditClaims(cfg, claims.Issuer, claims.Raw)
+	}
 
 	// Add request context to the logger. The requested role ARN is not a claim
 	// value and is always logged; repository/ref/branch/actor ARE claim values,

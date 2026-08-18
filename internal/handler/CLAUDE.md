@@ -27,6 +27,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - Structured logging with the request-scoped logger (`slog.With`), never the package-level `slog` — a package-level call writes past the request logger, losing `requestId` correlation and escaping any handler a test installed. Never log token material; if a site ever must, redact it with `utils.RedactToken` first.
 - Claim VALUES in the log stream (canonical subject included) go through `subjectAttr(cfg, …)` / the `cfg.LogClaimValues` gate, so `log_claim_values=false` holds across the whole log stream and not just the audit record.
 - Test processor with `ClaimsExtractorInterface` mocks (not `TokenValidatorInterface`); the latter is for `SelfExtractor` unit tests only.
+- Adapters must derive request identity through `reqcontext.go` (`resolveRequestID`/`clientIP`) rather than rolling their own — `requestId` is the Lambda invocation UUID (stable across frontends), `frontendRequestId` is the per-frontend ID kept as the join key back to API Gateway / ALB access logs, and `sourceIp` is always either a parsed IP or empty, never a non-IP value like an ARN.
 
 ## Gotchas
 

@@ -49,6 +49,17 @@ type auditRecord struct {
 	JWTMode   string `json:"jwtMode"`
 	Decision  string `json:"decision"`        // "allow" | "deny"
 	Stage     string `json:"stage,omitempty"` // failing stage; deny only
+
+	// SourceIP is the requesting client's IP; SourceIPFrom is its provenance
+	// ("frontend" = attested by AWS, "x-forwarded-for" = client-supplied and
+	// therefore spoofable). The provenance is stored rather than inferred: an
+	// auditor reading a record months later cannot otherwise tell whether the
+	// address was observed or asserted. Both are request metadata, not claim
+	// values, so redact() leaves them alone — but note an IP is personal data
+	// under GDPR, which is a retention concern for the bucket, not a reason to
+	// omit it from a security control's audit trail.
+	SourceIP     string `json:"sourceIp,omitempty"`
+	SourceIPFrom string `json:"sourceIpFrom,omitempty"`
 	// Reason is the deny reason, named "reason" here to match the standardized
 	// slog attribute set in auditLogAttrs — one name for the same value in both
 	// the log line and the audit record. Deny only.

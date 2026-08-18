@@ -14,7 +14,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
-	"github.com/google/uuid"
 )
 
 // frontendALB identifies this adapter in audit records/logs.
@@ -40,13 +39,24 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
+	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
+	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
-	// Add request ID and additional data to all logs for this request
+	// Add request ID and additional data to all logs for this request.
+	// slog.With, NOT h.logger — the handler struct (AwsApplicationLoadBalancer)
+	// has no logger field, and neither do the other three adapters; all four
+	// build the request logger from the default, which bootstrap has already
+	// pointed at the JSON handler via slog.SetDefault.
 	log := slog.With(
 		slog.String("requestId", requestID),
 		slog.String("path", event.Path),
 		slog.String("method", event.HTTPMethod),
-		slog.String("sourceIp", event.RequestContext.ELB.TargetGroupArn), // ALB doesn't provide direct source IP in the same way
+		slog.String("sourceIp", sourceIP),
+		// Always emitted for ALB, where the IP can only come from a
+		// client-supplied header. A reader must not have to guess whether
+		// this IP was attested.
+		slog.String("sourceIpFrom", sourceIPFrom),
+		slog.String("targetGroupArn", event.RequestContext.ELB.TargetGroupArn),
 		slog.String("userAgent", event.Headers["user-agent"]),
 	)
 
@@ -87,16 +97,21 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 
 // createRequestContext creates an enhanced context with request tracking information
 func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, event events.ALBTargetGroupRequest) (context.Context, context.CancelFunc) {
-	// Generate a request ID (ALB doesn't provide one directly)
-	requestID := uuid.New().String()
+	// ALB supplies neither a request ID nor a source-IP field, so both
+	// resolveRequestID and clientIP fall back to their non-frontend paths:
+	// a fresh UUID, and the rightmost X-Forwarded-For hop.
+	requestID, frontendRequestID := resolveRequestID(ctx, "")
+	sourceIP, sourceIPFrom := clientIP("", event.Headers)
 
 	// Start request timer
 	startTime := time.Now()
 
 	// Add request tracking information using context keys
 	ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
+	ctx = context.WithValue(ctx, FrontendRequestIDContextKey, frontendRequestID)
 	ctx = context.WithValue(ctx, StartTimeContextKey, startTime)
-	ctx = context.WithValue(ctx, SourceIPContextKey, event.Headers["x-forwarded-for"])
+	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
+	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
 	ctx = context.WithValue(ctx, UserAgentContextKey, event.Headers["user-agent"])
 
 	// Create a context with timeout. The caller must invoke the returned cancel
