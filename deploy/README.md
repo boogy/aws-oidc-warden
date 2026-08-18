@@ -48,9 +48,15 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 | ------------------------------ | ------- | ----------------------------------------------------- | ------------------------------------------------ |
 | `enable_dynamodb_cache`        | `false` | DynamoDB table `<prefix>-cache`                       | `dynamodb:GetItem/PutItem/DeleteItem`            |
 | `enable_s3_cache`              | `false` | S3 bucket `<prefix>-cache-<suffix>`                   | `s3:GetObject/PutObject/DeleteObject/ListBucket` |
-| `enable_s3_logs`               | `false` | S3 bucket `<prefix>-logs-<suffix>` (90-day lifecycle) | `s3:PutObject`                                   |
+| `enable_s3_logs`               | `false` | S3 bucket `<prefix>-logs-<suffix>` (90-day lifecycle) | `s3:PutObject`, `s3:PutObjectTagging`            |
+| `audit_required`               | `true`  | Implies `enable_s3_logs` (needs a bucket to write to) | `s3:PutObject`, `s3:PutObjectTagging`            |
+| `log_claim_values`             | `true`  | No new resources                                      | —                                                |
 | `enable_session_policy_bucket` | `false` | S3 bucket `<prefix>-session-policies-<suffix>`        | `s3:GetObject`                                   |
 | `tag_auth.enabled`             | `false` | No new resources                                      | `iam:GetRole`, `iam:ListRoleTags`                |
+
+**`audit_required` defaults to `true`** and provisions the log bucket on its own, so every allow decision's audit record is written to S3 synchronously before credentials are returned (fail-closed). Set it to `false` for the best-effort batched trail — in Lambda that path can lose buffered records at container reclaim (see [docs/LOGGING.md](../docs/LOGGING.md)).
+
+**`log_claim_values` defaults to `true`** so each record identifies who made the request (`claims.repository`, `claims.ref`, `claims.event_name`, `claims.actor`, plus the canonical `subject`). Set it to `false` to keep identities out of the log stream — decision, reason, role, and claim *names* are still recorded.
 
 **Cache backends are mutually exclusive.** `enable_dynamodb_cache` and `enable_s3_cache` cannot both be `true`; a `precondition` enforces this at plan time. Leaving both `false` uses in-memory cache (suitable for low traffic; cache lost on cold start).
 
@@ -58,10 +64,11 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 
 ## How config.yaml is delivered
 
-`main.tf` renders a v2 config — `var.issuers` (or, if unset, the `var.issuer`/`var.audiences` shorthand rendered as a single GitHub `issuers[]` entry), `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. The Lambda receives two env vars at startup:
+`main.tf` renders a v2 config — `var.issuers` (or, if unset, the `var.issuer`/`var.audiences` shorthand rendered as a single GitHub `issuers[]` entry), `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. The Lambda receives three env vars at startup:
 
 - `AOW_S3_CONFIG_BUCKET` — bucket name
 - `AOW_S3_CONFIG_PATH` — object key (`config.yaml`)
+- `AOW_JWT_VALIDATION_MODE` — set from `var.jwt_validation_mode`; the extractor implementation is wired at cold start from this env var, not from `config.yaml` (which is hot-reloadable), so it must match the deployed Lambda binary variant
 
 On startup the Lambda fetches and parses this file. All complex configuration (repo mappings, nested objects) lives here; scalar overrides can also be set via `AOW_*` env vars.
 
@@ -136,7 +143,15 @@ A successful response returns HTTP 200 with STS temporary credentials JSON.
 
 ## Operational Prerequisites
 
-1. **Target-role trust policy:** Each role in `assumable_role_arns` must have a trust policy that allows the warden execution role (`execution_role_arn` output) to call `sts:AssumeRole`. The warden cannot grant itself this permission.
+1. **Target-role trust policy:** Each role in `assumable_role_arns` must have a trust policy that allows the warden execution role (`execution_role_arn` output) to call `sts:AssumeRole` **and `sts:TagSession`**. The warden cannot grant itself this permission. `sts:TagSession` is required whenever the issuer has `session_tags` configured (e.g. `repo`, `actor`) — true by default for the GitHub shorthand — since AWS rejects an `AssumeRole` call carrying session tags unless the *target* role's trust policy explicitly allows `sts:TagSession`, regardless of what the warden's own IAM policy grants it. Example trust policy statement:
+
+   ```json
+   {
+     "Effect": "Allow",
+     "Principal": { "AWS": "<execution_role_arn>" },
+     "Action": ["sts:AssumeRole", "sts:TagSession"]
+   }
+   ```
 
 2. **No VPC (default):** The Lambda runs outside any VPC and needs outbound internet access to fetch issuer JWKS (self/alb modes) or the ALB key endpoint (alb mode). If you later attach the Lambda to a VPC, provide a NAT gateway or VPC endpoint path.
 
