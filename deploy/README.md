@@ -67,7 +67,7 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 
 ## How config.yaml is delivered
 
-`main.tf` renders a v2 config — `var.issuers` (or, if unset, the `var.issuer`/`var.audiences` shorthand rendered as a single GitHub `issuers[]` entry), `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. The Lambda receives three env vars at startup:
+`main.tf` renders a v2 config — `var.issuers` (or, if unset, the `var.issuer`/`var.audiences` shorthand rendered as a single GitHub `issuers[]` entry), `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. Each `var.role_mappings` entry may set `role_session_name` to override the global `var.role_session_name` for the roles it grants, so CloudTrail names the requester instead of the service — STS accepts 2–64 characters from `[\w+=,.@-]` (no `/`, so a repository name cannot be used verbatim); an invalid value fails the service at boot. `role_groups`, the analogous DRY convenience for many subjects sharing one set of defaults, is a `config.yaml`-only feature — it is not exposed as a Terraform variable in this module. The Lambda receives three env vars at startup:
 
 - `AOW_S3_CONFIG_BUCKET` — bucket name
 - `AOW_S3_CONFIG_PATH` — object key (`config.yaml`)

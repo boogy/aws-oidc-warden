@@ -21,7 +21,7 @@ func TestFindSessionPolicy_ScopedToGrantingRole(t *testing.T) {
 	c := &Config{
 		Issuers:         []IssuerConfig{{Issuer: iss, Provider: "github", Audiences: []string{"sts.amazonaws.com"}}},
 		DefaultIssuer:   iss,
-		RoleSessionName: "s",
+		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{
 			{Subject: "myorg/.*", Roles: []string{readonly}},                                  // order 0: broad, no policy
 			{Subject: "myorg/.*-deploy", Roles: []string{deploy}, SessionPolicy: restrictive}, // order 1: scoped
@@ -70,7 +70,7 @@ func TestFindSessionPolicy_ConditionsGateThePolicy(t *testing.T) {
 	c := &Config{
 		Issuers:         []IssuerConfig{{Issuer: iss, Provider: "github", Audiences: []string{"sts.amazonaws.com"}}},
 		DefaultIssuer:   iss,
-		RoleSessionName: "s",
+		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{
 			// order 0: grants role but only on refs/heads/main, with a policy.
 			{Subject: "acme/app", Roles: []string{role}, SessionPolicy: mainOnly,

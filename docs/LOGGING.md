@@ -32,8 +32,15 @@ Always present: `requestId`, `frontend`, `jwtMode`, `decision` (`allow`/`deny`),
 `processingMs`. Deny adds `stage` (`extract` / `account_check` /
 `claims_processing` / `authorize` / `session_policy` / `assume_role`) and
 `reason`. Allow adds `issuer`, `provider`, `matchedVia` (`explicit`/`tag-auth`),
-`requestedRole`, `grantedRole`, `accountId`, `sessionTagKeys`,
+`requestedRole`, `grantedRole`, `accountId`, `sessionName`, `sessionTagKeys`,
 `sessionPolicyRef`, `expiry`.
+
+`sessionName` is the STS session name actually used — the global
+`role_session_name` or the per-mapping override that authorized the role (see
+[CONFIGURATION.md](CONFIGURATION.md)). It is recorded because that override
+exists purely for CloudTrail attribution, so the audit record has to say which
+name the CloudTrail entry will carry. It is operator-declared static config,
+never claim-derived, so it is **not** suppressed by `log_claim_values=false`.
 
 Claim **values** — `jwtSub` (raw `sub`), `subject` (canonical identity),
 `audience`, resolved `sessionTags`, and `claims` — appear only when

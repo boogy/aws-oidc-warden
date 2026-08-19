@@ -56,7 +56,7 @@ func TestMergeBytes_EnvTagAuthTransitiveAndCrossAccountAllowedAccounts(t *testin
 
 func TestCrossAccount_AllowedAccounts_RejectsMalformed(t *testing.T) {
 	c := &Config{
-		Issuers: singleIssuer("https://x", "a"), RoleSessionName: "s",
+		Issuers: singleIssuer("https://x", "a"), RoleSessionName: "test",
 		CrossAccount: &CrossAccount{Enabled: true, AllowedAccounts: []string{"123"}},
 	}
 	err := c.Validate()
@@ -66,7 +66,7 @@ func TestCrossAccount_AllowedAccounts_RejectsMalformed(t *testing.T) {
 
 func TestCrossAccount_DefaultsNormalizedOnValidate(t *testing.T) {
 	c := &Config{
-		Issuers: singleIssuer("https://x", "a"), RoleSessionName: "s",
+		Issuers: singleIssuer("https://x", "a"), RoleSessionName: "test",
 		CrossAccount: &CrossAccount{Enabled: true},
 	}
 	require.NoError(t, c.Validate())
@@ -105,7 +105,7 @@ func TestSessionTagsTransitive_DefaultsOff(t *testing.T) {
 func TestSessionTagsTransitive_ExplicitTrueSurvivesClone(t *testing.T) {
 	cfg := &Config{
 		Issuers:               singleIssuer("https://issuer.com", "aud"),
-		RoleSessionName:       "s",
+		RoleSessionName:       "test",
 		SessionTagsTransitive: true,
 	}
 	require.NoError(t, cfg.Validate())

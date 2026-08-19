@@ -25,6 +25,7 @@ Handlers accept the interface for mockability. Clients are built once in `servic
 
 - Wrap AWS errors with context; use `errors.As` for typed errors (e.g. `AccessDeniedException`).
 - `GetS3Object` returns an `io.ReadCloser` — the caller must close it.
+- `AwsConsumer.SessionName` cleans the STS session name (64 chars max, `[\w+=,.@-]`) by **substituting** disallowed characters with `-`, never deleting them: deletion collapses distinct identities onto one name (`acme/api` and `ac/meapi` both become `acmeapi`), which matters because the name is conditionable via `sts:RoleSessionName` and appears in `aws:userid`/CloudTrail — a collision there is an audit-attribution failure, not just a cosmetic one. Config-declared names are already rejected at boot by `config.validateRoleSessionName`, so in practice this only reshapes the global default; it stays as defense in depth. Truncation past 64 chars now logs a `slog.Warn`.
 
 ## Gotchas
 

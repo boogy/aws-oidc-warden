@@ -98,6 +98,15 @@ variable "role_mappings" {
     configured, unless `var.default_issuer` is set — the service refuses to
     boot otherwise (internal/config/config.go). With a single issuer it is
     optional; that sole issuer applies regardless.
+
+    `role_session_name` overrides the global `var.role_session_name` for
+    roles granted by THIS mapping only, so CloudTrail names the requester
+    instead of the service. STS accepts 2-64 characters from
+    `[\w+=,.@-]` — note `/` is NOT in that set, so a GitHub "owner/repo"
+    subject cannot be used verbatim. An invalid value fails the service at
+    boot rather than being silently reshaped. A mapping whose `subject` is a
+    regex matching many repositories gets ONE name for the whole set, not one
+    per repository — per-repository names require per-repository mappings.
   EOT
   type = list(object({
     subject             = string
@@ -105,6 +114,7 @@ variable "role_mappings" {
     roles               = list(string)
     session_policy      = optional(string)
     session_policy_file = optional(string)
+    role_session_name   = optional(string)
     conditions = optional(object({
       branch        = optional(string)
       ref           = optional(string)

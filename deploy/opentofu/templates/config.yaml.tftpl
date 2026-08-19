@@ -86,6 +86,9 @@ role_mappings:${length(cfg.role_mappings) == 0 ? " []" : ""}
 %{ if m.session_policy_file != null ~}
     session_policy_file: ${jsonencode(m.session_policy_file)}
 %{ endif ~}
+%{ if m.role_session_name != null ~}
+    role_session_name: ${jsonencode(m.role_session_name)}
+%{ endif ~}
 %{ if m.conditions != null ~}
     conditions:
 %{ if m.conditions.branch != null ~}

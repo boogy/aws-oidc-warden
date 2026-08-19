@@ -78,6 +78,11 @@ type auditRecord struct {
 	RequestedRole string `json:"requestedRole,omitempty"`
 	GrantedRole   string `json:"grantedRole,omitempty"` // == RequestedRole once granted; allow only
 	AccountID     string `json:"accountId,omitempty"`
+	// SessionName is the STS session name actually used for this assumption
+	// (global role_session_name or a per-mapping override) — the whole point
+	// of the per-mapping feature is CloudTrail attribution, so the audit
+	// record must say which name was used. Allow only.
+	SessionName string `json:"sessionName,omitempty"`
 
 	// SessionTagKeys (tag names only) are always safe to log/audit. SessionTags
 	// (resolved values) are only populated when LogClaimValues is on, and only
@@ -164,6 +169,7 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 	appendIf("issuer", rec.Issuer)
 	appendIf("provider", rec.Provider)
 	appendIf("accountId", rec.AccountID)
+	appendIf("sessionName", rec.SessionName)
 	appendIf("sourceIp", rec.SourceIP)
 	// Provenance only when the IP was NOT platform-attested: a constant
 	// "frontend" on every line is the noise this task exists to remove, while

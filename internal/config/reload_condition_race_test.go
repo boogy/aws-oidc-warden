@@ -45,7 +45,7 @@ role_mappings:
 	base := &Config{
 		Issuers:              []IssuerConfig{{Issuer: iss, Provider: "github", Audiences: []string{"sts.amazonaws.com"}}},
 		DefaultIssuer:        iss,
-		RoleSessionName:      "s",
+		RoleSessionName:      "test",
 		ConfigFragments:      []string{fragPath},
 		ConfigReloadInterval: time.Nanosecond, // every MaybeRefresh is "due"
 	}

@@ -40,6 +40,11 @@ var (
 	accountIDPattern     = regexp.MustCompile(`^\d{12}$`)
 	sessionTagKeyPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]{1,128}$`)
 
+	// sessionNameCharset is STS's accepted RoleSessionName charset. Note the
+	// absence of "/": a GitHub canonical subject ("owner/repo") is NOT a valid
+	// session name, which is the most likely thing an operator will try.
+	sessionNameCharset = regexp.MustCompile(`^[\w+=,.@-]+$`)
+
 	// reservedClaims are JWT-standard claim names that claim_mappings may never
 	// target, since doing so could shadow a verified claim used for security
 	// decisions (issuer, audience, timing, canonical sub).
@@ -89,6 +94,7 @@ type RoleMapping struct {
 	SessionPolicyFile string     `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"` // S3 session policy file
 	Roles             []string   `mapstructure:"roles"               json:"roles"`                         // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
 	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`          // Conditions for role assumption
+	RoleSessionName   string     `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`   // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
 
 	// Cached compiled pattern and declaration order (not serialized). order
 	// preserves first-match-wins semantics for FindSessionPolicy once
@@ -104,6 +110,7 @@ type RoleGroupDefaults struct {
 	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`
 	SessionPolicy     string     `mapstructure:"session_policy"      json:"session_policy,omitempty"`
 	SessionPolicyFile string     `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
+	RoleSessionName   string     `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
 }
 
 // RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
@@ -795,6 +802,13 @@ func (c *Config) Validate() error {
 	if c.RoleSessionName == "" {
 		return errors.New("role session name is required")
 	}
+	// A global override is an operator-set value like any per-mapping one, so
+	// it gets the same boot-time rejection instead of falling through to the
+	// runtime sanitizer, which would silently reshape it into a different
+	// CloudTrail identity (see validateRoleSessionName).
+	if err := validateRoleSessionName(c.RoleSessionName); err != nil {
+		return fmt.Errorf("role_session_name: %w", err)
+	}
 
 	for i, uri := range c.ConfigFragments {
 		if strings.TrimSpace(uri) == "" {
@@ -895,6 +909,11 @@ func (c *Config) Validate() error {
 		if m.Subject == "" || len(m.Roles) == 0 {
 			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
 		}
+		if m.RoleSessionName != "" {
+			if err := validateRoleSessionName(m.RoleSessionName); err != nil {
+				return fmt.Errorf("%s[%d] (%s): role_session_name: %w", source, i, m.Subject, err)
+			}
+		}
 		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
@@ -955,6 +974,7 @@ func (c *Config) Validate() error {
 				Conditions:        group.Defaults.Conditions,
 				SessionPolicy:     group.Defaults.SessionPolicy,
 				SessionPolicyFile: group.Defaults.SessionPolicyFile,
+				RoleSessionName:   group.Defaults.RoleSessionName,
 			}
 			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
 				return err
@@ -1200,6 +1220,26 @@ func compileAnchoredSubject(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile("^(?:" + pattern + ")$")
 }
 
+// validateRoleSessionName rejects a session name STS would refuse or that the
+// runtime sanitizer would have to reshape.
+//
+// Rejecting beats sanitizing here for the same reason BuildSessionTags skips an
+// illegal tag rather than coercing it (internal/aws/consumer.go:309): this
+// value becomes an identity. It appears in the assumed-role ARN, in
+// aws:userid, in CloudTrail, and is conditionable via sts:RoleSessionName, so a
+// silently-mangled name means IAM conditions and audit queries are written
+// against a string the operator never chose. Failing at boot is a config error
+// the operator sees once; a mangled name is a mystery they debug in CloudTrail.
+func validateRoleSessionName(name string) error {
+	if len(name) < 2 || len(name) > 64 {
+		return fmt.Errorf("must be 2-64 characters, got %d", len(name))
+	}
+	if !sessionNameCharset.MatchString(name) {
+		return fmt.Errorf("%q contains characters STS does not accept; allowed: letters, digits, and +=,.@-_ (note: \"/\" is not allowed, so a repository name cannot be used verbatim)", name)
+	}
+	return nil
+}
+
 // warnUnscopedRoleGrants logs a warning for every (issuer, role) that is
 // granted by more than one effective mapping where the LOWEST-order grant
 // carries no session policy but some higher-order grant does.
@@ -1320,9 +1360,36 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 // index is purely a performance detail: every candidate is re-verified against
 // its compiled pattern (index↔linear-scan parity).
 func (c *Config) FindSessionPolicy(issuer, subject, role string, claims map[string]any) (*string, *string) {
+	best := c.findAuthorizingMapping(issuer, subject, role, claims)
+	if best == nil {
+		return nil, nil
+	}
+	if best.SessionPolicyFile != "" {
+		return nil, &best.SessionPolicyFile
+	}
+	if best.SessionPolicy != "" {
+		return &best.SessionPolicy, nil
+	}
+	return nil, nil
+}
+
+// findAuthorizingMapping returns the mapping that authorized role for
+// (issuer, subject) under claims: one that matches the subject pattern,
+// satisfies its conditions, AND grants role. Among several qualifying mappings
+// the first-declared (lowest order) wins.
+//
+// Extracted so FindSessionPolicy and FindRoleSessionName cannot diverge. They
+// must resolve to the SAME mapping — a session policy from one mapping paired
+// with a session name from another would mean CloudTrail attributes the
+// session to an identity that is not the one whose policy scoped it.
+//
+// Returns nil when no mapping grants role (e.g. a tag-auth grant, which has no
+// config-declared mapping). Bucketing into the index is purely a performance
+// detail: every candidate is re-verified against its compiled pattern.
+func (c *Config) findAuthorizingMapping(issuer, subject, role string, claims map[string]any) *RoleMapping {
 	idx, ok := c.index[issuer]
 	if !ok {
-		return nil, nil
+		return nil
 	}
 
 	var best *RoleMapping
@@ -1340,17 +1407,22 @@ func (c *Config) FindSessionPolicy(issuer, subject, role string, claims map[stri
 			best = mapping
 		}
 	}
+	return best
+}
 
-	if best == nil {
-		return nil, nil
+// FindRoleSessionName returns the STS session name override declared by the
+// mapping that authorized role for (issuer, subject) under claims, or "" if
+// there is no such mapping or it declares no override. "" means the caller
+// should use the global Config.RoleSessionName.
+//
+// Resolution is identical to FindSessionPolicy by construction (both go through
+// findAuthorizingMapping), so the name and the policy always come from the same
+// grant. The returned value was validated at Validate() time.
+func (c *Config) FindRoleSessionName(issuer, subject, role string, claims map[string]any) string {
+	if best := c.findAuthorizingMapping(issuer, subject, role, claims); best != nil {
+		return best.RoleSessionName
 	}
-	if best.SessionPolicyFile != "" {
-		return nil, &best.SessionPolicyFile
-	}
-	if best.SessionPolicy != "" {
-		return &best.SessionPolicy, nil
-	}
-	return nil, nil
+	return ""
 }
 
 // AuthorizeRoles evaluates every role_mapping/role_group entry bound to

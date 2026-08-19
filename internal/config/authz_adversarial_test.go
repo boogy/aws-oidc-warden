@@ -411,7 +411,7 @@ func TestPermissiveConditionPatternsRejected(t *testing.T) {
 	for _, p := range []string{".*", ".+", ""} {
 		c := &Config{
 			Issuers:         []IssuerConfig{{Issuer: vIss, Provider: "generic", Audiences: []string{"a"}, ClaimMappings: map[string]string{"subject": "sub"}}},
-			RoleSessionName: "t",
+			RoleSessionName: "test",
 			RoleMappings: []RoleMapping{{
 				Subject: "myorg/repo", Roles: []string{"arn:aws:iam::111111111111:role/r"},
 				Conditions: &Condition{Ref: p},
@@ -453,7 +453,7 @@ func TestRequestedRoleMustMatchExactly(t *testing.T) {
 func TestRoleSetResolvedFromConfigNotToken(t *testing.T) {
 	c := &Config{
 		Issuers:         []IssuerConfig{{Issuer: vIss, Provider: "generic", Audiences: []string{"a"}, ClaimMappings: map[string]string{"subject": "sub"}}},
-		RoleSessionName: "t",
+		RoleSessionName: "test",
 		RoleSets:        map[string][]string{"deploy": {"arn:aws:iam::111111111111:role/A", "arn:aws:iam::111111111111:role/B"}},
 		RoleMappings:    []RoleMapping{{Subject: "myorg/repo", Roles: []string{"@deploy"}}},
 	}
@@ -470,7 +470,7 @@ func TestRoleSetResolvedFromConfigNotToken(t *testing.T) {
 	// Undefined set must fail closed at Validate.
 	c2 := &Config{
 		Issuers:         []IssuerConfig{{Issuer: vIss, Provider: "generic", Audiences: []string{"a"}, ClaimMappings: map[string]string{"subject": "sub"}}},
-		RoleSessionName: "t",
+		RoleSessionName: "test",
 		RoleMappings:    []RoleMapping{{Subject: "myorg/repo", Roles: []string{"@nope"}}},
 	}
 	if err := c2.Validate(); err == nil {
