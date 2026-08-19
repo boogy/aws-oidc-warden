@@ -282,7 +282,7 @@ Tag-based authorization lets a repository assume an IAM role authorized by **tag
 
 For cross-account (hub/spoke) scenarios, enable the separate top-level `cross_account` block: the warden reads and assumes roles in member accounts by first assuming a convention-named spoke role (`aow-spoke` by default) in the target account. The transport is independent of tag-auth — explicit `role_mappings` can target member-account ARNs on their own. Explicit `role_mappings` are always evaluated first; tag-auth is a fallback path only.
 
-Both features are opt-in (`tag_auth.enabled` / `cross_account.enabled`, default `false`); cross-account supports a target-account allow-list and an external ID for spoke-role trust, and tag-auth supports transitive session tags. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) for setup, tag reference, and IAM examples, and [docs/examples/cross-account/](docs/examples/cross-account/) for a full worked cross-account example (config + IAM roles + StackSets template).
+Both features are opt-in (`tag_auth.enabled` / `cross_account.enabled`, default `false`); cross-account supports a target-account allow-list and an external ID for spoke-role trust. Independently of either, the top-level `session_tags_transitive` (RECOMMENDED, default `false`) marks every session tag transitive so the requester's identity survives role chaining instead of being dropped at the first hop — see [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags) for setup, tag reference, and IAM examples, and [docs/examples/cross-account/](docs/examples/cross-account/) for a full worked cross-account example (config + IAM roles + StackSets template).
 
 ---
 
