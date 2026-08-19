@@ -18,14 +18,14 @@ audit path are fixed.
 - **`claims` in the durable audit record** — the S3 audit record now carries
   the identifying claims behind the decision, on both allow **and** deny, so
   the trail answers "who did this" without a cross-reference. Also emitted on
-  the standardized decision log line. GitHub issuers report a curated set (`repository`,
-  `repository_owner`, `repository_visibility`, `ref`, `ref_type`,
-  `event_name`, `actor`, `workflow_ref`, `job_workflow_ref`, `sha`, `run_id`,
-  `run_attempt`, `runner_environment`); every other issuer reports the claims
-  its own `claim_mappings` reference. These are claim VALUES, so they are
-  gated by `log_claim_values` and redacted alongside `subject`/`jwtSub` —
-  set `log_claim_values: true` to see them. See
-  [docs/LOGGING.md](docs/LOGGING.md).
+  the standardized decision log line. GitHub issuers report the **full
+  verified claim set** — every GitHub Actions OIDC claim, not a curated
+  subset — with `repository`/`repository_id` renamed to `repo`/`repo_id` so
+  the audit vocabulary is stable regardless of the raw claim name; every
+  other issuer reports the claims its own `claim_mappings` reference. These
+  are claim VALUES, so they are gated by `log_claim_values` and redacted
+  alongside `subject`/`jwtSub` — set `log_claim_values: true` to see them.
+  See [docs/LOGGING.md](docs/LOGGING.md).
 
 - **Top-level `session_tags_transitive`** (env `AOW_SESSION_TAGS_TRANSITIVE`),
   promoted out of `tag_auth.transitive_session_tags` — the mechanism is
@@ -52,17 +52,35 @@ audit path are fixed.
   review retention on the audit bucket. See
   [Source IP trust model](docs/LOGGING.md#source-ip-trust-model).
 
-- **`frontendRequestId` on the decision log line** for the three frontends
-  that issue an ID of their own, kept as the join key back to API Gateway
-  access logs now that `requestId` is the Lambda invocation UUID (see
-  *Changed*). ALB issues no request ID, so the attribute is absent there
-  rather than emitted empty.
+- **`frontendRequestId` on the decision log line and the durable audit
+  record** for the three frontends that issue an ID of their own, kept as the
+  join key back to API Gateway access logs now that `requestId` is the Lambda
+  invocation UUID (see *Changed*). ALB issues no request ID, so the attribute
+  is absent there rather than emitted empty.
 
 - **`Config.AuditEnforced()`** — audit enforcement is now derived from the
   active config snapshot on every call instead of being resolved once at boot,
   so supplying `log_to_s3` + `log_bucket` through a hot reload engages the
   fail-closed contract immediately, with no restart and without restating
   `audit_required`.
+
+- **Per-mapping `role_session_name`** — `role_mappings[].role_session_name`
+  and `role_groups[].defaults.role_session_name` override the global
+  `role_session_name` for the roles that mapping grants, so CloudTrail names
+  the requester instead of the service. The override is resolved through the
+  same `(issuer, subject, role, conditions)` match as the session policy, so
+  the two always come from the same grant — a name from one mapping paired
+  with a policy from another would attribute the session to an identity that
+  is not the one whose policy scoped it. The name is a static string, not a
+  template: a mapping whose `subject` is a regex matching many repositories
+  gets **one** name for the whole set. Also exposed on the OpenTofu
+  `role_mappings` variable. See
+  [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+- **`sessionName` on the audit record and the decision log line** — the STS
+  session name actually used for the assumption. Operator-declared static
+  config, never claim-derived, so it is deliberately **not** suppressed by
+  `log_claim_values=false`.
 
 ### Changed
 
@@ -127,6 +145,28 @@ audit path are fixed.
   All log output is JSON and is now pinned as such by test, so downstream
   parsers can rely on every line being valid JSON.
 
+- **`role_session_name` is now validated at boot instead of being sanitized at
+  runtime.** STS accepts 2–64 characters from `[\w+=,.@-]`; a value outside
+  that set is rejected by `Validate()` rather than reshaped on its way to
+  `AssumeRole`. This value is an identity — it appears in the assumed-role ARN,
+  in `aws:userid`, in CloudTrail, and is conditionable via
+  `sts:RoleSessionName` — so a silently mangled name means IAM conditions and
+  audit queries are written against a string the operator never chose.
+
+  **Behavior change on upgrade.** This applies to the **global**
+  `role_session_name` as well as the new per-mapping overrides. A deployment
+  whose global name contains a character STS rejects (a space, or a `/` from
+  pasting an `owner/repo` value) boots today with that character silently
+  stripped and will **refuse to boot** after this change. Check the value
+  before upgrading. The overrides are new keys, so they cannot affect an
+  existing config. Hot reload still fails safe: a rejected config is discarded
+  and the last-good one keeps serving.
+
+  The runtime sanitizer remains as defense in depth but now **substitutes**
+  disallowed characters with `-` rather than deleting them, and warns on
+  truncation. Deleting collapsed distinct identities onto one name — `acme/api`
+  and `ac/meapi` both became `acmeapi` — which is an audit-attribution failure.
+
 ### Fixed
 
 - **`audit_required` disabled itself permanently.** `Validate()` mutated the
@@ -175,6 +215,35 @@ audit path are fixed.
 
 - **The requested role ARN was repeated three times in a single log line**
   (`request.role`, `role`, `matchedRole`).
+
+- **Numeric claim values were recorded in scientific notation.** Claims are
+  decoded into `map[string]any`, so every JSON number arrives as a `float64`,
+  and the default float formatting rendered a 10-digit epoch second as
+  `1.7555904e+09` — an `exp` no auditor reads as a timestamp and no SIEM parses
+  as a number. Integral values are now rendered as integers. The fix is shared
+  by the audit record and `BuildSessionTags` (`utils.FormatClaimValue`), so the
+  documented guarantee that a claim reported in `claims` and the same claim
+  attached as a session tag can never disagree still holds — a session tag
+  mapped to a numeric claim was previously sent to `sts:TagSession` in
+  scientific notation too.
+
+- **A claim rename could silently drop a verified claim.** If a token carried
+  both `repository` and `repo`, the `repository`→`repo` rename landed both on
+  one key and one value vanished, with the survivor decided by Go's randomized
+  map iteration order — a lossy, non-reproducible audit record. A rename is now
+  skipped when the token already carries a claim under the alias target.
+
+- **Unused IAM permissions in both deployment templates.** `iam:ListRoleTags`
+  is never called — tag-based authorization reads role tags out of the
+  `GetRole` response — and the OpenTofu module granted it as `iam:ListRole*`,
+  which additionally allowed `iam:ListRoles` (enumerate every role in the
+  account). The S3 action wildcards are enumerated for the same reason as the
+  audit-writer statement above: `s3:PutObject*`/`s3:DeleteObject*` on the JWKS
+  cache bucket also granted `PutObjectRetention`/`PutObjectLegalHold` and
+  `DeleteObjectVersion`, and `s3:GetObject*` on the config and session-policy
+  buckets also granted `GetObjectVersion` — which would let a compromised
+  Lambda read a superseded, possibly more permissive revision of a policy
+  document that has since been tightened.
 
 ## [2.3.0] - 2026-08-12
 

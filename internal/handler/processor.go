@@ -60,6 +60,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 	rec.SourceIP, _ = ctx.Value(SourceIPContextKey).(string)
 	rec.SourceIPFrom, _ = ctx.Value(SourceIPSourceContextKey).(string)
+	rec.FrontendRequestID, _ = ctx.Value(FrontendRequestIDContextKey).(string)
 	// elapsed is the single source for every millisecond timing on this
 	// request: the audit record's processingMs and the validationMs/totalMs log
 	// attrs. Going through it rather than calling time.Since(startTime) inline
@@ -137,7 +138,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		rec.Stage = "account_check"
 		rec.Reason = "target account not allowed"
 		rec.ProcessingMS = elapsed()
-		log.Error("Target account not allowed", slog.String("stage", rec.Stage), slog.String("role", requestedRole))
+		log.Error("Target account not allowed", slog.String("stage", rec.Stage))
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrAccountNotAllowed)
 	}
 
@@ -177,11 +178,11 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		roleTags, terr := r.consumer.GetRoleTags(requestedRole)
 		if terr != nil {
 			log.Warn("Tag-based authorization: could not read role tags",
-				slog.String("role", requestedRole), slog.String("error", terr.Error()))
+				slog.String("error", terr.Error()))
 		} else if cfg.TagAuth.Authorize(roleTags, claimsMap, claims.Issuer, claims.Subject) {
 			allowed = true
 			rec.MatchedVia = "tag-auth"
-			log.Info("Authorized via role tags", slog.String("role", requestedRole))
+			log.Info("Authorized via role tags")
 		}
 	}
 

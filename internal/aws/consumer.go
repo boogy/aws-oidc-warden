@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 // maxConfigSize bounds how many bytes are read from a remote configuration
@@ -356,7 +357,7 @@ func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []typ
 		if !ok || raw == nil {
 			continue
 		}
-		value := fmt.Sprintf("%v", raw)
+		value := utils.FormatClaimValue(raw)
 		if value == "" {
 			continue
 		}
