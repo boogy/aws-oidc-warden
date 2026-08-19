@@ -86,6 +86,8 @@ On startup the Lambda fetches and parses this file. All complex configuration (r
 
 > **ALB mode is not supported by this stack.** `jwt_validation.mode: "alb"` requires the `alb` Lambda binary (`make build-alb`) deployed behind an Application Load Balancer, which neither the OpenTofu module nor the CloudFormation template provisions. The `apigateway` binary refuses to start in `alb` mode.
 
+Both supported modes above are also the two where the audit trail's `sourceIp` is **attested by AWS** rather than taken from a client-supplied `X-Forwarded-For` header — API Gateway reports the source IP it observed, and the caller cannot set it. That is one more reason to prefer this stack over an ALB front-end, and `"apigw"` in particular, since a JWT Authorizer also rejects invalid tokens before the Lambda is invoked. See [Source IP trust model](../docs/LOGGING.md#source-ip-trust-model) for the per-frontend attestation table and the front-proxy caveat that applies to ALB deployments.
+
 Build the correct binary before running `tofu apply`:
 
 ```bash
