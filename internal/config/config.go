@@ -581,7 +581,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("jwks_refetch_cooldown", defaultJWKSRefetchCooldown)
 	viper.SetDefault("allow_insecure_issuers", false)
 	viper.SetDefault("log_level", defaultLogLevel)
-	viper.SetDefault("log_claim_values", false)
+	viper.SetDefault("log_claim_values", true)
 	viper.SetDefault("audit_required", true)
 	viper.SetDefault("session_tags_transitive", false)
 
