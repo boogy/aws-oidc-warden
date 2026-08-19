@@ -11,7 +11,7 @@ variable "assumable_role_arns" {
 
 variable "enable_iam_getrole" {
   type        = bool
-  description = "Grant iam:GetRole and iam:ListRoleTags for tag-based authorization."
+  description = "Grant iam:GetRole for tag-based authorization (reads role tags from the GetRole response)."
   default     = false
 }
 
