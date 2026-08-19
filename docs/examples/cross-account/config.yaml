@@ -101,8 +101,14 @@ cross_account:
 tag_auth:
   enabled: false
   tag_prefix: "aow/"
-  # Mark session tags immutable through any further role chaining by the target.
-  transitive_session_tags: false
+
+# RECOMMENDED, and enabled here outright: cross-account role assumption is
+# exactly where a target role is most likely to chain to another role, and a
+# non-transitive session tag is dropped at that hop — every ABAC policy past
+# it would stop seeing which repo/actor originally made the request. Top-level
+# and independent of tag_auth (the deprecated tag_auth.transitive_session_tags
+# still works as a fallback for existing configs).
+session_tags_transitive: true
 
 ####################################################################################
 # Everything below is standard single-account configuration — unchanged by
