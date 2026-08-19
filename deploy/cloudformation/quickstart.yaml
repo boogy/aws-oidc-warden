@@ -115,7 +115,7 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: >-
-      Enable tag-based authorization - grants iam:GetRole/iam:ListRoleTags and
+      Enable tag-based authorization - grants iam:GetRole and
       sets AOW_TAG_AUTH_ENABLED (tag_prefix etc. live in config.yaml).
   AssumableRoleArns:
     Type: CommaDelimitedList
@@ -365,9 +365,11 @@ Resources:
                 - UseTagAuth
                 - Sid: ReadRoleTags
                   Effect: Allow
+                  # GetRole only: tag-based authorization reads a role's tags
+                  # from the GetRole response, and nothing in this service ever
+                  # calls ListRoleTags.
                   Action:
                     - "iam:GetRole"
-                    - "iam:ListRoleTags"
                   Resource: "*"
                 - !Ref AWS::NoValue
               - !If

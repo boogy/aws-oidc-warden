@@ -52,7 +52,7 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 | `audit_required`               | `true`  | Implies `enable_s3_logs` (needs a bucket to write to) | `s3:PutObject`, `s3:PutObjectTagging`            |
 | `log_claim_values`             | `true`  | No new resources                                      | —                                                |
 | `enable_session_policy_bucket` | `false` | S3 bucket `<prefix>-session-policies-<suffix>`        | `s3:GetObject`                                   |
-| `tag_auth.enabled`             | `false` | No new resources                                      | `iam:GetRole`, `iam:ListRoleTags`                |
+| `tag_auth.enabled`             | `false` | No new resources                                      | `iam:GetRole`                                    |
 | `session_tags_transitive`      | `false` | No new resources                                      | —                                                 |
 
 **`audit_required` defaults to `true`** and provisions the log bucket on its own, so every allow decision's audit record is written to S3 synchronously before credentials are returned (fail-closed). Set it to `false` for the best-effort batched trail — in Lambda that path can lose buffered records at container reclaim (see [docs/LOGGING.md](../docs/LOGGING.md)).
@@ -231,7 +231,7 @@ The `ApiEndpoint` stack output is the verify URL, and `ExecutionRoleArn` is the 
 CloudFormation parameters mirror the OpenTofu variables (`ApiGatewayType`, `EnableWAF`, `WAFRateLimit`, `WAFCommonRuleSet`, `ThrottlingBurstLimit`/`ThrottlingRateLimit`, `ReservedConcurrency`, `EnableDynamoDBCache`/`EnableS3Cache`/`CacheTTL`, `EnableS3Logs`, `EnableSessionPolicyBucket`, `EnableTagAuth`, `LogRetentionDays`, `BucketSuffix`), with the same defaults and the same plan-time assertions (WAF↔REST, apigw↔HTTP, cache exclusivity). Not parameters because they live elsewhere:
 
 - `region`/`tags` — set via the AWS CLI (`--region`, `--tags`).
-- `issuer`, `audiences`, `role_mappings`, `tag_auth` details, `cross_account` — belong in the uploaded `config.yaml` (OpenTofu renders these; CloudFormation cannot). `EnableTagAuth` still exists to grant the IAM side (`iam:GetRole`/`iam:ListRoleTags`).
+- `issuer`, `audiences`, `role_mappings`, `tag_auth` details, `cross_account` — belong in the uploaded `config.yaml` (OpenTofu renders these; CloudFormation cannot). `EnableTagAuth` still exists to grant the IAM side (`iam:GetRole`).
 - `force_destroy_buckets` — no CloudFormation equivalent; empty buckets manually before stack deletion.
 
 ---
