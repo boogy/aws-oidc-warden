@@ -66,6 +66,14 @@ locals {
     } if v.route_key != null
   } : {}
 
+  # audit_required needs a durable S3 destination to write to — with no bucket
+  # the service downgrades it to a no-op at boot (internal/config/config.go),
+  # silently losing the fail-closed guarantee the flag is asking for. So it
+  # provisions the log bucket on its own rather than requiring the operator to
+  # remember a second toggle; enable_s3_logs stays meaningful for the
+  # audit_required=false case (best-effort batched trail, still to S3).
+  s3_logs_enabled = var.enable_s3_logs || var.audit_required
+
   # Rendered application configuration (v2 schema: issuers[] + role_mappings).
   # Every key is unconditional so both branches of every ternary share the
   # same type (avoids e.g. log_to_s3 coercing to the string "true"); disabled
@@ -90,35 +98,51 @@ locals {
       s3_bucket      = var.enable_s3_cache ? local.cache_bucket_name : null
       s3_prefix      = var.enable_s3_cache ? "jwks/" : null
     }
-    log_to_s3             = var.enable_s3_logs
-    log_bucket            = var.enable_s3_logs ? local.log_bucket_name : null
-    log_prefix            = var.enable_s3_logs ? "audit/" : null
-    session_policy_bucket = var.enable_session_policy_bucket ? local.session_policy_bucket_name : null
-    tag_auth              = var.tag_auth
-    cross_account         = var.cross_account
-    jwt_validation        = { mode = var.jwt_validation_mode }
+    audit_required          = var.audit_required
+    log_claim_values        = var.log_claim_values
+    log_to_s3               = local.s3_logs_enabled
+    log_bucket              = local.s3_logs_enabled ? local.log_bucket_name : null
+    log_prefix              = local.s3_logs_enabled ? "audit/" : null
+    session_policy_bucket   = var.enable_session_policy_bucket ? local.session_policy_bucket_name : null
+    session_tags_transitive = var.session_tags_transitive
+    tag_auth                = var.tag_auth
+    cross_account           = var.cross_account
+    jwt_validation          = { mode = var.jwt_validation_mode }
   }
 
   rendered_config = templatefile("${path.module}/templates/config.yaml.tftpl", { cfg = local.app_config })
 
   # The drift precondition below compares local.app_config against a
-  # yamldecode() of local.rendered_config. session_policy is exempt from that
-  # comparison's trailing-whitespace sensitivity: the template's `|-` block
-  # scalar strips all trailing newlines on decode, but a heredoc-sourced
+  # yamldecode() of local.rendered_config. The template omits null
+  # role_mappings fields entirely (rather than emitting `field: null`), so
+  # local.app_config's role_mappings (which always carries every key, null or
+  # not) are stripped of null-valued keys here to line up with what actually
+  # comes back from yamldecode. session_policy is additionally exempt from
+  # the comparison's trailing-whitespace sensitivity: the template's `|-`
+  # block scalar strips all trailing newlines on decode, but a heredoc-sourced
   # policy always ends in one, so an unnormalized compare would report
   # spurious drift on semantically identical content. trimspace() (not
   # trimsuffix, which only strips a single newline) normalizes both sides;
   # every other field is still compared byte-for-byte.
   rendered_config_decoded = yamldecode(local.rendered_config)
   app_config_for_drift_check = merge(local.app_config, {
-    role_mappings = [for m in local.app_config.role_mappings : merge(m, {
-      session_policy = m.session_policy == null ? null : trimspace(m.session_policy)
-    })]
+    role_mappings = [for m in local.app_config.role_mappings : {
+      for k, v in merge(m, {
+        session_policy = m.session_policy == null ? null : trimspace(m.session_policy)
+        conditions = m.conditions == null ? null : (
+          length([for ck, cv in m.conditions : ck if cv != null]) == 0 ? null :
+          { for ck, cv in m.conditions : ck => cv if cv != null }
+        )
+      }) : k => v if v != null
+    }]
   })
   rendered_config_decoded_for_drift_check = merge(local.rendered_config_decoded, {
-    role_mappings = [for m in local.rendered_config_decoded.role_mappings : merge(m, {
-      session_policy = m.session_policy == null ? null : trimspace(m.session_policy)
-    })]
+    role_mappings = [for m in local.rendered_config_decoded.role_mappings : {
+      for k, v in merge(m, {
+        session_policy = try(trimspace(m.session_policy), null)
+        conditions     = try(m.conditions, null) == null ? null : { for ck, cv in m.conditions : ck => cv if cv != null }
+      }) : k => v if v != null
+    }]
   })
 }
 
@@ -137,7 +161,7 @@ module "cache_bucket" {
 }
 
 module "log_bucket" {
-  count                     = var.enable_s3_logs ? 1 : 0
+  count                     = local.s3_logs_enabled ? 1 : 0
   source                    = "./modules/s3"
   bucket_name               = local.log_bucket_name
   force_destroy             = var.force_destroy_buckets
@@ -249,7 +273,7 @@ module "iam" {
   cache_s3_bucket_arn       = var.enable_s3_cache ? module.cache_bucket[0].bucket_arn : null
   config_bucket_arn         = module.config_bucket.bucket_arn
   session_policy_bucket_arn = var.enable_session_policy_bucket ? module.session_policy_bucket[0].bucket_arn : null
-  log_bucket_arn            = var.enable_s3_logs ? module.log_bucket[0].bucket_arn : null
+  log_bucket_arn            = local.s3_logs_enabled ? module.log_bucket[0].bucket_arn : null
 }
 
 # ---- Lambda ----
@@ -266,9 +290,10 @@ module "lambda" {
   log_retention_days   = var.log_retention_days
   reserved_concurrency = var.lambda_reserved_concurrency
   environment_variables = {
-    AOW_S3_CONFIG_BUCKET = module.config_bucket.bucket_id
-    AOW_S3_CONFIG_PATH   = local.config_key
-    LOG_LEVEL            = var.log_level
+    AOW_S3_CONFIG_BUCKET    = module.config_bucket.bucket_id
+    AOW_S3_CONFIG_PATH      = local.config_key
+    AOW_JWT_VALIDATION_MODE = var.jwt_validation_mode
+    LOG_LEVEL               = var.log_level
   }
 
   depends_on = [aws_s3_object.config]
