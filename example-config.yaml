@@ -89,17 +89,21 @@ allow_insecure_issuers: false
 ####################################################################################
 ## slog level: debug | info | warn | error (default "info").
 log_level: "info"
-## When false (default), claim VALUES (canonical subject, raw sub, audience,
-## session-tag values, repository/ref/actor) are suppressed in BOTH the log
-## stream and the audit records; claim NAMES + decision + reason are kept.
-log_claim_values: false
-## When true, every allow decision's audit record must be durably written
-## BEFORE credentials are returned; a write failure denies the request
-## (fail-closed). Requires log_to_s3=true and log_bucket set — until both are
-## configured this stays a no-op (decisions still log to CloudWatch), logging
-## a warning at boot. Default true; set false to opt out of the durable audit
-## trail even once log_to_s3+log_bucket are configured. See docs/LOGGING.md.
-audit_required: true
+## On by default: claim VALUES (canonical subject, raw sub, audience,
+## session-tag values, repository/ref/actor — including the GitHub actor
+## username) are included in BOTH the log stream and the audit records, so
+## each record identifies who made the request. Set false to suppress claim
+## values, keeping only claim NAMES + decision + reason.
+log_claim_values: true
+## audit_required defaults to true: each allow decision's audit record is
+## written to S3 before credentials are returned (fail-closed). It stays
+## inactive until log_to_s3 + log_bucket are set, and says so with a warning
+## at boot — expected when running this example, where log_to_s3 is false
+## below. Commenting the key out does NOT silence that warning, because true
+## is the default; only setting it to false does, and that opts out of the
+## fail-closed guarantee. Left commented to show the default rather than
+## restate it.
+# audit_required: true
 ## RECOMMENDED: mark every session tag transitive so the requester's identity
 ## survives role chaining. Without this, tags are dropped the moment a target
 ## role assumes another role, and any ABAC policy past that hop can no longer
