@@ -130,52 +130,74 @@ func (rec *auditRecord) matchedRole() string {
 }
 
 // auditLogAttrs returns the standardized slog attribute set for one
-// decision: frontend, jwtMode, issuer, provider, jwtSub, subject, audience,
-// decision, reason, matchedRole, accountId, processingMs, stage. requestId is
-// deliberately NOT in this set: every adapter already binds it to the
-// request-scoped logger via slog.With, so adding it here would emit a
-// duplicate "requestId" key in the same JSON log line (the durable audit
-// record keeps its own RequestID field regardless). Callers append these to
-// their existing log.Error/log.Info call rather than replacing the
-// descriptive message, so the standardized contract is added without renaming
-// unrelated logs.
+// decision: frontend, jwtMode, decision, matchedRole, processingMs always;
+// issuer, provider, accountId, sourceIp, sourceIpFrom, stage, reason, and
+// (when logClaimValues) jwtSub, subject, audience, claims only when non-empty
+// — omitted rather than emitted empty, so a CloudWatch Insights query never
+// has to filter `field != ""`. requestId is deliberately NOT in this set:
+// every adapter already binds it to the request-scoped logger via slog.With,
+// so adding it here would emit a duplicate "requestId" key in the same JSON
+// log line (the durable audit record keeps its own RequestID field
+// regardless). Callers append these to their existing log.Error/log.Info call
+// rather than replacing the descriptive message, so the standardized contract
+// is added without renaming unrelated logs.
 //
 // logClaimValues gates the same claim VALUES that auditRecord.redact()
-// suppresses for the durable sink (jwtSub, subject, audience) — so when
-// log_claim_values=false those values are absent from the emitted log stream
-// too, not just the audit record (suppress in BOTH the log stream and the
-// audit record). Claim NAMES, decision, reason, and non-claim metadata
+// suppresses for the durable sink (jwtSub, subject, audience, claims) — so
+// when log_claim_values=false those values are absent from the emitted log
+// stream too, not just the audit record (suppress in BOTH the log stream and
+// the audit record). Claim NAMES, decision, reason, and non-claim metadata
 // (requestId/issuer/provider/role/account/stage) are always emitted.
 func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
-	jwtSub, subject, audience := rec.JWTSub, rec.Subject, rec.Audience
-	if !logClaimValues {
-		jwtSub, subject, audience = "", "", nil
-	}
-	return []any{
+	attrs := []any{
 		slog.String("frontend", rec.Frontend),
 		slog.String("jwtMode", rec.JWTMode),
-		slog.String("issuer", rec.Issuer),
-		slog.String("provider", rec.Provider),
-		slog.String("jwtSub", jwtSub),
-		slog.String("subject", subject),
-		slog.Any("audience", audience),
 		slog.String("decision", rec.Decision),
-		slog.String("reason", rec.Reason),
 		slog.String("matchedRole", rec.matchedRole()),
-		slog.String("accountId", rec.AccountID),
 		slog.Int64("processingMs", rec.ProcessingMS),
-		slog.String("stage", rec.Stage),
 	}
+	appendIf := func(key, value string) {
+		if value != "" {
+			attrs = append(attrs, slog.String(key, value))
+		}
+	}
+	appendIf("issuer", rec.Issuer)
+	appendIf("provider", rec.Provider)
+	appendIf("accountId", rec.AccountID)
+	appendIf("sourceIp", rec.SourceIP)
+	// Provenance only when the IP was NOT platform-attested: a constant
+	// "frontend" on every line is the noise this task exists to remove, while
+	// a client-supplied IP is something a reader must not miss.
+	if rec.SourceIPFrom != "" && rec.SourceIPFrom != ipSourceFrontend {
+		attrs = append(attrs, slog.String("sourceIpFrom", rec.SourceIPFrom))
+	}
+	// Deny-only: absent on an allow rather than emitted empty.
+	appendIf("stage", rec.Stage)
+	appendIf("reason", rec.Reason)
+	// Claim values: omitted entirely when the gate is off, not blanked.
+	if logClaimValues {
+		appendIf("jwtSub", rec.JWTSub)
+		appendIf("subject", rec.Subject)
+		if len(rec.Audience) > 0 {
+			attrs = append(attrs, slog.Any("audience", rec.Audience))
+		}
+		if len(rec.Claims) > 0 {
+			attrs = append(attrs, slog.Any("claims", rec.Claims))
+		}
+	}
+	return attrs
 }
 
-// subjectAttr returns the canonical subject as a log attribute, blanked when
-// cfg.LogClaimValues is false. Every log site outside the audit record that
-// wants to name the subject must go through this, so the gate holds across the
-// whole log stream and not just the decision line (auditLogAttrs applies the
-// identical blanking to the audit attrs).
+// subjectAttr returns the canonical subject as a log attribute, omitted
+// (rather than blanked) when cfg.LogClaimValues is false or subject is empty.
+// Every log site outside the audit record that wants to name the subject must
+// go through this, so the gate holds across the whole log stream and not just
+// the decision line (auditLogAttrs applies the identical omission to the
+// audit attrs). The zero slog.Attr{} is discarded by slog, so this never
+// emits an empty "subject" key.
 func subjectAttr(cfg *config.Config, subject string) slog.Attr {
-	if !cfg.LogClaimValues {
-		return slog.String("subject", "")
+	if !cfg.LogClaimValues || subject == "" {
+		return slog.Attr{}
 	}
 	return slog.String("subject", subject)
 }

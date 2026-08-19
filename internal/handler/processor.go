@@ -60,6 +60,13 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 	rec.SourceIP, _ = ctx.Value(SourceIPContextKey).(string)
 	rec.SourceIPFrom, _ = ctx.Value(SourceIPSourceContextKey).(string)
+	// elapsed is the single source for every millisecond timing on this
+	// request: the audit record's processingMs and the validationMs/totalMs log
+	// attrs. Going through it rather than calling time.Since(startTime) inline
+	// keeps the zero guard in one place — startTime is absent whenever the
+	// caller did not set StartTimeContextKey, and time.Since(time.Time{}) is
+	// ~64000 years, which as a millisecond integer is indistinguishable from
+	// garbage.
 	elapsed := func() int64 {
 		if startTime.IsZero() {
 			return 0
@@ -150,7 +157,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// would leak every raw claim value the audit record/standardized log line
 	// carefully suppresses.
 	log.Info("Token validation successful",
-		slog.Duration("validationTime", time.Since(startTime)),
+		slog.Int64("validationMs", elapsed()),
 	)
 	if cfg.LogClaimValues {
 		log.Debug("Validated claims", slog.Any("claims", claims))
@@ -204,9 +211,12 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, err)
 	}
 
-	// Time to assume role
-	log.Debug("Assuming role",
-		slog.String("role", requestedRole),
+	// Info, not Debug: this is the last line before a privileged credential is
+	// minted, so it must be visible at the default level. It replaces the
+	// uncorrelated slog.Info in internal/aws/service_wrapper.go, which had no
+	// requestId. role is not repeated here — the request-scoped logger already
+	// carries it in the "request" group bound above.
+	log.Info("Assuming role",
 		slog.Bool("hasSessionPolicy", sessionPolicy != nil))
 
 	// Assume role
@@ -217,7 +227,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		rec.Reason = err.Error()
 		rec.ProcessingMS = elapsed()
 		log.Error("Failed to assume role",
-			slog.String("stage", rec.Stage), slog.String("error", err.Error()), slog.String("role", requestedRole))
+			slog.String("stage", rec.Stage), slog.String("error", err.Error()))
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, fmt.Errorf("failed to assume role: %w", ErrAssumeRoleFailed))
 	}
 
@@ -233,10 +243,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		credExpiration = *credentials.Expiration
 	}
 	log.Info("Successfully assumed role",
-		slog.String("role", requestedRole),
 		slog.String("accessKeyId", accessKeyID),
 		slog.Time("expiration", credExpiration),
-		slog.Duration("totalTime", time.Since(startTime)))
+		slog.Int64("totalMs", elapsed()))
 
 	// Fill in the allow-only audit fields: granted role, account, session tag
 	// names (always) and resolved session-tag values (only when
@@ -274,7 +283,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger
 	defer func() {
 		log.Debug("getSessionPolicy operation completed",
 			subjectAttr(cfg, subject),
-			slog.Duration("duration", time.Since(opStart)))
+			slog.Int64("durationMs", time.Since(opStart).Milliseconds()))
 	}()
 
 	sessionPolicy, sessionPolicyFile := cfg.FindSessionPolicy(issuer, subject, role, claims)

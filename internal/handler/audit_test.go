@@ -388,6 +388,65 @@ func TestAudit_LogClaimValuesOn_IncludesClaimValues(t *testing.T) {
 	assert.Equal(t, "org/repo", sessionTags["repo"])
 }
 
+// --- CloudWatch log stream cleanliness ---
+
+// TestAuditLogAttrs_OmitsEmptyFields pins that the decision line does not
+// carry empty keys. An allow decision has no stage/reason, and with
+// log_claim_values off the claim values must be ABSENT, not blanked — a
+// production stream showed "reason":"", "stage":"", "jwtSub":"",
+// "subject":"", "audience":null on every successful request.
+func TestAuditLogAttrs_OmitsEmptyFields(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		logClaimValues bool
+		absent         []string
+	}{
+		{"allow with claim values", true, []string{`"stage"`, `"reason"`}},
+		{"allow without claim values", false, []string{`"stage"`, `"reason"`, `"jwtSub"`, `"subject"`, `"audience"`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := auditTestCfg(t, false, tc.logClaimValues)
+			var buf bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&buf, nil))
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+				&fixedExtractor{claims: allowClaims("org/repo")}, &fakeAuditSink{}, "test-frontend")
+
+			_, err := proc.ProcessRequest(context.Background(),
+				&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+				validator.ExtractionInput{Token: "t"}, "req-empty", log)
+			require.NoError(t, err)
+
+			out := buf.String()
+			require.Contains(t, out, `"decision":"allow"`)
+			for _, key := range tc.absent {
+				assert.NotContains(t, out, key, "%s must be omitted, not emitted empty", key)
+			}
+		})
+	}
+}
+
+// TestProcessor_DurationsAreMilliseconds pins that timing fields are emitted
+// as readable millisecond counts, consistent with processingMs — not the raw
+// nanosecond integers slog.Duration produces in JSON.
+func TestProcessor_DurationsAreMilliseconds(t *testing.T) {
+	cfg := auditTestCfg(t, false, true)
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: allowClaims("org/repo")}, &fakeAuditSink{}, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-dur", log)
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, `"validationMs":`)
+	assert.Contains(t, out, `"totalMs":`)
+	assert.NotContains(t, out, `"validationTime":`, "nanosecond duration must be gone")
+	assert.NotContains(t, out, `"totalTime":`, "nanosecond duration must be gone")
+}
+
 // --- log-injection safety ---
 
 func TestAudit_LogInjection_ControlCharsDoNotBreakRecordStructure(t *testing.T) {
