@@ -12,6 +12,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
 
@@ -45,10 +46,14 @@ type AuditSink interface {
 // scope here.
 type auditRecord struct {
 	RequestID string `json:"requestId"`
-	Frontend  string `json:"frontend"`
-	JWTMode   string `json:"jwtMode"`
-	Decision  string `json:"decision"`        // "allow" | "deny"
-	Stage     string `json:"stage,omitempty"` // failing stage; deny only
+	// FrontendRequestID is the frontend's own request ID (API Gateway /
+	// ALB), kept alongside the UUID RequestID as the join key back to
+	// access logs. Not a claim value — always recorded.
+	FrontendRequestID string `json:"frontendRequestId,omitempty"`
+	Frontend          string `json:"frontend"`
+	JWTMode           string `json:"jwtMode"`
+	Decision          string `json:"decision"`        // "allow" | "deny"
+	Stage             string `json:"stage,omitempty"` // failing stage; deny only
 
 	// SourceIP is the requesting client's IP; SourceIPFrom is its provenance
 	// ("frontend" = attested by AWS, "x-forwarded-for" = client-supplied and
@@ -91,10 +96,11 @@ type auditRecord struct {
 	SessionTags      map[string]string `json:"sessionTags,omitempty"`
 	SessionPolicyRef string            `json:"sessionPolicyRef,omitempty"`
 
-	// Claims answers "who did this" in the audit trail: the identifying claims
-	// behind the decision (repository/ref/event_name/actor for GitHub, the
-	// issuer's mapped claims otherwise). Claim VALUES, so populated only when
-	// LogClaimValues is on and cleared by redact() alongside subject/jwtSub.
+	// Claims answers "who did this" in the audit trail: the full verified
+	// claim set for GitHub issuers (repository/repository_id aliased to
+	// repo/repo_id), the issuer's mapped claims otherwise. Claim VALUES, so
+	// populated only when LogClaimValues is on and cleared by redact()
+	// alongside subject/jwtSub.
 	Claims map[string]string `json:"claims,omitempty"`
 
 	Expiry *time.Time `json:"expiry,omitempty"`
@@ -136,16 +142,20 @@ func (rec *auditRecord) matchedRole() string {
 
 // auditLogAttrs returns the standardized slog attribute set for one
 // decision: frontend, jwtMode, decision, matchedRole, processingMs always;
-// issuer, provider, accountId, sourceIp, sourceIpFrom, stage, reason, and
-// (when logClaimValues) jwtSub, subject, audience, claims only when non-empty
-// — omitted rather than emitted empty, so a CloudWatch Insights query never
-// has to filter `field != ""`. requestId is deliberately NOT in this set:
-// every adapter already binds it to the request-scoped logger via slog.With,
-// so adding it here would emit a duplicate "requestId" key in the same JSON
-// log line (the durable audit record keeps its own RequestID field
-// regardless). Callers append these to their existing log.Error/log.Info call
-// rather than replacing the descriptive message, so the standardized contract
-// is added without renaming unrelated logs.
+// frontendRequestId, issuer, provider, accountId, sourceIp, sourceIpFrom,
+// stage, reason, and (when logClaimValues) jwtSub, subject, audience, claims
+// only when non-empty — omitted rather than emitted empty, so a CloudWatch
+// Insights query never has to filter `field != ""`. requestId is
+// deliberately NOT in this set: every adapter already binds it to the
+// request-scoped logger via slog.With, so adding it here would emit a
+// duplicate "requestId" key in the same JSON log line (the durable audit
+// record keeps its own RequestID field regardless). frontendRequestId IS
+// emitted here (right after requestId in the rendered line, since slog.With
+// attrs precede the ones passed to the call) — ALB issues no ID of its own,
+// so it's absent there rather than emitted empty. Callers append these to
+// their existing log.Error/log.Info call rather than replacing the
+// descriptive message, so the standardized contract is added without
+// renaming unrelated logs.
 //
 // logClaimValues gates the same claim VALUES that auditRecord.redact()
 // suppresses for the durable sink (jwtSub, subject, audience, claims) — so
@@ -166,6 +176,7 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 			attrs = append(attrs, slog.String(key, value))
 		}
 	}
+	appendIf("frontendRequestId", rec.FrontendRequestID)
 	appendIf("issuer", rec.Issuer)
 	appendIf("provider", rec.Provider)
 	appendIf("accountId", rec.AccountID)
@@ -357,64 +368,71 @@ func sessionTagKeyNames(tagSpec map[string]string) []string {
 	return keys
 }
 
-// githubAuditClaims are the GitHub Actions claims worth carrying in an audit
-// record: who acted (actor), on what (repository, repository_owner,
-// repository_visibility), from where (ref, ref_type, sha), and via which
-// workflow run (event_name, workflow_ref, job_workflow_ref, run_id,
-// run_attempt, runner_environment). The low-signal numeric IDs
-// (actor_id/repository_id/run_number/*_sha) and PR-only base_ref/head_ref are
-// left out: under audit_required every record is its own S3 object, so record
-// size is a per-request cost.
-var githubAuditClaims = []string{
-	"actor",
-	"event_name",
-	"job_workflow_ref",
-	"ref",
-	"ref_type",
-	"repository",
-	"repository_owner",
-	"repository_visibility",
-	"run_attempt",
-	"run_id",
-	"runner_environment",
-	"sha",
-	"workflow_ref",
+// claimAliases renames claims on their way into the audit record so the
+// audit vocabulary is stable and queryable: GitHub's repository/repository_id
+// are recorded as repo/repo_id. Applied to every provider — a claim named
+// "repository" means the same thing wherever it comes from.
+//
+// A rename is skipped when the token already carries a claim under the alias
+// target (see auditClaims): silently overwriting one verified claim with
+// another in an audit record — with which one survives decided by Go's
+// randomized map iteration order — would make the record both lossy and
+// non-reproducible.
+var claimAliases = map[string]string{
+	"repository":    "repo",
+	"repository_id": "repo_id",
 }
 
-// auditClaims resolves the identifying claims behind a decision for the audit
-// record. GitHub issuers use the curated githubAuditClaims list; every other
-// issuer uses the claims its own claim_mappings reference, which is the only
-// claim set the operator has actually declared meaningful for that issuer
-// (a generic issuer has no fixed claim vocabulary to curate against).
+// auditClaims resolves the claims recorded for a decision.
 //
-// Values are read from the verified raw claim set and formatted the same way
-// BuildSessionTags formats session tag values, so a claim reported here and
-// the same claim attached as a session tag can never disagree. Callers must
-// only populate the record when cfg.LogClaimValues permits claim values.
+// For provider "github" this is the FULL verified claim set: every GitHub
+// Actions OIDC claim is non-secret workflow metadata, and a complete dump
+// beats a curated list that silently omits whatever the investigation
+// actually needs (and that has to be revised whenever GitHub adds a claim).
+//
+// Every other provider gets only the claims its own claim_mappings
+// reference. This is deliberate and not a symmetry oversight: an arbitrary
+// OIDC issuer can put email addresses, group memberships, or entitlements in
+// a token, and this service must not be what copies them into an S3 object.
+// Naming a claim in claim_mappings is the operator's statement that it is
+// both meaningful and safe to record.
+//
+// Values are formatted exactly as BuildSessionTags formats session tag
+// values, so a claim reported here and the same claim attached as a session
+// tag can never disagree. Callers must only populate the record when
+// cfg.LogClaimValues permits claim values.
 func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) map[string]string {
 	if len(rawClaims) == 0 {
 		return nil
 	}
 
-	var names []string
-	if issuerProvider(cfg, issuer) == "github" {
-		names = githubAuditClaims
-	} else {
+	include := func(string) bool { return true } // github: everything
+	if issuerProvider(cfg, issuer) != "github" {
+		mapped := make(map[string]bool)
 		for _, claimName := range issuerClaimMappings(cfg, issuer) {
-			names = append(names, claimName)
+			mapped[claimName] = true
 		}
-		sort.Strings(names)
+		include = func(name string) bool { return mapped[name] }
 	}
 
-	out := make(map[string]string, len(names))
-	for _, name := range names {
-		raw, ok := rawClaims[name]
-		if !ok || raw == nil {
+	out := make(map[string]string, len(rawClaims))
+	for name, raw := range rawClaims {
+		if raw == nil || !include(name) {
 			continue
 		}
-		if value := fmt.Sprintf("%v", raw); value != "" {
-			out[name] = value
+		value := utils.FormatClaimValue(raw)
+		if value == "" {
+			continue
 		}
+		key := name
+		// Only rename when the alias target is not itself a claim in this
+		// token; otherwise both would land on one key and one would vanish.
+		if alias, ok := claimAliases[name]; ok {
+			if _, taken := rawClaims[alias]; !taken {
+				key = alias
+			}
+		}
+		out[key] = value
 	}
 	if len(out) == 0 {
 		return nil

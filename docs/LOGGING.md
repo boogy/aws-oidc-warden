@@ -29,11 +29,16 @@ same redacted record backs both the standardized log line and the durable
 audit record, so they never disagree.
 
 Always present: `requestId`, `frontend`, `jwtMode`, `decision` (`allow`/`deny`),
-`processingMs`. Deny adds `stage` (`extract` / `account_check` /
-`claims_processing` / `authorize` / `session_policy` / `assume_role`) and
-`reason`. Allow adds `issuer`, `provider`, `matchedVia` (`explicit`/`tag-auth`),
-`requestedRole`, `grantedRole`, `accountId`, `sessionName`, `sessionTagKeys`,
-`sessionPolicyRef`, `expiry`.
+`processingMs`. `requestId` is the Lambda invocation UUID — stable across
+every frontend mode, so a query spanning frontends has one shape to match on.
+`frontendRequestId` is present whenever the frontend issues an ID of its own
+(API Gateway v1/v2, Lambda Function URLs) and absent for ALB, which issues
+none; it is the join key back to that frontend's own access logs, kept
+alongside `requestId` for that reason. Deny adds `stage` (`extract` /
+`account_check` / `claims_processing` / `authorize` / `session_policy` /
+`assume_role`) and `reason`. Allow adds `issuer`, `provider`, `matchedVia`
+(`explicit`/`tag-auth`), `requestedRole`, `grantedRole`, `accountId`,
+`sessionName`, `sessionTagKeys`, `sessionPolicyRef`, `expiry`.
 
 `sessionName` is the STS session name actually used — the global
 `role_session_name` or the per-mapping override that authorized the role (see
@@ -47,17 +52,22 @@ Claim **values** — `jwtSub` (raw `sub`), `subject` (canonical identity),
 `log_claim_values=true`. `sessionTagKeys` (names only) are always present.
 
 `claims` answers "who did this", on **both** allow and deny records. For
-`provider: github` issuers it carries a curated set: `repository`,
-`repository_owner`, `repository_visibility`, `ref`, `ref_type`, `event_name`,
-`actor`, `workflow_ref`, `job_workflow_ref`, `sha`, `run_id`, `run_attempt`,
-`runner_environment`. The low-signal IDs (`actor_id`, `repository_id`,
-`run_number`, `*_sha`) and PR-only `base_ref`/`head_ref` are omitted — under
-`audit_required` each record is its own S3 object, so record size is a
-per-request cost. For every other issuer it carries the claims that issuer's
-own `claim_mappings` reference, since a generic issuer has no fixed claim
-vocabulary to curate against. Values are formatted exactly as session tag
-values are, so a claim reported here and the same claim attached as a session
-tag can never disagree.
+`provider: github` issuers it carries the **full verified claim set** — every
+GitHub Actions OIDC claim, not a curated subset — with `repository` and
+`repository_id` renamed to `repo` and `repo_id` so the audit vocabulary is
+stable and queryable regardless of which raw claim name GitHub used. A claim
+with an empty value is still skipped (e.g. `base_ref`/`head_ref` outside a
+pull request), since it carries no information and costs bytes in a
+per-request S3 object. A full dump is deliberate for `github` specifically:
+every claim GitHub puts in that token is non-secret workflow metadata, and a
+complete dump beats a curated list that silently omits whatever an
+investigation actually needs. For every other issuer, `claims` carries only
+the claims that issuer's own `claim_mappings` reference — an arbitrary OIDC
+issuer can put email addresses, group memberships, or entitlements in a
+token, and naming a claim in `claim_mappings` is the operator's statement
+that it is both meaningful and safe to record. Values are formatted exactly
+as session tag values are, so a claim reported here and the same claim
+attached as a session tag can never disagree.
 
 Records are built with `encoding/json`, which escapes control characters, so a
 claim value containing newlines cannot forge a log line or break the record.

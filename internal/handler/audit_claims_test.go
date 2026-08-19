@@ -15,7 +15,10 @@ import (
 )
 
 // githubRawClaims is a representative verified GitHub Actions claim set,
-// including claims deliberately left out of the curated audit list.
+// including low-signal claims (actor_id, repository_id, run_number,
+// workflow_sha) a curated list used to drop but a full dump now carries, plus
+// empty base_ref/head_ref (PR-only claims, empty on a push event) to pin that
+// empty claims are still skipped regardless of dump semantics.
 func githubRawClaims() map[string]any {
 	return map[string]any{
 		"repository":            "org/repo",
@@ -31,7 +34,7 @@ func githubRawClaims() map[string]any {
 		"run_id":                "1234567890",
 		"run_attempt":           "1",
 		"runner_environment":    "github-hosted",
-		// Excluded from the curated set — asserted absent below.
+		// Dropped by the old curated list, carried by the full dump.
 		"actor_id":      "583231",
 		"repository_id": "42",
 		"run_number":    "7",
@@ -66,35 +69,125 @@ func recClaims(t *testing.T, rec map[string]any) map[string]any {
 	return claims
 }
 
-// TestAuditClaims_GitHubCuratedSet pins which GitHub claims reach the audit
-// record: the curated "who did this" set, and not the low-signal IDs.
-func TestAuditClaims_GitHubCuratedSet(t *testing.T) {
+// TestAuditClaims_GitHubDumpsEverythingWithAliases pins the full-dump
+// semantics: every verified GitHub claim reaches the record, with the
+// requested renames applied (repository -> repo, repository_id -> repo_id).
+func TestAuditClaims_GitHubDumpsEverythingWithAliases(t *testing.T) {
 	cfg := auditTestCfg(t, false, true)
 	sink := &fakeAuditSink{}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), &fixedExtractor{claims: githubClaims("org/repo")}, sink, "test-frontend")
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: githubClaims("org/repo")}, sink, "test-frontend")
 
 	_, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
-		validator.ExtractionInput{Token: "t"},
-		"req-claims", slog.Default())
+		validator.ExtractionInput{Token: "t"}, "req-claims", slog.Default())
 	require.NoError(t, err)
 
 	claims := recClaims(t, sink.last(t))
-	require.NotNil(t, claims, "audit record must carry claims when log_claim_values=true")
+	require.NotNil(t, claims)
 
-	// The claims the operator actually asked the audit trail to answer.
-	assert.Equal(t, "org/repo", claims["repository"])
-	assert.Equal(t, "org", claims["repository_owner"])
-	assert.Equal(t, "refs/heads/main", claims["ref"])
-	assert.Equal(t, "push", claims["event_name"])
-	assert.Equal(t, "octocat", claims["actor"])
-	assert.Equal(t, "github-hosted", claims["runner_environment"])
-	assert.Equal(t, "1234567890", claims["run_id"])
+	// Renamed per the logging requirement.
+	assert.Equal(t, "org/repo", claims["repo"])
+	assert.Equal(t, "42", claims["repo_id"])
+	assert.NotContains(t, claims, "repository", "repository must be emitted as repo")
+	assert.NotContains(t, claims, "repository_id", "repository_id must be emitted as repo_id")
 
-	// Deliberately excluded to keep per-request S3 records small.
-	for _, excluded := range []string{"actor_id", "repository_id", "run_number", "workflow_sha", "base_ref", "head_ref"} {
-		assert.NotContains(t, claims, excluded, "%q should not be in the curated audit claim set", excluded)
+	// Explicitly required by the logging spec.
+	for _, k := range []string{"actor", "ref", "workflow_ref", "job_workflow_ref", "sha"} {
+		assert.NotEmpty(t, claims[k], "required claim %q must be logged", k)
 	}
+
+	// Previously dropped by the curated list — now present.
+	assert.Equal(t, "583231", claims["actor_id"])
+	assert.Equal(t, "7", claims["run_number"])
+	assert.Equal(t, "def456", claims["workflow_sha"])
+
+	// Empty claims are still skipped: they carry no information and cost bytes
+	// in a per-request S3 object.
+	assert.NotContains(t, claims, "base_ref")
+}
+
+// TestAuditClaims_NumericClaimsAreNotScientificNotation pins that a numeric
+// claim reaches the audit record as a plain integer.
+//
+// This only became reachable with the full dump: claims are decoded into
+// map[string]any, so every JSON number is a float64, and fmt's default float
+// verb renders a 10-digit epoch second as "1.7555904e+09". An `exp` an auditor
+// cannot read as a timestamp is a defect in the compliance artifact, so the
+// value goes through utils.FormatClaimValue — the same helper BuildSessionTags
+// uses, so the documented "a claim here and the same claim as a session tag can
+// never disagree" guarantee still holds.
+func TestAuditClaims_NumericClaimsAreNotScientificNotation(t *testing.T) {
+	claims := githubClaims("org/repo")
+	claims.Raw["exp"] = float64(1755590400) // as encoding/json decodes it
+	claims.Raw["repository_id"] = float64(42)
+	claims.Raw["run_number"] = float64(7)
+
+	cfg := auditTestCfg(t, false, true)
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: claims}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-numeric", slog.Default())
+	require.NoError(t, err)
+
+	rec := recClaims(t, sink.last(t))
+	require.NotNil(t, rec)
+	assert.Equal(t, "1755590400", rec["exp"], "an epoch second must not be scientific notation")
+	assert.Equal(t, "42", rec["repo_id"])
+	assert.Equal(t, "7", rec["run_number"])
+}
+
+// TestAuditClaims_AliasSkippedWhenTargetClaimExists pins that the
+// repository->repo rename does not overwrite a claim the token already carries
+// under the alias target. Both landing on one key would drop a verified claim
+// from the audit record, and which one survived would depend on Go's
+// randomized map iteration order — a lossy, non-reproducible record.
+func TestAuditClaims_AliasSkippedWhenTargetClaimExists(t *testing.T) {
+	claims := githubClaims("org/repo")
+	claims.Raw["repo"] = "already-taken"
+
+	cfg := auditTestCfg(t, false, true)
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: claims}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-alias-clash", slog.Default())
+	require.NoError(t, err)
+
+	rec := recClaims(t, sink.last(t))
+	require.NotNil(t, rec)
+	assert.Equal(t, "already-taken", rec["repo"], "the token's own repo claim must win")
+	assert.Equal(t, "org/repo", rec["repository"], "repository must keep its raw name rather than vanish")
+}
+
+// TestAuditRecord_IdentityFields pins the request-identity fields on the
+// record itself: iss/sub/aud were already there, and the frontend join key
+// plus the resolved client IP are added.
+func TestAuditRecord_IdentityFields(t *testing.T) {
+	cfg := auditTestCfg(t, false, true)
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: githubClaims("org/repo")}, sink, "test-frontend")
+
+	ctx := context.WithValue(context.Background(), handler.SourceIPContextKey, "203.0.113.7")
+	ctx = context.WithValue(ctx, handler.FrontendRequestIDContextKey, "CPyipjveDoEEPIA=")
+
+	_, err := proc.ProcessRequest(ctx,
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-identity", slog.Default())
+	require.NoError(t, err)
+
+	rec := sink.last(t)
+	assert.Equal(t, testIssuer, rec["issuer"])
+	assert.Equal(t, "raw-sub-value", rec["jwtSub"])
+	assert.Equal(t, []any{"sts.amazonaws.com"}, rec["audience"])
+	assert.Equal(t, "203.0.113.7", rec["sourceIp"])
+	assert.Equal(t, "CPyipjveDoEEPIA=", rec["frontendRequestId"])
 }
 
 // TestAuditClaims_SuppressedWhenLogClaimValuesOff guards the gate: claims are
@@ -133,7 +226,7 @@ func TestAuditClaims_OnDenyRecord(t *testing.T) {
 	require.Equal(t, "deny", rec["decision"])
 	claims := recClaims(t, rec)
 	require.NotNil(t, claims, "deny records must carry the identifying claims too")
-	assert.Equal(t, "org/repo", claims["repository"])
+	assert.Equal(t, "org/repo", claims["repo"])
 	assert.Equal(t, "octocat", claims["actor"])
 }
 
