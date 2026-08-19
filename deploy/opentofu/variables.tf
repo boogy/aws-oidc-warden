@@ -145,6 +145,24 @@ variable "tag_auth" {
   default = { enabled = false }
 }
 
+variable "session_tags_transitive" {
+  type        = bool
+  description = <<-EOT
+    RECOMMENDED: mark every session tag transitive so the requester's identity
+    survives further role chaining by the target role and cannot be altered
+    downstream.
+
+    Without this, a session tag is dropped the moment the target role assumes
+    another role, so any ABAC policy past that hop can no longer see who the
+    original caller was.
+
+    Defaults to false only for upgrade safety: transitive tags are immutable
+    downstream, so enabling this breaks a target role that re-tags with the
+    same keys while chaining. If yours does not (the common case), turn it on.
+  EOT
+  default     = false
+}
+
 variable "cross_account" {
   description = "Cross-account policy gate. enabled=false hard-denies all cross-account operations. When true, the Lambda assumes target roles in member accounts directly (one hop, no spoke); the spoke role (spoke_role_name) is used only as a tag-read broker (iam:GetRole) when tag_auth is enabled against cross-account targets. external_id applies only to that hub->spoke tag-read hop, never to direct role assumption."
   type = object({
@@ -300,8 +318,37 @@ variable "cache_ttl" {
 
 variable "enable_s3_logs" {
   type        = bool
-  description = "Provision an audit-log bucket and enable log_to_s3."
+  description = <<-EOT
+    Provision an audit-log bucket and enable log_to_s3. Implied by
+    audit_required (default true), which needs a durable destination — set
+    audit_required=false to opt out of both.
+  EOT
   default     = false
+}
+
+variable "log_claim_values" {
+  type        = bool
+  description = <<-EOT
+    Include claim VALUES in logs and audit records: the canonical subject, raw
+    `sub`, audience, resolved session tags, and the per-issuer `claims` object
+    (repository/ref/event_name/actor for GitHub). Without this an audit record
+    names the decision and the role but not who made the request. Set false to
+    keep identities out of the log stream; claim NAMES, decision, and reason
+    are always recorded either way.
+  EOT
+  default     = true
+}
+
+variable "audit_required" {
+  type        = bool
+  description = <<-EOT
+    Write each allow decision's audit record to S3 synchronously, BEFORE
+    credentials are returned; a write failure denies the request (fail-closed).
+    Implies enable_s3_logs, since the guarantee needs a bucket to write to.
+    Set false for the best-effort batched trail, which in Lambda can lose
+    buffered records at container reclaim (docs/LOGGING.md).
+  EOT
+  default     = true
 }
 
 variable "enable_session_policy_bucket" {

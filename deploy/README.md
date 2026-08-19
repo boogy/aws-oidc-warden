@@ -53,10 +53,13 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 | `log_claim_values`             | `true`  | No new resources                                      | —                                                |
 | `enable_session_policy_bucket` | `false` | S3 bucket `<prefix>-session-policies-<suffix>`        | `s3:GetObject`                                   |
 | `tag_auth.enabled`             | `false` | No new resources                                      | `iam:GetRole`, `iam:ListRoleTags`                |
+| `session_tags_transitive`      | `false` | No new resources                                      | —                                                 |
 
 **`audit_required` defaults to `true`** and provisions the log bucket on its own, so every allow decision's audit record is written to S3 synchronously before credentials are returned (fail-closed). Set it to `false` for the best-effort batched trail — in Lambda that path can lose buffered records at container reclaim (see [docs/LOGGING.md](../docs/LOGGING.md)).
 
 **`log_claim_values` defaults to `true`** so each record identifies who made the request (`claims.repository`, `claims.ref`, `claims.event_name`, `claims.actor`, plus the canonical `subject`). Set it to `false` to keep identities out of the log stream — decision, reason, role, and claim *names* are still recorded.
+
+**`session_tags_transitive` defaults to `false`, but turning it on is RECOMMENDED.** Without it, a session tag is dropped the moment the target role assumes another role, so any ABAC policy past that hop can no longer see who the original caller was. It defaults off only for upgrade safety: transitive tags are immutable downstream, so enabling it breaks a target role that re-tags with the same keys while chaining. If yours doesn't (the common case), set `session_tags_transitive = true`.
 
 **Cache backends are mutually exclusive.** `enable_dynamodb_cache` and `enable_s3_cache` cannot both be `true`; a `precondition` enforces this at plan time. Leaving both `false` uses in-memory cache (suitable for low traffic; cache lost on cold start).
 

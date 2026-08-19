@@ -43,6 +43,12 @@ enable_s3_cache       = false
 cache_ttl             = "1h"
 
 # --- Optional features ---
+# audit_required (default true) implies enable_s3_logs: each allow decision's
+# audit record is written to S3 before credentials are returned (fail-closed).
+# audit_required               = true
+# log_claim_values (default true) puts the requesting identity in each record
+# (claims.repository/ref/event_name/actor + canonical subject).
+# log_claim_values             = true
 enable_s3_logs               = false
 enable_session_policy_bucket = false
 
@@ -86,6 +92,13 @@ role_mappings = [
 #   enabled     = true
 #   default_org = "my-org"
 # }
+
+# RECOMMENDED. Marks every session tag transitive so the requester's identity
+# survives role chaining and cannot be altered downstream. Without it, tags are
+# dropped at the first role hop and ABAC policies past that hop can no longer
+# tell who the caller was. Defaults to false only for upgrade safety: enabling
+# it breaks a target role that re-tags with the same keys while chaining.
+# session_tags_transitive = true
 
 # --- Optional cross-account policy gate ---
 # enabled=true lets the Lambda assume target roles in member accounts
@@ -140,4 +153,3 @@ jwt_validation_mode = "self"
 # time if var.issuers is set, since each entry there drives its own authorizer.
 # jwt_authorizer_issuer    = "https://token.actions.githubusercontent.com"
 # jwt_authorizer_audiences = ["sts.amazonaws.com"]
-

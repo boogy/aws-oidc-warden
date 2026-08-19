@@ -91,6 +91,20 @@ Parameters:
       (fail-closed). Implies EnableS3Logs, since the guarantee needs a bucket
       to write to. Set false for the best-effort batched trail, which in Lambda
       can lose buffered records at container reclaim.
+  SessionTagsTransitive:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      RECOMMENDED: mark every session tag transitive so the requester's
+      identity survives further role chaining by the target role and cannot
+      be altered downstream. Without this, a session tag is dropped the
+      moment the target role assumes another role, so any ABAC policy past
+      that hop can no longer see who the original caller was. Defaults to
+      false only for upgrade safety: transitive tags are immutable
+      downstream, so enabling this breaks a target role that re-tags with
+      the same keys while chaining. If yours does not (the common case),
+      set this to true.
   EnableSessionPolicyBucket:
     Type: String
     Default: "false"
@@ -425,6 +439,7 @@ Resources:
           AOW_CACHE_TTL: !If [UseAnyCache, !Ref CacheTTL, !Ref "AWS::NoValue"]
           AOW_AUDIT_REQUIRED: !If [UseAuditRequired, "true", "false"]
           AOW_LOG_CLAIM_VALUES: !Ref LogClaimValues
+          AOW_SESSION_TAGS_TRANSITIVE: !Ref SessionTagsTransitive
           AOW_LOG_TO_S3: !If [UseS3Logs, "true", !Ref "AWS::NoValue"]
           AOW_LOG_BUCKET: !If [UseS3Logs, !Ref LogBucket, !Ref "AWS::NoValue"]
           AOW_LOG_PREFIX: !If [UseS3Logs, "audit/", !Ref "AWS::NoValue"]

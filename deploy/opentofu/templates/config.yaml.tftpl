@@ -43,6 +43,9 @@ cache:
 jwt_validation:
   mode: ${jsonencode(cfg.jwt_validation.mode)}
 
+audit_required: ${cfg.audit_required}
+log_claim_values: ${cfg.log_claim_values}
+session_tags_transitive: ${cfg.session_tags_transitive}
 log_to_s3: ${cfg.log_to_s3}
 log_bucket: ${cfg.log_bucket == null ? "null" : jsonencode(cfg.log_bucket)}
 log_prefix: ${cfg.log_prefix == null ? "null" : jsonencode(cfg.log_prefix)}
@@ -67,28 +70,44 @@ cross_account:
 role_mappings:${length(cfg.role_mappings) == 0 ? " []" : ""}
 %{ for m in cfg.role_mappings ~}
   - subject: ${jsonencode(m.subject)}
-    issuer: ${m.issuer == null ? "null" : jsonencode(m.issuer)}
-    roles:${m.roles == null ? " null" : (length(m.roles) == 0 ? " []" : "")}
+%{ if m.issuer != null ~}
+    issuer: ${jsonencode(m.issuer)}
+%{ endif ~}
 %{ if m.roles != null ~}
+    roles:${length(m.roles) == 0 ? " []" : ""}
 %{ for r in m.roles ~}
       - ${jsonencode(r)}
 %{ endfor ~}
 %{ endif ~}
-    session_policy: ${m.session_policy == null ? "null" : "|-"}
 %{ if m.session_policy != null ~}
+    session_policy: |-
       ${indent(6, m.session_policy)}
 %{ endif ~}
-    session_policy_file: ${m.session_policy_file == null ? "null" : jsonencode(m.session_policy_file)}
-    conditions: ${m.conditions == null ? "null" : ""}
+%{ if m.session_policy_file != null ~}
+    session_policy_file: ${jsonencode(m.session_policy_file)}
+%{ endif ~}
 %{ if m.conditions != null ~}
-      branch: ${m.conditions.branch == null ? "null" : jsonencode(m.conditions.branch)}
-      ref: ${m.conditions.ref == null ? "null" : jsonencode(m.conditions.ref)}
-      ref_type: ${m.conditions.ref_type == null ? "null" : jsonencode(m.conditions.ref_type)}
-      event_name: ${m.conditions.event_name == null ? "null" : jsonencode(m.conditions.event_name)}
-      workflow_ref: ${m.conditions.workflow_ref == null ? "null" : jsonencode(m.conditions.workflow_ref)}
-      environment: ${m.conditions.environment == null ? "null" : jsonencode(m.conditions.environment)}
-      actor_matches:${m.conditions.actor_matches == null ? " null" : (length(m.conditions.actor_matches) == 0 ? " []" : "")}
+    conditions:
+%{ if m.conditions.branch != null ~}
+      branch: ${jsonencode(m.conditions.branch)}
+%{ endif ~}
+%{ if m.conditions.ref != null ~}
+      ref: ${jsonencode(m.conditions.ref)}
+%{ endif ~}
+%{ if m.conditions.ref_type != null ~}
+      ref_type: ${jsonencode(m.conditions.ref_type)}
+%{ endif ~}
+%{ if m.conditions.event_name != null ~}
+      event_name: ${jsonencode(m.conditions.event_name)}
+%{ endif ~}
+%{ if m.conditions.workflow_ref != null ~}
+      workflow_ref: ${jsonencode(m.conditions.workflow_ref)}
+%{ endif ~}
+%{ if m.conditions.environment != null ~}
+      environment: ${jsonencode(m.conditions.environment)}
+%{ endif ~}
 %{ if m.conditions.actor_matches != null ~}
+      actor_matches:${length(m.conditions.actor_matches) == 0 ? " []" : ""}
 %{ for a in m.conditions.actor_matches ~}
         - ${jsonencode(a)}
 %{ endfor ~}
