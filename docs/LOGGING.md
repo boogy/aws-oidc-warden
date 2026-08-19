@@ -55,6 +55,28 @@ tag can never disagree.
 Records are built with `encoding/json`, which escapes control characters, so a
 claim value containing newlines cannot forge a log line or break the record.
 
+The CloudWatch decision line omits empty attributes rather than emitting them
+blank: `stage`/`reason` are absent on an allow decision (they're deny-only),
+and with `log_claim_values=false` the claim values (`jwtSub`, `subject`,
+`audience`, `claims`) are absent, not blanked. `sourceIp` is present whenever
+known; `sourceIpFrom` is present only when the IP was **not**
+platform-attested (i.e. it's absent for the common `frontend` case, so a
+reader only sees provenance called out when it's a client-supplied,
+spoofable value). The durable audit record keeps its own shape regardless: the
+optional fields above are all `json:"...,omitempty"` there, so absence already
+means "empty" independent of this log-line-only omission — but note the record
+does keep `sourceIpFrom` even for the attested `frontend` case, because there
+it is a real value rather than line noise. `frontend`, `jwtMode`, and
+`decision` are unconditional in both.
+
+Timing fields (`validationMs`, `totalMs`, `durationMs`) are millisecond
+integers, matching `processingMs` — not raw nanosecond counts.
+
+All log output is JSON (`slog.NewJSONHandler`, the only handler constructed
+anywhere in the service); this is enforced by
+`TestLogOutputIsJSON`/`TestBootstrapLoggerIsJSONHandler`, so a downstream
+parser can rely on every line being valid JSON.
+
 > **`log_level` note:** `log_level` / `AOW_LOG_LEVEL` is validated (an unknown
 > level name is rejected at config load) but is **not** applied to the running
 > `slog` handler, whose level is fixed at bootstrap from the bare `LOG_LEVEL`

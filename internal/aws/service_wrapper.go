@@ -144,10 +144,9 @@ func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeR
 	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
 	defer cancel()
 
-	slog.Info("Assuming role",
-		slog.String("roleArn", *input.RoleArn),
-		slog.String("sessionName", *input.RoleSessionName),
-	)
+	// No slog.Info here: the request-scoped processor.go logs "Assuming role"
+	// with requestId correlation before calling this method. A package-level
+	// slog call here would duplicate that line without the correlation.
 
 	// Ensure we have a reasonable duration set
 	if input.DurationSeconds == nil || *input.DurationSeconds == 0 {
@@ -175,8 +174,9 @@ func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeR
 		return nil, err
 	}
 
-	// Don't log sensitive information like credentials, but indicate success
-	slog.Info("Successfully assumed role", "roleArn", *input.RoleArn)
+	// No slog.Info here: processor.go already logs "Successfully assumed
+	// role" with requestId correlation and full context (role, access key ID,
+	// expiration, timing) once this call returns successfully.
 	return output, nil
 }
 
