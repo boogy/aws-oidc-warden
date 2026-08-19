@@ -357,12 +357,29 @@ checks):
 
 ![Role chaining and transitive session tags](images/tag-auth-transitive.svg)
 
+> **RECOMMENDED.** Enable this even if you don't use tag-based authorization —
+> it's a top-level setting (`session_tags_transitive`, independent of
+> `tag_auth.enabled`) documented here because role chaining is where it
+> matters most. Every session tag the warden attaches is dropped the instant
+> the target role assumes another role: `sts:AssumeRole` does not propagate
+> the calling principal's session tags to the next hop unless they were
+> explicitly marked transitive on *this* hop. So without it, any ABAC policy
+> written against `aws:PrincipalTag/repo` (or any other identity tag) silently
+> stops seeing who the original caller was as soon as the chain goes one role
+> deep — and so does your audit trail. The service defaults this to `false`
+> only for upgrade safety, not because it's a weaker posture: see "When NOT to
+> use" below for the one failure mode this default protects against.
+
 When a workflow assumes a target role that **itself chains to further roles** (via
 `sts:AssumeRole` in the target's permissions), the warden can mark the attached
 session tags as **transitive**, making them immutable and propagated to every
 downstream assumption in the chain.
 
-Enable with `tag_auth.transitive_session_tags: true`.
+Enable with the top-level `session_tags_transitive: true` — it applies to
+every `AssumeRole` call regardless of whether `tag_auth` is enabled. The
+nested `tag_auth.transitive_session_tags` key is **deprecated**: it predates
+the top-level key, has nothing to do with tag-based authorization, and stays
+only as a fallback for existing configs (either key turning it on wins).
 
 ### How the chain works
 
@@ -378,7 +395,7 @@ it is not part of this chain and carries no session tags of its own, cached
 per account and reused across repos. All per-repo tagging happens at the
 `AssumeRole` into the target role.)
 
-When `transitive_session_tags` is enabled, the warden marks **every session tag
+When `session_tags_transitive` is enabled, the warden marks **every session tag
 it attaches** (the issuer's whole `session_tags` spec — e.g. `repo`, `ref`,
 `actor`, … for the standard GitHub spec) transitive via `TransitiveTagKeys` in
 the `AssumeRole` call to the target. The key set follows the issuer's
@@ -429,7 +446,7 @@ One target role, many repos — each repo can only access its own resources:
 }
 ```
 
-With `transitive_session_tags: true`, even if the target role chains to another
+With `session_tags_transitive: true`, even if the target role chains to another
 role, the `repo` tag remains bound to the original GitHub repository.
 
 > **IAM note:** to use transitive tags, the target role's trust policy must grant
@@ -584,7 +601,14 @@ tag_auth:
   enabled: true
   tag_prefix: "aow/"
   default_org: "" # if set, bare aow/repo tags (e.g. "api") expand to "<default_org>/api"
-  transitive_session_tags: false # set true to mark all attached session tags immutable through role chaining
+
+# RECOMMENDED: top-level, independent of tag_auth — mark every session tag
+# transitive so the requester's identity survives role chaining instead of
+# being dropped at the first hop. Off by default only for upgrade safety
+# (transitive tags are immutable, so a target role that re-tags with the same
+# keys while chaining would start failing). See "Role chaining & transitive
+# session tags" above.
+session_tags_transitive: true
 
 # Cross-account policy gate. Required (enabled: true) for ANY cross-account
 # operation — assumes (which are always direct hub->target) and tag reads
@@ -599,7 +623,8 @@ cross_account:
 ```
 
 Or via environment variables: `AOW_TAG_AUTH_ENABLED`, `AOW_TAG_AUTH_TAG_PREFIX`,
-`AOW_TAG_AUTH_DEFAULT_ORG`, `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`,
+`AOW_TAG_AUTH_DEFAULT_ORG`, `AOW_SESSION_TAGS_TRANSITIVE` (the deprecated
+`AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` still works as a fallback),
 `AOW_CROSS_ACCOUNT_ENABLED`, `AOW_CROSS_ACCOUNT_SPOKE_ROLE_NAME`,
 `AOW_CROSS_ACCOUNT_EXTERNAL_ID`, `AOW_CROSS_ACCOUNT_SPOKE_SESSION_DURATION`,
 `AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS` (comma-separated account IDs).

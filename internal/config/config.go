@@ -178,9 +178,11 @@ type TagAuth struct {
 	TagPrefix  string `mapstructure:"tag_prefix" json:"tag_prefix,omitempty"`   // default "aow/"
 	DefaultOrg string `mapstructure:"default_org" json:"default_org,omitempty"` // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
 
-	// TransitiveSessionTags, when true, marks every session tag attached to the
-	// AssumeRole call transitive (see aws.selectTransitiveKeys) so they
-	// propagate immutably through role chaining. Default off.
+	// TransitiveSessionTags is deprecated: use the top-level
+	// Config.SessionTagsTransitive instead — this field has nothing to do
+	// with tag-based authorization and predates that key. Kept only as a
+	// fallback so existing configs keep working; see
+	// Config.TransitiveSessionTags().
 	TransitiveSessionTags bool `mapstructure:"transitive_session_tags" json:"transitive_session_tags,omitempty"`
 
 	// multiIssuer is set by Config.Validate() (len(Issuers) > 1) and gates the
@@ -302,6 +304,21 @@ type Config struct {
 	// audit sink capable of persisting anything.
 	AuditRequired bool `mapstructure:"audit_required" json:"audit_required,omitempty"`
 
+	// SessionTagsTransitive marks every session tag attached to AssumeRole
+	// transitive, so the identity survives further role chaining by the
+	// target role and cannot be altered downstream. Top-level because it
+	// governs session tagging, which happens on every request — it was
+	// originally nested under tag_auth, where operators running with
+	// tag_auth.enabled=false reasonably assumed it was inert.
+	//
+	// Defaults to false so upgrading changes nothing: transitive tags are
+	// immutable downstream, so a target role that re-tags with the same keys
+	// while chaining would start failing. Turning it on is nonetheless the
+	// recommended posture — without it, an identity tag is dropped at the
+	// first role hop and every ABAC policy past that hop stops seeing who the
+	// caller was. example-config.yaml and docs/ say so prominently.
+	SessionTagsTransitive bool `mapstructure:"session_tags_transitive" json:"session_tags_transitive,omitempty"`
+
 	// TagAuth enables tag-based authorization (IAM role tags authorize claims).
 	TagAuth *TagAuth `mapstructure:"tag_auth" json:"tag_auth,omitempty"`
 
@@ -409,6 +426,7 @@ var envBindings = []envBinding{
 	{"log_claim_values", func(c *Config, v string) { c.LogClaimValues = envTrue(v) }},
 	{"audit_required", func(c *Config, v string) { c.AuditRequired = envTrue(v) }},
 	{"allow_insecure_issuers", func(c *Config, v string) { c.AllowInsecureIssuers = envTrue(v) }},
+	{"session_tags_transitive", func(c *Config, v string) { c.SessionTagsTransitive = envTrue(v) }},
 
 	// Durations (warn-and-skip on parse error).
 	{"config_reload_interval", func(c *Config, v string) {
@@ -565,6 +583,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("log_level", defaultLogLevel)
 	viper.SetDefault("log_claim_values", false)
 	viper.SetDefault("audit_required", true)
+	viper.SetDefault("session_tags_transitive", false)
 
 	// Explicitly bind all config keys to environment variables. Driven by
 	// envBindings (see below) so this list and reapplyEnvOverrides cannot
@@ -698,6 +717,22 @@ func (c *Config) AuditEnforced() bool {
 	return c.AuditRequired && c.LogToS3 && c.LogBucket != ""
 }
 
+// TransitiveSessionTags reports whether session tags should be marked
+// transitive. Either source turning it on wins: the top-level
+// session_tags_transitive or the deprecated tag_auth.transitive_session_tags,
+// so existing configs keep working. Both default to false.
+//
+// The OR is deliberate rather than strict precedence. An operator who sets the
+// top-level key to false while leaving the deprecated key true has written a
+// self-contradicting config; resolving that toward transitive keeps the
+// stronger guarantee, and the Validate() warning below tells them to pick one.
+func (c *Config) TransitiveSessionTags() bool {
+	if c.SessionTagsTransitive {
+		return true
+	}
+	return c.TagAuth != nil && c.TagAuth.TransitiveSessionTags
+}
+
 // Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
 	if len(c.Issuers) == 0 {
@@ -815,6 +850,10 @@ func (c *Config) Validate() error {
 		// (fail-open). AuditEnforced() re-derives per snapshot instead.
 		slog.Warn("audit_required is set but log_to_s3/log_bucket are not configured; " +
 			"the durable audit trail is inactive until both are set (decisions still log to CloudWatch)")
+	}
+
+	if c.TagAuth != nil && c.TagAuth.TransitiveSessionTags && !c.SessionTagsTransitive {
+		slog.Warn("tag_auth.transitive_session_tags is deprecated; use the top-level session_tags_transitive")
 	}
 
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {

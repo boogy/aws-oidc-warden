@@ -316,6 +316,62 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 	mockAWS.AssertExpectations(t)
 }
 
+// TestAssumeRole_TransitiveFromTopLevelKey pins that transitivity is driven by
+// the top-level session_tags_transitive key, independently of tag_auth: the
+// deprecated tag_auth.transitive_session_tags fallback keeps working, and
+// either source turning it on wins.
+func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
+	testRoleArn := "arn:aws:iam::123456789012:role/test-role"
+	testDuration := int32(3600)
+	testClaims := &gtypes.Claims{Raw: map[string]any{"repository": "owner/repo"}}
+	testSpec := map[string]string{"repo": "repository"}
+
+	for _, tc := range []struct {
+		name           string
+		topLevel       bool
+		tagAuth        *gtvcfg.TagAuth
+		wantTransitive bool
+	}{
+		{"top-level on, tag_auth absent", true, nil, true},
+		{"top-level off, tag_auth absent", false, nil, false},
+		{"deprecated tag_auth key still honored", false, &gtvcfg.TagAuth{TransitiveSessionTags: true}, true},
+		{"top-level on wins over tag_auth off", true, &gtvcfg.TagAuth{TransitiveSessionTags: false}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockAWS := new(MockAwsServiceWrapper)
+			consumer := &AwsConsumer{
+				AWS: mockAWS,
+				Config: &gtvcfg.Config{
+					SessionTagsTransitive: tc.topLevel,
+					TagAuth:               tc.tagAuth,
+				},
+			}
+			mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
+
+			var captured *sts.AssumeRoleInput
+			mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+				captured = input
+				return *input.RoleArn == testRoleArn
+			})).Return(&sts.AssumeRoleOutput{
+				Credentials: &types.Credentials{
+					AccessKeyId:     aws.String("AKIATEST"),
+					SecretAccessKey: aws.String("SECRET"),
+					SessionToken:    aws.String("TOKEN"),
+				},
+			}, nil).Once()
+
+			_, err := consumer.AssumeRole(testRoleArn, "test-session", nil, &testDuration, testClaims, testSpec)
+			require.NoError(t, err)
+
+			if tc.wantTransitive {
+				assert.Equal(t, []string{"repo"}, captured.TransitiveTagKeys)
+			} else {
+				assert.Empty(t, captured.TransitiveTagKeys)
+			}
+		})
+	}
+}
+
 func TestSelectTransitiveKeys(t *testing.T) {
 	tests := []struct {
 		name string
