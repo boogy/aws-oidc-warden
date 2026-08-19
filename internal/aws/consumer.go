@@ -224,7 +224,7 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 
 	// Mark identity-bearing session tags transitive so ABAC survives any further
 	// role chaining by the target role (immutable downstream).
-	if cfg := a.cfg(); cfg != nil && cfg.TagAuth != nil && cfg.TagAuth.TransitiveSessionTags {
+	if cfg := a.cfg(); cfg != nil && cfg.TransitiveSessionTags() {
 		if keys := selectTransitiveKeys(assumeRoleInput.Tags); len(keys) > 0 {
 			assumeRoleInput.TransitiveTagKeys = keys
 		}
@@ -278,8 +278,8 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 
 // selectTransitiveKeys returns the keys of every session tag attached to the
 // assumption. Session-tag key names are operator-configured per issuer
-// (config.IssuerConfig.SessionTags), so when tag_auth.transitive_session_tags
-// is enabled all of them are marked transitive — a hardcoded key list would
+// (config.IssuerConfig.SessionTags), so when session_tags_transitive is
+// enabled all of them are marked transitive — a hardcoded key list would
 // silently drop custom-named identity tags and break ABAC across role chains.
 func selectTransitiveKeys(tags []types.Tag) []string {
 	keys := make([]string, 0, len(tags))

@@ -95,11 +95,21 @@ log_level: "info"
 log_claim_values: false
 ## When true, every allow decision's audit record must be durably written
 ## BEFORE credentials are returned; a write failure denies the request
-## (fail-closed). Requires log_to_s3=true and log_bucket set.
-## Default false keeps zero-dependency startup (decisions still log to
-## CloudWatch); RECOMMENDED true in production when the audit trail is a
-## security/compliance control. See docs/LOGGING.md.
-audit_required: false
+## (fail-closed). Requires log_to_s3=true and log_bucket set — until both are
+## configured this stays a no-op (decisions still log to CloudWatch), logging
+## a warning at boot. Default true; set false to opt out of the durable audit
+## trail even once log_to_s3+log_bucket are configured. See docs/LOGGING.md.
+audit_required: true
+## RECOMMENDED: mark every session tag transitive so the requester's identity
+## survives role chaining. Without this, tags are dropped the moment a target
+## role assumes another role, and any ABAC policy past that hop can no longer
+## tell who the original caller was — the audit trail and your tag-based
+## conditions both go blind at the first hop.
+##
+## Off by default only for upgrade safety: transitive tags are immutable
+## downstream, so enabling this breaks a target role that re-tags with the same
+## keys while chaining. If yours does not (the common case), turn it on.
+# session_tags_transitive: true
 ## Persist logs/audit records to S3 (in addition to CloudWatch).
 log_to_s3: false
 log_bucket: "aws-oidc-warden-logs"
@@ -240,6 +250,8 @@ tag_auth:
   enabled: false
   tag_prefix: "aow/"
   default_org: "" # if set, bare aow/repo tokens (e.g. "api") expand to "<default_org>/api"
+  # Deprecated: use the top-level session_tags_transitive instead (see
+  # LOGGING & AUDIT above) — this key never had anything to do with tag_auth.
   transitive_session_tags: false
 
 ####################################################################################
