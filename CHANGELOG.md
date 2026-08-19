@@ -5,6 +5,177 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-08-19
+
+Audit and observability hardening. The durable S3 audit trail becomes the
+default rather than an opt-in, every record identifies who made the request
+and from where, and the CloudWatch decision line becomes machine-queryable
+without post-filtering. Three fail-open or broken-by-default defects in the
+audit path are fixed.
+
+### Added
+
+- **`claims` in the durable audit record** — the S3 audit record now carries
+  the identifying claims behind the decision, on both allow **and** deny, so
+  the trail answers "who did this" without a cross-reference. Also emitted on
+  the standardized decision log line. GitHub issuers report a curated set (`repository`,
+  `repository_owner`, `repository_visibility`, `ref`, `ref_type`,
+  `event_name`, `actor`, `workflow_ref`, `job_workflow_ref`, `sha`, `run_id`,
+  `run_attempt`, `runner_environment`); every other issuer reports the claims
+  its own `claim_mappings` reference. These are claim VALUES, so they are
+  gated by `log_claim_values` and redacted alongside `subject`/`jwtSub` —
+  set `log_claim_values: true` to see them. See
+  [docs/LOGGING.md](docs/LOGGING.md).
+
+- **Top-level `session_tags_transitive`** (env `AOW_SESSION_TAGS_TRANSITIVE`),
+  promoted out of `tag_auth.transitive_session_tags` — the mechanism is
+  unchanged, but the gate no longer lives under a block operators disable via
+  `tag_auth.enabled: false`. **RECOMMENDED to enable**: without it, a session
+  tag is dropped the moment the target role assumes another role, so any ABAC
+  policy past that hop can no longer see who the original caller was.
+  Defaults to `false` for upgrade safety — transitive tags are immutable
+  downstream, so turning this on breaks a target role that re-tags with the
+  same keys while chaining. The deprecated `tag_auth.transitive_session_tags`
+  key still works as a fallback (either key enabling it wins); `Validate()`
+  warns when only the deprecated key is set. See
+  [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags).
+
+- **`sourceIp` and `sourceIpFrom` on the audit record**, on both allow and
+  deny. `sourceIpFrom` records the value's provenance — `frontend` when AWS
+  attested the address (API Gateway v1/v2, Lambda Function URLs) or
+  `x-forwarded-for` when it could only be read from a client-supplied header
+  (ALB, which has no source-IP field). Provenance is stored rather than
+  inferred, because an auditor reading a record months later cannot otherwise
+  tell an observed address from an asserted one. Authorization never consults
+  the IP, so a forged one grants nothing — but it could otherwise misattribute
+  an entry in the compliance artifact. An IP is personal data under GDPR;
+  review retention on the audit bucket. See
+  [Source IP trust model](docs/LOGGING.md#source-ip-trust-model).
+
+- **`frontendRequestId` on the decision log line** for the three frontends
+  that issue an ID of their own, kept as the join key back to API Gateway
+  access logs now that `requestId` is the Lambda invocation UUID (see
+  *Changed*). ALB issues no request ID, so the attribute is absent there
+  rather than emitted empty.
+
+- **`Config.AuditEnforced()`** — audit enforcement is now derived from the
+  active config snapshot on every call instead of being resolved once at boot,
+  so supplying `log_to_s3` + `log_bucket` through a hot reload engages the
+  fail-closed contract immediately, with no restart and without restating
+  `audit_required`.
+
+### Changed
+
+- **`audit_required` now defaults to `true`.** Previously `false` by default
+  (best-effort, batched S3 audit trail). The durable, fail-closed guarantee
+  still only actually engages once `log_to_s3=true` + `log_bucket` are also
+  configured — with either unset, `audit_required=true` stays a no-op (a
+  warning is logged at boot instead of a hard failure), so zero-dependency
+  startup with no S3 bucket configured is unaffected. Set `audit_required:
+  false` explicitly to opt back into the best-effort, batched trail even with
+  S3 logging configured.
+
+  **Behavior change on upgrade.** A deployment that already has
+  `log_to_s3: true` + `log_bucket` set and never stated `audit_required`
+  silently moves from best-effort batching to fail-closed: an allow decision
+  whose audit write fails now returns `ErrAuditWriteFailed` (HTTP 500) instead
+  of credentials. That is the intended posture, but it makes the audit sink a
+  hard dependency of credential issuance — confirm the Lambda's role can write
+  to `log_bucket` (both `s3:PutObject` **and** `s3:PutObjectTagging`, since the
+  writer always sets object tagging) and alert on
+  `errorCode=audit_write_failed` before upgrading. Set `audit_required: false`
+  to keep the previous behavior.
+
+  **OpenTofu consequence.** `audit_required` implies a destination, so the
+  module now derives `enable_s3_logs || audit_required` and provisions the
+  audit-log bucket on its own. With the new default that means `tofu apply`
+  creates the bucket unless you set `audit_required = false`. Without it the
+  flag would silently degrade to a no-op, losing the guarantee it asks for.
+  See [deploy/README.md](deploy/README.md).
+
+- **`log_claim_values` now defaults to `true`** (was `false`), so decision logs
+  and audit records carry the requesting identity — canonical subject,
+  `jwtSub`, audience, resolved session-tag values, and the `claims` set —
+  instead of only claim *names*.
+
+  **Privacy note for upgrades.** A deployment configured through YAML or
+  environment variables that never stated `log_claim_values` will begin
+  recording identifying values, including the GitHub `actor` username
+  alongside the new `sourceIp` field. A username paired with an IP address is
+  personal data; review your audit bucket's retention policy and access
+  controls before upgrading. Deployments provisioned by the OpenTofu module
+  are unaffected — that module already set it to `true`. Set
+  `log_claim_values: false` to keep the previous behavior; claim names,
+  decision, reason, and role are still recorded either way.
+
+- **`requestId` is now the Lambda invocation UUID in every frontend mode**,
+  replacing each frontend's own identifier. The per-frontend IDs are not
+  interchangeable — API Gateway v2 issues opaque tokens like
+  `CPyipjveDoEEPIA=`, REST v1 and Lambda URLs issue UUIDs, and ALB issues
+  nothing — so a query spanning frontends had no single shape to match on. The
+  frontend's own ID is preserved as `frontendRequestId`.
+
+- **The decision log line now omits empty attributes** instead of emitting
+  them blank, so a CloudWatch Insights query never has to filter `field != ""`.
+  Deny-only `stage`/`reason` are absent on an allow, and with
+  `log_claim_values=false` claim values are absent rather than blanked.
+  `sourceIpFrom` is emitted only when the IP was *not* platform-attested,
+  since a constant on every line is noise; the durable record keeps it
+  unconditionally. Timing attributes are millisecond integers named
+  `validationMs`/`totalMs`/`durationMs`, consistent with `processingMs`.
+
+  All log output is JSON and is now pinned as such by test, so downstream
+  parsers can rely on every line being valid JSON.
+
+### Fixed
+
+- **`audit_required` disabled itself permanently.** `Validate()` mutated the
+  field to `false` when `log_to_s3`/`log_bucket` were unset. Because
+  `Provider.refresh` clones a pristine base, a later reload supplying the
+  bucket could never re-engage enforcement — the service went on issuing
+  credentials with no durable audit record, fail-open, with nothing in the
+  logs to say enforcement had been dropped. Declared intent is no longer
+  mutated; enforcement is derived per snapshot via `AuditEnforced()`, and the
+  unmet-prerequisite case is a boot warning.
+
+- **Audit-log writes failed with `AccessDenied` in both deployment templates.**
+  The writer always sets object tagging on the audit object, but IAM granted
+  only `s3:PutObject`, so every synchronous audit write was rejected — which
+  under `audit_required` fails the request closed. Both templates now grant
+  `s3:PutObject` **and** `s3:PutObjectTagging`. Enumerated rather than
+  `s3:PutObject*`, which would also grant `PutObjectRetention` and
+  `PutObjectLegalHold` and let the writer weaken object-lock on its own
+  records.
+
+- **ALB requests logged the ELB target-group ARN in the `sourceIp` field.**
+  Every frontend now logs a validated IP address or nothing at all. ALB derives
+  it from the **rightmost** `X-Forwarded-For` hop — the entry the load balancer
+  itself appended, and the only one with an attester — rather than a leftmost
+  value the caller chooses. The correctly-parsed ALB client IP was already
+  being stored in the request context and read by nothing.
+
+- **The durable S3 audit record carried no source IP at all**, so the
+  compliance-facing artifact could not answer where a request originated.
+
+- **Lambda URL requests logged the path under `rawPath`** while every other
+  frontend used `path`, so `path`-filtered queries silently omitted them.
+
+- **`requestMeta` minted its own request ID** when the context value was empty,
+  so a response could report a `requestId` that appeared in no log line.
+
+- **The claim-extraction debug line logged `mode`** while the audit record and
+  decision line both used `jwtMode`.
+
+- **`"Assuming role"` and `"Successfully assumed role"` were each logged twice
+  per request** — once from `internal/aws` through the package-level logger,
+  with no `requestId` correlation. The uncorrelated duplicates are removed and
+  the processor's own correlated line is promoted to `Info`, so the record
+  immediately before a privileged credential is minted stays visible at the
+  default level. The error path keeps its log.
+
+- **The requested role ARN was repeated three times in a single log line**
+  (`request.role`, `role`, `matchedRole`).
+
 ## [2.3.0] - 2026-08-12
 
 Multi-issuer support in `apigw` validation mode, end to end. The service now
@@ -939,6 +1110,7 @@ see `docs/MIGRATION_V2.md` for the upgrade path.
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.1...v2.2.2
 [2.2.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.0...v2.2.1
