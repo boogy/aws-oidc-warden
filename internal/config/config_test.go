@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -335,7 +336,7 @@ func TestAuditEnforced_DerivedNotMutated(t *testing.T) {
 	base := func() Config {
 		return Config{
 			Issuers:         singleIssuer("https://issuer.com", "aud"),
-			RoleSessionName: "s",
+			RoleSessionName: "test",
 			AuditRequired:   true,
 		}
 	}
@@ -922,4 +923,118 @@ func TestMergeBytesExplicitNullIssuersRejectsSeed(t *testing.T) {
 	err := c.MergeBytes([]byte("issuers: null\n"), "yaml")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one issuer is required")
+}
+
+// TestFindRoleSessionName_ComesFromAuthorizingMapping pins that the session
+// name travels with the grant, exactly as the session policy does. A broad
+// mapping declared first must not shadow the narrow mapping that granted the
+// role — that is the bug FindSessionPolicy's doc comment describes.
+func TestFindRoleSessionName_ComesFromAuthorizingMapping(t *testing.T) {
+	const iss = "https://token.actions.githubusercontent.com"
+	cfg := &Config{
+		Issuers:         singleIssuer(iss, "sts.amazonaws.com"),
+		RoleSessionName: "aws-oidc-warden",
+		RoleMappings: []RoleMapping{
+			// Declared first (lowest order) but does NOT grant the role below.
+			{Subject: "acme/.+", Roles: []string{"arn:aws:iam::111122223333:role/other"}},
+			{Subject: "acme/api", Roles: []string{"arn:aws:iam::111122223333:role/deploy"},
+				RoleSessionName: "acme-api-deploy"},
+		},
+	}
+	require.NoError(t, cfg.Validate())
+
+	got := cfg.FindRoleSessionName(iss, "acme/api", "arn:aws:iam::111122223333:role/deploy", nil)
+	assert.Equal(t, "acme-api-deploy", got,
+		"name must come from the mapping that granted the role, not the first that matched the subject")
+
+	// A role granted by a mapping with no override falls back to the global name.
+	got = cfg.FindRoleSessionName(iss, "acme/api", "arn:aws:iam::111122223333:role/other", nil)
+	assert.Empty(t, got, "no override on the authorizing mapping -> caller uses the global default")
+
+	// A role no mapping grants (e.g. tag-auth) resolves to nothing.
+	got = cfg.FindRoleSessionName(iss, "acme/api", "arn:aws:iam::111122223333:role/unknown", nil)
+	assert.Empty(t, got)
+}
+
+// TestFindRoleSessionName_RespectsConditions pins that a mapping whose
+// conditions fail cannot supply the session name.
+func TestFindRoleSessionName_RespectsConditions(t *testing.T) {
+	const iss = "https://token.actions.githubusercontent.com"
+	const role = "arn:aws:iam::111122223333:role/deploy"
+	cfg := &Config{
+		Issuers:         singleIssuer(iss, "sts.amazonaws.com"),
+		RoleSessionName: "aws-oidc-warden",
+		RoleMappings: []RoleMapping{
+			{Subject: "acme/api", Roles: []string{role}, RoleSessionName: "prod-only",
+				Conditions: &Condition{Extra: map[string]string{"ref": "refs/heads/main"}}},
+		},
+	}
+	require.NoError(t, cfg.Validate())
+
+	assert.Equal(t, "prod-only",
+		cfg.FindRoleSessionName(iss, "acme/api", role, map[string]any{"ref": "refs/heads/main"}))
+	assert.Empty(t,
+		cfg.FindRoleSessionName(iss, "acme/api", role, map[string]any{"ref": "refs/heads/dev"}),
+		"conditions must gate the session name as they gate the grant")
+}
+
+// TestRoleSessionName_RejectedAtValidate pins that an unusable name fails at
+// boot rather than being silently mangled into CloudTrail. This mirrors the
+// session-tag rule in internal/aws/consumer.go:309 — illegal values are
+// refused, never coerced.
+func TestRoleSessionName_RejectedAtValidate(t *testing.T) {
+	for _, tc := range []struct{ name, sessionName string }{
+		{"slash is not permitted by STS", "acme/api"},
+		{"space is not permitted", "acme api"},
+		{"over 64 chars", strings.Repeat("a", 65)},
+		{"sanitizes to empty", "///"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{
+				Issuers:         singleIssuer("https://issuer.com", "aud"),
+				RoleSessionName: "aws-oidc-warden",
+				RoleMappings: []RoleMapping{{
+					Subject: "acme/api", Roles: []string{"arn:aws:iam::111122223333:role/deploy"},
+					RoleSessionName: tc.sessionName,
+				}},
+			}
+			err := cfg.Validate()
+			require.Error(t, err, "an unusable session name must fail closed at boot")
+			assert.Contains(t, err.Error(), "role_session_name")
+		})
+	}
+}
+
+// TestRoleGroupDefaults_PropagateRoleSessionName pins that role_groups can set
+// the name for every subject they expand to.
+func TestRoleGroupDefaults_PropagateRoleSessionName(t *testing.T) {
+	const iss = "https://token.actions.githubusercontent.com"
+	const role = "arn:aws:iam::111122223333:role/deploy"
+	cfg := &Config{
+		Issuers:         singleIssuer(iss, "sts.amazonaws.com"),
+		RoleSessionName: "aws-oidc-warden",
+		RoleGroups: []RoleGroup{{
+			Subjects: []string{"acme/api", "acme/web"},
+			Defaults: RoleGroupDefaults{Roles: []string{role}, RoleSessionName: "acme-team"},
+		}},
+	}
+	require.NoError(t, cfg.Validate())
+
+	assert.Equal(t, "acme-team", cfg.FindRoleSessionName(iss, "acme/api", role, nil))
+	assert.Equal(t, "acme-team", cfg.FindRoleSessionName(iss, "acme/web", role, nil))
+}
+
+// TestGlobalRoleSessionName_RejectedAtValidate pins that the top-level
+// role_session_name is validated exactly like a per-mapping override. Without
+// this, an operator-set global name that STS would refuse (or the runtime
+// sanitizer would have to reshape) boots successfully and is silently mangled
+// on every request instead of failing once at config load.
+func TestGlobalRoleSessionName_RejectedAtValidate(t *testing.T) {
+	cfg := &Config{
+		Issuers:         singleIssuer("https://issuer.com", "aud"),
+		RoleSessionName: "my/service",
+	}
+	err := cfg.Validate()
+	require.Error(t, err, "an unusable global session name must fail closed at boot")
+	assert.Contains(t, err.Error(), "role_session_name")
 }

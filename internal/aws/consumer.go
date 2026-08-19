@@ -86,12 +86,38 @@ func NewAwsConsumer(cfg *gtvcfg.Config) *AwsConsumer {
 	}
 }
 
-// SessionName cleans the session name to be valid
+// invalidSessionNameChars matches everything outside STS's accepted
+// RoleSessionName charset. Package-level so it is compiled once rather than
+// on every SessionName call.
+var invalidSessionNameChars = regexp.MustCompile(`[^[:word:]+=,.@-]`)
+
+// SessionName cleans the session name to be valid for STS: 64 chars max from
+// [\w+=,.@-].
+//
+// Disallowed characters are REPLACED, not deleted. Deleting them collapses
+// distinct identities onto one name ("acme/api" and "ac/meapi" both become
+// "acmeapi"), and this string is an identity: it appears in the assumed-role
+// ARN, in aws:userid and CloudTrail, and is conditionable via
+// sts:RoleSessionName. A collision there is an audit-attribution failure and a
+// potential IAM-condition mismatch.
+//
+// Config-declared names are already validated and rejected at boot
+// (config.validateRoleSessionName), so in practice this only reshapes the
+// global default. It stays as defense in depth: STS rejects the whole
+// AssumeRole call on an invalid name, which would turn a cosmetic config
+// mistake into a total outage.
 func (a *AwsConsumer) SessionName(name string) string {
-	invalidChars := regexp.MustCompile(`[^[:word:]+=,.@-]`)
-	name = invalidChars.ReplaceAllLiteralString(name, "")
+	original := name
+	name = invalidSessionNameChars.ReplaceAllLiteralString(name, "-")
 
 	if len(name) > 64 {
+		// Keep the tail: for "owner-repo"-shaped names the distinguishing part
+		// is at the end. Two names sharing a 64-char suffix still collide, so
+		// make it audible rather than silent.
+		slog.Warn("session name exceeds STS's 64-character limit and was truncated; "+
+			"CloudTrail will show the truncated name",
+			slog.String("original", original),
+			slog.Int("originalLength", len(original)))
 		return name[len(name)-64:]
 	}
 	return name

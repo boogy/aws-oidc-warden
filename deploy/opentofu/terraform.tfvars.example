@@ -69,9 +69,20 @@ assumable_role_arns = [
 # than one issuer is configured (see the multi-issuer block above), unless
 # default_issuer is set — the service refuses to boot otherwise. With the
 # single-issuer shorthand active (as below) it's optional.
+#
+# `role_groups` (expand one set of role/condition defaults across many
+# subjects) is not exposed as a Terraform variable in this module — it is a
+# config.yaml-only convenience. To grant the same roles/conditions to many
+# repos through Terraform, repeat a role_mappings entry per subject (or per
+# subject-set via a regex, as in the second entry below).
+#
+# The first entry below is a fully-populated single-repo mapping (every field
+# this schema supports, including the regex-only `conditions` sub-fields); the
+# second shows a regex `subject` matching many repositories. Most real
+# mappings only need a few of these fields — trim what you don't use.
 role_mappings = [
   {
-    subject = "my-org/my-repo"
+    subject = "my-org/my-repo" # canonical subject; GitHub: "owner/repo"
     # issuer is redundant here: with the single-issuer shorthand active (as
     # above), that sole issuer applies regardless. Leaving a hardcoded issuer
     # live is a trap for a GHES/self-hosted operator who changes `issuer`
@@ -79,11 +90,37 @@ role_mappings = [
     # URL they never typed. Uncomment and set only once a second issuer
     # exists (see the multi-issuer block above).
     # issuer = "https://token.actions.githubusercontent.com"
-    roles   = ["arn:aws:iam::111122223333:role/github-actions-example"]
+    roles = ["arn:aws:iam::111122223333:role/github-actions-example"]
+    # Inline session policy (JSON string) scoping the assumed role. Mutually
+    # exclusive with session_policy_file (inline wins if both are set) —
+    # shown here only for reference; leave one of the two, not both.
+    # session_policy = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Action\":[\"iam:*\"],\"Resource\":\"*\"}]}"
+    # S3 key (relative to session_policy_bucket) holding the session policy.
+    # session_policy_file = "session-policies/my-org/my-repo/policy.json"
     conditions = {
-      branch     = "refs/heads/main"
-      event_name = "push"
+      branch        = "refs/heads/main" # regex against the `ref` claim (alias of `ref` below)
+      ref           = "refs/heads/main" # same underlying claim as `branch`; use whichever name reads better
+      ref_type      = "branch"          # "branch" | "tag" | ...
+      event_name    = "push"            # e.g. "push", "pull_request", "workflow_dispatch"
+      workflow_ref  = "my-org/my-repo/.github/workflows/deploy.yml@refs/heads/main" # exact workflow that triggered the run
+      environment   = "production"      # checked against the `runner_environment` claim
+      actor_matches = ["^octocat$"]      # regexes against `actor`, OR'd within the list
     }
+    # Overrides the global role_session_name (top of this file) for roles
+    # granted by THIS mapping only, so CloudTrail names the requester instead
+    # of the service. STS charset [\w+=,.@-], 2-64 chars — "/" is excluded, so
+    # a repository name cannot be used verbatim. Invalid values fail the
+    # service at boot rather than being silently reshaped.
+    role_session_name = "my-org-my-repo-deploy"
+  },
+  {
+    # Regex subject matching every "my-org/service-*" repository.
+    # role_session_name below names the WHOLE matched set, not each
+    # repository individually — it is a static string, not a template.
+    # Per-repository names require one mapping per repository, as above.
+    subject           = "my-org/service-.*"
+    roles             = ["arn:aws:iam::111122223333:role/github-actions-readonly"]
+    role_session_name = "my-org-services"
   },
 ]
 

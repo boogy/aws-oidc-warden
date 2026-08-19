@@ -211,17 +211,26 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, err)
 	}
 
+	// A per-mapping role_session_name overrides the global default, so
+	// CloudTrail names the requester rather than the service. Resolution goes
+	// through the same authorizing mapping as the session policy.
+	sessionName := cfg.RoleSessionName
+	if override := cfg.FindRoleSessionName(claims.Issuer, claims.Subject, requestedRole, claims.Raw); override != "" {
+		sessionName = override
+	}
+
 	// Info, not Debug: this is the last line before a privileged credential is
 	// minted, so it must be visible at the default level. It replaces the
 	// uncorrelated slog.Info in internal/aws/service_wrapper.go, which had no
 	// requestId. role is not repeated here — the request-scoped logger already
 	// carries it in the "request" group bound above.
 	log.Info("Assuming role",
-		slog.Bool("hasSessionPolicy", sessionPolicy != nil))
+		slog.Bool("hasSessionPolicy", sessionPolicy != nil),
+		slog.String("sessionName", sessionName))
 
 	// Assume role
 	sessionTagSpec := cfg.IssuerSessionTags(claims.Issuer)
-	credentials, err := r.consumer.AssumeRole(requestedRole, cfg.RoleSessionName, sessionPolicy, nil, claims, sessionTagSpec)
+	credentials, err := r.consumer.AssumeRole(requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
 	if err != nil {
 		rec.Stage = "assume_role"
 		rec.Reason = err.Error()
@@ -252,6 +261,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// cfg.LogClaimValues permits claim values to be logged/audited), session
 	// policy reference, and token expiry.
 	rec.GrantedRole = requestedRole
+	rec.SessionName = sessionName
 	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
 	if cfg.LogClaimValues {
 		rec.SessionTags = resolvedSessionTags(claims.Raw, sessionTagSpec)

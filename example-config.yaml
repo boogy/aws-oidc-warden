@@ -59,7 +59,12 @@ issuers:
       ref: "ref"
       ref-type: "ref_type"
 
-## AWS role session name (identifies the session in CloudTrail).
+## AWS role session name (identifies the session in CloudTrail). STS accepts
+## 2-64 characters from [\w+=,.@-] ("/" is NOT allowed, so a GitHub
+## "owner/repo" subject cannot be used verbatim); an invalid value fails at
+## boot rather than being silently reshaped. A role_mappings/role_groups entry
+## may set its own role_session_name to override this for the roles it
+## grants — see role_mappings below.
 role_session_name: aws-oidc-warden
 
 ## default_issuer: the issuer a role_mapping/role_group inherits when it does
@@ -201,11 +206,15 @@ role_mappings:
     conditions:
       branch: "refs/heads/main"
 
-  # Inline session policy + subject pattern for many repos.
+  # Inline session policy + subject pattern for many repos. role_session_name
+  # here names the WHOLE matched set, not each repository individually — it
+  # is a static string, not a template. Per-repository names require one
+  # mapping per repository, as in the other entries on this page.
   - subject: "org/service-.*"
     roles: ["@readonly"]
     session_policy: >
       {"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["iam:*"],"Resource":"*"}]}
+    role_session_name: "org-services"
 
   # Multiple conditions (all must hold) incl. a generic claim by its raw name.
   - subject: "org/prod-repo"
@@ -216,6 +225,9 @@ role_mappings:
       ref_type: "tag"
       environment: "production" # regex against the raw 'runner_environment' claim
       sha: "^[0-9a-f]{40}$" # generic: any raw claim name works (must be string-typed)
+    # Overrides the global role_session_name for roles granted by THIS
+    # mapping only, so CloudTrail names the requester instead of the service.
+    role_session_name: "org-prod-repo-deploy"
 
   # A GitLab mapping — bound explicitly to the GitLab issuer. Its `subject` is
   # the canonical value produced by claim_mappings.subject (project_path).
@@ -240,6 +252,10 @@ role_groups:
       roles: ["@readonly"]
       conditions:
         event_name: "push"
+      # Applies to every subject this group expands to (org/frontend,
+      # org/backend, org/mobile) — one name for the whole group, not one per
+      # subject.
+      role_session_name: "org-readonly-group"
 
 ####################################################################################
 # TAG-BASED AUTHORIZATION (optional, default disabled) — enterprise-scale path.

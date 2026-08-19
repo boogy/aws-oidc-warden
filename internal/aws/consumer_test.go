@@ -35,7 +35,7 @@ func TestAwsConsumer_SessionName(t *testing.T) {
 		{
 			name:        "Session name with invalid characters",
 			inputName:   "github/actions*workflow$",
-			expectedOut: "githubactionsworkflow",
+			expectedOut: "github-actions-workflow-",
 		},
 		{
 			name:        "Session name exceeding 64 characters",

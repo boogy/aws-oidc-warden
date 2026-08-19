@@ -61,7 +61,7 @@ func TestClassifySubject_EndToEndAuthzParity(t *testing.T) {
 	c := &Config{
 		Issuers:         []IssuerConfig{{Issuer: iss, Provider: "github", Audiences: []string{"sts.amazonaws.com"}}},
 		DefaultIssuer:   iss,
-		RoleSessionName: "s",
+		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{
 			{Subject: "myorg/?opt-.*", Roles: []string{role}, SessionPolicy: policy},
 		},
