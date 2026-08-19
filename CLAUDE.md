@@ -25,7 +25,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 ## Other folders (no CLAUDE.md of their own)
 
-- `internal/utils/` — helpers; `RedactToken` is the redaction helper to use if a log site ever needs to carry token material. No current log site does — the pipeline keeps tokens out of logs entirely rather than logging them redacted (see `ParseRequestBody`, which deliberately logs no body preview), so `RedactToken` has no callers by design.
+- `internal/utils/` — helpers. `FormatClaimValue` is the single formatter for a verified claim value on its way into an audit record or an STS session tag; both `handler.auditClaims` and `aws.BuildSessionTags` must go through it, or the documented guarantee that a claim reported in `claims` and the same claim attached as a session tag can never disagree breaks. `RedactToken` is the redaction helper to use if a log site ever needs to carry token material. No current log site does — the pipeline keeps tokens out of logs entirely rather than logging them redacted (see `ParseRequestBody`, which deliberately logs no body preview), so `RedactToken` has no callers by design.
 
 ## Commands
 
