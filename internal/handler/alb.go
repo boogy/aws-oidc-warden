@@ -51,14 +51,18 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		slog.String("requestId", requestID),
 		slog.String("path", event.Path),
 		slog.String("method", event.HTTPMethod),
-		slog.String("sourceIp", sourceIP),
-		// Always emitted for ALB, where the IP can only come from a
-		// client-supplied header. A reader must not have to guess whether
-		// this IP was attested.
-		slog.String("sourceIpFrom", sourceIPFrom),
 		slog.String("targetGroupArn", event.RequestContext.ELB.TargetGroupArn),
 		slog.String("userAgent", event.Headers["user-agent"]),
 	)
+	if sourceIP != "" {
+		log = log.With(slog.String("sourceIp", sourceIP))
+	}
+	// Always emitted for ALB when known, where the IP can only come from a
+	// client-supplied header. A reader must not have to guess whether this
+	// IP was attested.
+	if sourceIPFrom != "" {
+		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
+	}
 
 	// Build extraction input: prefer ALB OIDC data header when present.
 	oidcData := event.Headers["x-amzn-oidc-data"]

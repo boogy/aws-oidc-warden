@@ -43,14 +43,20 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 	// Add request ID and additional data to all logs for this request
 	log := slog.With(
 		slog.String("requestId", requestID),
-		slog.String("frontendRequestId", frontendRequestID),
 		slog.String("path", event.Path),
 		slog.String("method", event.HTTPMethod),
-		slog.String("sourceIp", sourceIP),
 		slog.String("userAgent", event.RequestContext.Identity.UserAgent),
 		slog.String("requestTime", event.RequestContext.RequestTime),
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
+	// AWS always populates these, so this is defence-in-depth rather than a
+	// live gap — kept consistent with the other adapters regardless.
+	if frontendRequestID != "" {
+		log = log.With(slog.String("frontendRequestId", frontendRequestID))
+	}
+	if sourceIP != "" {
+		log = log.With(slog.String("sourceIp", sourceIP))
+	}
 	// The attested case is the norm here; only surface provenance when it's
 	// not the platform-attested value, so an anomaly is visible without a
 	// constant "sourceIpFrom=frontend" on every line.
