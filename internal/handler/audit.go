@@ -142,17 +142,14 @@ func (rec *auditRecord) matchedRole() string {
 
 // auditLogAttrs returns the standardized slog attribute set for one
 // decision: frontend, jwtMode, decision, matchedRole, processingMs always;
-// frontendRequestId, issuer, provider, accountId, sourceIp, sourceIpFrom,
-// stage, reason, and (when logClaimValues) jwtSub, subject, audience, claims
-// only when non-empty — omitted rather than emitted empty, so a CloudWatch
-// Insights query never has to filter `field != ""`. requestId is
-// deliberately NOT in this set: every adapter already binds it to the
-// request-scoped logger via slog.With, so adding it here would emit a
-// duplicate "requestId" key in the same JSON log line (the durable audit
-// record keeps its own RequestID field regardless). frontendRequestId IS
-// emitted here (right after requestId in the rendered line, since slog.With
-// attrs precede the ones passed to the call) — ALB issues no ID of its own,
-// so it's absent there rather than emitted empty. Callers append these to
+// issuer, provider, accountId, sessionName, stage, reason, and (when
+// logClaimValues) jwtSub, subject, audience, claims only when non-empty —
+// omitted rather than emitted empty, so a CloudWatch Insights query never has
+// to filter `field != ""`. requestId, frontendRequestId, sourceIp, and
+// sourceIpFrom are deliberately NOT in this set: every adapter already binds
+// them to the request-scoped logger via slog.With, so adding them here would
+// emit duplicate keys in the same JSON log line (the durable audit record
+// keeps its own fields for all four regardless). Callers append these to
 // their existing log.Error/log.Info call rather than replacing the
 // descriptive message, so the standardized contract is added without
 // renaming unrelated logs.
@@ -176,18 +173,10 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 			attrs = append(attrs, slog.String(key, value))
 		}
 	}
-	appendIf("frontendRequestId", rec.FrontendRequestID)
 	appendIf("issuer", rec.Issuer)
 	appendIf("provider", rec.Provider)
 	appendIf("accountId", rec.AccountID)
 	appendIf("sessionName", rec.SessionName)
-	appendIf("sourceIp", rec.SourceIP)
-	// Provenance only when the IP was NOT platform-attested: a constant
-	// "frontend" on every line is the noise this task exists to remove, while
-	// a client-supplied IP is something a reader must not miss.
-	if rec.SourceIPFrom != "" && rec.SourceIPFrom != ipSourceFrontend {
-		attrs = append(attrs, slog.String("sourceIpFrom", rec.SourceIPFrom))
-	}
 	// Deny-only: absent on an allow rather than emitted empty.
 	appendIf("stage", rec.Stage)
 	appendIf("reason", rec.Reason)
