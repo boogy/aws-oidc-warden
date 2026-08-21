@@ -211,11 +211,7 @@ Conditions:
   UseS3Cache: !Equals [!Ref EnableS3Cache, "true"]
   UseAnyCache: !Or [!Condition UseDynamoDB, !Condition UseS3Cache]
   UseAuditRequired: !Equals [!Ref AuditRequired, "true"]
-  UseS3Logs:
-    !Or [
-      !Equals [!Ref EnableS3Logs, "true"],
-      !Equals [!Ref AuditRequired, "true"],
-    ]
+  UseS3Logs: !Or [!Equals [!Ref EnableS3Logs, "true"], !Equals [!Ref AuditRequired, "true"]]
   UseSessionPolicyBucket: !Equals [!Ref EnableSessionPolicyBucket, "true"]
   UseTagAuth: !Equals [!Ref EnableTagAuth, "true"]
   CreateConfigBucket: !Equals [!Ref ConfigBucket, ""]
@@ -424,7 +420,8 @@ Resources:
       Architectures: [!Ref Architecture]
       MemorySize: !Ref MemorySize
       Timeout: !Ref Timeout
-      ReservedConcurrentExecutions: !If [HasReservedConcurrency, !Ref ReservedConcurrency, !Ref "AWS::NoValue"]
+      ReservedConcurrentExecutions:
+        !If [HasReservedConcurrency, !Ref ReservedConcurrency, !Ref "AWS::NoValue"]
       Role: !GetAtt ExecutionRole.Arn
       Code:
         S3Bucket: !Ref LambdaCodeBucket
@@ -435,7 +432,8 @@ Resources:
           # beats the S3 config, so an unconditional value would stomp any
           # cache block in the user's config.yaml (app default is memory).
           AOW_CACHE_TYPE: !If [UseDynamoDB, dynamodb, !If [UseS3Cache, s3, !Ref "AWS::NoValue"]]
-          AOW_CACHE_DYNAMODB_TABLE: !If [UseDynamoDB, !Sub "${FunctionName}-cache", !Ref "AWS::NoValue"]
+          AOW_CACHE_DYNAMODB_TABLE:
+            !If [UseDynamoDB, !Sub "${FunctionName}-cache", !Ref "AWS::NoValue"]
           AOW_CACHE_S3_BUCKET: !If [UseS3Cache, !Ref CacheBucket, !Ref "AWS::NoValue"]
           AOW_CACHE_S3_PREFIX: !If [UseS3Cache, "jwks/", !Ref "AWS::NoValue"]
           AOW_CACHE_TTL: !If [UseAnyCache, !Ref CacheTTL, !Ref "AWS::NoValue"]
@@ -445,9 +443,11 @@ Resources:
           AOW_LOG_TO_S3: !If [UseS3Logs, "true", !Ref "AWS::NoValue"]
           AOW_LOG_BUCKET: !If [UseS3Logs, !Ref LogBucket, !Ref "AWS::NoValue"]
           AOW_LOG_PREFIX: !If [UseS3Logs, "audit/", !Ref "AWS::NoValue"]
-          AOW_SESSION_POLICY_BUCKET: !If [UseSessionPolicyBucket, !Ref SessionPolicyBucket, !Ref "AWS::NoValue"]
+          AOW_SESSION_POLICY_BUCKET:
+            !If [UseSessionPolicyBucket, !Ref SessionPolicyBucket, !Ref "AWS::NoValue"]
           AOW_TAG_AUTH_ENABLED: !If [UseTagAuth, "true", !Ref "AWS::NoValue"]
-          AOW_S3_CONFIG_BUCKET: !If [CreateConfigBucket, !Ref ConfigBucketResource, !Ref ConfigBucket]
+          AOW_S3_CONFIG_BUCKET:
+            !If [CreateConfigBucket, !Ref ConfigBucketResource, !Ref ConfigBucket]
           AOW_S3_CONFIG_PATH: !Ref ConfigKey
           AOW_JWT_VALIDATION_MODE: !Ref JWTValidationMode
           LOG_LEVEL: !Ref LogLevel

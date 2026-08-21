@@ -26,21 +26,17 @@ goreleaser check                # validates .goreleaser.yaml
 
 ### 3. Changelog
 
-`CHANGELOG.md` has an entry for the new version. Deploy-only (`deploy/`)
-changes belong in `deploy/README.md`, not the changelog.
+`CHANGELOG.md` has an entry for the new version. Deploy-only (`deploy/`) changes belong in `deploy/README.md`, not the changelog.
 
 ### 4. Tag semantics
 
 Verify the tag against the release pipeline rules (`.github/workflows/release.yml`):
 
-- Final release `vX.Y.Z`: images get `<module>-<tag>`, `<module>-latest`,
-  bare `<version>`, and `latest`.
+- Final release `vX.Y.Z`: images get `<module>-<tag>`, `<module>-latest`, bare `<version>`, and `latest`.
 - Prerelease `vX.Y.Z-rc.N` / `-beta.*`: **never** moves `*-latest`/`latest`.
 - Tags must be annotated and signed: `git tag -s vX.Y.Z -m "vX.Y.Z"`.
 
-If `release.yml` itself changed: ko image tags must be passed via
-`--tags` on the CLI — a `tags:` key under `.ko.yaml` `builds[]` is not a
-real ko option and is silently ignored.
+If `release.yml` itself changed: ko image tags must be passed via `--tags` on the CLI — a `tags:` key under `.ko.yaml` `builds[]` is not a real ko option and is silently ignored.
 
 ### 5. Optional full dry-run
 
