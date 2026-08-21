@@ -287,6 +287,35 @@ Both features are opt-in (`tag_auth.enabled` / `cross_account.enabled`, default 
 
 ---
 
+## Session Tags as ABAC: an EKS Pod Identity Analogy
+
+If you've used **EKS Pod Identity**, the shape of this service will feel familiar: the platform attests a workload's identity, the workload assumes an IAM role with no long-lived credential, and AWS automatically attaches session tags describing the workload — cluster name, **namespace**, service account, pod name — that IAM policies condition on via `aws:PrincipalTag/...`. This service does the same thing for CI/CD: the OIDC token attests the workflow's identity (repository, ref, actor), the workflow assumes an IAM role with no stored credential, and the warden attaches session tags derived from **verified** claims. The repository plays the role a Kubernetes namespace plays — the natural unit to write ABAC policy against. It's an analogy, not an AWS-native equivalent.
+
+Where it differs from Pod Identity matters for how you configure it:
+
+- The tags are **not** a fixed AWS-provided set — they come from the issuer's `session_tags` block in config, which maps an STS tag key to a raw claim name (see `example-config.yaml`: for GitHub, `repo: "repository"`, `repo-owner: "repository_owner"`, `ref: "ref"`, `ref-type: "ref_type"`, `actor: "actor"`, `event-name: "event_name"`; for GitLab, `project: "project_path"`, `ref: "ref"`, `ref-type: "ref_type"`). The operator chooses the tag vocabulary, and it works for any OIDC issuer, not just one platform.
+- `repo` carries the FULL `owner/repo` (the raw `repository` claim).
+- Tags are attached at `AssumeRole` and are **not** transitive by default — set the top-level `session_tags_transitive: true` so a tag survives when the target role assumes another role; without it, an ABAC policy past that hop can no longer see who the original caller was. It defaults to `false` for upgrade safety.
+- Only verified claims become tags — a tag can never carry something the token did not prove.
+
+This is what makes it matter at scale: without ABAC, a large org needs one IAM role per repo (or per repo × environment), a count that grows without bound. With claim-derived session tags, a small number of shared roles carry policies conditioned on `aws:PrincipalTag/repo`, `aws:PrincipalTag/ref`, and so on, and onboarding a new repo becomes a config change rather than a new IAM role — this composes with session policies for further per-repo scoping.
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::my-bucket/*",
+  "Condition": {
+    "StringEquals": { "aws:PrincipalTag/repo": "my-org/my-repo" },
+    "StringLike": { "aws:PrincipalTag/ref": "refs/heads/main" }
+  }
+}
+```
+
+See [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md) for the full tag reference and [docs/TAG_BASED_AUTHORIZATION.md#session-tags--abac](docs/TAG_BASED_AUTHORIZATION.md#session-tags--abac) for how session tags combine with tag-based role authorization.
+
+---
+
 ## API Responses
 
 ### Success Response
