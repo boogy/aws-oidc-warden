@@ -78,8 +78,11 @@ never claim-derived, so it is **not** suppressed by `log_claim_values=false`.
 Everything on the decision line above (the values, not the synthesized
 `matchedRole`), plus seven fields that never reach CloudWatch:
 
-- `requestedRole`, `grantedRole` — the role asked for and the role actually
-  granted; allow only, equal to each other once granted.
+- `requestedRole` — the role the request asked for. Present on **allow and
+  deny** alike: it is set at record construction, before any stage runs, so
+  even an `extract`-stage deny still carries it.
+- `grantedRole` — the role actually granted; **allow only**, and equal to
+  `requestedRole` once granted.
 - `matchedVia` (`explicit`/`tag-auth`) — which authorization path allowed the
   request. This is the field to check for "credential issued via tag-auth
   fallback" — that question has no answer from CloudWatch, only from S3.
