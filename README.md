@@ -307,7 +307,7 @@ This is what makes it matter at scale: without ABAC, a large org needs one IAM r
   "Resource": "arn:aws:s3:::my-bucket/*",
   "Condition": {
     "StringEquals": { "aws:PrincipalTag/repo": "my-org/my-repo" },
-    "StringLike": { "aws:PrincipalTag/ref": "refs/heads/main" }
+    "StringLike": { "aws:PrincipalTag/ref": "refs/heads/*" }
   }
 }
 ```
