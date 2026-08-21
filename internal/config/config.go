@@ -365,9 +365,31 @@ func envVarName(key string) string {
 	return "AOW_" + strings.ToUpper(envKeyReplacer.Replace(key))
 }
 
-// envTrue implements the truthy check used by all boolean AOW_ env knobs.
-func envTrue(v string) bool {
-	return v == "true" || v == "1" || v == "True" || v == "TRUE"
+// envBool parses a boolean AOW_ env value and assigns it via set, leaving the
+// current value untouched (with a warning) when the value is unparseable.
+//
+// strconv.ParseBool is deliberate: it is the same parser viper's cast.ToBool
+// uses when LoadConfig unmarshals env vars at boot. The previous hand-rolled
+// truthy check accepted only "true"/"1"/"True"/"TRUE", so the two paths
+// disagreed on every other value ParseBool accepts — AOW_AUDIT_REQUIRED=t was
+// true at boot and silently became FALSE on the first remote-config refresh,
+// downgrading the fail-closed audit contract to best-effort with nothing in
+// the logs. Sharing one parser is what makes envBindings' "the two paths
+// cannot drift" claim true of values, not just of the key list.
+//
+// Unparseable values ("yes", "on", a typo) warn and keep the current value
+// rather than silently assigning false: these knobs now default to true, and a
+// typo must not quietly disable a security control. viper's cast.ToBool
+// swallows the same error into false at boot, so the resulting value still
+// matches in the common case (the reload clones the boot config); the
+// difference is that a reload also says so in the log.
+func envBool(key, v string, set func(bool)) {
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		warnInvalidEnv(envVarName(key), v, err)
+		return
+	}
+	set(b)
 }
 
 // ensureTagAuth returns c.TagAuth, initializing it to a zero-value TagAuth
@@ -429,11 +451,15 @@ var envBindings = []envBinding{
 	{"log_level", func(c *Config, v string) { c.LogLevel = v }},
 
 	// Booleans.
-	{"log_to_s3", func(c *Config, v string) { c.LogToS3 = envTrue(v) }},
-	{"log_claim_values", func(c *Config, v string) { c.LogClaimValues = envTrue(v) }},
-	{"audit_required", func(c *Config, v string) { c.AuditRequired = envTrue(v) }},
-	{"allow_insecure_issuers", func(c *Config, v string) { c.AllowInsecureIssuers = envTrue(v) }},
-	{"session_tags_transitive", func(c *Config, v string) { c.SessionTagsTransitive = envTrue(v) }},
+	{"log_to_s3", func(c *Config, v string) { envBool("log_to_s3", v, func(b bool) { c.LogToS3 = b }) }},
+	{"log_claim_values", func(c *Config, v string) { envBool("log_claim_values", v, func(b bool) { c.LogClaimValues = b }) }},
+	{"audit_required", func(c *Config, v string) { envBool("audit_required", v, func(b bool) { c.AuditRequired = b }) }},
+	{"allow_insecure_issuers", func(c *Config, v string) {
+		envBool("allow_insecure_issuers", v, func(b bool) { c.AllowInsecureIssuers = b })
+	}},
+	{"session_tags_transitive", func(c *Config, v string) {
+		envBool("session_tags_transitive", v, func(b bool) { c.SessionTagsTransitive = b })
+	}},
 
 	// Durations (warn-and-skip on parse error).
 	{"config_reload_interval", func(c *Config, v string) {
@@ -504,20 +530,18 @@ var envBindings = []envBinding{
 		}
 	}},
 	{"cache.s3_cleanup", func(c *Config, v string) {
-		// NOTE: strconv.ParseBool, not envTrue — this field has always used
-		// Go's canonical bool parsing rather than the looser truthy check.
-		if b, err := strconv.ParseBool(v); err != nil {
-			warnInvalidEnv(envVarName("cache.s3_cleanup"), v, err)
-		} else {
-			c.Cache.S3Cleanup = b
-		}
+		envBool("cache.s3_cleanup", v, func(b bool) { c.Cache.S3Cleanup = b })
 	}},
 
 	// Tag-based authorization knobs. enabled/transitive_session_tags create
 	// TagAuth if nil; the rest only apply if it already exists (preserves the
 	// pre-refactor init semantics exactly).
-	{"tag_auth.enabled", func(c *Config, v string) { ensureTagAuth(c).Enabled = envTrue(v) }},
-	{"tag_auth.transitive_session_tags", func(c *Config, v string) { ensureTagAuth(c).TransitiveSessionTags = envTrue(v) }},
+	{"tag_auth.enabled", func(c *Config, v string) {
+		envBool("tag_auth.enabled", v, func(b bool) { ensureTagAuth(c).Enabled = b })
+	}},
+	{"tag_auth.transitive_session_tags", func(c *Config, v string) {
+		envBool("tag_auth.transitive_session_tags", v, func(b bool) { ensureTagAuth(c).TransitiveSessionTags = b })
+	}},
 	{"tag_auth.tag_prefix", func(c *Config, v string) {
 		if c.TagAuth != nil {
 			c.TagAuth.TagPrefix = v
@@ -530,7 +554,9 @@ var envBindings = []envBinding{
 	}},
 
 	// Cross-account transport knobs.
-	{"cross_account.enabled", func(c *Config, v string) { ensureCrossAccount(c).Enabled = envTrue(v) }},
+	{"cross_account.enabled", func(c *Config, v string) {
+		envBool("cross_account.enabled", v, func(b bool) { ensureCrossAccount(c).Enabled = b })
+	}},
 	{"cross_account.spoke_role_name", func(c *Config, v string) { ensureCrossAccount(c).SpokeRoleName = v }},
 	{"cross_account.external_id", func(c *Config, v string) { ensureCrossAccount(c).ExternalID = v }},
 	{"cross_account.allowed_accounts", func(c *Config, v string) { ensureCrossAccount(c).AllowedAccounts = splitCommaList(v) }},

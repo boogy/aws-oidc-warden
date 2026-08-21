@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.1] - 2026-08-21
+
+Follow-up to the 2.4.0 audit hardening: two defects found while reviewing that release, both in code paths that only open up after a hot reload.
+
+### Fixed
+
+- **A hot reload that switched on `log_to_s3` + `log_bucket` bricked credential issuance until the next cold start.** `NewS3Logger` built the S3 client exactly once, from the boot config, so a container that started with S3 logging off never had one. `AuditEnforced()` is re-derived per snapshot, so the reload correctly engaged the fail-closed contract — but the enforced write then failed on the missing client for every allow decision on that warm container, and nothing rebuilt it. No credentials were ever issued without a durable record (the contract held, fail-closed), but the service was unavailable for issuance rather than newly audited, contradicting the "no restart" promise in [docs/LOGGING.md](docs/LOGGING.md). `WriteRecord` now builds the client on demand, once, when the live config enables S3 audit logging. A container whose live config still has S3 logging off keeps failing closed exactly as before — the lazy path never invents a destination.
+
+- **Boolean `AOW_` environment variables were parsed differently at boot and on reload.** Boot went through viper's `cast.ToBool` (i.e. `strconv.ParseBool`); the remote-config refresh used a hand-rolled truthy check that recognized only `true`/`1`/`True`/`TRUE`. `AOW_AUDIT_REQUIRED=t` was therefore honoured at boot and silently flipped to **false** on the first refresh, downgrading the fail-closed audit contract to best-effort with nothing in the logs. Both paths now share `strconv.ParseBool`, so every form Go accepts (`t`, `T`, `f`, `F`, `TRUE`, `FALSE`, `0`, `1`, …) means the same thing in both. A value neither parser accepts (`yes`, `on`, a typo) now warns and leaves the current value alone instead of quietly assigning `false` — these knobs default to `true`, and a typo must not silently disable a security control. Applies to `log_to_s3`, `log_claim_values`, `audit_required`, `allow_insecure_issuers`, `session_tags_transitive`, `cache.s3_cleanup`, `tag_auth.enabled`, `tag_auth.transitive_session_tags`, and `cross_account.enabled`.
+
 ## [2.4.0] - 2026-08-21
 
 Audit and observability hardening. The durable S3 audit trail becomes the default rather than an opt-in, every record identifies who made the request and from where, and the CloudWatch decision line becomes machine-queryable without post-filtering. Three fail-open or broken-by-default defects in the audit path are fixed.
@@ -503,6 +513,7 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.2...v2.3.0
 [2.2.2]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.1...v2.2.2

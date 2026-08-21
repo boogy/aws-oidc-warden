@@ -78,13 +78,17 @@ type S3Logger struct {
 	// snapshot silently keeps a value the operator has since changed.
 	configSource func() *gtvcfg.Config
 	s3Client     s3ClientInterface
-	batchBuffer  *bytes.Buffer   // Internal buffer for batching
-	logBatch     [][]byte        // Batch of logs waiting to be written
-	mu           sync.Mutex      // Mutex for thread safety
-	batchTimer   *time.Timer     // Timer for batch flushing
-	ctx          context.Context // Context for S3 operations
-	cancel       context.CancelFunc
-	timeNow      func() time.Time // For testing time-dependent code
+	clientMu     sync.Mutex // Guards lazy s3Client construction
+	// clientFactory builds the S3 client. Indirected so the lazy
+	// initialization path can be exercised without reaching AWS.
+	clientFactory func(context.Context) (s3ClientInterface, error)
+	batchBuffer   *bytes.Buffer   // Internal buffer for batching
+	logBatch      [][]byte        // Batch of logs waiting to be written
+	mu            sync.Mutex      // Mutex for thread safety
+	batchTimer    *time.Timer     // Timer for batch flushing
+	ctx           context.Context // Context for S3 operations
+	cancel        context.CancelFunc
+	timeNow       func() time.Time // For testing time-dependent code
 
 	// Configuration options
 	s3Config S3LoggerConfig
@@ -113,6 +117,8 @@ func NewS3Logger(cfg *gtvcfg.Config) *S3Logger {
 			FileExtension:    ".json.gz",
 		},
 	}
+
+	logger.clientFactory = logger.loadS3Client
 
 	// Initialize S3 client if logging to S3 is enabled
 	if cfg.LogToS3 && cfg.LogBucket != "" {
@@ -156,19 +162,71 @@ func (l *S3Logger) targetBucket() string {
 	return l.s3Config.Bucket
 }
 
-// initS3Client initializes the S3 client
-func (l *S3Logger) initS3Client() {
-	awsConfig, err := config.LoadDefaultConfig(l.ctx, config.WithRetryMaxAttempts(l.s3Config.MaxRetries))
+// loadS3Client is the production clientFactory: it resolves AWS configuration
+// and builds a real S3 client.
+func (l *S3Logger) loadS3Client(ctx context.Context) (s3ClientInterface, error) {
+	awsConfig, err := config.LoadDefaultConfig(ctx, config.WithRetryMaxAttempts(l.s3Config.MaxRetries))
 	if err != nil {
-		slog.Error("Failed to load AWS config for S3 logger",
+		return nil, fmt.Errorf("failed to load AWS config for S3 logger: %w", err)
+	}
+	return s3.NewFromConfig(awsConfig), nil
+}
+
+// initS3Client initializes the S3 client at construction time. A failure here
+// is not fatal: the enforced audit path retries via ensureDurableClient, and
+// the best-effort paths already tolerate a nil client.
+func (l *S3Logger) initS3Client() {
+	if err := l.ensureDurableClient(); err != nil {
+		slog.Error("Failed to initialize S3 client for logging",
 			slog.String("error", err.Error()))
 		return
 	}
 
-	l.s3Client = s3.NewFromConfig(awsConfig)
 	slog.Debug("S3 client initialized for logging",
 		slog.String("bucket", l.s3Config.Bucket),
 		slog.String("prefix", l.s3Config.Prefix))
+}
+
+// ensureDurableClient resolves the S3 client used by the enforced audit path,
+// building it on first need.
+//
+// The client used to be built exactly once, inside NewS3Logger, from the
+// boot-time config snapshot. AuditEnforced() is re-derived from the LIVE
+// config on every request, so the two could permanently disagree: a container
+// that cold-started with log_to_s3 off had s3Client==nil forever, and an
+// operator who then enabled log_to_s3+log_bucket via hot reload flipped
+// enforcement on against a logger that could never write. Every allow decision
+// then failed with ErrAuditWriteFailed — a permanent 500 on that warm
+// container with no way to self-heal short of a restart, which is the opposite
+// of what docs/LOGGING.md promises about reloading those keys.
+//
+// Building on demand makes the documented behavior true: the first enforced
+// write after the reload creates the client and the audit trail starts working.
+// It deliberately does NOT build a client when the live config has S3 logging
+// off — "not initialized" must still be an error there, never a silent no-op,
+// because the caller hands out credentials only if this path succeeds.
+func (l *S3Logger) ensureDurableClient() error {
+	l.clientMu.Lock()
+	defer l.clientMu.Unlock()
+
+	if l.s3Client != nil {
+		return nil
+	}
+
+	c := l.liveConfig()
+	if c == nil || !c.LogToS3 || c.LogBucket == "" {
+		return errors.New("s3 audit logger: S3 client not initialized and the live config does not enable S3 audit logging")
+	}
+
+	client, err := l.clientFactory(l.ctx)
+	if err != nil {
+		return fmt.Errorf("s3 audit logger: %w", err)
+	}
+	l.s3Client = client
+
+	slog.Info("S3 audit client initialized on demand",
+		slog.String("bucket", c.LogBucket))
+	return nil
 }
 
 // startBatchTimer starts the timer for batch flushing
@@ -398,8 +456,8 @@ func (l *S3Logger) WriteSingleLog(logData []byte) error {
 // exact inverse of audit_required's fail-closed contract. It also bypasses
 // WriteSingleLog for the same reason: that helper re-checks the same snapshot.
 func (l *S3Logger) WriteRecord(_ context.Context, record []byte) error {
-	if l.s3Client == nil {
-		return errors.New("s3 audit logger: S3 client not initialized")
+	if err := l.ensureDurableClient(); err != nil {
+		return err
 	}
 
 	compressedData, err := compressGzip(record)
