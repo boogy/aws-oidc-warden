@@ -72,6 +72,21 @@ and safe to record. Values are formatted exactly as session tag values are,
 so a claim reported here and the same claim attached as a session tag can
 never disagree.
 
+Because the `github` dump is the full verified claim set, it necessarily
+repeats registered claims the record already carries under dedicated field
+names: `iss`→`issuer`, `sub`→`jwtSub`, `aud`→`audience`, `exp`→`expiry` (4 of
+4 dedicated fields). `iat`, `nbf`, and `jti` have no dedicated field, so they
+exist only inside `claims`. The dedicated fields are the stable, queryable
+ones a consumer should key on, not their `claims` copies — and the format can
+differ for the same value: `expiry` is RFC3339 (e.g.
+`2026-08-19T09:00:00Z`) while `claims.exp` is the raw epoch as a string (e.g.
+`1755594000`), so comparing the two textually will not match. On a realistic
+30-claim token this duplication grows the record from 647 to 1526 bytes (+879
+bytes, +136%); that cost is accepted deliberately, not overlooked, because a
+curated list is one a future GitHub claim can silently fall through, and any
+curated list is one someone must revise every time GitHub adds a claim —
+`claims` stays the full verified claim set on purpose.
+
 Records are built with `encoding/json`, which escapes control characters, so a
 claim value containing newlines cannot forge a log line or break the record.
 
