@@ -26,8 +26,7 @@ tofu validate
 
 ### 2. OpenTofu tests
 
-`tofu test` (runs `hardening.tftest.hcl`) requires the Lambda zip — a
-`fileexists(var.zip_path)` precondition fails otherwise:
+`tofu test` (runs `hardening.tftest.hcl`) requires the Lambda zip — a `fileexists(var.zip_path)` precondition fails otherwise:
 
 ```bash
 [ -f dist/function.zip ] || ./build.sh
@@ -46,13 +45,10 @@ Watch for E2001: parameter logical IDs must be alphanumeric (no underscores).
 
 ### 4. Docs sync
 
-- `deploy/README.md` updated to reflect the change (deploy changes are
-  documented there, **not** in `CHANGELOG.md`).
-- New/changed variables in `variables.tf` are reflected in
-  `terraform.tfvars.example` and the README (incl. the hardening table).
+- `deploy/README.md` updated to reflect the change (deploy changes are documented there, **not** in `CHANGELOG.md`).
+- New/changed variables in `variables.tf` are reflected in `terraform.tfvars.example` and the README (incl. the hardening table).
 - Module input/output changes are reflected in root `main.tf`/`outputs.tf`.
 
 ## Report
 
-State pass/fail per step with failing output. Do not mark done with any
-failing or skipped check.
+State pass/fail per step with failing output. Do not mark done with any failing or skipped check.

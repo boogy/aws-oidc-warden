@@ -8,20 +8,15 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 ## Package guide
 
-- **`internal/handler/`** → [CLAUDE.md](internal/handler/CLAUDE.md) — core request pipeline shared by every deployment. `NewBootstrap()` wires DI (config, validator, cache, AWS consumer); `ProcessRequest()` runs the pipeline; `RequestData` + sentinel errors live in `types.go`; the per-frontend adapters (`apigateway.go` / `alb.go` / `lambdaurl.go`) differ only in event parse/serialize.
-  _Go here when_ changing request flow, adding a frontend, or touching error→HTTP mapping.
+- **`internal/handler/`** → [CLAUDE.md](internal/handler/CLAUDE.md) — core request pipeline shared by every deployment. `NewBootstrap()` wires DI (config, validator, cache, AWS consumer); `ProcessRequest()` runs the pipeline; `RequestData` + sentinel errors live in `types.go`; the per-frontend adapters (`apigateway.go` / `alb.go` / `lambdaurl.go`) differ only in event parse/serialize. _Go here when_ changing request flow, adding a frontend, or touching error→HTTP mapping.
 
-- **`internal/validator/`** → [CLAUDE.md](internal/validator/CLAUDE.md) — multi-issuer JWT parse + JWKS signature/claims verification (`TokenValidatorInterface`). Routes on the unverified `iss` to a per-issuer registry spec, then verifies signature → re-asserted issuer → audience (ANY-match) → time bounds → required*claims → canonical-subject normalization. Allowed algorithms only (ES/RS 256–512, never `none`). Delegated `apigw`/`alb` share the same claim-check path.
-  \_Go here when* touching token verification, JWKS fetching, or audience handling.
+- **`internal/validator/`** → [CLAUDE.md](internal/validator/CLAUDE.md) — multi-issuer JWT parse + JWKS signature/claims verification (`TokenValidatorInterface`). Routes on the unverified `iss` to a per-issuer registry spec, then verifies signature → re-asserted issuer → audience (ANY-match) → time bounds → required*claims → canonical-subject normalization. Allowed algorithms only (ES/RS 256–512, never `none`). Delegated `apigw`/`alb` share the same claim-check path. \_Go here when* touching token verification, JWKS fetching, or audience handling.
 
-- **`internal/config/`** → [CLAUDE.md](internal/config/CLAUDE.md) — Viper config (`AOW_` env prefix > file > defaults), the `issuers[]` model, issuer-bound subject/condition matching over an owner-bucketed index, config fragments, and the remote `Provider` (lazy refresh via injected `FetchFunc`, atomic swap from a pristine base). Key methods: `AuthorizeRoles(issuer, subject, claims)`, `FindSessionPolicy(issuer, subject, role, claims)` (role- and condition-aware: the policy comes from the mapping that authorized the role), `IssuerSessionTags(issuer)`, `Validate()` (compiles anchored regex once, builds the index).
-  _Go here when_ adding config keys, constraint logic, or remote-refresh behavior.
+- **`internal/config/`** → [CLAUDE.md](internal/config/CLAUDE.md) — Viper config (`AOW_` env prefix > file > defaults), the `issuers[]` model, issuer-bound subject/condition matching over an owner-bucketed index, config fragments, and the remote `Provider` (lazy refresh via injected `FetchFunc`, atomic swap from a pristine base). Key methods: `AuthorizeRoles(issuer, subject, claims)`, `FindSessionPolicy(issuer, subject, role, claims)` (role- and condition-aware: the policy comes from the mapping that authorized the role), `IssuerSessionTags(issuer)`, `Validate()` (compiles anchored regex once, builds the index). _Go here when_ adding config keys, constraint logic, or remote-refresh behavior.
 
-- **`internal/cache/`** → [CLAUDE.md](internal/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects).
-  _Go here when_ changing cache backends, TTL handling, or eviction.
+- **`internal/cache/`** → [CLAUDE.md](internal/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects). _Go here when_ changing cache backends, TTL handling, or eviction.
 
-- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-resolved `sessionTags` (built by `BuildSessionTags(rawClaims, tagSpec)` from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`.
-  _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
+- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-resolved `sessionTags` (built by `BuildSessionTags(rawClaims, tagSpec)` from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
 
 ## Other folders (no CLAUDE.md of their own)
 
