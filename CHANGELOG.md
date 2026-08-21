@@ -133,14 +133,25 @@ audit path are fixed.
   nothing — so a query spanning frontends had no single shape to match on. The
   frontend's own ID is preserved as `frontendRequestId`.
 
+- **The decision log line no longer duplicates `sourceIp`, `sourceIpFrom`, and
+  `frontendRequestId`.** Previously each was emitted twice — once by the
+  frontend adapter's request-scoped logger and once by the decision line's
+  own attribute set — so every decision line carried two keys with the same
+  name. Each of the three now has exactly one writer, the adapter-bound
+  logger, matching how `requestId` was already handled above.
+
 - **The decision log line now omits empty attributes** instead of emitting
   them blank, so a CloudWatch Insights query never has to filter `field != ""`.
-  Deny-only `stage`/`reason` are absent on an allow, and with
-  `log_claim_values=false` claim values are absent rather than blanked.
-  `sourceIpFrom` is emitted only when the IP was *not* platform-attested,
-  since a constant on every line is noise; the durable record keeps it
-  unconditionally. Timing attributes are millisecond integers named
-  `validationMs`/`totalMs`/`durationMs`, consistent with `processingMs`.
+  This covers both the decision line's own attribute set — deny-only
+  `stage`/`reason` are absent on an allow, and with `log_claim_values=false`
+  claim values are absent rather than blanked — and the adapter-bound request
+  attributes: `frontendRequestId` and `sourceIp` are absent rather than
+  emitted as an empty string when the frontend has none (ALB issues no
+  frontend request ID, and has no source IP without a usable
+  `x-forwarded-for`). `sourceIpFrom` is emitted only when the IP was *not*
+  platform-attested, since a constant on every line is noise; the durable
+  record keeps it unconditionally. Timing attributes are millisecond integers
+  named `validationMs`/`totalMs`/`durationMs`, consistent with `processingMs`.
 
   All log output is JSON and is now pinned as such by test, so downstream
   parsers can rely on every line being valid JSON.
