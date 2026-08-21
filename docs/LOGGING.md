@@ -113,7 +113,7 @@ sources below produced the value, so provenance is never inferred.
 | API Gateway HTTP (v2) | `frontend` | Attested by AWS. `requestContext.http.sourceIp` is observed by the platform and cannot be set by the caller. |
 | API Gateway REST (v1) | `frontend` | Attested by AWS (`requestContext.identity.sourceIp`). |
 | Lambda Function URL | `frontend` | Attested by AWS. |
-| ALB | `x-forwarded-for` | **Client-supplied.** ALB provides no source-IP field, so the value comes from the `X-Forwarded-For` header. |
+| ALB | `x-forwarded-for` or `""` | **Client-supplied.** ALB provides no source-IP field, so the value comes from the `X-Forwarded-For` header; `sourceIpFrom` is `""` when no usable value is present (see below). |
 
 For ALB the **rightmost** hop is used, not the leftmost. ALB appends the TCP peer
 it actually observed to whatever `X-Forwarded-For` the client already sent, so in
@@ -121,10 +121,24 @@ it actually observed to whatever `X-Forwarded-For` the client already sent, so i
 appended `203.0.113.7`. Every entry left of the last one is caller-controlled;
 taking the leftmost would log precisely the value an attacker chose.
 
+Only the last comma-separated field is ever examined, and there is no fallback
+to an earlier one: if that field is missing, empty, or does not parse as an IP,
+`sourceIp` and `sourceIpFrom` are both `""`. An earlier implementation fell back
+to the rightmost *parseable* field, which meant a caller who appended a trailing
+empty or malformed entry to the header could still get their own, earlier entry
+logged as the source IP. That fallback has been removed deliberately: an absent
+source IP is strictly better than one fabricated by the caller.
+
 Verifying the JWT does not make this header trustworthy. Token verification
 authenticates the workflow identity carried *inside* the token; `X-Forwarded-For`
 is a network-layer header the caller sets independently, and nothing in the token
 attests to it.
+
+**Deployment requirement (ALB only).** The ALB in front of this service must be
+configured to **append** to `X-Forwarded-For` — the default behavior — rather
+than preserve or remove it. A preserved header is entirely caller-supplied, and
+no parsing strategy on the receiving end can make it trustworthy; the rightmost
+rule above depends on the load balancer being the one adding the final entry.
 
 **Topology caveat (ALB only).** The rightmost hop is the client's IP only when
 the ALB is the internet-facing edge. Put a CloudFront distribution or a second
