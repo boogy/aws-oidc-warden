@@ -51,23 +51,26 @@ Claim **values** — `jwtSub` (raw `sub`), `subject` (canonical identity),
 `audience`, resolved `sessionTags`, and `claims` — appear only when
 `log_claim_values=true`. `sessionTagKeys` (names only) are always present.
 
-`claims` answers "who did this", on **both** allow and deny records. For
-`provider: github` issuers it carries the **full verified claim set** — every
-GitHub Actions OIDC claim, not a curated subset — with `repository` and
-`repository_id` renamed to `repo` and `repo_id` so the audit vocabulary is
-stable and queryable regardless of which raw claim name GitHub used. A claim
-with an empty value is still skipped (e.g. `base_ref`/`head_ref` outside a
-pull request), since it carries no information and costs bytes in a
-per-request S3 object. A full dump is deliberate for `github` specifically:
-every claim GitHub puts in that token is non-secret workflow metadata, and a
-complete dump beats a curated list that silently omits whatever an
-investigation actually needs. For every other issuer, `claims` carries only
-the claims that issuer's own `claim_mappings` reference — an arbitrary OIDC
-issuer can put email addresses, group memberships, or entitlements in a
-token, and naming a claim in `claim_mappings` is the operator's statement
-that it is both meaningful and safe to record. Values are formatted exactly
-as session tag values are, so a claim reported here and the same claim
-attached as a session tag can never disagree.
+`claims` answers "who did this", on **both** allow and deny records. Two raw
+claim names are always renamed on the way in, regardless of issuer or
+provider: `repository` becomes `repo` and `repository_id` becomes `repo_id`,
+so the audit vocabulary stays stable and queryable whenever a token happens
+to carry a claim under either name. A claim with an empty value is still
+skipped (e.g. `base_ref`/`head_ref` outside a pull request), since it carries
+no information and costs bytes in a per-request S3 object.
+
+For `provider: github` issuers, `claims` carries the **full verified claim
+set** — every GitHub Actions OIDC claim, not a curated subset. A full dump is
+deliberate for `github` specifically: every claim GitHub puts in that token
+is non-secret workflow metadata, and a complete dump beats a curated list
+that silently omits whatever an investigation actually needs. For every
+other issuer, `claims` carries only the claims that issuer's own
+`claim_mappings` reference — an arbitrary OIDC issuer can put email
+addresses, group memberships, or entitlements in a token, and naming a claim
+in `claim_mappings` is the operator's statement that it is both meaningful
+and safe to record. Values are formatted exactly as session tag values are,
+so a claim reported here and the same claim attached as a session tag can
+never disagree.
 
 Records are built with `encoding/json`, which escapes control characters, so a
 claim value containing newlines cannot forge a log line or break the record.
