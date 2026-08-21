@@ -295,3 +295,56 @@ func TestAuditClaims_GenericIssuerUsesClaimMappings(t *testing.T) {
 	// GitHub's curated names must not leak into a generic issuer's record.
 	assert.NotContains(t, got, "repository")
 }
+
+// TestAuditClaims_GenericIssuerRepositoryAliasIsProviderIndependent pins that
+// the repository -> repo rename applies to every provider, not just
+// "github": a generic issuer whose own claim_mappings happen to name a raw
+// "repository" claim still gets it aliased to "repo" in the audit record.
+func TestAuditClaims_GenericIssuerRepositoryAliasIsProviderIndependent(t *testing.T) {
+	const genericIssuer = "https://issuer.example.com"
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:    genericIssuer,
+			Provider:  "generic",
+			Audiences: []string{"sts.amazonaws.com"},
+			ClaimMappings: map[string]string{
+				"subject": "repository",
+			},
+		}},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 0},
+		RoleMappings: []config.RoleMapping{{
+			Subject: "acme/api",
+			Issuer:  genericIssuer,
+			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+		}},
+		LogClaimValues: true,
+	}
+	require.NoError(t, cfg.Validate())
+
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:   genericIssuer,
+			Subject:  "acme/api",
+			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
+		},
+		Sub: "acme/api",
+		Raw: map[string]any{
+			"repository": "acme/api",
+		},
+	}
+
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), &fixedExtractor{claims: claims}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"},
+		"req-claims-generic-alias", slog.Default())
+	require.NoError(t, err)
+
+	got := recClaims(t, sink.last(t))
+	require.NotNil(t, got)
+	assert.Equal(t, "acme/api", got["repo"], "the rename applies regardless of provider")
+	assert.NotContains(t, got, "repository", "the raw claim name must not survive the rename")
+}
