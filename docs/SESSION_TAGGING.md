@@ -1,14 +1,10 @@
 # Session Tagging
 
-The AWS OIDC Warden attaches STS session tags when assuming a role, for ABAC,
-audit trails, and cost allocation.
+The AWS OIDC Warden attaches STS session tags when assuming a role, for ABAC, audit trails, and cost allocation.
 
 ## v2: session tags are per-issuer and spec-driven
 
-Each issuer declares its own `session_tags` map — **STS tag key ← raw claim
-name** — and only those tags are attached for that issuer's tokens. There is no
-hard-coded GitHub tag set; a tag's value is the verified claim's value, taken
-verbatim.
+Each issuer declares its own `session_tags` map — **STS tag key ← raw claim name** — and only those tags are attached for that issuer's tokens. There is no hard-coded GitHub tag set; a tag's value is the verified claim's value, taken verbatim.
 
 ```yaml
 issuers:
@@ -23,15 +19,9 @@ issuers:
       event-name: "event_name"
 ```
 
-Tag **keys** must match `[A-Za-z0-9 _.:/=+@-]{1,128}`; values are capped at 256
-chars. An invalid key or value is **skipped and logged — never sanitized or
-truncated**, so an ABAC condition can trust that a tag it sees carries the
-exact claim value (a silently mangled value would be a security bug).
+Tag **keys** must match `[A-Za-z0-9 _.:/=+@-]{1,128}`; values are capped at 256 chars. An invalid key or value is **skipped and logged — never sanitized or truncated**, so an ABAC condition can trust that a tag it sees carries the exact claim value (a silently mangled value would be a security bug).
 
-> **Breaking change from v1:** the default `repo` tag now carries the **full
-> `owner/repo`** (the raw `repository` claim). v1 stripped the owner to a bare
-> repo name. If an ABAC policy matched a bare repo name, update it — or map
-> `repo` to a claim that is already bare.
+> **Breaking change from v1:** the default `repo` tag now carries the **full `owner/repo`** (the raw `repository` claim). v1 stripped the owner to a bare repo name. If an ABAC policy matched a bare repo name, update it — or map `repo` to a claim that is already bare.
 
 ### Example tags for the mapping above
 
@@ -44,18 +34,9 @@ exact claim value (a silently mangled value would be a security bug).
 | `actor`      | `actor`            | `username`         |
 | `event-name` | `event_name`       | `push`             |
 
-For a non-GitHub (`generic`) issuer, key the tags on that provider's raw claim
-names (e.g. GitLab `project_path`, `ref`). See [MULTI_ISSUER.md](MULTI_ISSUER.md).
+For a non-GitHub (`generic`) issuer, key the tags on that provider's raw claim names (e.g. GitLab `project_path`, `ref`). See [MULTI_ISSUER.md](MULTI_ISSUER.md).
 
-> **Session tagging vs. tag-based authorization.** This page covers the STS
-> session tags attached to every assumed-role session (for ABAC policy
-> conditions, audit, and cost allocation). A separate, opt-in mechanism —
-> [tag-based authorization](TAG_BASED_AUTHORIZATION.md) — lets a role's own
-> IAM tags _grant_ the authorization decision itself (in place of
-> `role_mappings`), which is the recommended path once you're managing
-> authorization for hundreds/thousands of roles or need cross-account
-> hub/spoke delegation. The two compose: an IAM-tag-authorized role still gets
-> the same per-issuer `session_tags` attached on assumption.
+> **Session tagging vs. tag-based authorization.** This page covers the STS session tags attached to every assumed-role session (for ABAC policy conditions, audit, and cost allocation). A separate, opt-in mechanism — [tag-based authorization](TAG_BASED_AUTHORIZATION.md) — lets a role's own IAM tags _grant_ the authorization decision itself (in place of `role_mappings`), which is the recommended path once you're managing authorization for hundreds/thousands of roles or need cross-account hub/spoke delegation. The two compose: an IAM-tag-authorized role still gets the same per-issuer `session_tags` attached on assumption.
 
 ## Security Benefits
 
@@ -266,6 +247,4 @@ WHERE userIdentity.sessionContext.sessionIssuer.tags.ref != 'refs/heads/main'
 - Session tags are limited to 50 tags per session
 - Each tag key and value has character and length restrictions
 - Session tags only apply to the assumed role session, not the underlying IAM role
-- An invalid tag key or value is **skipped and logged, never sanitized or
-  truncated** — an ABAC condition can trust that any tag it sees carries the
-  exact verified claim value (see the note above)
+- An invalid tag key or value is **skipped and logged, never sanitized or truncated** — an ABAC condition can trust that any tag it sees carries the exact verified claim value (see the note above)

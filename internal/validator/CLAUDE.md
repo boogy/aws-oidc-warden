@@ -24,8 +24,7 @@ Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec
 1. Unverified `iss` peek — routing only, never used for identity/authorization.
 2. Registry lookup by exact issuer match. Unknown issuer denies **before any JWKS fetch is attempted**.
 3. Per-call parser scoped to the matched issuer (algorithm allowlist, `WithExpirationRequired`, `WithIssuedAt`, `WithLeeway`).
-4. Fetch JWKS (cached per issuer); verify signature. A `kid` miss (`ErrKeyNotFound`) triggers one cache-bypassing refetch (key-rotation recovery), then fails.
-   4b. Re-assert the verified issuer matches the spec used, guarding a hot-reload race between steps 2 and 4.
+4. Fetch JWKS (cached per issuer); verify signature. A `kid` miss (`ErrKeyNotFound`) triggers one cache-bypassing refetch (key-rotation recovery), then fails. 4b. Re-assert the verified issuer matches the spec used, guarding a hot-reload race between steps 2 and 4.
 5. Audience ANY-match against the issuer's configured audiences (`audienceMatches`).
 6. `required_claims` present and non-empty on the verified raw claims.
 7. `normalizeClaims` — see below.

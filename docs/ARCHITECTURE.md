@@ -180,23 +180,7 @@ Three modes controlled by `jwt_validation.mode`:
 
 **Security invariant:** In delegated modes, if no upstream-injected claims arrive (direct Lambda invocation bypass), `Extract()` returns an error wrapping `ErrTokenValidationFailed` → HTTP 401.
 
-> **Trust boundary warning — `apigw` mode has no cryptographic backstop.**
-> In `apigw` mode the Lambda never sees or verifies the original OIDC token's
-> signature; it fully trusts `event.requestContext.authorizer.jwt.claims` as
-> handed to it. The invariant above only rejects an **empty** claims map — it
-> does **not** detect a direct invoke that supplies **forged, non-empty**
-> claims (an arbitrary `iss`/`aud`/`sub`/`exp`), which pass straight through
-> with no signature to check them against. **`lambda:InvokeFunction` on this
-> function is therefore equivalent to full identity impersonation in `apigw`
-> mode** — anyone who can invoke it directly can obtain AWS credentials for
-> any spoofed subject your `role_mappings`/`role_groups`/`tag_auth` would
-> authorize. `alb` mode does not share this gap: the Lambda itself verifies
-> the ALB's ES256 signature over `x-amzn-oidc-data`, so a forged direct
-> invoke fails that check. **Mitigation:** the function's resource-based
-> (invoke) policy must restrict `lambda:InvokeFunction` to the fronting API
-> Gateway's execution/service principal only — never a broader principal.
-> See [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode)
-> for the full write-up.
+> **Trust boundary warning — `apigw` mode has no cryptographic backstop.** In `apigw` mode the Lambda never sees or verifies the original OIDC token's signature; it fully trusts `event.requestContext.authorizer.jwt.claims` as handed to it. The invariant above only rejects an **empty** claims map — it does **not** detect a direct invoke that supplies **forged, non-empty** claims (an arbitrary `iss`/`aud`/`sub`/`exp`), which pass straight through with no signature to check them against. **`lambda:InvokeFunction` on this function is therefore equivalent to full identity impersonation in `apigw` mode** — anyone who can invoke it directly can obtain AWS credentials for any spoofed subject your `role_mappings`/`role_groups`/`tag_auth` would authorize. `alb` mode does not share this gap: the Lambda itself verifies the ALB's ES256 signature over `x-amzn-oidc-data`, so a forged direct invoke fails that check. **Mitigation:** the function's resource-based (invoke) policy must restrict `lambda:InvokeFunction` to the fronting API Gateway's execution/service principal only — never a broader principal. See [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode) for the full write-up.
 
 **API Gateway mode** requires an `aws_apigatewayv2_authorizer` JWT resource pointing at `https://token.actions.githubusercontent.com`. Restrict Lambda invocations to the API Gateway execution role via Lambda resource-based policies.
 
@@ -287,22 +271,13 @@ type AwsConsumerInterface interface {
 
 **Session Tags Applied:**
 
-Tags are not hardcoded — each issuer declares its own `session_tags` map (STS
-tag key ← raw claim name), and `BuildSessionTags(rawClaims, tagSpec)` resolves
-that spec against the verified claims of the token that authorized this
-request:
+Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request:
 
 ```go
 func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag
 ```
 
-A typical GitHub `session_tags` spec (`repo: repository`, `actor: actor`,
-`ref: ref`, ...) produces the same shape of tags v1 hardcoded, but any issuer
-can define its own key set from its own raw claims (see
-[SESSION_TAGGING.md](SESSION_TAGGING.md)). Invalid keys/values are skipped and
-logged, never sanitized — a tag an ABAC policy sees always carries the exact
-verified claim value. The list is deterministic (sorted by key) and capped at
-50 tags.
+A typical GitHub `session_tags` spec (`repo: repository`, `actor: actor`, `ref: ref`, ...) produces the same shape of tags v1 hardcoded, but any issuer can define its own key set from its own raw claims (see [SESSION_TAGGING.md](SESSION_TAGGING.md)). Invalid keys/values are skipped and logged, never sanitized — a tag an ABAC policy sees always carries the exact verified claim value. The list is deterministic (sorted by key) and capped at 50 tags.
 
 ### Caching System (`internal/cache/`)
 
@@ -315,10 +290,7 @@ type Cache interface {
 }
 ```
 
-`NewCache(cfg)` selects **one** backend from `cache.type` (`memory`, `dynamodb`,
-or `s3`) — the backends are alternatives, not chained tiers. The DynamoDB and
-S3 backends each keep a small local in-memory layer in front of their remote
-store to cut per-request latency.
+`NewCache(cfg)` selects **one** backend from `cache.type` (`memory`, `dynamodb`, or `s3`) — the backends are alternatives, not chained tiers. The DynamoDB and S3 backends each keep a small local in-memory layer in front of their remote store to cut per-request latency.
 
 #### Memory Cache
 
@@ -363,12 +335,7 @@ type Config struct {
 }
 ```
 
-Each `IssuerConfig` carries `issuer`, `provider` (`github`/`generic`),
-`audiences`, optional `jwks_uri`, `claim_mappings`, `required_claims`, and
-`session_tags`. At `Validate()`, `role_mappings`/`role_groups` are resolved to
-their issuer (explicit, `default_issuer`, or the sole issuer), `@role_set`
-aliases are expanded, patterns are anchored + compiled once, and an
-owner-bucketed authorization index is built (byte-identical to a linear scan).
+Each `IssuerConfig` carries `issuer`, `provider` (`github`/`generic`), `audiences`, optional `jwks_uri`, `claim_mappings`, `required_claims`, and `session_tags`. At `Validate()`, `role_mappings`/`role_groups` are resolved to their issuer (explicit, `default_issuer`, or the sole issuer), `@role_set` aliases are expanded, patterns are anchored + compiled once, and an owner-bucketed authorization index is built (byte-identical to a linear scan).
 
 **Configuration Sources** (in order of precedence):
 
@@ -441,9 +408,7 @@ flowchart TD
 
 ### 2. Condition Validation
 
-Every named field and every `Extra` (arbitrary-claim) entry compiles through the
-same anchored-regex mechanism, so a plain string is a widened `==`, not a
-special case:
+Every named field and every `Extra` (arbitrary-claim) entry compiles through the same anchored-regex mechanism, so a plain string is a widened `==`, not a special case:
 
 ```go
 type Condition struct {
@@ -460,18 +425,14 @@ type Condition struct {
 
 **Validation Logic:**
 
-- All specified conditions must be satisfied (AND logic) — this includes a
-  named field and an `Extra` entry that happen to target the same underlying
-  claim; both apply and both must match.
+- All specified conditions must be satisfied (AND logic) — this includes a named field and an `Extra` entry that happen to target the same underlying claim; both apply and both must match.
 - Every pattern is auto-anchored (`^(?:pattern)$`) and regex-capable.
-- Claims are extracted from the validated JWT token; `Extra` claim values must
-  be string-typed (a numeric claim like `run_id` never satisfies a condition).
+- Claims are extracted from the validated JWT token; `Extra` claim values must be string-typed (a numeric claim like `run_id` never satisfies a condition).
 - Condition compilation happens once, in `Validate()`, never per request.
 
 ### 3. Caching Strategy
 
-One backend is selected at startup by `cache.type`; the remote backends keep a
-small local in-memory layer in front of their store:
+One backend is selected at startup by `cache.type`; the remote backends keep a small local in-memory layer in front of their store:
 
 ```mermaid
 flowchart LR
@@ -488,8 +449,7 @@ flowchart LR
 
 - One `cache.ttl` applies to the selected backend (default `1h`).
 - Entries expire by TTL (DynamoDB native TTL; S3 metadata + optional `s3_cleanup`).
-- A signing-key rotation is recovered by a forced, rate-limited JWKS refetch on
-  `kid` miss (`jwks_refetch_cooldown`) — there is no claim-based invalidation.
+- A signing-key rotation is recovered by a forced, rate-limited JWKS refetch on `kid` miss (`jwks_refetch_cooldown`) — there is no claim-based invalidation.
 
 ## Security Architecture
 
@@ -541,16 +501,10 @@ flowchart TD
 
 **Session Security:**
 
-- Session duration limits (default: 1 hour, max: 12 hours; whenever the
-  warden's own credentials are a role session — always true on Lambda,
-  same-account assumes included — chaining clamps the issued session to 1
-  hour regardless of target. Only `local` server mode with IAM user
-  credentials can exceed 1 hour, up to the target role's own max, cross-account
-  targets included)
+- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. Only `local` server mode with IAM user credentials can exceed 1 hour, up to the target role's own max, cross-account targets included)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
-- Credentials are short-lived and expire on their own — no long-lived secrets
-  are ever issued or stored
+- Credentials are short-lived and expire on their own — no long-lived secrets are ever issued or stored
 
 ### 4. Tag-Based Authorization & Cross-Account
 
@@ -564,11 +518,9 @@ Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a
 4. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
 5. If authorized, `AssumeRole` is called directly on the target role using the hub's own credentials (never spoke credentials). When `Config.TransitiveSessionTags()` (the top-level `session_tags_transitive`, RECOMMENDED — the deprecated `tag_auth.transitive_session_tags` still works as a fallback) is true, every attached session tag (the issuer's `session_tags` spec) is marked transitive so it propagates immutably through subsequent role chaining; without it, the tags are dropped at this hop and any ABAC policy past it loses the caller's identity. Because the hub's credentials are always a role session on Lambda, this assume — same-account included — is clamped to 1 hour; only `local` mode with IAM user credentials avoids the clamp.
 
-**Account Allow-List (`IsTargetAccountAllowed`):**
-Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `cross_account.allowed_accounts`. With `cross_account` disabled, only the hub account is allowed. With it enabled, the hub account is always implicitly allowed, and an empty list permits any account (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
+**Account Allow-List (`IsTargetAccountAllowed`):** Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `cross_account.allowed_accounts`. With `cross_account` disabled, only the hub account is allowed. With it enabled, the hub account is always implicitly allowed, and an empty list permits any account (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
 
-**`DefaultOrg` shorthand:**
-When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no `/`) are automatically expanded to `<default_org>/<name>` before comparison, enabling short tag values like `my-service` instead of `org/my-service`.
+**`DefaultOrg` shorthand:** When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no `/`) are automatically expanded to `<default_org>/<name>` before comparison, enabling short tag values like `my-service` instead of `org/my-service`.
 
 **Diagrams:**
 
@@ -584,44 +536,24 @@ When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no
 
 ### 5. Residual Risk: Stateless Replay
 
-The validator is fully stateless — there is no `jti`/nonce replay cache. A
-token that is captured before it expires (e.g. exfiltrated from CI logs or a
-compromised runner) remains usable by an attacker for the rest of its
-validity window, and a duplicate `AssumeRole` call with the same token is not
-itself detected as a replay. The hardening knobs bound, but do not eliminate,
-this exposure:
+The validator is fully stateless — there is no `jti`/nonce replay cache. A token that is captured before it expires (e.g. exfiltrated from CI logs or a compromised runner) remains usable by an attacker for the rest of its validity window, and a duplicate `AssumeRole` call with the same token is not itself detected as a replay. The hardening knobs bound, but do not eliminate, this exposure:
 
-- `max_token_lifetime` / `max_token_age` shrink the window a stolen token
-  stays valid, independent of what the issuer itself set for `exp`.
-- `jwks_refetch_cooldown` and per-`(issuer, kid)` rate limiting stop a replay
-  attempt from being amplified into a JWKS-fetch storm.
-- Structured audit records (`docs/LOGGING.md`) let you detect anomalous
-  reuse after the fact (e.g. the same `jwtSub`/`subject` assuming roles from
-  unexpected source IPs or in an unexpected cadence), even though the service
-  itself does not block it in real time.
+- `max_token_lifetime` / `max_token_age` shrink the window a stolen token stays valid, independent of what the issuer itself set for `exp`.
+- `jwks_refetch_cooldown` and per-`(issuer, kid)` rate limiting stop a replay attempt from being amplified into a JWKS-fetch storm.
+- Structured audit records (`docs/LOGGING.md`) let you detect anomalous reuse after the fact (e.g. the same `jwtSub`/`subject` assuming roles from unexpected source IPs or in an unexpected cadence), even though the service itself does not block it in real time.
 
-If your threat model requires hard replay prevention, put a short-lived,
-single-use token issuance step in front of this service, or rely on the
-short (minutes-scale) validity window GitHub Actions/GitLab CI already give
-OIDC tokens.
+If your threat model requires hard replay prevention, put a short-lived, single-use token issuance step in front of this service, or rely on the short (minutes-scale) validity window GitHub Actions/GitLab CI already give OIDC tokens.
 
 ## Performance Architecture
 
 ### 1. Caching Performance
 
-JWKS documents change rarely (issuer key rotations), so with any backend and a
-sane `cache.ttl` nearly every request is served from cache; only cold starts
-and key rotations pay the upstream fetch. In `self` mode even the cold start is
-usually covered: `NewBootstrap()` warm-prefetches every configured issuer's JWKS
-during Lambda INIT (best-effort, 3s-bounded), so the first request normally
-finds the key already cached. A slow or unreachable issuer is abandoned at the
-timeout and fetched inline on first use. Relative cost per lookup:
+JWKS documents change rarely (issuer key rotations), so with any backend and a sane `cache.ttl` nearly every request is served from cache; only cold starts and key rotations pay the upstream fetch. In `self` mode even the cold start is usually covered: `NewBootstrap()` warm-prefetches every configured issuer's JWKS during Lambda INIT (best-effort, 3s-bounded), so the first request normally finds the key already cached. A slow or unreachable issuer is abandoned at the timeout and fetched inline on first use. Relative cost per lookup:
 
 - Memory: in-process map access (fastest; lost on container recycle)
 - DynamoDB: one-digit-millisecond network hop, shared across containers
 - S3: tens of milliseconds, cheapest at rest for large/cold objects
-- Cache miss: one SSRF-hardened HTTPS fetch to the issuer (singleflight —
-  concurrent misses for one issuer collapse into a single upstream call)
+- Cache miss: one SSRF-hardened HTTPS fetch to the issuer (singleflight — concurrent misses for one issuer collapse into a single upstream call)
 
 ### 2. Lambda Performance Optimizations
 
@@ -736,12 +668,7 @@ The Lambda execution role requires the following IAM permissions:
     },
     {
       "Effect": "Allow",
-      "Action": [
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:DeleteItem"
-      ],
+      "Action": ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
       "Resource": ["arn:aws:dynamodb:*:*:table/aws-oidc-warden-cache"]
     },
     {
@@ -751,15 +678,8 @@ The Lambda execution role requires the following IAM permissions:
     },
     {
       "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": [
-        "arn:aws:logs:*:*:log-group:*",
-        "arn:aws:logs:*:*:log-group:*:log-stream:*"
-      ]
+      "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": ["arn:aws:logs:*:*:log-group:*", "arn:aws:logs:*:*:log-group:*:log-stream:*"]
     }
   ]
 }
