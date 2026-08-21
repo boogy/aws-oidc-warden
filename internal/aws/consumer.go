@@ -188,6 +188,20 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 	if cr.Expiration != nil {
 		expires = cr.Expiration.Add(-5 * time.Minute) // refresh margin
 	}
+
+	// This is the only signal for a successful hub->spoke assumption: unlike
+	// the primary AssumeRole path, spokeCredsFor has no request context to
+	// correlate with a requestId, and the result is cached for up to ~1h, so
+	// without this line a privileged cross-account credential mint would
+	// otherwise leave no trace. No credential material or ca.ExternalID here,
+	// only the identifiers needed to attribute the assumption. This write
+	// happens under a.mu (held since :148); deliberately so, not an
+	// accident — it fires at most once per account per cache TTL.
+	slog.Info("Assumed spoke role for cross-account operation",
+		"spokeArn", spokeArn,
+		"sessionName", sessionName,
+		"expires", expires)
+
 	a.spokeCache[account] = cachedCreds{provider: provider, expires: expires}
 	return provider, nil
 }
