@@ -25,31 +25,70 @@ disable decision logging itself.
 ## Decision log / audit record fields
 
 One record is produced per authorization decision (allow **and** deny). The
-same redacted record backs both the standardized log line and the durable
-audit record, so they never disagree.
+same redacted record backs both surfaces, so the *values* they carry can
+never disagree — but the two surfaces do not carry the same *field set*: the
+CloudWatch decision line is a queryable subset of the record plus one
+synthesized field (`matchedRole`); the durable S3 record is the complete
+record. The two lists below are exhaustive for each surface.
 
-Always present: `requestId`, `frontend`, `jwtMode`, `decision` (`allow`/`deny`),
-`processingMs`. `requestId` is the Lambda invocation UUID — stable across
-every frontend mode, so a query spanning frontends has one shape to match on.
-`frontendRequestId` is present whenever the frontend issues an ID of its own
-(API Gateway v1/v2, Lambda Function URLs) and absent for ALB, which issues
-none; it is the join key back to that frontend's own access logs, kept
-alongside `requestId` for that reason. Deny adds `stage` (`extract` /
-`account_check` / `claims_processing` / `authorize` / `session_policy` /
-`assume_role`) and `reason`. Allow adds `issuer`, `provider`, `matchedVia`
-(`explicit`/`tag-auth`), `requestedRole`, `grantedRole`, `accountId`,
-`sessionName`, `sessionTagKeys`, `sessionPolicyRef`, `expiry`.
+### CloudWatch decision line
+
+Bound by the frontend adapter to the request-scoped logger, so these are
+present on every log line for the request, not only the decision line:
+
+- `requestId` — always present. The Lambda invocation UUID, stable across
+  every frontend mode, so a query spanning frontends has one shape to match
+  on.
+- `frontendRequestId` — present whenever the frontend issues an ID of its own
+  (API Gateway v1/v2, Lambda Function URLs); absent for ALB, which issues
+  none. The join key back to that frontend's own access logs.
+- `sourceIp` / `sourceIpFrom` — each present only when known (see
+  [Source IP trust model](#source-ip-trust-model) below).
+
+Added by `auditLogAttrs` for the decision itself:
+
+- Always: `frontend`, `jwtMode`, `decision` (`allow`/`deny`), `matchedRole`,
+  `processingMs`.
+- Present when non-empty: `issuer`, `provider`, `accountId`, `sessionName`,
+  `stage` (deny only — one of `extract` / `account_check` / `authorize` /
+  `session_policy` / `assume_role`), `reason` (deny only).
+- Present when `log_claim_values=true` **and** non-empty: `jwtSub`,
+  `subject`, `audience`, `claims`.
+
+`matchedRole` is synthesized, not a stored field: the granted role once one
+was assumed, otherwise the requested role. It is the **only** role field on
+the decision line — key a query on it, not on `requestedRole`/`grantedRole`,
+which are record-only (below).
+
+`issuer` and `provider` are set as soon as claims are extracted, so they
+appear on every deny past the `extract` stage, not only on an allow —
+`account_check`, `authorize`, `session_policy`, and `assume_role` denies all
+carry them. The fields that genuinely are allow-only are `accountId` and
+`sessionName`: both are set only once a role has actually been assumed.
 
 `sessionName` is the STS session name actually used — the global
 `role_session_name` or the per-mapping override that authorized the role (see
 [CONFIGURATION.md](CONFIGURATION.md)). It is recorded because that override
-exists purely for CloudTrail attribution, so the audit record has to say which
+exists purely for CloudTrail attribution, so the audit trail has to say which
 name the CloudTrail entry will carry. It is operator-declared static config,
 never claim-derived, so it is **not** suppressed by `log_claim_values=false`.
 
-Claim **values** — `jwtSub` (raw `sub`), `subject` (canonical identity),
-`audience`, resolved `sessionTags`, and `claims` — appear only when
-`log_claim_values=true`. `sessionTagKeys` (names only) are always present.
+### Durable S3 audit record
+
+Everything on the decision line above (the values, not the synthesized
+`matchedRole`), plus seven fields that never reach CloudWatch:
+
+- `requestedRole`, `grantedRole` — the role asked for and the role actually
+  granted; allow only, equal to each other once granted.
+- `matchedVia` (`explicit`/`tag-auth`) — which authorization path allowed the
+  request. This is the field to check for "credential issued via tag-auth
+  fallback" — that question has no answer from CloudWatch, only from S3.
+- `sessionTagKeys` — session-tag names; always present once a role is
+  granted, regardless of `log_claim_values`.
+- `sessionTags` — resolved session-tag values; present only when
+  `log_claim_values=true`.
+- `sessionPolicyRef` — reference to the session policy applied, if any.
+- `expiry` — the issued credential's expiration, RFC3339.
 
 `claims` answers "who did this", on **both** allow and deny records. Two raw
 claim names are always renamed on the way in, regardless of issuer or
