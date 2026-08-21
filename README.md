@@ -8,7 +8,9 @@
 
 **AWS OIDC Warden** is a secure, lightweight Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS AssumeRole. It acts as a trusted intermediary between CI/CD workflows and AWS resources, enforcing fine-grained access control based on repository, branch, actor, and other configurable constraints — without storing long-lived credentials.
 
-> [!CAUTION] Not all OIDC claims can be trusted. See the great tool and table created [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for a comprehensive list of claims.
+<!-- prettier-ignore -->
+> [!CAUTION]
+> Not all OIDC claims can be trusted. See the great tool and table created [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for a comprehensive list of claims.
 >
 > This lambda allows you to include specific constraints for a repository before it can obtain credentials from a role. Choose wisely based on the table that Palo Alto Networks has provided in the repository linked above.
 
@@ -371,7 +373,9 @@ For the full step-by-step flow, crypto hardening, JWKS handling, and SSRF protec
 5. Run checks: `make check`
 6. Submit a pull request with a clear description
 
-> [!TIP] If you find a bug please don't just create an issue. Create a pull request with your fix so that everyone can benefit from it.
+<!-- prettier-ignore -->
+> [!TIP]
+> If you find a bug please don't just create an issue. Create a pull request with your fix so that everyone can benefit from it.
 
 ---
 
@@ -382,7 +386,9 @@ For the full step-by-step flow, crypto hardening, JWKS handling, and SSRF protec
 - **DynamoDB Table** — persistent caching (optional)
 - **S3 Bucket** — logs and session policies (optional)
 
-> [!TIP] A generic role with broader privileges can be given to Lambda, then scoped per-repo with session policies. This reduces the total number of IAM roles needed.
+<!-- prettier-ignore -->
+> [!TIP]
+> A generic role with broader privileges can be given to Lambda, then scoped per-repo with session policies. This reduces the total number of IAM roles needed.
 
 For the complete IAM policy and infrastructure details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#required-iam-permissions).
 
