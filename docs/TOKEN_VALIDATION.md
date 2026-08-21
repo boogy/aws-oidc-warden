@@ -1,19 +1,12 @@
 # Token Validation
 
-How AWS OIDC Warden turns an incoming OIDC token into a set of verified,
-canonical claims that authorization can trust. This is the security core of the
-service: every credential issuance depends on the guarantees described here.
+How AWS OIDC Warden turns an incoming OIDC token into a set of verified, canonical claims that authorization can trust. This is the security core of the service: every credential issuance depends on the guarantees described here.
 
 - **Package:** `internal/validator/`
-- **Entry point:** `TokenValidatorInterface.Validate()` (self mode) or a
-  `ClaimsExtractorInterface` implementation (delegated modes)
-- **Output:** a `*types.Claims` with a **canonical `Subject`** plus the full
-  verified raw-claims map, or an error (fail-closed — no partial result)
+- **Entry point:** `TokenValidatorInterface.Validate()` (self mode) or a `ClaimsExtractorInterface` implementation (delegated modes)
+- **Output:** a `*types.Claims` with a **canonical `Subject`** plus the full verified raw-claims map, or an error (fail-closed — no partial result)
 
-For where validation sits in the wider request pipeline see
-[ARCHITECTURE.md](ARCHITECTURE.md); for the config keys referenced here see
-[CONFIGURATION.md](CONFIGURATION.md); for adding a new issuer/provider see
-[MULTI_ISSUER.md](MULTI_ISSUER.md).
+For where validation sits in the wider request pipeline see [ARCHITECTURE.md](ARCHITECTURE.md); for the config keys referenced here see [CONFIGURATION.md](CONFIGURATION.md); for adding a new issuer/provider see [MULTI_ISSUER.md](MULTI_ISSUER.md).
 
 ![Token validation pipeline (self mode)](img/token-validation.svg)
 
@@ -21,28 +14,18 @@ For where validation sits in the wider request pipeline see
 
 ## 1. Trust model
 
-Validation answers one question: **can these claims be trusted to describe the
-caller?** Two rules govern everything below.
+Validation answers one question: **can these claims be trusted to describe the caller?** Two rules govern everything below.
 
-1. **Issuer authenticity comes before identity.** The token's `iss` is read
-   _unverified_ only to route to a configured issuer's spec. No identity or
-   authorization decision uses any claim until the signature is verified and
-   the issuer is re-asserted against that spec.
-2. **A token can never self-assert its canonical identity.** The
-   authorization key (`Subject`) is derived by the service from a configured
-   mapping (`claim_mappings.subject`, or the GitHub `repository` claim by
-   default) — never read directly from an attacker-influenced field.
+1. **Issuer authenticity comes before identity.** The token's `iss` is read _unverified_ only to route to a configured issuer's spec. No identity or authorization decision uses any claim until the signature is verified and the issuer is re-asserted against that spec.
+2. **A token can never self-assert its canonical identity.** The authorization key (`Subject`) is derived by the service from a configured mapping (`claim_mappings.subject`, or the GitHub `repository` claim by default) — never read directly from an attacker-influenced field.
 
-Any failure — unknown issuer, bad signature, expired token, missing claim,
-type mismatch — **denies**. There is no partial-credential path.
+Any failure — unknown issuer, bad signature, expired token, missing claim, type mismatch — **denies**. There is no partial-credential path.
 
 ---
 
 ## 2. Validation modes
 
-`jwt_validation.mode` selects how claims enter the pipeline. All three converge
-on the **same claim-check-and-normalize path** (`checkAndNormalizeClaims`), so a
-delegated mode can never be a weaker validator than self mode.
+`jwt_validation.mode` selects how claims enter the pipeline. All three converge on the **same claim-check-and-normalize path** (`checkAndNormalizeClaims`), so a delegated mode can never be a weaker validator than self mode.
 
 | Mode             | Who verifies the signature             | Multi-issuer?         | Adapter          | Use when                                                         |
 | ---------------- | -------------------------------------- | --------------------- | ---------------- | ---------------------------------------------------------------- |
@@ -50,25 +33,13 @@ delegated mode can never be a weaker validator than self mode.
 | `apigw`          | API Gateway HTTP API v2 JWT Authorizer | **Yes** (per-route)   | `APIGWExtractor` | You front the service with an API Gateway JWT Authorizer         |
 | `alb`            | Application Load Balancer OIDC         | No (exactly 1 issuer) | `ALBExtractor`   | You front the service with ALB OIDC (`x-amzn-oidc-data`)         |
 
-**Delegated modes trust an upstream for _signature verification only_.** They
-still independently re-validate issuer, audience, expiry, `nbf`, `iat`,
-lifetime/age caps, and `required_claims`, and still derive the canonical subject
-themselves. `alb` requires **exactly one** configured issuer and fails closed
-otherwise — the ALB has exactly one OIDC IdP configured and cannot tell this
-service _which_ issuer it checked. `apigw` has no such restriction: each
-route's JWT Authorizer pins that route to its issuer and forwards the
-upstream-verified `iss` claim, so the service resolves the matching issuer
-spec per request from that claim instead.
+**Delegated modes trust an upstream for _signature verification only_.** They still independently re-validate issuer, audience, expiry, `nbf`, `iat`, lifetime/age caps, and `required_claims`, and still derive the canonical subject themselves. `alb` requires **exactly one** configured issuer and fails closed otherwise — the ALB has exactly one OIDC IdP configured and cannot tell this service _which_ issuer it checked. `apigw` has no such restriction: each route's JWT Authorizer pins that route to its issuer and forwards the upstream-verified `iss` claim, so the service resolves the matching issuer spec per request from that claim instead.
 
-> **Bypass guard:** in a delegated mode, if the upstream injects no claims, the
-> extractor returns an error wrapping `ErrTokenValidationFailed` rather than
-> treating "no claims" as "anonymous allow".
+> **Bypass guard:** in a delegated mode, if the upstream injects no claims, the extractor returns an error wrapping `ErrTokenValidationFailed` rather than treating "no claims" as "anonymous allow".
 
 ### 2.1 Request contract per mode
 
-The mode also changes **what the caller sends on the wire** — because it changes
-_who receives the token_. The role ARN is always in the JSON body; only the
-token's location differs.
+The mode also changes **what the caller sends on the wire** — because it changes _who receives the token_. The role ARN is always in the JSON body; only the token's location differs.
 
 | Mode             | `Authorization` header                | Request body                      | Token consumed by              |
 | ---------------- | ------------------------------------- | --------------------------------- | ------------------------------ |
@@ -76,58 +47,20 @@ token's location differs.
 | `apigw`          | `Authorization: Bearer <token>`       | `{"role": "..."}`                 | API Gateway JWT Authorizer     |
 | `alb`            | none — ALB injects `x-amzn-oidc-data` | `{"role": "..."}`                 | ALB OIDC                       |
 
-- **The token is never sent both in the header and the body.** In `apigw` mode
-  the token lives **only** in the `Authorization: Bearer` header, where API
-  Gateway's JWT Authorizer reads it. This service's Lambda never sees the raw
-  token — it receives the authorizer's decoded claims from
-  `event.requestContext.authorizer.jwt.claims`.
-- Delegated adapters parse the body with `ParseRoleOnlyRequestBody`, which reads
-  **only** `role`. A `token` field sent in the body in `apigw`/`alb` mode is
-  silently ignored.
-- Omitting the `Authorization` header in `apigw` mode makes **API Gateway**
-  reject the request (before this service runs); the bypass guard above only
-  covers the case where API Gateway forwards a request carrying no claims.
-- In `apigw` mode the token's `aud` must satisfy **both** the API Gateway JWT
-  Authorizer's configured audience **and** this service's issuer `audiences`
-  (re-checked here as defense in depth — see [§6](#6-claim-checks)).
+- **The token is never sent both in the header and the body.** In `apigw` mode the token lives **only** in the `Authorization: Bearer` header, where API Gateway's JWT Authorizer reads it. This service's Lambda never sees the raw token — it receives the authorizer's decoded claims from `event.requestContext.authorizer.jwt.claims`.
+- Delegated adapters parse the body with `ParseRoleOnlyRequestBody`, which reads **only** `role`. A `token` field sent in the body in `apigw`/`alb` mode is silently ignored.
+- Omitting the `Authorization` header in `apigw` mode makes **API Gateway** reject the request (before this service runs); the bypass guard above only covers the case where API Gateway forwards a request carrying no claims.
+- In `apigw` mode the token's `aud` must satisfy **both** the API Gateway JWT Authorizer's configured audience **and** this service's issuer `audiences` (re-checked here as defense in depth — see [§6](#6-claim-checks)).
 
 ### 2.2 Trust boundary: `lambda:InvokeFunction` is identity impersonation in `apigw` mode
 
-> **This is the most important thing to understand about delegated modes.**
-> In `apigw` (and `alb`) mode, the Lambda **fully trusts** the claims handed
-> to it by the upstream — it never sees, and never verifies, the original
-> OIDC token's signature. **Anyone who can invoke the function directly
-> (`lambda:InvokeFunction`) bypasses the upstream entirely** and can hand the
-> function whatever claims they like.
+> **This is the most important thing to understand about delegated modes.** In `apigw` (and `alb`) mode, the Lambda **fully trusts** the claims handed to it by the upstream — it never sees, and never verifies, the original OIDC token's signature. **Anyone who can invoke the function directly (`lambda:InvokeFunction`) bypasses the upstream entirely** and can hand the function whatever claims they like.
 >
-> - The **only** guard against a direct invoke is "claims must be
->   non-empty" (`apigw_extractor.go`, the bypass-guard check in
->   [§2](#2-validation-modes) above). This guard catches an **empty**
->   direct-invoke payload. **It cannot detect a direct invoke that supplies
->   forged, non-empty claims** — a crafted `event.requestContext.authorizer.jwt.claims`
->   with an arbitrary `iss`/`aud`/`exp`/`sub` sails straight through, because
->   there is no signature to check it against.
-> - Therefore, in `apigw` mode, **`lambda:InvokeFunction` permission on this
->   function is equivalent to full identity impersonation** — anyone who
->   holds it can obtain AWS credentials for any spoofed subject the
->   `role_mappings`/`role_groups`/`tag_auth` config would authorize.
-> - **`alb` mode has an asymmetry in its favor:** the Lambda itself verifies
->   the ALB's ES256 signature over `x-amzn-oidc-data`
->   ([§4](#4-key-selection--crypto-hardening) applies identically there). A
->   direct invoke supplying a forged `x-amzn-oidc-data` value fails that
->   signature check and is rejected. **`apigw` mode has no equivalent
->   cryptographic backstop** — API Gateway's JWT Authorizer verification
->   happens entirely upstream of the Lambda, so IAM is the _only_ line of
->   defense.
+> - The **only** guard against a direct invoke is "claims must be non-empty" (`apigw_extractor.go`, the bypass-guard check in [§2](#2-validation-modes) above). This guard catches an **empty** direct-invoke payload. **It cannot detect a direct invoke that supplies forged, non-empty claims** — a crafted `event.requestContext.authorizer.jwt.claims` with an arbitrary `iss`/`aud`/`exp`/`sub` sails straight through, because there is no signature to check it against.
+> - Therefore, in `apigw` mode, **`lambda:InvokeFunction` permission on this function is equivalent to full identity impersonation** — anyone who holds it can obtain AWS credentials for any spoofed subject the `role_mappings`/`role_groups`/`tag_auth` config would authorize.
+> - **`alb` mode has an asymmetry in its favor:** the Lambda itself verifies the ALB's ES256 signature over `x-amzn-oidc-data` ([§4](#4-key-selection--crypto-hardening) applies identically there). A direct invoke supplying a forged `x-amzn-oidc-data` value fails that signature check and is rejected. **`apigw` mode has no equivalent cryptographic backstop** — API Gateway's JWT Authorizer verification happens entirely upstream of the Lambda, so IAM is the _only_ line of defense.
 >
-> **Required mitigation:** lock down the function's resource-based (invoke)
-> policy so that **only the fronting API Gateway's execution/service
-> principal** can call `lambda:InvokeFunction` — never grant it broadly (e.g.
-> to a wildcard principal, an entire account, or an over-broad IAM role/group).
-> See [ARCHITECTURE.md](ARCHITECTURE.md#jwt-validation-modes) for the same
-> invariant framed against the request pipeline, and
-> [CONFIGURATION.md](CONFIGURATION.md#jwt-validation-mode-settings) for the
-> `jwt_validation.mode` config reference.
+> **Required mitigation:** lock down the function's resource-based (invoke) policy so that **only the fronting API Gateway's execution/service principal** can call `lambda:InvokeFunction` — never grant it broadly (e.g. to a wildcard principal, an entire account, or an over-broad IAM role/group). See [ARCHITECTURE.md](ARCHITECTURE.md#jwt-validation-modes) for the same invariant framed against the request pipeline, and [CONFIGURATION.md](CONFIGURATION.md#jwt-validation-mode-settings) for the `jwt_validation.mode` config reference.
 
 ---
 
@@ -146,96 +79,62 @@ token's location differs.
 10. Normalize           derive canonical Subject + raw-claims map via the provider adapter
 ```
 
-(Steps are numbered to match the code comments; 5/7 are the crypto/time
-hardening woven into 3–4 and 6.)
+(Steps are numbered to match the code comments; 5/7 are the crypto/time hardening woven into 3–4 and 6.)
 
 ### Step 0 — Length guard
 
-The raw token string is rejected if it exceeds `max_token_bytes` (default 8192)
-**before any parsing**, so an oversized token can never reach the JSON/JWT
-decoders. Returns `ErrTokenTooLarge`.
+The raw token string is rejected if it exceeds `max_token_bytes` (default 8192) **before any parsing**, so an oversized token can never reach the JSON/JWT decoders. Returns `ErrTokenTooLarge`.
 
 ### Step 1 — Unverified issuer peek (routing only)
 
-The token is parsed with `ParseUnverified` purely to read `iss`. This value is
-**never** used for identity or authorization — only to pick which issuer spec to
-verify against. A missing/empty `iss` denies (`ErrUnknownIssuer`).
+The token is parsed with `ParseUnverified` purely to read `iss`. This value is **never** used for identity or authorization — only to pick which issuer spec to verify against. A missing/empty `iss` denies (`ErrUnknownIssuer`).
 
 ### Step 2 — Registry lookup
 
-The unverified `iss` is looked up by **exact string match** (no normalization,
-no trailing-slash fixups) in the issuer registry. An unknown issuer denies
-**before any JWKS fetch is attempted** — an unrecognized issuer cannot make the
-service emit an outbound request.
+The unverified `iss` is looked up by **exact string match** (no normalization, no trailing-slash fixups) in the issuer registry. An unknown issuer denies **before any JWKS fetch is attempted** — an unrecognized issuer cannot make the service emit an outbound request.
 
-The registry is an immutable snapshot behind an `atomic.Pointer`, rebuilt
-lock-free when the config hot-reloads (new/removed issuer, audience, or mapping)
-— picked up on the next `Validate()` call, no restart.
+The registry is an immutable snapshot behind an `atomic.Pointer`, rebuilt lock-free when the config hot-reloads (new/removed issuer, audience, or mapping) — picked up on the next `Validate()` call, no restart.
 
 ### Step 3 — Issuer-scoped parser
 
 A per-call `jwt.Parser` is built, pinned to the matched issuer:
 
-- **Algorithm allow-list:** `RS256/384/512`, `ES256/384/512` only. `none`,
-  `HS*` (HMAC), and every other algorithm are rejected — this is the primary
-  defense against alg-confusion.
+- **Algorithm allow-list:** `RS256/384/512`, `ES256/384/512` only. `none`, `HS*` (HMAC), and every other algorithm are rejected — this is the primary defense against alg-confusion.
 - `WithIssuer(spec.Issuer)` — the verified `iss` must equal the spec's issuer.
 - `WithExpirationRequired()` — a token with no `exp` is rejected.
-- `WithIssuedAt()` and `WithLeeway(leeway)` — `iat` parsed, clock-skew leeway
-  applied (default 30s, hard max 120s).
+- `WithIssuedAt()` and `WithLeeway(leeway)` — `iat` parsed, clock-skew leeway applied (default 30s, hard max 120s).
 
-`leeway`, `max_token_lifetime`, `max_token_age`, and `max_token_bytes` are read
-**live from config on every call**, so a hot-reloaded change takes effect
-without a restart.
+`leeway`, `max_token_lifetime`, `max_token_age`, and `max_token_bytes` are read **live from config on every call**, so a hot-reloaded change takes effect without a restart.
 
 ### Step 4 — Signature verification
 
-The issuer's JWKS is fetched (cache-first — see [§5](#5-jwks-retrieval)), and the
-signing key is selected and the signature verified (see [§4](#4-key-selection--crypto-hardening)).
-If the key ID is not present in the cached JWKS (`ErrKeyNotFound`), the service
-performs **one** cache-bypassing refetch to recover from key rotation, subject
-to a per-`(issuer, kid)` rate limiter, then retries once.
+The issuer's JWKS is fetched (cache-first — see [§5](#5-jwks-retrieval)), and the signing key is selected and the signature verified (see [§4](#4-key-selection--crypto-hardening)). If the key ID is not present in the cached JWKS (`ErrKeyNotFound`), the service performs **one** cache-bypassing refetch to recover from key rotation, subject to a per-`(issuer, kid)` rate limiter, then retries once.
 
 ### Step 4b — Issuer re-assertion
 
-After verification, the **verified** `iss` is compared again to the spec used
-for this call. This closes the small window between the step-2 lookup and step-4
-verification in which a concurrent hot reload could have swapped the registry.
-Mismatch denies.
+After verification, the **verified** `iss` is compared again to the spec used for this call. This closes the small window between the step-2 lookup and step-4 verification in which a concurrent hot reload could have swapped the registry. Mismatch denies.
 
 ### Steps 6–10 — Claim checks and normalization
 
-Handed off to `checkAndNormalizeClaims` — the **same** function the delegated
-extractors call — so self and delegated modes cannot drift apart. See
-[§6](#6-claim-checks) and [§7](#7-canonical-subject-normalization).
+Handed off to `checkAndNormalizeClaims` — the **same** function the delegated extractors call — so self and delegated modes cannot drift apart. See [§6](#6-claim-checks) and [§7](#7-canonical-subject-normalization).
 
 ---
 
 ## 4. Key selection & crypto hardening
 
-Signature verification is more than a `kid` lookup. For a JWKS key to be used it
-must satisfy **all** of:
+Signature verification is more than a `kid` lookup. For a JWKS key to be used it must satisfy **all** of:
 
-- **`kid` match** — the JWKS entry's key ID equals the token header `kid`
-  (missing `kid` in the token denies).
+- **`kid` match** — the JWKS entry's key ID equals the token header `kid` (missing `kid` in the token denies).
 - **`use` is `sig` or unset** — encryption-only keys are skipped.
-- **`alg` match** — if the JWKS entry declares an `alg`, it must equal the
-  token's `alg`.
-- **key-type ↔ alg-family match** — RSA keys only for `RS*`, EC keys only for
-  `ES*`.
+- **`alg` match** — if the JWKS entry declares an `alg`, it must equal the token's `alg`.
+- **key-type ↔ alg-family match** — RSA keys only for `RS*`, EC keys only for `ES*`.
 
-If a `kid` matches but fails these checks, scanning **continues** (a duplicate
-`kid` with one matching and one non-matching key still resolves to the correct
-key). This blocks alg-confusion and duplicate-`kid`-different-type key
-selection. The key memo is scoped by issuer, so the same `kid` string from two
-different issuers is never conflated.
+If a `kid` matches but fails these checks, scanning **continues** (a duplicate `kid` with one matching and one non-matching key still resolves to the correct key). This blocks alg-confusion and duplicate-`kid`-different-type key selection. The key memo is scoped by issuer, so the same `kid` string from two different issuers is never conflated.
 
-**Key material is validated defensively** (a compromised JWKS source must not
-enable offline forgery):
+**Key material is validated defensively** (a compromised JWKS source must not enable offline forgery):
 
 - **RSA:** modulus **≥ 2048 bits** or the key is rejected.
-- **EC:** the point must lie on its declared curve (`P-256`/`P-384`/`P-521`);
-  off-curve or identity points are rejected. Unsupported curves are rejected.
+- **EC:** the point must lie on its declared curve (`P-256`/`P-384`/`P-521`); off-curve or identity points are rejected. Unsupported curves are rejected.
 
 ---
 
@@ -249,29 +148,17 @@ issuer ──► cache hit? ──► yes ─► use cached JWKS
         singleflight (per issuer) ──► resolve jwks_uri ──► fetch ──► validate ──► cache
 ```
 
-- **Discovery:** unless the issuer sets an explicit `jwks_uri`, the service
-  fetches `<issuer>/.well-known/openid-configuration` and uses its `jwks_uri`.
-  The discovery document's own `issuer` field **must equal** the configured
-  issuer (RFC 8414) — a compromised/misconfigured discovery endpoint cannot
-  redirect trust to a different issuer. Discovered URIs are memoized.
-- **Caching:** JWKS are cached per issuer with `cache.ttl`, across the memory,
-  DynamoDB, or S3 backend ([cache docs](../internal/cache/CLAUDE.md)).
-- **Singleflight:** concurrent cold fetches for one issuer collapse into a
-  single upstream call, so cold-start or rotation storms make exactly one
-  request per issuer.
-- **Rotation recovery:** a `kid` miss forces one cache-bypassing refetch
-  (rate-limited per `(issuer, kid)` via `jwks_refetch_cooldown`, default 60s);
-  a discovery-driven `jwks_uri` that 404s is re-discovered once.
-- **Bounds:** discovery and JWKS responses are read with `io.LimitReader`
-  (1 MB), and a JWKS is rejected if it has **zero** keys or **more than 20**.
-  Rejected JWKS are never cached.
+- **Discovery:** unless the issuer sets an explicit `jwks_uri`, the service fetches `<issuer>/.well-known/openid-configuration` and uses its `jwks_uri`. The discovery document's own `issuer` field **must equal** the configured issuer (RFC 8414) — a compromised/misconfigured discovery endpoint cannot redirect trust to a different issuer. Discovered URIs are memoized.
+- **Caching:** JWKS are cached per issuer with `cache.ttl`, across the memory, DynamoDB, or S3 backend ([cache docs](../internal/cache/CLAUDE.md)).
+- **Singleflight:** concurrent cold fetches for one issuer collapse into a single upstream call, so cold-start or rotation storms make exactly one request per issuer.
+- **Rotation recovery:** a `kid` miss forces one cache-bypassing refetch (rate-limited per `(issuer, kid)` via `jwks_refetch_cooldown`, default 60s); a discovery-driven `jwks_uri` that 404s is re-discovered once.
+- **Bounds:** discovery and JWKS responses are read with `io.LimitReader` (1 MB), and a JWKS is rejected if it has **zero** keys or **more than 20**. Rejected JWKS are never cached.
 
 ---
 
 ## 6. Claim checks
 
-`checkAndNormalizeClaims` applies these to the trusted raw claims (all
-fail-closed):
+`checkAndNormalizeClaims` applies these to the trusted raw claims (all fail-closed):
 
 | Check                | Rule                                                                                                                           |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -284,8 +171,7 @@ fail-closed):
 | **audience**         | **ANY-match** — at least one token `aud` equals one of the issuer's configured `audiences`; an empty set on either side denies |
 | `required_claims`    | every configured claim name is present and (if a string) non-empty, checked on the raw claims                                  |
 
-Audiences are **per-issuer isolated**: a token's `aud` is only ever checked
-against the audience set of _its own_ verified issuer — no cross-issuer leakage.
+Audiences are **per-issuer isolated**: a token's `aud` is only ever checked against the audience set of _its own_ verified issuer — no cross-issuer leakage.
 
 ---
 
@@ -293,49 +179,33 @@ against the audience set of _its own_ verified issuer — no cross-issuer leakag
 
 `normalizeClaims` converts verified raw claims into `types.Claims`:
 
-1. Copy the standard registered claims (`iss`, `aud`, `exp`, `iat`, `nbf`,
-   `jti`) for every provider.
+1. Copy the standard registered claims (`iss`, `aud`, `exp`, `iat`, `nbf`, `jti`) for every provider.
 2. Dispatch to the provider adapter for provider-specific population.
 3. **Always** set `Subject` from `adapter.subject(...)` — never from raw JSON.
 
-Two providers ship; the seam is open/closed (add a provider by implementing
-`providerAdapter` and registering it — no core edits):
+Two providers ship; the seam is open/closed (add a provider by implementing `providerAdapter` and registering it — no core edits):
 
-- **`github`** — native unmarshal of the full GitHub Actions claim set into the
-  typed struct. Canonical `Subject` defaults to the `repository` claim,
-  overridable via `claim_mappings.subject`.
-- **`generic`** — no native struct. Canonical `Subject` **must** come from
-  `claim_mappings.subject` (enforced at config load, re-checked here).
+- **`github`** — native unmarshal of the full GitHub Actions claim set into the typed struct. Canonical `Subject` defaults to the `repository` claim, overridable via `claim_mappings.subject`.
+- **`generic`** — no native struct. Canonical `Subject` **must** come from `claim_mappings.subject` (enforced at config load, re-checked here).
 
-`types.Claims.Subject` is the canonical identity authorization reads.
-`types.Claims.Raw` (JSON-excluded) carries every verified raw claim, used for
-condition matching, session-tag mapping, and `required_claims` against
-provider-native claim names.
+`types.Claims.Subject` is the canonical identity authorization reads. `types.Claims.Raw` (JSON-excluded) carries every verified raw claim, used for condition matching, session-tag mapping, and `required_claims` against provider-native claim names.
 
 ---
 
 ## 8. SSRF hardening of outbound fetches
 
-Discovery and JWKS fetches are the only outbound requests validation makes. They
-go through a single hardened `http.Client`, built once at construction:
+Discovery and JWKS fetches are the only outbound requests validation makes. They go through a single hardened `http.Client`, built once at construction:
 
-- **Dial-time IP blocking** — the resolved IP is checked _before_ connecting;
-  private, loopback, link-local (covers the `169.254.169.254` cloud-metadata
-  address), unspecified, and multicast addresses are refused. Applied on the
-  original request **and every redirect hop**.
-- **DNS-rebinding safe** — the validated IP is dialed directly, so a second DNS
-  lookup inside the dialer cannot swap in a different, unvalidated address.
-- **TLS 1.2+** enforced; **HTTPS required** (plain `http://` allowed only for
-  loopback and only under `allow_insecure_issuers`, a dev/test escape hatch).
+- **Dial-time IP blocking** — the resolved IP is checked _before_ connecting; private, loopback, link-local (covers the `169.254.169.254` cloud-metadata address), unspecified, and multicast addresses are refused. Applied on the original request **and every redirect hop**.
+- **DNS-rebinding safe** — the validated IP is dialed directly, so a second DNS lookup inside the dialer cannot swap in a different, unvalidated address.
+- **TLS 1.2+** enforced; **HTTPS required** (plain `http://` allowed only for loopback and only under `allow_insecure_issuers`, a dev/test escape hatch).
 - **Redirects** capped at 5 hops, each re-validated (scheme + host).
 
 ---
 
 ## 9. Hardening knobs
 
-All optional, top-level, hot-reloadable (except `allow_insecure_issuers`, which
-configures the HTTP client built at construction). Full reference in
-[CONFIGURATION.md](CONFIGURATION.md).
+All optional, top-level, hot-reloadable (except `allow_insecure_issuers`, which configures the HTTP client built at construction). Full reference in [CONFIGURATION.md](CONFIGURATION.md).
 
 | Key                      | Default | Effect                                                          |
 | ------------------------ | ------- | --------------------------------------------------------------- |
@@ -350,8 +220,7 @@ configures the HTTP client built at construction). Full reference in
 
 ## 10. Failure modes → HTTP status
 
-Validation failures propagate as sentinel errors mapped to HTTP status by the
-frontend adapters (`internal/handler/errors.go`):
+Validation failures propagate as sentinel errors mapped to HTTP status by the frontend adapters (`internal/handler/errors.go`):
 
 | Condition                                                                | Sentinel                   | HTTP | `errorCode`          |
 | ------------------------------------------------------------------------ | -------------------------- | ---- | -------------------- |
@@ -389,15 +258,12 @@ sequenceDiagram
 
 ## 12. Security invariants (summary)
 
-1. Unverified `iss` is used for **routing only**; identity/authz use verified,
-   re-asserted claims.
+1. Unverified `iss` is used for **routing only**; identity/authz use verified, re-asserted claims.
 2. Canonical `Subject` is always **derived**, never self-asserted.
 3. Algorithm allow-list is **RS/ES 256–512** — never `none`/`HS*`.
-4. Key selection pins `kid` + `alg` + `use` + key-type↔alg-family; RSA ≥ 2048;
-   EC verified on-curve.
+4. Key selection pins `kid` + `alg` + `use` + key-type↔alg-family; RSA ≥ 2048; EC verified on-curve.
 5. Audience is **per-issuer isolated**, ANY-match, empty ⇒ deny.
-6. Delegated modes re-validate everything except signature and route through the
-   **same** claim-check path as self mode.
+6. Delegated modes re-validate everything except signature and route through the **same** claim-check path as self mode.
 7. Outbound JWKS/discovery fetches are **SSRF-hardened** and bounded.
 8. **Fail-closed throughout** — any error denies; no partial credentials.
 
@@ -416,6 +282,4 @@ sequenceDiagram
 | Extractor interface + self/apigw/alb             | `internal/validator/*_extractor.go`      |
 | Canonical claim struct                           | `internal/types/github.go`               |
 
-See also: [ARCHITECTURE.md](ARCHITECTURE.md) · [CONFIGURATION.md](CONFIGURATION.md) ·
-[MULTI_ISSUER.md](MULTI_ISSUER.md) · [LOGGING.md](LOGGING.md) ·
-`internal/validator/CLAUDE.md` (contributor notes).
+See also: [ARCHITECTURE.md](ARCHITECTURE.md) · [CONFIGURATION.md](CONFIGURATION.md) · [MULTI_ISSUER.md](MULTI_ISSUER.md) · [LOGGING.md](LOGGING.md) · `internal/validator/CLAUDE.md` (contributor notes).

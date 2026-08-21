@@ -1,18 +1,11 @@
 # Multi-issuer & onboarding any OIDC provider
 
-v2 validates tokens from any number of OIDC issuers. Each issuer is one entry
-in `issuers[]`; a token is routed to its issuer by an exact `iss` match, its
-signature is verified against that issuer's JWKS, and its claims are normalized
-to a canonical **subject** used for authorization.
+v2 validates tokens from any number of OIDC issuers. Each issuer is one entry in `issuers[]`; a token is routed to its issuer by an exact `iss` match, its signature is verified against that issuer's JWKS, and its claims are normalized to a canonical **subject** used for authorization.
 
 ## The two providers
 
-- **`provider: github`** — natively unmarshals the full GitHub Actions claim
-  set. The canonical `subject` defaults to the `repository` claim (override via
-  `claim_mappings.subject`).
-- **`provider: generic`** (default) — no native struct. You **must** map the
-  canonical `subject` from a provider claim with `claim_mappings.subject`.
-  Conditions and session tags reference the provider's **raw claim names**.
+- **`provider: github`** — natively unmarshals the full GitHub Actions claim set. The canonical `subject` defaults to the `repository` claim (override via `claim_mappings.subject`).
+- **`provider: generic`** (default) — no native struct. You **must** map the canonical `subject` from a provider claim with `claim_mappings.subject`. Conditions and session tags reference the provider's **raw claim names**.
 
 Adding a provider requires no code changes — just an `issuers[]` entry.
 
@@ -28,8 +21,7 @@ Adding a provider requires no code changes — just an `issuers[]` entry.
 | `required_claims` | no                                       | raw claim names that must be present + non-empty                                     |
 | `session_tags`    | no                                       | STS tag key ← raw claim name (key charset `[A-Za-z0-9 _.:/=+@-]{1,128}`)             |
 
-Issuer and `jwks_uri` must be HTTPS (loopback `http://` only with
-`allow_insecure_issuers`, dev/test only).
+Issuer and `jwks_uri` must be HTTPS (loopback `http://` only with `allow_insecure_issuers`, dev/test only).
 
 ## Example: GitHub + GitLab
 
@@ -67,52 +59,25 @@ role_mappings:
 
 ## How to onboard a new provider
 
-1. Find the provider's issuer URL and confirm its discovery document at
-   `<issuer>/.well-known/openid-configuration` (or set `jwks_uri` directly).
-2. Pick the claim that identifies the workload and map it:
-   `claim_mappings.subject: <that claim>`.
-3. Choose the audience(s) the provider mints tokens for and list them under
-   `audiences`.
+1. Find the provider's issuer URL and confirm its discovery document at `<issuer>/.well-known/openid-configuration` (or set `jwks_uri` directly).
+2. Pick the claim that identifies the workload and map it: `claim_mappings.subject: <that claim>`.
+3. Choose the audience(s) the provider mints tokens for and list them under `audiences`.
 4. Add `required_claims` for any claim your `conditions`/authorization rely on.
-5. Optionally define `session_tags` keyed on the provider's raw claims for ABAC
-   and audit.
+5. Optionally define `session_tags` keyed on the provider's raw claims for ABAC and audit.
 6. Add `role_mappings` (or a `role_group`) bound to the new `issuer`.
 
 ## `alb` mode is single-issuer only
 
-`jwt_validation.mode: alb` trusts an upstream (ALB OIDC) that verified the
-token against a **single** issuer — the ALB has exactly one OIDC IdP
-configured, and cannot tell this service _which_ issuer it checked. It
-therefore requires **exactly one** entry in `issuers[]`; `NewBootstrap()` fails
-at cold start otherwise (`jwt_validation.mode %q supports exactly one
-configured issuer, got %d`).
+`jwt_validation.mode: alb` trusts an upstream (ALB OIDC) that verified the token against a **single** issuer — the ALB has exactly one OIDC IdP configured, and cannot tell this service _which_ issuer it checked. It therefore requires **exactly one** entry in `issuers[]`; `NewBootstrap()` fails at cold start otherwise (`jwt_validation.mode %q supports exactly one configured issuer, got %d`).
 
-`jwt_validation.mode: apigw` has no such restriction: `issuers[]` may hold any
-number of entries (API Gateway allows at most 10 JWT Authorizers per HTTP
-API). Each entry gets its own route and JWT Authorizer, which pins that
-route to its issuer and forwards the upstream-verified `iss` claim; the
-service resolves the matching `issuers[]` entry per request from that claim,
-the same way `self` mode resolves it from the token's own verified issuer.
+`jwt_validation.mode: apigw` has no such restriction: `issuers[]` may hold any number of entries (API Gateway allows at most 10 JWT Authorizers per HTTP API). Each entry gets its own route and JWT Authorizer, which pins that route to its issuer and forwards the upstream-verified `iss` claim; the service resolves the matching `issuers[]` entry per request from that claim, the same way `self` mode resolves it from the token's own verified issuer.
 
 ## Tag-based authorization across issuers
 
-With tag-based authorization ([TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md))
-the canonical identity tag is `aow/subject`, matched against any issuer's
-canonical subject (`aow/repo`/`aow/repo-owner` remain accepted as legacy
-GitHub-shaped aliases). Once **more than one** issuer is configured, a role
-must also carry a matching `aow/issuer` tag or tag-auth fails closed for it —
-otherwise a role scoped to one issuer's subjects would be reachable by another
-issuer's identically-shaped subject (e.g. a GitHub `owner/repo` colliding with
-a GitLab `group/project`). Add `aow/issuer` to tag-authorized roles **before**
-adding a second issuer.
+With tag-based authorization ([TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md)) the canonical identity tag is `aow/subject`, matched against any issuer's canonical subject (`aow/repo`/`aow/repo-owner` remain accepted as legacy GitHub-shaped aliases). Once **more than one** issuer is configured, a role must also carry a matching `aow/issuer` tag or tag-auth fails closed for it — otherwise a role scoped to one issuer's subjects would be reachable by another issuer's identically-shaped subject (e.g. a GitHub `owner/repo` colliding with a GitLab `group/project`). Add `aow/issuer` to tag-authorized roles **before** adding a second issuer.
 
 ## Security notes
 
-- The unverified `iss` is used only for routing; every identity/role decision
-  uses post-signature-verified claims, and the verified `iss` is re-asserted
-  against the matched spec.
-- An issuer's audience set is isolated from every other issuer's — a token's
-  `aud` is only ever checked against the spec resolved by its own verified
-  `iss`, and role mappings are issuer-bound (no cross-issuer subject collision).
-- A token can never self-assert an unmapped `subject`: it comes only from
-  `claim_mappings.subject` (or the GitHub `repository` default).
+- The unverified `iss` is used only for routing; every identity/role decision uses post-signature-verified claims, and the verified `iss` is re-asserted against the matched spec.
+- An issuer's audience set is isolated from every other issuer's — a token's `aud` is only ever checked against the spec resolved by its own verified `iss`, and role mappings are issuer-bound (no cross-issuer subject collision).
+- A token can never self-assert an unmapped `subject`: it comes only from `claim_mappings.subject` (or the GitHub `repository` default).

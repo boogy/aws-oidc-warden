@@ -8,8 +8,7 @@
 
 **AWS OIDC Warden** is a secure, lightweight Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS AssumeRole. It acts as a trusted intermediary between CI/CD workflows and AWS resources, enforcing fine-grained access control based on repository, branch, actor, and other configurable constraints — without storing long-lived credentials.
 
-> [!CAUTION]
-> Not all OIDC claims can be trusted. See the great tool and table created [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for a comprehensive list of claims.
+> [!CAUTION] Not all OIDC claims can be trusted. See the great tool and table created [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for a comprehensive list of claims.
 >
 > This lambda allows you to include specific constraints for a repository before it can obtain credentials from a role. Choose wisely based on the table that Palo Alto Networks has provided in the repository linked above.
 
@@ -319,8 +318,7 @@ Both features are opt-in (`tag_auth.enabled` / `cross_account.enabled`, default 
 }
 ```
 
-Error responses carry only the classified `errorCode`/`message`; internal
-error detail stays in the server-side logs, correlatable via `requestId`.
+Error responses carry only the classified `errorCode`/`message`; internal error detail stays in the server-side logs, correlatable via `requestId`.
 
 ---
 
@@ -347,13 +345,11 @@ Per-issuer session tags are attached to every STS session for auditing, cost all
 8. **Assume Role**: the role is assumed with per-issuer [STS session tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html)
 9. **Audit + Return**: the allow/deny decision is recorded and temporary credentials are returned
 
-Token validation is the security core of the service. The fail-closed
-validation pipeline (self mode):
+Token validation is the security core of the service. The fail-closed validation pipeline (self mode):
 
 ![Token validation pipeline](docs/img/token-validation.svg)
 
-For the full step-by-step flow, crypto hardening, JWKS handling, and SSRF
-protection see **[docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)**.
+For the full step-by-step flow, crypto hardening, JWKS handling, and SSRF protection see **[docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)**.
 
 ---
 
@@ -375,8 +371,7 @@ protection see **[docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)**.
 5. Run checks: `make check`
 6. Submit a pull request with a clear description
 
-> [!TIP]
-> If you find a bug please don't just create an issue. Create a pull request with your fix so that everyone can benefit from it.
+> [!TIP] If you find a bug please don't just create an issue. Create a pull request with your fix so that everyone can benefit from it.
 
 ---
 
@@ -387,8 +382,7 @@ protection see **[docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)**.
 - **DynamoDB Table** — persistent caching (optional)
 - **S3 Bucket** — logs and session policies (optional)
 
-> [!TIP]
-> A generic role with broader privileges can be given to Lambda, then scoped per-repo with session policies. This reduces the total number of IAM roles needed.
+> [!TIP] A generic role with broader privileges can be given to Lambda, then scoped per-repo with session policies. This reduces the total number of IAM roles needed.
 
 For the complete IAM policy and infrastructure details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#required-iam-permissions).
 

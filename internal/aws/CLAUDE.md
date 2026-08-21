@@ -29,14 +29,7 @@ Handlers accept the interface for mockability. Clients are built once in `servic
 
 ## Gotchas
 
-- Session duration: 1h default, up to role-defined max (≤12h) — but capped
-  hard at 1h whenever the warden's own credentials are a role session
-  (`GetCallerIdentityInfo`'s `isRoleSession`), which is always true on Lambda,
-  same-account assumes included: STS *fails* (does not clamp)
-  `DurationSeconds` > 3600 on a chained `AssumeRole`, so `AssumeRole` clamps
-  the request itself before calling STS. Only `local` server mode running
-  with IAM user credentials (not a role session) can get a session up to the
-  target role's own max, cross-account targets included.
+- Session duration: 1h default, up to role-defined max (≤12h) — but capped hard at 1h whenever the warden's own credentials are a role session (`GetCallerIdentityInfo`'s `isRoleSession`), which is always true on Lambda, same-account assumes included: STS _fails_ (does not clamp) `DurationSeconds` > 3600 on a chained `AssumeRole`, so `AssumeRole` clamps the request itself before calling STS. Only `local` server mode running with IAM user credentials (not a role session) can get a session up to the target role's own max, cross-account targets included.
 - Inline session policy max ~2048 chars.
 - Region via default SDK resolution.
 
@@ -46,7 +39,7 @@ IAM: execution role needs `sts:AssumeRole`+`sts:TagSession` on target roles, `s3
 
 `AssumeRole` always assumes the target role **directly** with the warden's own (hub) credentials, one hop, whether same-account or cross-account — it never uses spoke credentials. `cfg.CrossAccount.Enabled` is a policy gate, checked inline in `AssumeRole`: if the target account differs from the hub (`ParseRoleARN` + `GetCallerIdentityInfo`) and `CrossAccount` is nil/disabled, the call fails closed with an error; otherwise `accountAllowed` enforces `cfg.CrossAccount.AllowedAccounts` (hub implicit, empty=any).
 
-`GetRoleTags` authorizes the target account against the **live** config (`IsTargetAccountAllowed`) **before** consulting its 60s `roleTagCache`, so a revoked account is refused on the next request instead of being served from a warm entry until the TTL lapses; it does not rely on `ProcessRequest` having run the same check earlier. It is also the one operation that *is* account-aware via the spoke: for a non-hub account it calls `spokeCredsFor` (assumes the convention-named spoke role, cached) and reads tags with `GetRoleAs`; `spokeCredsFor` itself fails closed if `CrossAccount` is nil/disabled or the account isn't allowed. This is independent of `cfg.TagAuth.Enabled` — explicit mappings targeting member-account ARNs still get their tags read the same way if tag_auth is also on. Same-account → default hub clients via `GetRole` (identical to legacy).
+`GetRoleTags` authorizes the target account against the **live** config (`IsTargetAccountAllowed`) **before** consulting its 60s `roleTagCache`, so a revoked account is refused on the next request instead of being served from a warm entry until the TTL lapses; it does not rely on `ProcessRequest` having run the same check earlier. It is also the one operation that _is_ account-aware via the spoke: for a non-hub account it calls `spokeCredsFor` (assumes the convention-named spoke role, cached) and reads tags with `GetRoleAs`; `spokeCredsFor` itself fails closed if `CrossAccount` is nil/disabled or the account isn't allowed. This is independent of `cfg.TagAuth.Enabled` — explicit mappings targeting member-account ARNs still get their tags read the same way if tag_auth is also on. Same-account → default hub clients via `GetRole` (identical to legacy).
 
 Hub execution role IAM: `sts:GetCallerIdentity` (`GetCallerIdentityInfo`, also used for the hub account ID and the chained-session check), `sts:AssumeRole`+`sts:TagSession` directly on member-account target roles (prefer per-account patterns over `arn:aws:iam::*:role/*`), and — only if `tag_auth` reads roles cross-account — `sts:AssumeRole` on `arn:aws:iam::*:role/<spoke>`.
 
