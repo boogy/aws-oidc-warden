@@ -56,6 +56,15 @@ const (
 // a topology needs a trusted-hop count, which this function deliberately does
 // not guess at. See docs/LOGGING.md's "Source IP trust model" section.
 //
+// Only the last comma-separated field is ever inspected — there is no
+// fallback to an earlier one. If that field is missing, empty, or does not
+// parse as an IP, clientIP reports no IP at all rather than an earlier,
+// caller-controlled hop: a well-behaved ALB always appends the peer it
+// observed as the final field, so a trailing entry that fails to parse proves
+// the header was not produced by such an append, and falling back would
+// return exactly the attacker-chosen value the rightmost rule exists to
+// reject.
+//
 // XFF-derived values are reported as ipSourceForwardedFor. Authorization never
 // consults this IP; it is audit metadata. But a holder of a valid token could
 // otherwise forge their apparent origin in the trail undetectably, so the
@@ -72,14 +81,11 @@ func clientIP(directIP string, headers map[string]string) (ip, source string) {
 		if !strings.EqualFold(name, "x-forwarded-for") {
 			continue
 		}
-		// Walk right-to-left: the last valid address is the closest thing to
-		// an attested one. Scanning past an unparseable trailing entry keeps a
-		// malformed append from discarding the whole header.
+		// Only the final field is examined, never an earlier one: see the
+		// no-fallback rationale in the doc comment above.
 		hops := strings.Split(value, ",")
-		for i := len(hops) - 1; i >= 0; i-- {
-			if parsed := net.ParseIP(strings.TrimSpace(hops[i])); parsed != nil {
-				return parsed.String(), ipSourceForwardedFor
-			}
+		if parsed := net.ParseIP(strings.TrimSpace(hops[len(hops)-1])); parsed != nil {
+			return parsed.String(), ipSourceForwardedFor
 		}
 	}
 	return "", ""

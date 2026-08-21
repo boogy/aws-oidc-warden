@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
@@ -46,10 +47,27 @@ func TestClientIP(t *testing.T) {
 		{"XFF single value", "", map[string]string{"x-forwarded-for": "198.51.100.1"}, "198.51.100.1"},
 		{"XFF whitespace trimmed", "", map[string]string{"x-forwarded-for": "10.0.0.5,  198.51.100.1  "}, "198.51.100.1"},
 		{"header casing ignored", "", map[string]string{"X-Forwarded-For": "198.51.100.1"}, "198.51.100.1"},
-		{"garbage last hop falls back to the next valid one", "", map[string]string{"x-forwarded-for": "198.51.100.1, not-an-ip"}, "198.51.100.1"},
+		// No fallback: only the last field is ever examined. A trailing
+		// unparseable/empty field means the header was not produced by a
+		// well-behaved ALB append, so an earlier hop is never trusted.
+		{"garbage last hop is not a fallback trigger", "", map[string]string{"x-forwarded-for": "198.51.100.1, not-an-ip"}, ""},
 		{"garbage XFF rejected", "", map[string]string{"x-forwarded-for": "not-an-ip"}, ""},
 		{"nothing available", "", nil, ""},
 		{"never returns an ARN", "arn:aws:elasticloadbalancing:eu-west-1:1234:targetgroup/tg/abc", nil, ""},
+		{"empty XFF", "", map[string]string{"x-forwarded-for": ""}, ""},
+		{"whitespace-only XFF", "", map[string]string{"x-forwarded-for": "   "}, ""},
+		{"commas-only XFF", "", map[string]string{"x-forwarded-for": ",,,"}, ""},
+		{"bare IPv6 accepted", "", map[string]string{"x-forwarded-for": "2001:db8::1"}, "2001:db8::1"},
+		{"bracketed IPv6 rejected", "", map[string]string{"x-forwarded-for": "[2001:db8::1]"}, ""},
+		{"host:port rejected", "", map[string]string{"x-forwarded-for": "203.0.113.1:1234"}, ""},
+		{"bracketed IPv6 with port rejected", "", map[string]string{"x-forwarded-for": "[2001:db8::1]:443"}, ""},
+		{"trailing junk hops are not skipped", "", map[string]string{"x-forwarded-for": "1.2.3.4, junk, junk"}, ""},
+		{"trailing empty hops are not skipped", "", map[string]string{"x-forwarded-for": "1.2.3.4, , "}, ""},
+		{"trailing host:port hop is not skipped", "", map[string]string{"x-forwarded-for": "1.2.3.4, not-an-ip:99"}, ""},
+		{"trailing unknown hop is not skipped", "", map[string]string{"x-forwarded-for": "1.2.3.4, unknown"}, ""},
+		{"tab-padded XFF trimmed", "", map[string]string{"x-forwarded-for": "10.0.0.5,\t198.51.100.1\t"}, "198.51.100.1"},
+		{"CRLF-separated XFF trimmed", "", map[string]string{"x-forwarded-for": "10.0.0.5,\r\n198.51.100.1"}, "198.51.100.1"},
+		{"1000-hop XFF still resolves the rightmost", "", map[string]string{"x-forwarded-for": strings.Repeat("10.0.0.1, ", 999) + "203.0.113.7"}, "203.0.113.7"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ip, _ := clientIP(tc.directIP, tc.headers)
