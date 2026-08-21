@@ -350,9 +350,11 @@ var sessionTagCharsetPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]*$`)
 // SKIPPED and logged — never coerced, sanitized, or truncated. An ABAC policy
 // may trust a session tag's exact value; silently mangling it before it
 // reaches STS would be a security bug, not a convenience. Non-string claim
-// values are stringified with fmt.Sprintf("%v"); nil/empty values are
-// skipped. tagSpec keys are iterated in sorted order so, once the AWS-imposed
-// cap of 50 session tags is hit, which tags are dropped is deterministic.
+// values are stringified with utils.FormatClaimValue, which — unlike
+// fmt.Sprintf("%v") — renders an integral float as an integer rather than
+// scientific notation; nil/empty values are skipped. tagSpec keys are
+// iterated in sorted order so, once the AWS-imposed cap of 50 session tags is
+// hit, which tags are dropped is deterministic.
 func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag {
 	if len(rawClaims) == 0 || len(tagSpec) == 0 {
 		return nil
