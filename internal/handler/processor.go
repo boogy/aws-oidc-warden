@@ -216,7 +216,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// CloudTrail names the requester rather than the service. Resolution goes
 	// through the same authorizing mapping as the session policy.
 	sessionName := cfg.RoleSessionName
-	if override := cfg.FindRoleSessionName(claims.Issuer, claims.Subject, requestedRole, claims.Raw); override != "" {
+	if override := cfg.FindRoleSessionName(claims.Issuer, claims.Subject, requestedRole, claimsMap); override != "" {
 		sessionName = override
 	}
 
