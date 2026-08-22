@@ -63,6 +63,25 @@ type compiledCondition struct {
 	pattern *regexp.Regexp
 }
 
+const (
+	// maxConditionDepth bounds how deeply boolean groups may nest. The
+	// top-level `conditions:` block is depth 1, each nested group adds one.
+	//
+	// The cap exists for readability first and cost second. A gate a reviewer
+	// cannot hold in their head is a gate nobody reviews, and five levels is
+	// already more structure than any real authorization rule needs. It also
+	// keeps satisfiesConditions' recursion depth a property of this constant
+	// rather than of a config file.
+	maxConditionDepth = 5
+
+	// maxConditionNodes bounds the total number of condition nodes in ONE
+	// mapping's tree. Depth alone does not bound the work: a single any_of can
+	// list arbitrarily many members, and every candidate mapping is evaluated
+	// on every request. This keeps the per-request cost of the authorization
+	// gate bounded by a constant the code owns.
+	maxConditionNodes = 64
+)
+
 // compileCondition compiles every pattern on a condition tree (nil is valid: no
 // conditions means unconditional match) into the pre-compiled form checked by
 // satisfiesConditions. Called once per effective mapping at Validate() time,
@@ -85,7 +104,13 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 	if cond == nil {
 		return nil
 	}
+	if depth > maxConditionDepth {
+		return fmt.Errorf("%s: exceeds the maximum condition nesting depth of %d levels; flatten the expression", path, maxConditionDepth)
+	}
 	*budget++
+	if *budget > maxConditionNodes {
+		return fmt.Errorf("%s: more than %d condition nodes in one mapping; split it across mappings or simplify the expression", path, maxConditionNodes)
+	}
 
 	cond.compiled = cond.compiled[:0]
 	add := func(claim, pattern string) error {

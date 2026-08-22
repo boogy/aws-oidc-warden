@@ -463,3 +463,62 @@ func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 		})
 	}
 }
+
+// nestCondition builds a chain of all_of groups depth levels deep, with a real
+// leaf predicate at the innermost node. nestCondition(1) is a bare leaf.
+func nestCondition(depth int) *Condition {
+	c := &Condition{EventName: "push"}
+	for i := 1; i < depth; i++ {
+		c = &Condition{AllOf: []*Condition{c}}
+	}
+	return c
+}
+
+// TestValidate_RejectsExcessiveNesting pins the depth cap. Deep boolean nesting
+// is unreadable in a security config long before it is slow, and an unbounded
+// depth makes evaluation cost a property of a config file rather than of the
+// code.
+func TestValidate_RejectsExcessiveNesting(t *testing.T) {
+	cases := []struct {
+		name  string
+		depth int
+		want  bool // want an error
+	}{
+		{"single leaf", 1, false},
+		{"at the cap", maxConditionDepth, false},
+		{"one past the cap", maxConditionDepth + 1, true},
+		{"far past the cap", maxConditionDepth + 10, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCond(nestCondition(tc.depth))
+			if tc.want {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "nesting")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+// TestValidate_RejectsTooManyNodes pins the node budget: depth alone does not
+// bound the work, since one any_of can hold arbitrarily many members.
+func TestValidate_RejectsTooManyNodes(t *testing.T) {
+	build := func(members int) *Condition {
+		nodes := make([]*Condition, members)
+		for i := range nodes {
+			nodes[i] = &Condition{EventName: "push"}
+		}
+		return &Condition{AnyOf: nodes}
+	}
+
+	// The top-level node counts too, so maxConditionNodes-1 members is exactly
+	// at the cap and one more is over it.
+	require.NoError(t, validateCond(build(maxConditionNodes-1)), "a tree exactly at the cap must be accepted")
+
+	err := validateCond(build(maxConditionNodes))
+	require.Error(t, err, "a tree one node past the cap must be rejected")
+	require.Contains(t, err.Error(), "condition nodes")
+}
