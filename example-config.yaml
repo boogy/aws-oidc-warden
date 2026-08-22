@@ -187,17 +187,21 @@ role_sets:
 # assumable roles, scoped to a single issuer, optionally gated by `conditions`.
 # The requested role must be one of the mapping's resolved roles — a token can
 # never select an arbitrary role. `issuer` defaults to default_issuer above.
-# `conditions` are regexes against RAW verified claim names; any claim not
-# covered by a named field can be matched directly by its claim name. Entries
-# at the same level are AND'd; `all_of`/`any_of`/`none_of` groups nest inside
-# for richer logic. A claim whose value is a LIST matches when any element does.
+# Every key under `conditions` (other than the boolean groups) is the RAW
+# verified claim name it checks, and its value is one anchored regex or a LIST
+# of regexes, any of which may match. Entries at the same level are AND'd;
+# `all_of`/`any_of`/`none_of` groups nest inside for richer logic. A claim whose
+# value is itself a list matches when any element does.
+#
+# Deprecated (still work, Validate() warns): `branch` -> use `ref`,
+# `environment` -> use `runner_environment`, `actor_matches` -> use `actor`.
 ####################################################################################
 role_mappings:
   # Simple mapping, main branch only (inherits default_issuer = GitHub).
   - subject: "org/some-repo-name"
     roles: ["@deployers"] # role_set alias
     conditions:
-      branch: "refs/heads/main"
+      ref: "refs/heads/main"
 
   # External session policy file in S3.
   - subject: "org/main-branch-repo"
@@ -205,7 +209,7 @@ role_mappings:
     roles:
       - arn:aws:iam::123456789012:role/github-actions-create-repo
     conditions:
-      branch: "refs/heads/main"
+      ref: "refs/heads/main"
 
   # Inline session policy + subject pattern for many repos. role_session_name
   # here names the WHOLE matched set, not each repository individually — it
@@ -217,15 +221,17 @@ role_mappings:
       {"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["iam:*"],"Resource":"*"}]}
     role_session_name: "org-services"
 
-  # Multiple conditions (all must hold) incl. a generic claim by its raw name.
+  # Multiple conditions: different claims are AND'd, a list within one claim
+  # is OR'd. Any raw claim name works — there is no fixed field list.
   - subject: "org/prod-repo"
     roles:
       - arn:aws:iam::123456789012:role/github-actions-prod
     conditions:
       ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
       ref_type: "tag"
-      environment: "production" # regex against the raw 'runner_environment' claim
-      sha: "^[0-9a-f]{40}$" # generic: any raw claim name works (string, or a list matching any element)
+      runner_environment: "production"
+      actor: ["release-bot", "release-manager"] # OR: either actor satisfies it
+      sha: "[0-9a-f]{40}" # patterns are auto-anchored; no ^...$ needed
     # Overrides the global role_session_name for roles granted by THIS
     # mapping only, so CloudTrail names the requester instead of the service.
     role_session_name: "org-prod-repo-deploy"
@@ -248,18 +254,22 @@ role_mappings:
         - ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
         - all_of:
             - ref: "refs/tags/hotfix-.+"
-            - actor_matches: ["release-bot", "release-manager"]
+            - actor: ["release-bot", "release-manager"]
       none_of:
-        - environment: "sandbox" # regex against the raw 'runner_environment' claim
+        - runner_environment: "sandbox"
 
   # A GitLab mapping — bound explicitly to the GitLab issuer. Its `subject` is
   # the canonical value produced by claim_mappings.subject (project_path).
+  # Conditions use the same syntax for any provider: the key is whatever the
+  # issuer calls the claim, so no GitLab-specific fields are needed.
   - subject: "mygroup/myproject"
     issuer: "https://gitlab.com"
     roles:
       - arn:aws:iam::123456789012:role/gitlab-ci-deploy
     conditions:
       ref: "main"
+      project_path: "mygroup/myproject"
+      groups: ["platform-team", "sre"] # list claim: matches when any element does
 
 ####################################################################################
 # ROLE GROUPS (DRY: one entry expands to one mapping per subject, sharing

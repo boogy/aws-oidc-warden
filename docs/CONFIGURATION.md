@@ -102,7 +102,7 @@ role_mappings:
     issuer: "https://token.actions.githubusercontent.com" # explicit; overrides default_issuer
     roles: ["@deployers"]
     conditions:
-      branch: "main"
+      ref: "refs/heads/main"
       event_name: "push"
 
   - subject: "group/project" # GitLab project_path
@@ -121,16 +121,44 @@ role_groups:
         event_name: "push"
 ```
 
-| Concept         | Replaces (v1)        | Notes                                                                                                                                                             |
-| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `role_mappings` | `repo_role_mappings` | `subject` replaces `repo`; each entry binds to one `issuer` (explicit, `default_issuer`, or the sole configured issuer).                                          |
-| `conditions`    | `constraints`        | Same fields (`branch`, `ref`, `ref_type`, `event_name`, `workflow_ref`, `environment`, `actor_matches`), plus an open-ended map of `claim_name: pattern` entries, plus the `all_of`/`any_of`/`none_of` boolean groups below. |
-| `role_sets`     | (new)                | Named `[]string` ARN lists; reference as `"@name"` inside any `roles` list. Resolved once at `Validate()`, before the requested-role gate.                        |
-| `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.  |
+| Concept         | Replaces (v1)        | Notes                                                                                                                                                                                                                        |
+| --------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role_mappings` | `repo_role_mappings` | `subject` replaces `repo`; each entry binds to one `issuer` (explicit, `default_issuer`, or the sole configured issuer).                                                                                                     |
+| `conditions`    | `constraints`        | Any raw claim name as the key (`ref`, `event_name`, `repository`, `project_path`, …), with one pattern or a list of patterns as the value, plus the `all_of`/`any_of`/`none_of` boolean groups below. |
+| `role_sets`     | (new)                | Named `[]string` ARN lists; reference as `"@name"` inside any `roles` list. Resolved once at `Validate()`, before the requested-role gate.                                                                                   |
+| `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.                                                             |
 
 `subject` is matched with the same auto-anchored-regex semantics `repo` used (`^(?:pattern)$`) — keep patterns specific. A bare `.*`/`.+` is rejected by `Validate()` wherever it gates an authorization decision: both in `conditions` fields and as a `subject` (including `role_groups.subjects`), since a wildcard subject would grant its roles to every subject of the bound issuer. The check is literal, so an equivalent pattern written another way (`(.*)`, `[\s\S]*`) still compiles — it stops the accident, not a determined operator.
 
-`conditions.branch` and `conditions.ref` both check the raw `ref` claim (`refs/heads/main`, `refs/tags/v1.2.3`, ...) — this is intentional, not a bug; use whichever name reads better for your pattern.
+### Condition keys are claim names
+
+There is one condition mechanism, and it works the same for every issuer: **the key is the raw verified claim to check, and the value is one anchored regex or a list of them.**
+
+```yaml
+conditions:
+  repository: "octo-org/api" # a single pattern
+  actor: ["release-bot", "release-manager"] # a list: ANY may match
+  ref: 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+'
+  project_path: "mygroup/myproject" # non-GitHub claims need no special field
+  groups: ["platform-team", "sre"]
+```
+
+- **Patterns within one claim are OR-ed; separate claims are AND-ed.** So the block above reads: this repository, AND one of those two actors, AND a release tag, AND …
+- **Any claim the token carries can be used**, whether or not this project models it — nothing about the key list is GitHub-specific. Use the claim name your provider mints (`project_path`, `groups`, `sub`, `oid`, …).
+- Values are auto-anchored (`^(?:pattern)$`), so a literal string behaves like `==`.
+- A claim whose value is itself a list matches when any element matches (see "List-valued claims" below).
+
+Three keys predate this and are spelled differently from the claim they check. They keep working exactly as before, but `Validate()` now warns and names the replacement:
+
+| Deprecated key  | Use instead          | Checks the claim     |
+| --------------- | -------------------- | -------------------- |
+| `branch`        | `ref`                | `ref`                |
+| `environment`   | `runner_environment` | `runner_environment` |
+| `actor_matches` | `actor`              | `actor`              |
+
+`actor_matches` was the only key that accepted a list; every claim does now, so it carries no capability the generic form lacks.
+
+For an issuer configured with `provider: github`, `Validate()` also warns when a condition names a claim GitHub does not issue (`reposiory`, `event-name`) — a misspelled claim can never match, so the mapping would silently stop authorizing. It is a warning, not an error: the issuer's own `claim_mappings` / `required_claims` / `session_tags` claims count as known, and generic issuers are never warned about, since their claim vocabulary is whatever their provider mints.
 
 ### Boolean logic in conditions
 
@@ -142,7 +170,7 @@ Entries at the same level are AND-ed — that has always been true and still is,
 | `any_of`  | at least one listed condition holds                   |
 | `none_of` | no listed condition holds (one entry = a plain "not") |
 
-Each group takes a **list of conditions**, and each entry is a full condition block — flat claim fields, `actor_matches`, and further groups. On one node, the flat fields and all three groups are AND-ed together.
+Each group takes a **list of conditions**, and each entry is a full condition block — claim predicates and further groups. On one node, the claim predicates and all three groups are AND-ed together.
 
 ```yaml
 role_mappings:
@@ -154,9 +182,9 @@ role_mappings:
         - ref: 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+'
         - all_of:
             - ref: "refs/tags/hotfix-.+"
-            - actor_matches: ["release-bot"]
+            - actor: ["release-bot"]
       none_of:
-        - environment: "sandbox"
+        - runner_environment: "sandbox"
 ```
 
 Reads as: a tag build, from either a release tag or a bot-driven hotfix tag, never on the sandbox runner.
@@ -176,7 +204,8 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 
 - **`none_of` is exact negation.** A member naming a claim the token does not carry cannot match, so its negation holds and the `none_of` **passes**. If you need the claim to be present, add it as a flat predicate alongside the group, or list it in that issuer's `required_claims`.
 - **A missing or wrong-typed claim never satisfies a positive predicate.** Absent, `null`, number, bool, and object claims all fail to match, so a condition on one denies.
-- **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Non-string elements are ignored. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra.
+- **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Non-string elements are ignored. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra. Note the two lists are independent: a list of *patterns* is satisfied when any pattern matches, and a list-valued *claim* is matched when any element matches.
+- **An empty pattern (`ref: ""`) or an empty list (`ref: []`) is rejected at load time.** Both read as a predicate but gate nothing; before v2.5.0 an empty string was silently ignored.
 - **`all_of`, `any_of`, and `none_of` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it directly — it now parses as a boolean group, and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nothing else changes about generic claim predicates.
 
 Authorization is evaluated by `Config.AuthorizeRoles(issuer, subject, claims)`, which unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping. `Config.FindSessionPolicy(issuer, subject, role, claims)` then picks the session policy using the **same** match semantics, so a role's scoping policy always travels with the grant: the policy comes from a mapping that matches the subject, satisfies its conditions, **and** lists the role being assumed. Where several mappings qualify, the first-declared (config order) wins.

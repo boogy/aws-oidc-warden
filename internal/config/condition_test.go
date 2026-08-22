@@ -460,7 +460,7 @@ func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 			ok, _ = cfg.AuthorizeRoles(vIss, "acme/app", deny)
 			require.False(t, ok, "none_of must still deny after the round trip")
 			ok, _ = cfg.AuthorizeRoles(vIss, "acme/app", denyNoSha)
-			require.False(t, ok, "the Extra leaf must still deny after the round trip")
+			require.False(t, ok, "the generic-claim leaf must still deny after the round trip")
 		})
 	}
 }

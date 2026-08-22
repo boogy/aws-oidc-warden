@@ -104,9 +104,10 @@ func compileCondition(cond *Condition) error {
 // config names the exact entry to fix. depth is 1 for the top-level node.
 // budget counts nodes compiled so far across the whole tree.
 //
-// Every named field compiles through the same anchored-regex mechanism as
-// Extra, so an anchored regex over a literal string matches identically to
-// `==` — this is a pure widening, not a behavior change for literal configs.
+// Every named field compiles through the same anchored-regex mechanism as a
+// generic claim entry, so an anchored regex over a literal string matches
+// identically to `==` — a pure widening, not a behavior change for literal
+// configs.
 func compileConditionAt(cond *Condition, path string, depth int, budget *int) error {
 	if cond == nil {
 		return nil

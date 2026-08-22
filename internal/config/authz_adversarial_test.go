@@ -377,8 +377,8 @@ func TestConditionSemantics(t *testing.T) {
 }
 
 // TestTypoedConditionKeyFailsClosed proves an unrecognized condition
-// key is NOT silently ignored: it lands in Extra and is checked against a
-// claim that does not exist, denying the request.
+// key is NOT silently ignored: it is read as a claim name and checked against
+// a claim that does not exist, denying the request.
 func TestTypoedConditionKeyFailsClosed(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
 		Subject:    "myorg/repo",
