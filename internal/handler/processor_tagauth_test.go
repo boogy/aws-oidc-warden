@@ -32,6 +32,7 @@ type fakeConsumer struct {
 	assumed         string
 	gotClaims       *types.Claims     // claims passed to AssumeRole → drive session tags (ABAC)
 	gotSessionTags  map[string]string // session_tags spec passed to AssumeRole
+	gotSessionName  string            // STS session name passed to AssumeRole
 	assumeOut       *ststypes.Credentials
 	allowAccount    bool
 	allowAccountErr error
@@ -46,8 +47,9 @@ func (f *fakeConsumer) GetRoleTags(string) (map[string]string, error) { return f
 func (f *fakeConsumer) IsTargetAccountAllowed(string) (bool, error) {
 	return f.allowAccount, f.allowAccountErr
 }
-func (f *fakeConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
+func (f *fakeConsumer) AssumeRole(roleARN, sessionName string, _ *string, _ *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
 	f.assumed = roleARN
+	f.gotSessionName = sessionName
 	f.gotClaims = claims
 	f.gotSessionTags = sessionTags
 	return f.assumeOut, nil

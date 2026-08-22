@@ -1025,6 +1025,7 @@ func (c *Config) Validate() error {
 
 	c.index = buildAuthzIndex(c.effective)
 	warnUnscopedRoleGrants(c.effective)
+	warnTagAuthBypassesMappingScoping(c.TagAuth, c.effective)
 
 	// Calculate the average number of roles per mapping for more efficient memory allocation
 	totalRoles := 0
@@ -1318,6 +1319,56 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 			slog.String("role", role),
 			slog.String("winningSubject", g.lowest.Subject),
 			slog.String("ignoredPolicySubject", g.scoped.Subject))
+	}
+}
+
+// warnTagAuthBypassesMappingScoping logs a warning for every role that a
+// role_mapping scopes with a session_policy or a role_session_name while
+// tag_auth is enabled.
+//
+// The two authorization paths do not carry the same scoping. When
+// AuthorizeRoles finds no matching mapping, the tag-auth fallback can still
+// grant the role off the role's own IAM tags — and then findAuthorizingMapping
+// returns nil, so FindSessionPolicy and FindRoleSessionName both return the
+// empty result: the role is assumed with no session policy and under the
+// global role_session_name. An operator who scoped a role down in
+// role_mappings and separately tagged it for tag-auth therefore has a
+// second, unscoped way into the same role.
+//
+// This is by design (tag-auth's grant lives on the role, not in the config)
+// and is not an authorization bypass — the identity gate still applies — but
+// the scoping asymmetry is invisible in the config file, so it is made loud at
+// load time. Like warnUnscopedRoleGrants this over-approximates: whether the
+// role actually carries the tag-auth tags is an IAM fact this code cannot see.
+func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
+	if tagAuth == nil || !tagAuth.Enabled {
+		return
+	}
+
+	seen := make(map[string]bool)
+	for _, m := range effective {
+		scopedBy := ""
+		switch {
+		case m.SessionPolicy != "" || m.SessionPolicyFile != "":
+			scopedBy = "session_policy"
+		case m.RoleSessionName != "":
+			scopedBy = "role_session_name"
+		default:
+			continue
+		}
+		for _, role := range m.Roles {
+			if seen[role] {
+				continue
+			}
+			seen[role] = true
+			slog.Warn("tag_auth is enabled and this role is scoped in role_mappings; "+
+				"a tag-auth grant of the same role carries no session policy and no "+
+				"role_session_name override. Remove the role's aow/ tags, or accept "+
+				"that the tag-auth path is unscoped.",
+				slog.String("role", role),
+				slog.String("scopedBy", scopedBy),
+				slog.String("subject", m.Subject))
+		}
 	}
 }
 

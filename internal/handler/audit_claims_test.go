@@ -348,3 +348,84 @@ func TestAuditClaims_GenericIssuerRepositoryAliasIsProviderIndependent(t *testin
 	assert.Equal(t, "acme/api", got["repo"], "the rename applies regardless of provider")
 	assert.NotContains(t, got, "repository", "the raw claim name must not survive the rename")
 }
+
+// TestAuditClaims_AliasAppliesWhenTargetClaimIsNotEmitted pins the other half
+// of the collision rule: a rename is suppressed only by a claim that actually
+// reaches the record, never by one that was dropped on the way in.
+//
+// The check used to ask whether rawClaims held the alias target at all. For a
+// generic issuer that carries both "repository" and an unmapped "repo", the
+// unmapped claim is excluded from the record — yet its bare presence cancelled
+// the rename, so the record lost the repo/repo_id vocabulary the alias exists
+// to guarantee, and nothing took its place.
+func TestAuditClaims_AliasAppliesWhenTargetClaimIsNotEmitted(t *testing.T) {
+	const genericIssuer = "https://issuer.example.com"
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:    genericIssuer,
+			Provider:  "generic",
+			Audiences: []string{"sts.amazonaws.com"},
+			// "repo" is deliberately NOT mapped, so it is never recorded.
+			ClaimMappings: map[string]string{"subject": "repository"},
+		}},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 0},
+		RoleMappings: []config.RoleMapping{{
+			Subject: "acme/api",
+			Issuer:  genericIssuer,
+			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+		}},
+		LogClaimValues: true,
+	}
+	require.NoError(t, cfg.Validate())
+
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:   genericIssuer,
+			Subject:  "acme/api",
+			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
+		},
+		Sub: "acme/api",
+		Raw: map[string]any{
+			"repository": "acme/api",
+			"repo":       "not-recorded", // excluded by claim_mappings
+		},
+	}
+
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: claims}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-alias-not-emitted", slog.Default())
+	require.NoError(t, err)
+
+	got := recClaims(t, sink.last(t))
+	require.NotNil(t, got)
+	assert.Equal(t, "acme/api", got["repo"],
+		"the rename must apply: the colliding claim is excluded from the record")
+	assert.NotContains(t, got, "repository", "the raw claim name must not survive the rename")
+}
+
+// An empty alias-target claim is likewise not emitted (auditClaims drops empty
+// formatted values), so it must not cancel the rename either.
+func TestAuditClaims_AliasAppliesWhenTargetClaimIsEmpty(t *testing.T) {
+	claims := githubClaims("org/repo")
+	claims.Raw["repo"] = ""
+
+	cfg := auditTestCfg(t, false, true)
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: claims}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-alias-empty", slog.Default())
+	require.NoError(t, err)
+
+	got := recClaims(t, sink.last(t))
+	require.NotNil(t, got)
+	assert.Equal(t, "org/repo", got["repo"], "an empty claim records nothing and must not block the rename")
+	assert.NotContains(t, got, "repository")
+}

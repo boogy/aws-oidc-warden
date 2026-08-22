@@ -160,12 +160,20 @@ module "cache_bucket" {
   force_destroy = var.force_destroy_buckets
 }
 
+# The audit bucket is the durable record of every credential the warden ever
+# issued, so it is versioned by default: an overwrite or delete of an audit
+# object leaves the previous version recoverable. Set
+# audit_log_object_lock_mode to make that retention non-negotiable (see
+# deploy/README.md — it can only be set when the bucket is created).
 module "log_bucket" {
-  count                     = local.s3_logs_enabled ? 1 : 0
-  source                    = "./modules/s3"
-  bucket_name               = local.log_bucket_name
-  force_destroy             = var.force_destroy_buckets
-  lifecycle_expiration_days = 90
+  count                      = local.s3_logs_enabled ? 1 : 0
+  source                     = "./modules/s3"
+  bucket_name                = local.log_bucket_name
+  force_destroy              = var.force_destroy_buckets
+  lifecycle_expiration_days  = var.audit_log_retention_days
+  versioning_enabled         = true
+  object_lock_mode           = var.audit_log_object_lock_mode
+  object_lock_retention_days = var.audit_log_object_lock_days
 }
 
 module "session_policy_bucket" {

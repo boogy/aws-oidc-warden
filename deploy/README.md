@@ -44,22 +44,44 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 
 ## Toggle Reference
 
-| Variable                       | Default | Provisions                                            | IAM granted                                      |
-| ------------------------------ | ------- | ----------------------------------------------------- | ------------------------------------------------ |
-| `enable_dynamodb_cache`        | `false` | DynamoDB table `<prefix>-cache`                       | `dynamodb:GetItem/PutItem/DeleteItem`            |
-| `enable_s3_cache`              | `false` | S3 bucket `<prefix>-cache-<suffix>`                   | `s3:GetObject/PutObject/DeleteObject/ListBucket` |
-| `enable_s3_logs`               | `false` | S3 bucket `<prefix>-logs-<suffix>` (90-day lifecycle) | `s3:PutObject`, `s3:PutObjectTagging`            |
-| `audit_required`               | `true`  | Implies `enable_s3_logs` (needs a bucket to write to) | `s3:PutObject`, `s3:PutObjectTagging`            |
-| `log_claim_values`             | `true`  | No new resources                                      | —                                                |
-| `enable_session_policy_bucket` | `false` | S3 bucket `<prefix>-session-policies-<suffix>`        | `s3:GetObject`                                   |
-| `tag_auth.enabled`             | `false` | No new resources                                      | `iam:GetRole`                                    |
-| `session_tags_transitive`      | `false` | No new resources                                      | —                                                |
+| Variable                       | Default | Provisions                                                                           | IAM granted                                      |
+| ------------------------------ | ------- | ------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| `enable_dynamodb_cache`        | `false` | DynamoDB table `<prefix>-cache`                                                      | `dynamodb:GetItem/PutItem/DeleteItem`            |
+| `enable_s3_cache`              | `false` | S3 bucket `<prefix>-cache-<suffix>`                                                  | `s3:GetObject/PutObject/DeleteObject/ListBucket` |
+| `enable_s3_logs`               | `false` | S3 bucket `<prefix>-logs-<suffix>` (versioned, `audit_log_retention_days` lifecycle) | `s3:PutObject`, `s3:PutObjectTagging`            |
+| `audit_required`               | `true`  | Implies `enable_s3_logs` (needs a bucket to write to)                                | `s3:PutObject`, `s3:PutObjectTagging`            |
+| `log_claim_values`             | `true`  | No new resources                                                                     | —                                                |
+| `enable_session_policy_bucket` | `false` | S3 bucket `<prefix>-session-policies-<suffix>`                                       | `s3:GetObject`                                   |
+| `tag_auth.enabled`             | `false` | No new resources                                                                     | `iam:GetRole`                                    |
+| `session_tags_transitive`      | `false` | No new resources                                                                     | —                                                |
 
 **`audit_required` defaults to `true`** and provisions the log bucket on its own, so every allow decision's audit record is written to S3 synchronously before credentials are returned (fail-closed). Set it to `false` for the best-effort batched trail — in Lambda that path can lose buffered records at container reclaim (see [docs/LOGGING.md](../docs/LOGGING.md)).
 
 **`log_claim_values` defaults to `true`** so each record identifies who made the request — for GitHub issuers, the full verified claim set (`claims.repo`, `claims.ref`, `claims.event_name`, `claims.actor`, and so on), plus the canonical `subject`. Set it to `false` to keep identities out of the log stream — decision, reason, role, and claim _names_ are still recorded.
 
 **`session_tags_transitive` defaults to `false`, but turning it on is RECOMMENDED.** Without it, a session tag is dropped the moment the target role assumes another role, so any ABAC policy past that hop can no longer see who the original caller was. It defaults off only for upgrade safety: transitive tags are immutable downstream, so enabling it breaks a target role that re-tags with the same keys while chaining. If yours doesn't (the common case), set `session_tags_transitive = true`.
+
+### Audit bucket retention
+
+The log bucket holds the durable record of every credential the warden issued, so it is created with **versioning enabled**: an overwrite or a delete leaves the previous version recoverable, and the lifecycle rule expires noncurrent versions on the same schedule as current ones.
+
+| Variable                     | Default | Effect                                                                                 |
+| ---------------------------- | ------- | -------------------------------------------------------------------------------------- |
+| `audit_log_retention_days`   | `90`    | Days audit objects (current and noncurrent versions) are kept before expiring.         |
+| `audit_log_object_lock_mode` | `null`  | `"GOVERNANCE"`, `"COMPLIANCE"`, or `null` to leave S3 Object Lock off.                 |
+| `audit_log_object_lock_days` | `365`   | Days each object version is retained under Object Lock. Ignored when the mode is null. |
+
+Versioning alone protects against accident, not against an attacker with `s3:DeleteObjectVersion` on the bucket. Where the audit trail must survive a compromise of the account that writes it, set `audit_log_object_lock_mode`:
+
+- **`GOVERNANCE`** — a principal holding `s3:BypassGovernanceRetention` can still delete a locked version. Use it while tuning the retention window.
+- **`COMPLIANCE`** — no principal can delete or shorten a locked version, including the root account, for the full retention period. Choose the window deliberately: you cannot undo it, and you pay storage for every locked version until it expires.
+
+Two constraints follow from how S3 implements Object Lock:
+
+- **It can only be enabled when the bucket is created.** Setting `audit_log_object_lock_mode` on a stack whose log bucket already exists replaces the bucket; migrate by creating the new bucket, copying existing objects, then repointing `log_bucket`.
+- **Keep `audit_log_retention_days` at or above `audit_log_object_lock_days`.** A version under lock is not deleted before its retention expires, so a shorter lifecycle silently leaves locked versions in place (and billed) rather than removing them.
+
+CloudFormation exposes the same three knobs as `AuditLogRetentionDays`, `AuditLogObjectLockMode` (empty string = off), and `AuditLogObjectLockDays`.
 
 **Cache backends are mutually exclusive.** `enable_dynamodb_cache` and `enable_s3_cache` cannot both be `true`; a `precondition` enforces this at plan time. Leaving both `false` uses in-memory cache (suitable for low traffic; cache lost on cold start).
 
@@ -228,7 +250,7 @@ The `ApiEndpoint` stack output is the verify URL, and `ExecutionRoleArn` is the 
 
 ### Parameter mapping
 
-CloudFormation parameters mirror the OpenTofu variables (`ApiGatewayType`, `EnableWAF`, `WAFRateLimit`, `WAFCommonRuleSet`, `ThrottlingBurstLimit`/`ThrottlingRateLimit`, `ReservedConcurrency`, `EnableDynamoDBCache`/`EnableS3Cache`/`CacheTTL`, `EnableS3Logs`, `EnableSessionPolicyBucket`, `EnableTagAuth`, `LogRetentionDays`, `BucketSuffix`), with the same defaults and the same plan-time assertions (WAF↔REST, apigw↔HTTP, cache exclusivity). Not parameters because they live elsewhere:
+CloudFormation parameters mirror the OpenTofu variables (`ApiGatewayType`, `EnableWAF`, `WAFRateLimit`, `WAFCommonRuleSet`, `ThrottlingBurstLimit`/`ThrottlingRateLimit`, `ReservedConcurrency`, `EnableDynamoDBCache`/`EnableS3Cache`/`CacheTTL`, `EnableS3Logs`, `AuditLogRetentionDays`/`AuditLogObjectLockMode`/`AuditLogObjectLockDays`, `EnableSessionPolicyBucket`, `EnableTagAuth`, `LogRetentionDays`, `BucketSuffix`), with the same defaults and the same plan-time assertions (WAF↔REST, apigw↔HTTP, cache exclusivity). Not parameters because they live elsewhere:
 
 - `region`/`tags` — set via the AWS CLI (`--region`, `--tags`).
 - `issuer`, `audiences`, `role_mappings`, `tag_auth` details, `cross_account` — belong in the uploaded `config.yaml` (OpenTofu renders these; CloudFormation cannot). `EnableTagAuth` still exists to grant the IAM side (`iam:GetRole`).
