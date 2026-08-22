@@ -42,6 +42,7 @@ func TestFindSessionPolicy_ScopedToGrantingRole(t *testing.T) {
 	}
 	if policy == nil {
 		t.Fatal("deploy role assumed WITHOUT its restrictive session policy (regression)")
+		return // unreachable: t.Fatal exits the goroutine. Keeps staticcheck SA5011 quiet.
 	}
 	if *policy != restrictive {
 		t.Fatalf("wrong policy for deploy role:\n got %q\nwant %q", *policy, restrictive)

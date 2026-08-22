@@ -107,6 +107,7 @@ func TestS3CacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 	c.memCacheMu.Unlock()
 	if entry == nil {
 		t.Fatal("expected item in local cache after S3 hit")
+		return // unreachable: t.Fatal exits the goroutine. Keeps staticcheck SA5011 quiet.
 	}
 	if !entry.expiration.Equal(wantExpiration) {
 		t.Fatalf("local expiration = %v, want %v", entry.expiration, wantExpiration)

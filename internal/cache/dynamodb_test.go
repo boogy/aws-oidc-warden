@@ -103,6 +103,7 @@ func TestDynamoDBCacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 	c.memCacheMu.Unlock()
 	if entry == nil {
 		t.Fatal("expected item in local cache after DynamoDB hit")
+		return // unreachable: t.Fatal exits the goroutine. Keeps staticcheck SA5011 quiet.
 	}
 	if !entry.expiration.Equal(wantExpiration) {
 		t.Fatalf("local expiration = %v, want %v", entry.expiration, wantExpiration)
