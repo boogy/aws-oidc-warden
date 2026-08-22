@@ -26,6 +26,26 @@ type Condition struct {
 	Environment  string   `mapstructure:"environment"   json:"environment,omitempty"`   // Regex against 'runner_environment' (e.g., "production")
 	ActorMatches []string `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // Regexes against 'actor'; OR within the list
 
+	// Boolean groups. Each holds nested conditions evaluated with its own
+	// operator; all three are AND'd with the flat fields above and with each
+	// other on the same node, so the top level stays an implicit AND and every
+	// pre-existing config keeps its exact meaning.
+	//
+	// These three keys are RESERVED under `conditions:`. Extra is a
+	// mapstructure remain-map, so it only ever collected keys no field claimed;
+	// a raw claim literally named "all_of"/"any_of"/"none_of" now decodes as a
+	// group instead. The only shape that previously worked was a STRING value
+	// (Extra is map[string]string and the package registers no decode hooks or
+	// WeaklyTypedInput, so a list value never decoded at all) — and such a
+	// config now fails to decode loudly rather than changing meaning silently.
+	//
+	// all_of/any_of/none_of plus nesting is functionally complete (any boolean
+	// expression is expressible as nested any_of-of-all_of), which is why there
+	// is no `not` (a one-element none_of) and no `xor`.
+	AllOf  []*Condition `mapstructure:"all_of"  json:"all_of,omitempty"`  // every member must be satisfied
+	AnyOf  []*Condition `mapstructure:"any_of"  json:"any_of,omitempty"`  // at least one member must be satisfied
+	NoneOf []*Condition `mapstructure:"none_of" json:"none_of,omitempty"` // no member may be satisfied
+
 	// Extra holds generic claimName->regex entries (raw verified claim names)
 	// not covered by a named field above. Populated via mapstructure's
 	// remain-fields so no nested key is required in config.
@@ -43,18 +63,29 @@ type compiledCondition struct {
 	pattern *regexp.Regexp
 }
 
-// compileCondition compiles every pattern on a Condition (nil is valid: no
-// conditions means unconditional match) into the AND'd (claim, pattern) list
-// checked by satisfiesConditions. Every named field compiles through the same
-// anchored-regex mechanism as Extra, so "same mechanism" (D4) holds even for
-// fields that used to be plain string equality (ref_type/event_name/
-// environment) — an anchored regex over a literal string matches identically
-// to `==`, so this is a pure widening, not a behavior change for existing
-// literal configs.
+// compileCondition compiles every pattern on a condition tree (nil is valid: no
+// conditions means unconditional match) into the pre-compiled form checked by
+// satisfiesConditions. Called once per effective mapping at Validate() time,
+// never per request.
 func compileCondition(cond *Condition) error {
+	budget := 0
+	return compileConditionAt(cond, "conditions", 1, &budget)
+}
+
+// compileConditionAt compiles one node of the condition tree and recurses into
+// its groups. path is the operator-facing location of this node (e.g.
+// "conditions.any_of[1].all_of[0]") and appears in every error, so a rejected
+// config names the exact entry to fix. depth is 1 for the top-level node.
+// budget counts nodes compiled so far across the whole tree.
+//
+// Every named field compiles through the same anchored-regex mechanism as
+// Extra, so an anchored regex over a literal string matches identically to
+// `==` — this is a pure widening, not a behavior change for literal configs.
+func compileConditionAt(cond *Condition, path string, depth int, budget *int) error {
 	if cond == nil {
 		return nil
 	}
+	*budget++
 
 	cond.compiled = cond.compiled[:0]
 	add := func(claim, pattern string) error {
@@ -63,7 +94,7 @@ func compileCondition(cond *Condition) error {
 		}
 		re, err := compileAnchoredCondition(pattern)
 		if err != nil {
-			return fmt.Errorf("invalid pattern for %q: %w", claim, err)
+			return fmt.Errorf("%s: invalid pattern for %q: %w", path, claim, err)
 		}
 		cond.compiled = append(cond.compiled, compiledCondition{claim: claim, pattern: re})
 		return nil
@@ -101,21 +132,76 @@ func compileCondition(cond *Condition) error {
 		for i, pattern := range cond.ActorMatches {
 			re, err := compileAnchoredCondition(pattern)
 			if err != nil {
-				return fmt.Errorf("invalid actor_matches pattern %q: %w", pattern, err)
+				return fmt.Errorf("%s: invalid actor_matches pattern %q: %w", path, pattern, err)
 			}
 			cond.actorPatterns[i] = re
 		}
 	}
 
+	if err := compileGroup("all_of", cond.AllOf, path, depth, budget); err != nil {
+		return err
+	}
+	if err := compileGroup("any_of", cond.AnyOf, path, depth, budget); err != nil {
+		return err
+	}
+	return compileGroup("none_of", cond.NoneOf, path, depth, budget)
+}
+
+// compileGroup compiles one boolean group's members and rejects the two shapes
+// that would defeat the gate they appear in:
+//
+//   - an empty list (`any_of: []`) — vacuously false for any_of, vacuously true
+//     for all_of/none_of, and in neither case what the operator meant;
+//   - a member that declares no predicate (`- {}` or a null entry) — always
+//     true, so a single one makes an any_of always pass and a none_of always
+//     fail. An empty TOP-LEVEL condition stays legal (it has always meant "no
+//     gate", identical to omitting the key); only group members are rejected.
+func compileGroup(name string, nodes []*Condition, path string, depth int, budget *int) error {
+	if nodes == nil {
+		return nil
+	}
+	if len(nodes) == 0 {
+		return fmt.Errorf("%s.%s: must list at least one condition", path, name)
+	}
+	for i, child := range nodes {
+		childPath := fmt.Sprintf("%s.%s[%d]", path, name, i)
+		if child == nil {
+			return fmt.Errorf("%s: declares no predicate; an empty condition is always true and would defeat the %s it is in", childPath, name)
+		}
+		if err := compileConditionAt(child, childPath, depth+1, budget); err != nil {
+			return err
+		}
+		if conditionIsEmpty(child) {
+			return fmt.Errorf("%s: declares no predicate; an empty condition is always true and would defeat the %s it is in", childPath, name)
+		}
+	}
 	return nil
 }
 
-// cloneCondition returns a deep copy of c with fresh, unshared compiled state.
-// The input slices/maps (ActorMatches, Extra) are copied so the clone shares no
-// backing storage with c, and the derived compiled/actorPatterns fields are
+// conditionIsEmpty reports whether c gates nothing at all. Called AFTER the
+// node is compiled, so it reads the compiled form: a field set to "" is not a
+// predicate (compileConditionAt skips it), and neither is an Extra entry with
+// an empty value.
+func conditionIsEmpty(c *Condition) bool {
+	return len(c.compiled) == 0 &&
+		len(c.actorPatterns) == 0 &&
+		len(c.AllOf) == 0 &&
+		len(c.AnyOf) == 0 &&
+		len(c.NoneOf) == 0
+}
+
+// cloneCondition returns a DEEP copy of c with fresh, unshared compiled state.
+// The input slices/maps (ActorMatches, Extra) are copied, every nested group
+// member is itself cloned, and the derived compiled/actorPatterns fields are
 // reset to nil so compileCondition rebuilds them into freshly allocated memory
 // rather than reslicing a backing array another snapshot may be reading.
 // Returns nil for a nil input (a mapping with no conditions).
+//
+// The recursion is load-bearing, not tidiness: a shallow copy would leave every
+// nested node shared across snapshots, and compileConditionAt mutates each node
+// in place. A concurrent reader could then observe a nested node's compiled
+// list transiently empty — and an empty node is TRUE, so the whole gate would
+// silently pass. See TestHotReloadNestedConditionRace.
 func cloneCondition(c *Condition) *Condition {
 	if c == nil {
 		return nil
@@ -132,7 +218,25 @@ func cloneCondition(c *Condition) *Condition {
 			nc.Extra[k] = v
 		}
 	}
+	nc.AllOf = cloneConditions(c.AllOf)
+	nc.AnyOf = cloneConditions(c.AnyOf)
+	nc.NoneOf = cloneConditions(c.NoneOf)
 	return &nc
+}
+
+// cloneConditions deep-copies one group's members. It preserves the nil vs
+// empty-slice distinction: nil means the key was absent (no gate), an empty
+// non-nil slice means the operator wrote `any_of: []`, which compileGroup
+// rejects.
+func cloneConditions(in []*Condition) []*Condition {
+	if in == nil {
+		return nil
+	}
+	out := make([]*Condition, len(in))
+	for i, c := range in {
+		out[i] = cloneCondition(c)
+	}
+	return out
 }
 
 // bareWildcards are patterns that match every possible value. They must never
@@ -201,9 +305,22 @@ func claimMatches(claims map[string]any, claim string, pattern *regexp.Regexp) b
 	return valueMatches(claims[claim], pattern)
 }
 
-// satisfiesConditions reports whether claims satisfy every AND'd condition
-// (both the named-field conditions and any generic Extra entries), plus the
-// OR'd actor_matches dimension. A nil Condition always satisfies (no gate).
+// satisfiesConditions reports whether claims satisfy cond. A nil Condition
+// always satisfies (no gate).
+//
+// One node is satisfied when ALL of these hold, in short-circuit order:
+//   - every flat leaf (named fields + Extra) matches its claim;
+//   - actor_matches, if present, matches on at least one pattern (OR);
+//   - every all_of member is satisfied;
+//   - at least one any_of member is satisfied, if any_of is present;
+//   - no none_of member is satisfied.
+//
+// none_of is exact negation: a member naming an ABSENT claim cannot match, so
+// its negation holds and the none_of passes.
+//
+// The walk allocates nothing and compiles nothing — every pattern was compiled
+// at Validate() time — and its depth is bounded by the config, never by request
+// input.
 func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	if cond == nil {
 		return true
@@ -225,6 +342,31 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 			}
 		}
 		if !matched {
+			return false
+		}
+	}
+
+	for _, child := range cond.AllOf {
+		if !satisfiesConditions(child, claims) {
+			return false
+		}
+	}
+
+	if len(cond.AnyOf) > 0 {
+		matched := false
+		for _, child := range cond.AnyOf {
+			if satisfiesConditions(child, claims) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	for _, child := range cond.NoneOf {
+		if satisfiesConditions(child, claims) {
 			return false
 		}
 	}
