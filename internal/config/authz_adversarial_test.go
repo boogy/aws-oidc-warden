@@ -275,7 +275,7 @@ func TestSessionPolicyTravelsWithGrant(t *testing.T) {
 func TestSessionPolicyConditionGated(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	c := vcfg(t, []RoleMapping{
-		{Subject: "myorg/repo", Roles: []string{role}, SessionPolicy: "prod", Conditions: &Condition{Ref: "refs/heads/main"}},
+		{Subject: "myorg/repo", Roles: []string{role}, SessionPolicy: "prod", Conditions: &Condition{Ref: Patterns{"refs/heads/main"}}},
 		{Subject: "myorg/repo", Roles: []string{role}, SessionPolicy: "dev"},
 	})
 	if p, _ := c.FindSessionPolicy(vIss, "myorg/repo", role, map[string]any{"ref": "refs/heads/main"}); p == nil || *p != "prod" {
@@ -327,7 +327,7 @@ func TestConditionSemantics(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
 		Subject:    "myorg/repo",
 		Roles:      []string{role},
-		Conditions: &Condition{Ref: "refs/heads/main", EventName: "push"},
+		Conditions: &Condition{Ref: Patterns{"refs/heads/main"}, EventName: Patterns{"push"}},
 	}})
 	ok := func(claims map[string]any) bool {
 		m, _ := c.AuthorizeRoles(vIss, "myorg/repo", claims)
@@ -383,7 +383,7 @@ func TestTypoedConditionKeyFailsClosed(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
 		Subject:    "myorg/repo",
 		Roles:      []string{"arn:aws:iam::111111111111:role/r"},
-		Conditions: &Condition{Extra: map[string]string{"event-name": "push"}}, // typo: dash not underscore
+		Conditions: &Condition{Claims: map[string]Patterns{"event-name": {"push"}}}, // typo: dash not underscore
 	}})
 	if m, _ := c.AuthorizeRoles(vIss, "myorg/repo", map[string]any{"event_name": "push"}); m {
 		t.Error("FAIL-OPEN: a typo'd condition key was silently ignored")
@@ -394,7 +394,7 @@ func TestActorMatchesIsOrAndAnded(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
 		Subject:    "myorg/repo",
 		Roles:      []string{"arn:aws:iam::111111111111:role/r"},
-		Conditions: &Condition{ActorMatches: []string{"alice", "bob"}, EventName: "push"},
+		Conditions: &Condition{ActorMatches: Patterns{"alice", "bob"}, EventName: Patterns{"push"}},
 	}})
 	ok := func(claims map[string]any) bool {
 		m, _ := c.AuthorizeRoles(vIss, "myorg/repo", claims)
@@ -421,7 +421,7 @@ func TestPermissiveConditionPatternsRejected(t *testing.T) {
 			RoleSessionName: "test",
 			RoleMappings: []RoleMapping{{
 				Subject: "myorg/repo", Roles: []string{"arn:aws:iam::111111111111:role/r"},
-				Conditions: &Condition{Ref: p},
+				Conditions: &Condition{Ref: Patterns{p}},
 			}},
 		}
 		err := c.Validate()

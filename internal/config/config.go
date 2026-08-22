@@ -602,7 +602,7 @@ func (c *Config) LoadConfig() error {
 		}
 	}
 
-	if err := viper.Unmarshal(c); err != nil {
+	if err := viper.Unmarshal(c, decoderOptions()...); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
@@ -658,7 +658,7 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 		c.Issuers = nil
 	}
 
-	if err := v.Unmarshal(c); err != nil {
+	if err := v.Unmarshal(c, decoderOptions()...); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}
 
@@ -899,6 +899,15 @@ func (c *Config) Validate() error {
 	// re-expand from their source, never from a previously-expanded state.
 	c.effective = make([]*RoleMapping, 0, len(c.RoleMappings))
 
+	// Claim vocabulary per issuer, for the unknown-claim warning below. Built
+	// once here rather than per mapping.
+	knownClaims := make(map[string]map[string]bool, len(c.Issuers))
+	for i := range c.Issuers {
+		if known := knownClaimsFor(&c.Issuers[i]); known != nil {
+			knownClaims[c.Issuers[i].Issuer] = known
+		}
+	}
+
 	appendEffective := func(m RoleMapping, source string, i int) error {
 		if m.Subject == "" || len(m.Roles) == 0 {
 			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
@@ -943,6 +952,11 @@ func (c *Config) Validate() error {
 		if err := compileCondition(m.Conditions); err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
 		}
+
+		// Advisory only, and deliberately after compilation: a deprecated key
+		// or an unknown claim name is a config smell, never an authorization
+		// failure. See condition_warnings.go.
+		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, m.Subject), knownClaims[m.Issuer])
 
 		m.order = len(c.effective)
 		c.effective = append(c.effective, &m)

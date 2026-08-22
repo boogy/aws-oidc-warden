@@ -30,7 +30,7 @@ func authorizes(cfg *Config, claims map[string]any) bool {
 // matches on the anchored pattern, an array claim matches when ANY string
 // element does, and every other shape denies.
 func TestClaimMatches_ArrayClaims(t *testing.T) {
-	cfg := condCfg(t, &Condition{Extra: map[string]string{"groups": "team-a"}})
+	cfg := condCfg(t, &Condition{Claims: map[string]Patterns{"groups": {"team-a"}}})
 
 	cases := []struct {
 		name   string
@@ -65,7 +65,7 @@ func TestClaimMatches_ArrayClaims(t *testing.T) {
 // through the same leaf matcher, so an array-valued actor claim behaves like
 // every other array claim rather than through a second, divergent code path.
 func TestClaimMatches_ActorMatchesUsesTheSameMatcher(t *testing.T) {
-	cfg := condCfg(t, &Condition{ActorMatches: []string{"release-bot", "alice"}})
+	cfg := condCfg(t, &Condition{ActorMatches: Patterns{"release-bot", "alice"}})
 
 	cases := []struct {
 		name   string
@@ -93,8 +93,8 @@ func TestClaimMatches_ActorMatchesUsesTheSameMatcher(t *testing.T) {
 func TestAnyOf(t *testing.T) {
 	cfg := condCfg(t, &Condition{
 		AnyOf: []*Condition{
-			{EventName: "push", Ref: "refs/heads/main"},
-			{EventName: "workflow_dispatch"},
+			{EventName: Patterns{"push"}, Ref: Patterns{"refs/heads/main"}},
+			{EventName: Patterns{"workflow_dispatch"}},
 		},
 	})
 
@@ -124,8 +124,8 @@ func TestAnyOf(t *testing.T) {
 func TestAllOf(t *testing.T) {
 	cfg := condCfg(t, &Condition{
 		AllOf: []*Condition{
-			{RefType: "tag"},
-			{Ref: `refs/tags/v[0-9]+\.[0-9]+\.[0-9]+`},
+			{RefType: Patterns{"tag"}},
+			{Ref: Patterns{`refs/tags/v[0-9]+\.[0-9]+\.[0-9]+`}},
 		},
 	})
 
@@ -155,8 +155,8 @@ func TestAllOf(t *testing.T) {
 func TestNoneOf(t *testing.T) {
 	cfg := condCfg(t, &Condition{
 		NoneOf: []*Condition{
-			{Environment: "sandbox"},
-			{EventName: "pull_request"},
+			{Environment: Patterns{"sandbox"}},
+			{EventName: Patterns{"pull_request"}},
 		},
 	})
 
@@ -188,13 +188,13 @@ func TestNoneOf(t *testing.T) {
 // its exact meaning.
 func TestTopLevelStaysImplicitAnd(t *testing.T) {
 	cfg := condCfg(t, &Condition{
-		RefType: "tag", // flat leaf, AND'd with everything below
+		RefType: Patterns{"tag"}, // flat leaf, AND'd with everything below
 		AnyOf: []*Condition{
-			{Ref: `refs/tags/v[0-9]+\.[0-9]+\.[0-9]+`},
-			{Ref: `refs/tags/hotfix-.+`},
+			{Ref: Patterns{`refs/tags/v[0-9]+\.[0-9]+\.[0-9]+`}},
+			{Ref: Patterns{`refs/tags/hotfix-.+`}},
 		},
 		NoneOf: []*Condition{
-			{Environment: "sandbox"},
+			{Environment: Patterns{"sandbox"}},
 		},
 	})
 
@@ -226,16 +226,16 @@ func TestNestedGroups(t *testing.T) {
 	cfg := condCfg(t, &Condition{
 		AnyOf: []*Condition{
 			{AllOf: []*Condition{
-				{EventName: "push"},
-				{Ref: "refs/heads/main"},
+				{EventName: Patterns{"push"}},
+				{Ref: Patterns{"refs/heads/main"}},
 			}},
 			{AllOf: []*Condition{
-				{EventName: "workflow_dispatch"},
-				{ActorMatches: []string{"release-bot", "alice"}},
-				{NoneOf: []*Condition{{Ref: "refs/heads/wip-.+"}}},
+				{EventName: Patterns{"workflow_dispatch"}},
+				{ActorMatches: Patterns{"release-bot", "alice"}},
+				{NoneOf: []*Condition{{Ref: Patterns{"refs/heads/wip-.+"}}}},
 			}},
 		},
-		NoneOf: []*Condition{{Environment: "sandbox"}},
+		NoneOf: []*Condition{{Environment: Patterns{"sandbox"}}},
 	})
 
 	cases := []struct {
@@ -272,8 +272,8 @@ func TestGroupsGateSessionPolicyAndSessionName(t *testing.T) {
 		SessionPolicy:   `{"Version":"2012-10-17","Statement":[]}`,
 		RoleSessionName: "acme-app",
 		Conditions: &Condition{AnyOf: []*Condition{
-			{EventName: "push"},
-			{EventName: "workflow_dispatch"},
+			{EventName: Patterns{"push"}},
+			{EventName: Patterns{"workflow_dispatch"}},
 		}},
 	}})
 
@@ -327,14 +327,14 @@ func TestValidate_RejectsDefeatedGroups(t *testing.T) {
 		{"empty any_of list", &Condition{AnyOf: []*Condition{}}, true},
 		{"empty all_of list", &Condition{AllOf: []*Condition{}}, true},
 		{"empty none_of list", &Condition{NoneOf: []*Condition{}}, true},
-		{"empty member in any_of", &Condition{AnyOf: []*Condition{{EventName: "push"}, {}}}, true},
+		{"empty member in any_of", &Condition{AnyOf: []*Condition{{EventName: Patterns{"push"}}, {}}}, true},
 		{"nil member in any_of", &Condition{AnyOf: []*Condition{nil}}, true},
-		{"member whose only field is empty", &Condition{AnyOf: []*Condition{{EventName: ""}}}, true},
-		{"member whose only Extra value is empty", &Condition{AnyOf: []*Condition{{Extra: map[string]string{"x": ""}}}}, true},
-		{"bare wildcard leaf nested two levels deep", &Condition{AnyOf: []*Condition{{AllOf: []*Condition{{EventName: ".*"}}}}}, true},
-		{"bare wildcard in a nested actor_matches", &Condition{NoneOf: []*Condition{{ActorMatches: []string{".+"}}}}, true},
-		{"invalid regex nested", &Condition{AnyOf: []*Condition{{Ref: "refs/heads/("}}}, true},
-		{"valid nested group", &Condition{AnyOf: []*Condition{{EventName: "push"}, {EventName: "workflow_dispatch"}}}, false},
+		{"member whose only pattern is empty", &Condition{AnyOf: []*Condition{{EventName: Patterns{""}}}}, true},
+		{"member whose only generic claim pattern is empty", &Condition{AnyOf: []*Condition{{Claims: map[string]Patterns{"x": {""}}}}}, true},
+		{"bare wildcard leaf nested two levels deep", &Condition{AnyOf: []*Condition{{AllOf: []*Condition{{EventName: Patterns{".*"}}}}}}, true},
+		{"bare wildcard in a nested actor_matches", &Condition{NoneOf: []*Condition{{ActorMatches: Patterns{".+"}}}}, true},
+		{"invalid regex nested", &Condition{AnyOf: []*Condition{{Ref: Patterns{"refs/heads/("}}}}, true},
+		{"valid nested group", &Condition{AnyOf: []*Condition{{EventName: Patterns{"push"}}, {EventName: Patterns{"workflow_dispatch"}}}}, false},
 		{"empty top-level condition stays legal", &Condition{}, false},
 	}
 
@@ -356,8 +356,8 @@ func TestValidate_RejectsDefeatedGroups(t *testing.T) {
 func TestValidate_ErrorNamesTheOffendingNode(t *testing.T) {
 	err := validateCond(&Condition{
 		AnyOf: []*Condition{
-			{EventName: "push"},
-			{AllOf: []*Condition{{EventName: "push"}, {Ref: ".*"}}},
+			{EventName: Patterns{"push"}},
+			{AllOf: []*Condition{{EventName: Patterns{"push"}}, {Ref: Patterns{".*"}}}},
 		},
 	})
 	if err == nil {
@@ -394,33 +394,33 @@ func TestNestedConditionsDecodeFromYAML(t *testing.T) {
 	require.NoError(t, v.ReadConfig(strings.NewReader(nestedConditionYAML)))
 
 	var c Config
-	require.NoError(t, v.Unmarshal(&c))
+	require.NoError(t, v.Unmarshal(&c, decoderOptions()...))
 	require.Len(t, c.RoleMappings, 1)
 
 	cond := c.RoleMappings[0].Conditions
 	require.NotNil(t, cond)
-	require.Equal(t, "tag", cond.RefType)
-	require.Equal(t, "[0-9a-f]{40}", cond.Extra["sha"], "generic claim predicates must still land in Extra")
-	require.NotContains(t, cond.Extra, "any_of", "group keys must not be swallowed by the remain-map")
-	require.NotContains(t, cond.Extra, "none_of", "group keys must not be swallowed by the remain-map")
+	require.Equal(t, Patterns{"tag"}, cond.RefType)
+	require.Equal(t, Patterns{"[0-9a-f]{40}"}, cond.Claims["sha"], "generic claim predicates must still land in the remain-map")
+	require.NotContains(t, cond.Claims, "any_of", "group keys must not be swallowed by the remain-map")
+	require.NotContains(t, cond.Claims, "none_of", "group keys must not be swallowed by the remain-map")
 	require.Len(t, cond.AnyOf, 2)
-	require.Equal(t, "push", cond.AnyOf[0].EventName)
+	require.Equal(t, Patterns{"push"}, cond.AnyOf[0].EventName)
 	require.Len(t, cond.AnyOf[1].AllOf, 2)
-	require.Equal(t, []string{"release-bot"}, cond.AnyOf[1].AllOf[1].ActorMatches)
+	require.Equal(t, Patterns{"release-bot"}, cond.AnyOf[1].AllOf[1].ActorMatches)
 	require.Len(t, cond.NoneOf, 1)
-	require.Equal(t, "sandbox", cond.NoneOf[0].Environment)
+	require.Equal(t, Patterns{"sandbox"}, cond.NoneOf[0].Environment)
 }
 
 // TestNestedConditionsSurviveJSONClone proves the hot-reload path preserves the
 // tree. Provider.refreshLocked deep-copies Config through cloneConfig's JSON
 // round trip and re-Validates, so the recursive []*Condition structure and the
-// Extra remain-map must both survive marshal/unmarshal for a nested gate to
+// Claims remain-map must both survive marshal/unmarshal for a nested gate to
 // keep gating after a reload.
 //
 // Note what would and would NOT break this: encoding/json falls back to the
 // field NAME for an exported field with no tag, so omitting `json:"any_of"` is
 // a style bug, not a dropped gate. What drops a gate is `json:"-"` (as on the
-// unexported compiled/actorPatterns caches, deliberately) or an unexported
+// unexported compiled cache, deliberately) or an unexported
 // field. This test pins the round trip end-to-end rather than the tags.
 func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 	const role = "arn:aws:iam::111111111111:role/app"
@@ -437,9 +437,9 @@ func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 			Subject: "acme/app",
 			Roles:   []string{role},
 			Conditions: &Condition{
-				AnyOf:  []*Condition{{EventName: "push"}, {EventName: "workflow_dispatch"}},
-				NoneOf: []*Condition{{Environment: "sandbox"}},
-				Extra:  map[string]string{"sha": "[0-9a-f]{40}"},
+				AnyOf:  []*Condition{{EventName: Patterns{"push"}}, {EventName: Patterns{"workflow_dispatch"}}},
+				NoneOf: []*Condition{{Environment: Patterns{"sandbox"}}},
+				Claims: map[string]Patterns{"sha": {"[0-9a-f]{40}"}},
 			},
 		}},
 	}
@@ -468,7 +468,7 @@ func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 // nestCondition builds a chain of all_of groups depth levels deep, with a real
 // leaf predicate at the innermost node. nestCondition(1) is a bare leaf.
 func nestCondition(depth int) *Condition {
-	c := &Condition{EventName: "push"}
+	c := &Condition{EventName: Patterns{"push"}}
 	for i := 1; i < depth; i++ {
 		c = &Condition{AllOf: []*Condition{c}}
 	}
@@ -510,7 +510,7 @@ func TestValidate_RejectsTooManyNodes(t *testing.T) {
 	build := func(members int) *Condition {
 		nodes := make([]*Condition, members)
 		for i := range nodes {
-			nodes[i] = &Condition{EventName: "push"}
+			nodes[i] = &Condition{EventName: Patterns{"push"}}
 		}
 		return &Condition{AnyOf: nodes}
 	}
@@ -536,24 +536,24 @@ func TestNestedConditionIndexParity(t *testing.T) {
 			Subject: "acme/app",
 			Roles:   []string{"arn:aws:iam::111111111111:role/app"},
 			Conditions: &Condition{AnyOf: []*Condition{
-				{EventName: "push", Ref: "refs/heads/main"},
-				{EventName: "workflow_dispatch"},
+				{EventName: Patterns{"push"}, Ref: Patterns{"refs/heads/main"}},
+				{EventName: Patterns{"workflow_dispatch"}},
 			}},
 		},
 		{ // byOwner bucket
 			Subject: `acme/service-.+`,
 			Roles:   []string{"arn:aws:iam::111111111111:role/service"},
 			Conditions: &Condition{
-				RefType: "tag",
-				NoneOf:  []*Condition{{Environment: "sandbox"}},
+				RefType: Patterns{"tag"},
+				NoneOf:  []*Condition{{Environment: Patterns{"sandbox"}}},
 			},
 		},
 		{ // "any" bucket (top-level alternation has no literal prefix)
 			Subject: `acme/app|other/app`,
 			Roles:   []string{"arn:aws:iam::111111111111:role/either"},
 			Conditions: &Condition{AllOf: []*Condition{
-				{EventName: "push"},
-				{AnyOf: []*Condition{{Ref: "refs/heads/main"}, {Ref: "refs/heads/release"}}},
+				{EventName: Patterns{"push"}},
+				{AnyOf: []*Condition{{Ref: Patterns{"refs/heads/main"}}, {Ref: Patterns{"refs/heads/release"}}}},
 			}},
 		},
 	}

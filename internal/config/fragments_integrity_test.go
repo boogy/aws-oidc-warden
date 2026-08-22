@@ -135,7 +135,7 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 		RoleSets:        map[string][]string{"prod": {"arn:aws:iam::111111111111:role/prod"}},
 		RoleMappings: []RoleMapping{
 			{Subject: "o/r", Roles: []string{"@prod"}, SessionPolicyFile: "p.json",
-				Conditions: &Condition{Branch: "main", Extra: map[string]string{"custom": "v"}}},
+				Conditions: &Condition{Branch: Patterns{"main"}, Claims: map[string]Patterns{"custom": {"v"}}}},
 		},
 		TagAuth:                 &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "acme", TransitiveSessionTags: true},
 		CrossAccount:            &CrossAccount{Enabled: true, SpokeRoleName: "aow-spoke", ExternalID: "eid", AllowedAccounts: []string{"222222222222"}},

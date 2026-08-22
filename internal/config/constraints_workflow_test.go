@@ -32,7 +32,7 @@ func TestWorkflowRefConstraint_Anchored(t *testing.T) {
 				RoleMappings: []RoleMapping{{
 					Subject:    "org/repo",
 					Roles:      []string{"arn:aws:iam::111111111111:role/app"},
-					Conditions: &Condition{WorkflowRef: tc.workflowRef},
+					Conditions: &Condition{WorkflowRef: Patterns{tc.workflowRef}},
 				}},
 			}
 			require.NoError(t, cfg.Validate())

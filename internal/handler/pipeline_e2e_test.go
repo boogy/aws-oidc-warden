@@ -148,7 +148,7 @@ func TestPipeline_DenyPathsNeverReachSTS(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{{
 		Subject: "myorg/repo", Roles: []string{role},
-		Conditions: &config.Condition{Ref: "refs/heads/main"},
+		Conditions: &config.Condition{Ref: config.Patterns{"refs/heads/main"}},
 	}})
 
 	cases := []struct {

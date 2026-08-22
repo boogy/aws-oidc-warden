@@ -135,7 +135,7 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 		RoleMappings: []config.RoleMapping{{
 			Subject:    "acme/api",
 			Roles:      []string{"arn:aws:iam::111111111111:role/app"},
-			Conditions: &config.Condition{Branch: "main"}, // requires ref == main
+			Conditions: &config.Condition{Branch: config.Patterns{"main"}}, // requires ref == main
 		}},
 	}
 	require.NoError(t, cfg.Validate())

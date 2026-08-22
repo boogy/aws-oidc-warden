@@ -12,32 +12,39 @@ import (
 // the authorization gate can be read in one sitting.
 
 // Condition defines claim predicates that must be met for a role to be
-// assumed. The named fields below are provider-neutral sugar over the same
-// generic mechanism: each compiles to an auto-anchored regex checked against
-// one raw verified claim (see compileCondition/satisfiesConditions). Extra
-// carries arbitrary claimName->regex entries not covered by a named field,
-// so `conditions: {my_claim: "regex"}` works without a nested key.
+// assumed. There is ONE mechanism: every key under `conditions:` other than
+// the three reserved boolean groups names a raw verified claim, and its value
+// is one regex pattern or a list of patterns OR'd together. Keys are spelled
+// exactly like the claim they check (`repository`, `actor`, `project_path`,
+// `groups`), which is what makes the same syntax work for GitHub and for any
+// other issuer without new struct fields.
+//
+// The named fields below exist only so the most common GitHub claims are
+// discoverable in code and docs; they compile to exactly what an entry in
+// Claims compiles to. The three deprecated keys are the one exception — they
+// are spelled differently from the claim they check, which is why they are
+// deprecated (see deprecatedConditionKeys).
 type Condition struct {
-	Branch       string   `mapstructure:"branch"        json:"branch,omitempty"`        // Regex against the 'ref' claim (e.g., "main", "dev")
-	Ref          string   `mapstructure:"ref"           json:"ref,omitempty"`           // Regex against the 'ref' claim (e.g., "refs/heads/main", "refs/tags/v.*")
-	RefType      string   `mapstructure:"ref_type"      json:"ref_type,omitempty"`      // Regex against 'ref_type' (e.g., "branch", "tag")
-	EventName    string   `mapstructure:"event_name"    json:"event_name,omitempty"`    // Regex against 'event_name' (e.g., "push", "pull_request")
-	WorkflowRef  string   `mapstructure:"workflow_ref"  json:"workflow_ref,omitempty"`  // Regex against 'workflow_ref' (e.g., "owner/repo/.github/workflows/workflow.yml")
-	Environment  string   `mapstructure:"environment"   json:"environment,omitempty"`   // Regex against 'runner_environment' (e.g., "production")
-	ActorMatches []string `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // Regexes against 'actor'; OR within the list
+	Ref         Patterns `mapstructure:"ref"          json:"ref,omitempty"`          // Patterns against the 'ref' claim (e.g., "refs/heads/main", "refs/tags/v.*")
+	RefType     Patterns `mapstructure:"ref_type"     json:"ref_type,omitempty"`     // Patterns against 'ref_type' (e.g., "branch", "tag")
+	EventName   Patterns `mapstructure:"event_name"   json:"event_name,omitempty"`   // Patterns against 'event_name' (e.g., "push", "pull_request")
+	WorkflowRef Patterns `mapstructure:"workflow_ref" json:"workflow_ref,omitempty"` // Patterns against 'workflow_ref' (e.g., "owner/repo/.github/workflows/release.yml@.*")
+
+	// Deprecated keys. Each keeps its exact pre-2.5.0 meaning; Validate()
+	// warns and names the replacement. See deprecatedConditionKeys.
+	Branch       Patterns `mapstructure:"branch"        json:"branch,omitempty"`        // Deprecated: use `ref` (checks the same 'ref' claim)
+	Environment  Patterns `mapstructure:"environment"   json:"environment,omitempty"`   // Deprecated: use `runner_environment` (the claim it actually checks)
+	ActorMatches Patterns `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // Deprecated: use `actor` (a list is OR'd there too)
 
 	// Boolean groups. Each holds nested conditions evaluated with its own
 	// operator; all three are AND'd with the flat fields above and with each
 	// other on the same node, so the top level stays an implicit AND and every
 	// pre-existing config keeps its exact meaning.
 	//
-	// These three keys are RESERVED under `conditions:`. Extra is a
+	// These three keys are RESERVED under `conditions:`. Claims is a
 	// mapstructure remain-map, so it only ever collected keys no field claimed;
-	// a raw claim literally named "all_of"/"any_of"/"none_of" now decodes as a
-	// group instead. The only shape that previously worked was a STRING value
-	// (Extra is map[string]string and the package registers no decode hooks or
-	// WeaklyTypedInput, so a list value never decoded at all) — and such a
-	// config now fails to decode loudly rather than changing meaning silently.
+	// a raw claim literally named "all_of"/"any_of"/"none_of" decodes as a
+	// group instead.
 	//
 	// all_of/any_of/none_of plus nesting is functionally complete (any boolean
 	// expression is expressible as nested any_of-of-all_of), which is why there
@@ -46,21 +53,21 @@ type Condition struct {
 	AnyOf  []*Condition `mapstructure:"any_of"  json:"any_of,omitempty"`  // at least one member must be satisfied
 	NoneOf []*Condition `mapstructure:"none_of" json:"none_of,omitempty"` // no member may be satisfied
 
-	// Extra holds generic claimName->regex entries (raw verified claim names)
-	// not covered by a named field above. Populated via mapstructure's
-	// remain-fields so no nested key is required in config.
-	Extra map[string]string `mapstructure:",remain" json:"extra,omitempty"`
+	// Claims holds every claimName->patterns entry not covered by a named
+	// field above, keyed by the RAW verified claim name. Populated via
+	// mapstructure's remain-fields, so `conditions: {project_path: "grp/prj"}`
+	// works with no nested key and no provider-specific schema.
+	Claims map[string]Patterns `mapstructure:",remain" json:"claims,omitempty"`
 
-	// Cached compiled patterns (not serialized)
-	compiled      []compiledCondition `mapstructure:"-" json:"-"` // AND'd claimName/pattern pairs (named single-value fields + Extra)
-	actorPatterns []*regexp.Regexp    `mapstructure:"-" json:"-"` // OR'd within this one dimension
+	// Cached compiled patterns (not serialized): one entry per claim, AND'd.
+	compiled []compiledCondition `mapstructure:"-" json:"-"`
 }
 
-// compiledCondition is one AND'd (claim name, anchored pattern) pair compiled
-// from either a named Condition field or an Extra entry.
+// compiledCondition is one claim's compiled predicate: the anchored patterns
+// are OR'd with each other, and every compiledCondition on a node is AND'd.
 type compiledCondition struct {
-	claim   string
-	pattern *regexp.Regexp
+	claim    string
+	patterns []*regexp.Regexp
 }
 
 const (
@@ -113,53 +120,56 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 	}
 
 	cond.compiled = cond.compiled[:0]
-	add := func(claim, pattern string) error {
-		if pattern == "" {
+	// key is the config key being compiled and claim the raw verified claim it
+	// checks; the two differ only for the deprecated keys, and errors quote the
+	// key the operator actually wrote.
+	add := func(key, claim string, patterns Patterns) error {
+		if patterns == nil {
 			return nil
 		}
-		re, err := compileAnchoredCondition(pattern)
-		if err != nil {
-			return fmt.Errorf("%s: invalid pattern for %q: %w", path, claim, err)
+		if len(patterns) == 0 {
+			return fmt.Errorf("%s: %q must list at least one pattern", path, key)
 		}
-		cond.compiled = append(cond.compiled, compiledCondition{claim: claim, pattern: re})
+		compiled := make([]*regexp.Regexp, 0, len(patterns))
+		for _, pattern := range patterns {
+			re, err := compileAnchoredCondition(pattern)
+			if err != nil {
+				return fmt.Errorf("%s: invalid pattern for %q: %w", path, key, err)
+			}
+			compiled = append(compiled, re)
+		}
+		cond.compiled = append(cond.compiled, compiledCondition{claim: claim, patterns: compiled})
 		return nil
 	}
 
-	// NOTE: Branch and Ref intentionally both check the raw "ref" claim; this
-	// mirrors pre-existing behavior.
-	if err := add("ref", cond.Branch); err != nil {
+	// NOTE: `branch` and `ref` intentionally both check the raw "ref" claim,
+	// and `environment` checks "runner_environment"; this mirrors pre-existing
+	// behavior. Both spellings on one node are AND'd like any two claims.
+	if err := add("branch", "ref", cond.Branch); err != nil {
 		return err
 	}
-	if err := add("ref", cond.Ref); err != nil {
+	if err := add("ref", "ref", cond.Ref); err != nil {
 		return err
 	}
-	if err := add("ref_type", cond.RefType); err != nil {
+	if err := add("ref_type", "ref_type", cond.RefType); err != nil {
 		return err
 	}
-	if err := add("event_name", cond.EventName); err != nil {
+	if err := add("event_name", "event_name", cond.EventName); err != nil {
 		return err
 	}
-	if err := add("workflow_ref", cond.WorkflowRef); err != nil {
+	if err := add("workflow_ref", "workflow_ref", cond.WorkflowRef); err != nil {
 		return err
 	}
-	if err := add("runner_environment", cond.Environment); err != nil {
+	if err := add("environment", "runner_environment", cond.Environment); err != nil {
+		return err
+	}
+	if err := add("actor_matches", "actor", cond.ActorMatches); err != nil {
 		return err
 	}
 
-	for claim, pattern := range cond.Extra {
-		if err := add(claim, pattern); err != nil {
+	for claim, patterns := range cond.Claims {
+		if err := add(claim, claim, patterns); err != nil {
 			return err
-		}
-	}
-
-	if len(cond.ActorMatches) > 0 {
-		cond.actorPatterns = make([]*regexp.Regexp, len(cond.ActorMatches))
-		for i, pattern := range cond.ActorMatches {
-			re, err := compileAnchoredCondition(pattern)
-			if err != nil {
-				return fmt.Errorf("%s: invalid actor_matches pattern %q: %w", path, pattern, err)
-			}
-			cond.actorPatterns[i] = re
 		}
 	}
 
@@ -204,22 +214,21 @@ func compileGroup(name string, nodes []*Condition, path string, depth int, budge
 }
 
 // conditionIsEmpty reports whether c gates nothing at all. Called AFTER the
-// node is compiled, so it reads the compiled form: a field set to "" is not a
-// predicate (compileConditionAt skips it), and neither is an Extra entry with
-// an empty value.
+// node is compiled, so it reads the compiled form: an absent key is not a
+// predicate, and an empty pattern list never compiles (compileConditionAt
+// rejects it).
 func conditionIsEmpty(c *Condition) bool {
 	return len(c.compiled) == 0 &&
-		len(c.actorPatterns) == 0 &&
 		len(c.AllOf) == 0 &&
 		len(c.AnyOf) == 0 &&
 		len(c.NoneOf) == 0
 }
 
 // cloneCondition returns a DEEP copy of c with fresh, unshared compiled state.
-// The input slices/maps (ActorMatches, Extra) are copied, every nested group
-// member is itself cloned, and the derived compiled/actorPatterns fields are
-// reset to nil so compileCondition rebuilds them into freshly allocated memory
-// rather than reslicing a backing array another snapshot may be reading.
+// The input pattern lists and the Claims map are copied, every nested group
+// member is itself cloned, and the derived compiled field is reset to nil so
+// compileCondition rebuilds it into freshly allocated memory rather than
+// reslicing a backing array another snapshot may be reading.
 // Returns nil for a nil input (a mapping with no conditions).
 //
 // The recursion is load-bearing, not tidiness: a shallow copy would leave every
@@ -233,14 +242,17 @@ func cloneCondition(c *Condition) *Condition {
 	}
 	nc := *c
 	nc.compiled = nil
-	nc.actorPatterns = nil
-	if c.ActorMatches != nil {
-		nc.ActorMatches = append([]string(nil), c.ActorMatches...)
-	}
-	if c.Extra != nil {
-		nc.Extra = make(map[string]string, len(c.Extra))
-		for k, v := range c.Extra {
-			nc.Extra[k] = v
+	nc.Ref = clonePatterns(c.Ref)
+	nc.RefType = clonePatterns(c.RefType)
+	nc.EventName = clonePatterns(c.EventName)
+	nc.WorkflowRef = clonePatterns(c.WorkflowRef)
+	nc.Branch = clonePatterns(c.Branch)
+	nc.Environment = clonePatterns(c.Environment)
+	nc.ActorMatches = clonePatterns(c.ActorMatches)
+	if c.Claims != nil {
+		nc.Claims = make(map[string]Patterns, len(c.Claims))
+		for k, v := range c.Claims {
+			nc.Claims[k] = clonePatterns(v)
 		}
 	}
 	nc.AllOf = cloneConditions(c.AllOf)
@@ -261,6 +273,20 @@ func cloneConditions(in []*Condition) []*Condition {
 	for i, c := range in {
 		out[i] = cloneCondition(c)
 	}
+	return out
+}
+
+// clonePatterns copies one claim's pattern list, preserving the nil vs
+// empty-slice distinction (nil means the key was absent; an empty non-nil
+// slice means the operator wrote `ref: []`, which compileConditionAt rejects).
+func clonePatterns(in Patterns) Patterns {
+	if in == nil {
+		return nil
+	}
+	// make+copy, not append(nil, ...): appending zero elements to a nil slice
+	// yields nil, which would turn a rejected `ref: []` into an absent key.
+	out := make(Patterns, len(in))
+	copy(out, in)
 	return out
 }
 
@@ -322,20 +348,25 @@ func valueMatches(v any, pattern *regexp.Regexp) bool {
 	}
 }
 
-// claimMatches looks the named claim up and applies valueMatches. Call sites
-// that check several patterns against the SAME claim (actor_matches) should
-// hoist the lookup and call valueMatches directly instead of calling this in a
-// loop, so the map lookup and the type switch happen once.
-func claimMatches(claims map[string]any, claim string, pattern *regexp.Regexp) bool {
-	return valueMatches(claims[claim], pattern)
+// claimMatches looks the named claim up and reports whether ANY of the entry's
+// patterns match it. The lookup is hoisted out of the pattern loop so the map
+// access happens once per claim, not once per pattern.
+func claimMatches(claims map[string]any, cc compiledCondition) bool {
+	v := claims[cc.claim]
+	for _, pattern := range cc.patterns {
+		if valueMatches(v, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // satisfiesConditions reports whether claims satisfy cond. A nil Condition
 // always satisfies (no gate).
 //
 // One node is satisfied when ALL of these hold, in short-circuit order:
-//   - every flat leaf (named fields + Extra) matches its claim;
-//   - actor_matches, if present, matches on at least one pattern (OR);
+//   - every flat leaf matches its claim on at least one of its patterns
+//     (OR within one claim's list, AND across claims);
 //   - every all_of member is satisfied;
 //   - at least one any_of member is satisfied, if any_of is present;
 //   - no none_of member is satisfied.
@@ -352,21 +383,7 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	}
 
 	for _, cc := range cond.compiled {
-		if !claimMatches(claims, cc.claim, cc.pattern) {
-			return false
-		}
-	}
-
-	if len(cond.actorPatterns) > 0 {
-		actor := claims["actor"] // hoisted: one lookup + one type switch, as today
-		matched := false
-		for _, pattern := range cond.actorPatterns {
-			if valueMatches(actor, pattern) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		if !claimMatches(claims, cc) {
 			return false
 		}
 	}

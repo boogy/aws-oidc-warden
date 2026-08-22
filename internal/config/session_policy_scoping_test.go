@@ -75,7 +75,7 @@ func TestFindSessionPolicy_ConditionsGateThePolicy(t *testing.T) {
 		RoleMappings: []RoleMapping{
 			// order 0: grants role but only on refs/heads/main, with a policy.
 			{Subject: "acme/app", Roles: []string{role}, SessionPolicy: mainOnly,
-				Conditions: &Condition{Ref: "refs/heads/main"}},
+				Conditions: &Condition{Ref: Patterns{"refs/heads/main"}}},
 			// order 1: grants role on any branch, no policy.
 			{Subject: "acme/app", Roles: []string{role}},
 		},
