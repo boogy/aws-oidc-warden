@@ -210,7 +210,8 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 - An empty group (`any_of: []`) is rejected — it reduces the gate to a constant.
 - A group member that gates nothing (`- {}`) is rejected — an always-true member makes an `any_of` always pass and a `none_of` always fail. An empty top-level `conditions: {}` stays legal; it has always meant "no gate".
 - The bare-wildcard rejection (`.*`, `.+`) applies at every nesting level, exactly as it does at the top.
-- Errors name the offending node by path, e.g. `conditions.any_of[1].all_of[0]: invalid pattern for "ref"`.
+- A key that names no claim (`"": "pattern"`) is rejected — it reads as a gate but can never match any claim.
+- Errors name the offending node by path, e.g. `conditions.any_of[1].all_of[0]: invalid pattern for "ref"`. When a block has more than one bad entry, the reported one is stable across restarts (claim keys are compiled in sorted order).
 
 **Semantics to know:**
 
@@ -218,6 +219,8 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 - **A missing or wrong-typed claim never satisfies a positive predicate.** Absent, `null`, number, bool, and object claims all fail to match, so a condition on one denies.
 - **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Non-string elements are ignored. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra. Note the two lists are independent: a list of *patterns* is satisfied when any pattern matches, and a list-valued *claim* is matched when any element matches.
 - **An empty pattern (`ref: ""`) or an empty list (`ref: []`) is rejected at load time.** Both read as a predicate but gate nothing; before v3.0.0 an empty string was silently ignored.
+- **Claim keys are matched lowercase.** The config loader folds every key to lower case before it is read, so a claim whose name has upper-case letters (`emailVerified`) becomes `emailverified` and can never match the claim the token actually carries. This is fail-closed — the mapping denies rather than over-grants — but it means a mixed-case claim is not gateable by name. Gate on a different claim the same token carries, or have the issuer emit a lower-case alias.
+- **Pattern values are coerced to strings.** A YAML scalar written unquoted (`ref: 123`, `ref: true`) is decoded as the pattern `123` / `1`, not rejected. Always quote patterns.
 - **`all_of`, `any_of`, `none_of`, and `claims` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it at the top level — it parses as a boolean group (or as the `claims:` block), and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nest it under `claims:` instead, whose keys are always claim names. Nothing else changes about generic claim predicates.
 
 Authorization is evaluated by `Config.AuthorizeRoles(issuer, subject, claims)`, which unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping. `Config.FindSessionPolicy(issuer, subject, role, claims)` then picks the session policy using the **same** match semantics, so a role's scoping policy always travels with the grant: the policy comes from a mapping that matches the subject, satisfies its conditions, **and** lists the role being assumed. Where several mappings qualify, the first-declared (config order) wins.

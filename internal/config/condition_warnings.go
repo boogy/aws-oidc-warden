@@ -99,7 +99,7 @@ func warnConditionKeys(cond *Condition, path, where string, known map[string]boo
 // warnUnknownClaims flags a claim name the issuer does not issue — a typo that
 // denies silently. prefix is the operator-facing path of the map's own node.
 func warnUnknownClaims(claims map[string]Patterns, prefix, where string, known map[string]bool) {
-	for claim := range claims {
+	for _, claim := range sortedKeys(claims) {
 		if !known[claim] {
 			slog.Warn("condition references a claim this issuer does not issue; it can never match — check the spelling",
 				slog.String("mapping", where),

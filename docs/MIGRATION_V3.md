@@ -12,6 +12,8 @@ Nothing outside `conditions:` changes. Issuers, subjects, role sets, session pol
 | `actor_matches: [...]`     | `actor: [...]`               | `actor` — unchanged                                |
 | `environment: "github-hosted"` | `runner_environment: "github-hosted"` | `runner_environment` — **read the warning below** |
 
+A leftover `branch:` or `actor_matches:` does **not** stop the service from starting. Both now read as predicates on claims of those literal names, which GitHub does not issue, so the mapping denies every request and the boot log carries a warning naming the key (step 5 of the checklist). Fail-closed, but the failure shows up as a broken pipeline rather than a failed deploy — do the rename before you ship, not after.
+
 ## `environment` is the one that bites
 
 `environment` still exists as a condition key, but it no longer means what it meant in v2.

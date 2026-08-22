@@ -312,3 +312,38 @@ func TestGitHubClaimNamesCoverTheValidatorsVocabulary(t *testing.T) {
 	}
 	require.False(t, githubClaimNames["raw"], "Raw is a Go field, not a claim")
 }
+
+// TestEmptyConditionKeyIsRejected pins that a condition key naming no claim is
+// a load error rather than a leaf that can never match. YAML makes this easy to
+// write by accident (`"": pattern`, or a dangling key), and a leaf keyed on the
+// empty string is indistinguishable at request time from a gate the operator
+// believes is enforcing something.
+func TestEmptyConditionKeyIsRejected(t *testing.T) {
+	for name, conditions := range map[string]string{
+		"top level": `      "": "release-bot"`,
+		"claims":    "      claims:\n        \"\": \"release-bot\"",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := compileCondition(decodeConditions(t, conditions+"\n"))
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "must name a claim")
+		})
+	}
+}
+
+// TestConditionCompileErrorsAreDeterministic pins that a config with more than
+// one bad claim entry reports the SAME entry on every load. Both claim maps are
+// walked in sorted key order for exactly this reason: Go map iteration is
+// randomized, so without the sort an operator fixing one error would be handed
+// a different one at random on the next restart.
+func TestConditionCompileErrorsAreDeterministic(t *testing.T) {
+	const conditions = `
+      aaa_claim: "*invalid("
+      zzz_claim: "*also_invalid("
+`
+	for i := 0; i < 50; i++ {
+		err := compileCondition(decodeConditions(t, conditions))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "aaa_claim", "the lexically first bad key must always be the one reported")
+	}
+}

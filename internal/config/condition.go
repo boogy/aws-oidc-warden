@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 )
 
 // This file is the condition engine: the shape of a `conditions:` block, how it
@@ -132,6 +133,9 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 		if patterns == nil {
 			return nil
 		}
+		if claim == "" {
+			return fmt.Errorf("%s: a condition key must name a claim; the empty key is not a claim name", path)
+		}
 		if len(patterns) == 0 {
 			return fmt.Errorf("%s: %q must list at least one pattern", path, key)
 		}
@@ -169,13 +173,17 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 		return err
 	}
 
-	for claim, patterns := range cond.Claims {
-		if err := add(claim, claim, patterns); err != nil {
+	// Both maps are walked in sorted key order. Map iteration order is random,
+	// and without this the compiled order — and, more importantly, WHICH bad
+	// entry a config with two of them reports — would differ run to run, so the
+	// same broken config could produce a different error on each restart.
+	for _, claim := range sortedKeys(cond.Claims) {
+		if err := add(claim, claim, cond.Claims[claim]); err != nil {
 			return err
 		}
 	}
-	for claim, patterns := range cond.ExplicitClaims {
-		if err := add("claims."+claim, claim, patterns); err != nil {
+	for _, claim := range sortedKeys(cond.ExplicitClaims) {
+		if err := add("claims."+claim, claim, cond.ExplicitClaims[claim]); err != nil {
 			return err
 		}
 	}
@@ -187,6 +195,21 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 		return err
 	}
 	return compileGroup("none_of", cond.NoneOf, path, depth, budget)
+}
+
+// sortedKeys returns m's keys in lexical order. Compilation walks the claim
+// maps through it so error reporting is reproducible; it runs at Validate()
+// time only, never per request.
+func sortedKeys(m map[string]Patterns) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // compileGroup compiles one boolean group's members and rejects the two shapes
