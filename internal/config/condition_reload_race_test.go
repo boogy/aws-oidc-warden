@@ -40,9 +40,9 @@ role_mappings:
             - ref: "refs/heads/main"
         - all_of:
             - event_name: "workflow_dispatch"
-            - actor_matches: ["release-bot"]
+            - actor: ["release-bot"]
       none_of:
-        - environment: "sandbox"
+        - runner_environment: "sandbox"
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}

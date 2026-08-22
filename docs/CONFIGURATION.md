@@ -148,21 +148,33 @@ conditions:
 - Values are auto-anchored (`^(?:pattern)$`), so a literal string behaves like `==`.
 - A claim whose value is itself a list matches when any element matches (see "List-valued claims" below).
 
-Three keys predate this and are spelled differently from the claim they check. They keep working exactly as before, but `Validate()` now warns and names the replacement:
+Three keys that predated this were spelled differently from the claim they checked. **v3 removes them** — write the claim name instead:
 
-| Deprecated key  | Use instead          | Checks the claim     |
-| --------------- | -------------------- | -------------------- |
-| `branch`        | `ref`                | `ref`                |
-| `environment`   | `runner_environment` | `runner_environment` |
-| `actor_matches` | `actor`              | `actor`              |
+| Removed key (≤ v2) | Write instead        | Claim checked        |
+| ------------------ | -------------------- | -------------------- |
+| `branch`           | `ref`                | `ref`                |
+| `environment`      | `runner_environment` | `runner_environment` |
+| `actor_matches`    | `actor`              | `actor`              |
 
-`actor_matches` was the only key that accepted a list; every claim does now, so it carries no capability the generic form lacks.
+`environment` is the one to look at twice: it is now a claim key like any other, and it checks GitHub's **deployment-environment** claim — the `environment:` a job declares — not the runner type. A v2 config carrying `environment: "github-hosted"` will not error; it will gate on a deployment environment named `github-hosted`, which no job declares, and deny. Rename it to `runner_environment` when upgrading. See [MIGRATION_V3.md](MIGRATION_V3.md).
 
-For an issuer configured with `provider: github`, `Validate()` also warns when a condition names a claim GitHub does not issue (`reposiory`, `event-name`) — a misspelled claim can never match, so the mapping would silently stop authorizing. It is a warning, not an error: the issuer's own `claim_mappings` / `required_claims` / `session_tags` claims count as known, and generic issuers are never warned about, since their claim vocabulary is whatever their provider mints.
+Four keys are **reserved** and are not read as claim names: `all_of`, `any_of`, `none_of`, and `claims`. A claim that happens to be named like one of them is still gateable — nest it under `claims:`, whose keys are always raw claim names:
+
+```yaml
+conditions:
+  ref: "refs/heads/main" # ordinary key
+  claims:
+    all_of: "a-claim-really-named-all_of"
+    environment: "production" # identical to writing it at the top level
+```
+
+Entries under `claims:` are AND-ed with everything else on the node — it is a spelling, not a separate evaluation mode.
+
+For an issuer configured with `provider: github`, `Validate()` warns when a condition names a claim GitHub does not issue (`reposiory`, `event-name`) — a misspelled claim can never match, so the mapping would silently stop authorizing. It is a warning, not an error: the issuer's own `claim_mappings` / `required_claims` / `session_tags` claims count as known, and generic issuers are never warned about, since their claim vocabulary is whatever their provider mints.
 
 ### Boolean logic in conditions
 
-Entries at the same level are AND-ed — that has always been true and still is, so every pre-v2.5 config keeps its exact meaning. Three group keys add the rest of boolean logic:
+Entries at the same level are AND-ed — that has always been true and still is. Three group keys add the rest of boolean logic:
 
 | Key       | Holds when                                            |
 | --------- | ----------------------------------------------------- |
@@ -205,8 +217,8 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 - **`none_of` is exact negation.** A member naming a claim the token does not carry cannot match, so its negation holds and the `none_of` **passes**. If you need the claim to be present, add it as a flat predicate alongside the group, or list it in that issuer's `required_claims`.
 - **A missing or wrong-typed claim never satisfies a positive predicate.** Absent, `null`, number, bool, and object claims all fail to match, so a condition on one denies.
 - **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Non-string elements are ignored. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra. Note the two lists are independent: a list of *patterns* is satisfied when any pattern matches, and a list-valued *claim* is matched when any element matches.
-- **An empty pattern (`ref: ""`) or an empty list (`ref: []`) is rejected at load time.** Both read as a predicate but gate nothing; before v2.5.0 an empty string was silently ignored.
-- **`all_of`, `any_of`, and `none_of` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it directly — it now parses as a boolean group, and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nothing else changes about generic claim predicates.
+- **An empty pattern (`ref: ""`) or an empty list (`ref: []`) is rejected at load time.** Both read as a predicate but gate nothing; before v3.0.0 an empty string was silently ignored.
+- **`all_of`, `any_of`, `none_of`, and `claims` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it at the top level — it parses as a boolean group (or as the `claims:` block), and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nest it under `claims:` instead, whose keys are always claim names. Nothing else changes about generic claim predicates.
 
 Authorization is evaluated by `Config.AuthorizeRoles(issuer, subject, claims)`, which unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping. `Config.FindSessionPolicy(issuer, subject, role, claims)` then picks the session policy using the **same** match semantics, so a role's scoping policy always travels with the grant: the policy comes from a mapping that matches the subject, satisfies its conditions, **and** lists the role being assumed. Where several mappings qualify, the first-declared (config order) wins.
 

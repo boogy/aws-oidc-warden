@@ -390,18 +390,18 @@ func TestTypoedConditionKeyFailsClosed(t *testing.T) {
 	}
 }
 
-func TestActorMatchesIsOrAndAnded(t *testing.T) {
+func TestActorIsOrAndAnded(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
 		Subject:    "myorg/repo",
 		Roles:      []string{"arn:aws:iam::111111111111:role/r"},
-		Conditions: &Condition{ActorMatches: Patterns{"alice", "bob"}, EventName: Patterns{"push"}},
+		Conditions: &Condition{Actor: Patterns{"alice", "bob"}, EventName: Patterns{"push"}},
 	}})
 	ok := func(claims map[string]any) bool {
 		m, _ := c.AuthorizeRoles(vIss, "myorg/repo", claims)
 		return m
 	}
 	if !ok(map[string]any{"actor": "bob", "event_name": "push"}) {
-		t.Error("OR within actor_matches broken")
+		t.Error("OR within actor patterns broken")
 	}
 	if ok(map[string]any{"actor": "mallory", "event_name": "push"}) {
 		t.Error("unlisted actor authorized")

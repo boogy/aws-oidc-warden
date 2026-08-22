@@ -364,8 +364,8 @@ role_mappings:
     roles:
       - "arn:aws:iam::123456789012:role/github-actions-role"
     conditions:
-      branch: "refs/heads/main" # regex against the raw 'ref' claim
-      actor_matches: ["admin-.*"] # Actor constraints
+      ref: "refs/heads/main" # regex against the raw 'ref' claim
+      actor: ["admin-.*"] # Actor constraints
       event_name: "push" # Event type constraints
     session_policy: | # Inline session policy
       {
@@ -412,30 +412,29 @@ Every key under `conditions:` other than the three boolean groups names a raw ve
 
 ```go
 type Condition struct {
-    Ref         Patterns `mapstructure:"ref"`          // "refs/heads/main" or a list of patterns
-    RefType     Patterns `mapstructure:"ref_type"`     // branch, tag
-    EventName   Patterns `mapstructure:"event_name"`   // push, pull_request
-    WorkflowRef Patterns `mapstructure:"workflow_ref"` // .github/workflows/deploy.yml
-
-    // Deprecated (still honored; Validate() warns and names the replacement)
-    Branch       Patterns `mapstructure:"branch"`        // checks 'ref'
-    Environment  Patterns `mapstructure:"environment"`   // checks 'runner_environment'
-    ActorMatches Patterns `mapstructure:"actor_matches"` // checks 'actor'
+    Ref               Patterns `mapstructure:"ref"`                // "refs/heads/main" or a list of patterns
+    RefType           Patterns `mapstructure:"ref_type"`           // branch, tag
+    EventName         Patterns `mapstructure:"event_name"`         // push, pull_request
+    WorkflowRef       Patterns `mapstructure:"workflow_ref"`       // .github/workflows/deploy.yml
+    Actor             Patterns `mapstructure:"actor"`              // the triggering principal
+    RunnerEnvironment Patterns `mapstructure:"runner_environment"` // github-hosted, self-hosted
+    Environment       Patterns `mapstructure:"environment"`        // the deployment environment a job declares
 
     AllOf  []*Condition `mapstructure:"all_of"`  // every member must be satisfied
     AnyOf  []*Condition `mapstructure:"any_of"`  // at least one member must be satisfied
     NoneOf []*Condition `mapstructure:"none_of"` // no member may be satisfied
 
-    Claims map[string]Patterns `mapstructure:",remain"` // any other raw claim, by name
+    ExplicitClaims map[string]Patterns `mapstructure:"claims"`   // escape hatch: keys are always claim names
+    Claims         map[string]Patterns `mapstructure:",remain"`  // any other raw claim, by name
 }
 ```
 
 **Validation Logic:**
 
-- Patterns listed for ONE claim are OR-ed; separate claims are AND-ed — this includes a named field and a remain-map entry that happen to target the same underlying claim (`branch` and `ref`); both apply and both must match. `all_of` / `any_of` / `none_of` groups nest inside for richer logic, and on a single node the flat fields and all three groups are AND-ed together, so a pre-2.5.0 `conditions:` block keeps its exact meaning. Nesting is capped at 5 levels and one mapping's tree at 64 nodes, both rejected in `Validate()`.
+- Patterns listed for ONE claim are OR-ed; separate claims are AND-ed — including a named field and a `claims:` entry naming the same claim; both apply and both must match. `all_of` / `any_of` / `none_of` groups nest inside for richer logic, and on a single node the flat fields and all three groups are AND-ed together, so the top level of a `conditions:` block stays an implicit AND. Nesting is capped at 5 levels and one mapping's tree at 64 nodes, both rejected in `Validate()`.
 - Every pattern is auto-anchored (`^(?:pattern)$`) and regex-capable.
 - Claims are extracted from the validated JWT token. A **string** claim matches its anchored pattern; a **list** claim matches when any string element does (GitLab/Okta/Entra group, scope, and role lists). Every other shape denies — absent, `null`, numbers (a claim like `run_id` never satisfies a condition), bools, and objects.
-- Condition compilation happens once, in `Validate()`, never per request. `Validate()` additionally emits advisory warnings for the deprecated keys and, on a `provider: github` issuer, for a claim name GitHub does not issue — a typo that would otherwise deny silently.
+- Condition compilation happens once, in `Validate()`, never per request. `Validate()` additionally emits an advisory warning, on a `provider: github` issuer, for a claim name GitHub does not issue — a typo that would otherwise deny silently.
 - An empty pattern or an empty pattern list is rejected: both read as a predicate but gate nothing.
 
 ### 3. Caching Strategy

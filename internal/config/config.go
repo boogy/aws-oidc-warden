@@ -953,9 +953,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
 		}
 
-		// Advisory only, and deliberately after compilation: a deprecated key
-		// or an unknown claim name is a config smell, never an authorization
-		// failure. See condition_warnings.go.
+		// Advisory only, and deliberately after compilation: a claim name the
+		// issuer never mints is a config smell, never an authorization failure.
+		// See condition_warnings.go.
 		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, m.Subject), knownClaims[m.Issuer])
 
 		m.order = len(c.effective)

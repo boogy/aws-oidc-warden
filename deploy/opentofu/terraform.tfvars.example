@@ -98,13 +98,15 @@ role_mappings = [
     # S3 key (relative to session_policy_bucket) holding the session policy.
     # session_policy_file = "session-policies/my-org/my-repo/policy.json"
     conditions = {
-      branch        = "refs/heads/main" # regex against the `ref` claim (alias of `ref` below)
-      ref           = "refs/heads/main" # same underlying claim as `branch`; use whichever name reads better
-      ref_type      = "branch"          # "branch" | "tag" | ...
-      event_name    = "push"            # e.g. "push", "pull_request", "workflow_dispatch"
-      workflow_ref  = "my-org/my-repo/.github/workflows/deploy.yml@refs/heads/main" # exact workflow that triggered the run
-      environment   = "production"      # checked against the `runner_environment` claim
-      actor_matches = ["^octocat$"]      # regexes against `actor`, OR'd within the list
+      # Every key is the raw verified claim it checks (v3 removed `branch` and
+      # `actor_matches`, and repointed `environment` — see docs/MIGRATION_V3.md).
+      ref                = "refs/heads/main" # regex against the `ref` claim
+      ref_type           = "branch"          # "branch" | "tag" | ...
+      event_name         = "push"            # e.g. "push", "pull_request", "workflow_dispatch"
+      workflow_ref       = "my-org/my-repo/.github/workflows/deploy.yml@refs/heads/main" # exact workflow that triggered the run
+      runner_environment = "github-hosted"   # runner type: "github-hosted" | "self-hosted"
+      environment        = "production"      # GitHub deployment environment claim
+      actor              = ["^octocat$"]     # regexes against `actor`, OR'd within the list
     }
     # Overrides the global role_session_name (top of this file) for roles
     # granted by THIS mapping only, so CloudTrail names the requester instead

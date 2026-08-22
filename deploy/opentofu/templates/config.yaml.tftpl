@@ -91,9 +91,6 @@ role_mappings:${length(cfg.role_mappings) == 0 ? " []" : ""}
 %{ endif ~}
 %{ if m.conditions != null ~}
     conditions:
-%{ if m.conditions.branch != null ~}
-      branch: ${jsonencode(m.conditions.branch)}
-%{ endif ~}
 %{ if m.conditions.ref != null ~}
       ref: ${jsonencode(m.conditions.ref)}
 %{ endif ~}
@@ -106,12 +103,15 @@ role_mappings:${length(cfg.role_mappings) == 0 ? " []" : ""}
 %{ if m.conditions.workflow_ref != null ~}
       workflow_ref: ${jsonencode(m.conditions.workflow_ref)}
 %{ endif ~}
+%{ if m.conditions.runner_environment != null ~}
+      runner_environment: ${jsonencode(m.conditions.runner_environment)}
+%{ endif ~}
 %{ if m.conditions.environment != null ~}
       environment: ${jsonencode(m.conditions.environment)}
 %{ endif ~}
-%{ if m.conditions.actor_matches != null ~}
-      actor_matches:${length(m.conditions.actor_matches) == 0 ? " []" : ""}
-%{ for a in m.conditions.actor_matches ~}
+%{ if m.conditions.actor != null ~}
+      actor:${length(m.conditions.actor) == 0 ? " []" : ""}
+%{ for a in m.conditions.actor ~}
         - ${jsonencode(a)}
 %{ endfor ~}
 %{ endif ~}

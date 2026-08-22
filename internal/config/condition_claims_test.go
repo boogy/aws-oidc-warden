@@ -43,7 +43,7 @@ func TestPatternsDecodeStringOrList(t *testing.T) {
         - sre
 `)
 	require.Equal(t, Patterns{"refs/heads/main"}, cond.Ref)
-	require.Equal(t, Patterns{"release-bot", "release-manager"}, cond.Claims["actor"])
+	require.Equal(t, Patterns{"release-bot", "release-manager"}, cond.Actor)
 	require.Equal(t, Patterns{"mygroup/myproject"}, cond.Claims["project_path"])
 	require.Equal(t, Patterns{"platform-team", "sre"}, cond.Claims["groups"])
 }
@@ -158,34 +158,76 @@ func TestValidate_RejectsEmptyPatternLists(t *testing.T) {
 	}
 }
 
-// TestValidate_WarnsOnDeprecatedConditionKeys pins the deprecation contract:
-// the old keys keep working (the config still validates and still authorizes),
-// but Validate() names the mapping, the key, and its replacement.
-func TestValidate_WarnsOnDeprecatedConditionKeys(t *testing.T) {
-	cond := &Condition{
-		Branch:       Patterns{"main"},
-		Environment:  Patterns{"github-hosted"},
-		ActorMatches: Patterns{"release-bot"},
-		AnyOf:        []*Condition{{Branch: Patterns{"dev"}}},
-	}
-
-	logs := captureWarnings(t, func() {
-		require.NoError(t, validateCond(cond))
+// TestEnvironmentAndRunnerEnvironmentAreDistinctClaims pins the 3.0 break:
+// `environment` checks the deployment environment a job declares, and
+// `runner_environment` checks the runner type. Before 3.0 the `environment`
+// key checked runner_environment, which left the deployment-environment claim
+// unreachable and the key's name misleading.
+func TestEnvironmentAndRunnerEnvironmentAreDistinctClaims(t *testing.T) {
+	cfg := condCfg(t, &Condition{
+		Environment:       Patterns{"production"},
+		RunnerEnvironment: Patterns{"github-hosted"},
 	})
 
-	for _, want := range []string{
-		"conditions.branch", "conditions.environment", "conditions.actor_matches",
-		"conditions.any_of[0].branch", // groups are walked too
-		`"use":"ref"`, `"use":"runner_environment"`, `"use":"actor"`,
-		"acme/app", // the mapping is named
-	} {
-		require.Contains(t, logs, want)
-	}
+	require.True(t, authorizes(cfg, map[string]any{
+		"environment": "production", "runner_environment": "github-hosted",
+	}))
+	// Each key reads its own claim: neither value satisfies the other's gate.
+	require.False(t, authorizes(cfg, map[string]any{
+		"environment": "github-hosted", "runner_environment": "production",
+	}))
+	require.False(t, authorizes(cfg, map[string]any{"runner_environment": "github-hosted"}))
+	require.False(t, authorizes(cfg, map[string]any{"environment": "production"}))
+}
 
-	// Still gating exactly as before the deprecation.
-	cfg := condCfg(t, &Condition{Branch: Patterns{"main"}, Environment: Patterns{"github-hosted"}, ActorMatches: Patterns{"release-bot"}})
-	require.True(t, authorizes(cfg, map[string]any{"ref": "main", "runner_environment": "github-hosted", "actor": "release-bot"}))
-	require.False(t, authorizes(cfg, map[string]any{"ref": "dev", "runner_environment": "github-hosted", "actor": "release-bot"}))
+// TestExplicitClaimsMapReachesReservedNames proves the `claims:` escape hatch:
+// its keys are always raw claim names, so a claim named like a key this schema
+// reserves is still gateable.
+func TestExplicitClaimsMapReachesReservedNames(t *testing.T) {
+	cond := decodeConditions(t, `
+      claims:
+        all_of: "literal-claim"
+        claims: "meta"
+        environment: ["production", "staging"]
+`)
+	require.Equal(t, Patterns{"literal-claim"}, cond.ExplicitClaims["all_of"])
+	require.Equal(t, Patterns{"meta"}, cond.ExplicitClaims["claims"])
+	require.Equal(t, Patterns{"production", "staging"}, cond.ExplicitClaims["environment"])
+	require.Nil(t, cond.AllOf, "a claim named all_of under claims: is not a boolean group")
+
+	cfg := condCfg(t, &Condition{ExplicitClaims: map[string]Patterns{
+		"all_of":      {"literal-claim"},
+		"environment": {"production", "staging"},
+	}})
+	require.True(t, authorizes(cfg, map[string]any{"all_of": "literal-claim", "environment": "staging"}))
+	require.False(t, authorizes(cfg, map[string]any{"all_of": "literal-claim", "environment": "dev"}))
+	require.False(t, authorizes(cfg, map[string]any{"environment": "staging"}))
+}
+
+// TestExplicitClaimsAreAndedWithTopLevelKeys proves the escape hatch is not a
+// separate evaluation mode: an entry under `claims:` is one more AND'd
+// predicate on the same node, identical to writing it at the top level.
+func TestExplicitClaimsAreAndedWithTopLevelKeys(t *testing.T) {
+	cfg := condCfg(t, &Condition{
+		Ref:            Patterns{"refs/heads/main"},
+		ExplicitClaims: map[string]Patterns{"event_name": {"push"}},
+	})
+	require.True(t, authorizes(cfg, map[string]any{"ref": "refs/heads/main", "event_name": "push"}))
+	require.False(t, authorizes(cfg, map[string]any{"ref": "refs/heads/main", "event_name": "pull_request"}))
+	require.False(t, authorizes(cfg, map[string]any{"ref": "refs/heads/dev", "event_name": "push"}))
+}
+
+// TestValidate_RejectsEmptyExplicitClaimPatterns keeps the escape hatch under
+// the same load-time rules as every other key: a listed claim must gate
+// something, and the error names it by its `claims.` path.
+func TestValidate_RejectsEmptyExplicitClaimPatterns(t *testing.T) {
+	err := validateCond(&Condition{ExplicitClaims: map[string]Patterns{"environment": {}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `"claims.environment"`)
+
+	err = validateCond(&Condition{ExplicitClaims: map[string]Patterns{"environment": {".*"}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `"claims.environment"`)
 }
 
 // TestValidate_WarnsOnUnknownGitHubClaim catches the typo that would otherwise

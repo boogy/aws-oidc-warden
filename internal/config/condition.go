@@ -21,20 +21,15 @@ import (
 //
 // The named fields below exist only so the most common GitHub claims are
 // discoverable in code and docs; they compile to exactly what an entry in
-// Claims compiles to. The three deprecated keys are the one exception — they
-// are spelled differently from the claim they check, which is why they are
-// deprecated (see deprecatedConditionKeys).
+// Claims compiles to, and every one of them is spelled exactly like its claim.
 type Condition struct {
-	Ref         Patterns `mapstructure:"ref"          json:"ref,omitempty"`          // Patterns against the 'ref' claim (e.g., "refs/heads/main", "refs/tags/v.*")
-	RefType     Patterns `mapstructure:"ref_type"     json:"ref_type,omitempty"`     // Patterns against 'ref_type' (e.g., "branch", "tag")
-	EventName   Patterns `mapstructure:"event_name"   json:"event_name,omitempty"`   // Patterns against 'event_name' (e.g., "push", "pull_request")
-	WorkflowRef Patterns `mapstructure:"workflow_ref" json:"workflow_ref,omitempty"` // Patterns against 'workflow_ref' (e.g., "owner/repo/.github/workflows/release.yml@.*")
-
-	// Deprecated keys. Each keeps its exact pre-2.5.0 meaning; Validate()
-	// warns and names the replacement. See deprecatedConditionKeys.
-	Branch       Patterns `mapstructure:"branch"        json:"branch,omitempty"`        // Deprecated: use `ref` (checks the same 'ref' claim)
-	Environment  Patterns `mapstructure:"environment"   json:"environment,omitempty"`   // Deprecated: use `runner_environment` (the claim it actually checks)
-	ActorMatches Patterns `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // Deprecated: use `actor` (a list is OR'd there too)
+	Ref               Patterns `mapstructure:"ref"                json:"ref,omitempty"`                // Patterns against the 'ref' claim (e.g., "refs/heads/main", "refs/tags/v.*")
+	RefType           Patterns `mapstructure:"ref_type"           json:"ref_type,omitempty"`           // Patterns against 'ref_type' (e.g., "branch", "tag")
+	EventName         Patterns `mapstructure:"event_name"         json:"event_name,omitempty"`         // Patterns against 'event_name' (e.g., "push", "pull_request")
+	WorkflowRef       Patterns `mapstructure:"workflow_ref"       json:"workflow_ref,omitempty"`       // Patterns against 'workflow_ref' (e.g., "owner/repo/.github/workflows/release.yml@.*")
+	Actor             Patterns `mapstructure:"actor"              json:"actor,omitempty"`              // Patterns against 'actor' (the principal that triggered the run)
+	RunnerEnvironment Patterns `mapstructure:"runner_environment" json:"runner_environment,omitempty"` // Patterns against 'runner_environment' ("github-hosted", "self-hosted")
+	Environment       Patterns `mapstructure:"environment"        json:"environment,omitempty"`        // Patterns against 'environment' (the deployment environment a job declares)
 
 	// Boolean groups. Each holds nested conditions evaluated with its own
 	// operator; all three are AND'd with the flat fields above and with each
@@ -44,7 +39,7 @@ type Condition struct {
 	// These three keys are RESERVED under `conditions:`. Claims is a
 	// mapstructure remain-map, so it only ever collected keys no field claimed;
 	// a raw claim literally named "all_of"/"any_of"/"none_of" decodes as a
-	// group instead.
+	// group instead, and is reachable under `claims:`.
 	//
 	// all_of/any_of/none_of plus nesting is functionally complete (any boolean
 	// expression is expressible as nested any_of-of-all_of), which is why there
@@ -52,6 +47,15 @@ type Condition struct {
 	AllOf  []*Condition `mapstructure:"all_of"  json:"all_of,omitempty"`  // every member must be satisfied
 	AnyOf  []*Condition `mapstructure:"any_of"  json:"any_of,omitempty"`  // at least one member must be satisfied
 	NoneOf []*Condition `mapstructure:"none_of" json:"none_of,omitempty"` // no member may be satisfied
+
+	// ExplicitClaims holds the entries written under the reserved `claims:`
+	// key. They mean exactly what a top-level entry means — claim name to
+	// patterns — with one difference: no key is ever read as anything but a
+	// raw claim name. That is the escape hatch for a claim whose name collides
+	// with a key this schema reserves: `all_of`, `any_of`, `none_of`, and
+	// `claims` itself. Nothing else needs it, since every other key already IS
+	// its claim name.
+	ExplicitClaims map[string]Patterns `mapstructure:"claims" json:"explicit_claims,omitempty"`
 
 	// Claims holds every claimName->patterns entry not covered by a named
 	// field above, keyed by the RAW verified claim name. Populated via
@@ -122,8 +126,8 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 
 	cond.compiled = cond.compiled[:0]
 	// key is the config key being compiled and claim the raw verified claim it
-	// checks; the two differ only for the deprecated keys, and errors quote the
-	// key the operator actually wrote.
+	// checks; the two differ only under claims: (key "claims.x", claim "x"), and
+	// errors quote the key the operator actually wrote.
 	add := func(key, claim string, patterns Patterns) error {
 		if patterns == nil {
 			return nil
@@ -143,12 +147,6 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 		return nil
 	}
 
-	// NOTE: `branch` and `ref` intentionally both check the raw "ref" claim,
-	// and `environment` checks "runner_environment"; this mirrors pre-existing
-	// behavior. Both spellings on one node are AND'd like any two claims.
-	if err := add("branch", "ref", cond.Branch); err != nil {
-		return err
-	}
 	if err := add("ref", "ref", cond.Ref); err != nil {
 		return err
 	}
@@ -161,15 +159,23 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 	if err := add("workflow_ref", "workflow_ref", cond.WorkflowRef); err != nil {
 		return err
 	}
-	if err := add("environment", "runner_environment", cond.Environment); err != nil {
+	if err := add("actor", "actor", cond.Actor); err != nil {
 		return err
 	}
-	if err := add("actor_matches", "actor", cond.ActorMatches); err != nil {
+	if err := add("runner_environment", "runner_environment", cond.RunnerEnvironment); err != nil {
+		return err
+	}
+	if err := add("environment", "environment", cond.Environment); err != nil {
 		return err
 	}
 
 	for claim, patterns := range cond.Claims {
 		if err := add(claim, claim, patterns); err != nil {
+			return err
+		}
+	}
+	for claim, patterns := range cond.ExplicitClaims {
+		if err := add("claims."+claim, claim, patterns); err != nil {
 			return err
 		}
 	}
@@ -247,15 +253,11 @@ func cloneCondition(c *Condition) *Condition {
 	nc.RefType = clonePatterns(c.RefType)
 	nc.EventName = clonePatterns(c.EventName)
 	nc.WorkflowRef = clonePatterns(c.WorkflowRef)
-	nc.Branch = clonePatterns(c.Branch)
+	nc.Actor = clonePatterns(c.Actor)
+	nc.RunnerEnvironment = clonePatterns(c.RunnerEnvironment)
 	nc.Environment = clonePatterns(c.Environment)
-	nc.ActorMatches = clonePatterns(c.ActorMatches)
-	if c.Claims != nil {
-		nc.Claims = make(map[string]Patterns, len(c.Claims))
-		for k, v := range c.Claims {
-			nc.Claims[k] = clonePatterns(v)
-		}
-	}
+	nc.Claims = cloneClaimMap(c.Claims)
+	nc.ExplicitClaims = cloneClaimMap(c.ExplicitClaims)
 	nc.AllOf = cloneConditions(c.AllOf)
 	nc.AnyOf = cloneConditions(c.AnyOf)
 	nc.NoneOf = cloneConditions(c.NoneOf)
@@ -273,6 +275,19 @@ func cloneConditions(in []*Condition) []*Condition {
 	out := make([]*Condition, len(in))
 	for i, c := range in {
 		out[i] = cloneCondition(c)
+	}
+	return out
+}
+
+// cloneClaimMap deep-copies one claimName->patterns map, preserving the nil vs
+// empty-map distinction so a cloned snapshot decodes and compiles identically.
+func cloneClaimMap(in map[string]Patterns) map[string]Patterns {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]Patterns, len(in))
+	for k, v := range in {
+		out[k] = clonePatterns(v)
 	}
 	return out
 }

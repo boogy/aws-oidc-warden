@@ -4,9 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.5.0] - 2026-08-22
+## [3.0.0] - 2026-08-22
 
-Conditions become claim-native. Every key under `conditions:` is now the name of the claim it checks — for any issuer, not just GitHub — each key takes one pattern or a list of alternatives, and `all_of`/`any_of`/`none_of` compose them into a readable expression. A condition on a list-valued claim, which could never match before, now does. The top level stays an implicit AND and the three older key spellings keep working, so every existing config keeps its exact meaning.
+Conditions become claim-native. Every key under `conditions:` is now the name of the claim it checks — for any issuer, not just GitHub — each key takes one pattern or a list of alternatives, and `all_of`/`any_of`/`none_of` compose them into a readable expression. A condition on a list-valued claim, which could never match before, now does. The top level stays an implicit AND.
+
+**Breaking:** the three keys whose names did not match their claim are **removed**, not deprecated: `branch` → `ref`, `actor_matches` → `actor`, and `environment` → `runner_environment`. `environment` still exists but now checks GitHub's deployment-environment claim of that name, which no key could reach before. There is no deprecation window and no warning — a config using an old key fails to load, and an `environment:` left unrenamed changes meaning. See [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md); the rename is mechanical and every other config key is unchanged.
 
 ### Added
 
@@ -24,13 +26,13 @@ Conditions become claim-native. Every key under `conditions:` is now the name of
 
 ### Changed
 
-- **`branch`, `actor_matches`, and `environment` are deprecated in favour of the claim they check.** Their names never matched their claim: `branch` checks `ref` (and always did — it was never a bare branch name), `actor_matches` checks `actor`, and `environment` checks `runner_environment`, not the GitHub deployment-environment claim of the same name. All three keep working with their exact pre-2.5.0 meaning — in particular `environment` still checks `runner_environment`, which is **not** silently repointed at the `environment` claim — and `Validate()` now warns once per use, naming the mapping, the key path, and the replacement. Rename at your convenience; they will be removed in a future major release. `actor_matches` was the only key that accepted a list, and every key does now, so it carries no capability the generic form lacks.
+- **BREAKING: `branch`, `actor_matches`, and `environment` are removed; `environment` is repointed at the claim of that name.** Their names never matched their claim: `branch` checked `ref` (and always did — it was never a bare branch name), `actor_matches` checked `actor`, and `environment` checked `runner_environment`, **not** the GitHub deployment-environment claim of the same name. Now that every key is read as the claim it names, `branch` and `actor_matches` are gone — a config still using them fails to load with a decode error rather than being silently ignored — and `environment` gates the `environment` claim, which no key could reach before. Rename `branch:` → `ref:`, `actor_matches:` → `actor:`, and `environment:` → `runner_environment:`; the last one is the one that bites, because an unrenamed `environment:` keeps loading and quietly checks a different claim. No deprecation shim and no warning ships: a key that works but means something else is worse than one that fails at load. `actor_matches` was the only key that accepted a list, and every key does now, so nothing is lost. See [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md).
 
 - **A condition key naming a claim GitHub does not issue now warns at load.** A misspelled claim (`event-name`, `reposiory`) never matches, so the mapping simply stops authorizing with nothing in the config or the logs to say why — a fail-closed silence that reads exactly like a policy decision. `Validate()` names the mapping and the key. The check runs only on `provider: github`, whose vocabulary is derived by reflection from the struct the validator unmarshals into and so cannot drift from it, plus anything that issuer's own `claim_mappings`, `required_claims`, or `session_tags` declare; a generic issuer's claims are whatever its provider mints, so it is never warned about. Advisory only — nothing is rejected.
 
 - **An empty condition pattern is now rejected instead of ignored.** `ref: ""` was silently skipped, and `ref: []` would have read as an absent key: in both cases a line that looks like a gate gated nothing. Both are now load-time errors naming the node. A key that is genuinely optional should be omitted, not left blank.
 
-- **`all_of`, `any_of`, and `none_of` are now reserved keys under `conditions:`.** Generic claim predicates are collected by a remain-map, which only ever gathered keys no named field claimed, so a raw claim literally named `all_of`/`any_of`/`none_of` now parses as a boolean group. In practice the only affected config is one that gave such a key a plain string value — the pre-2.5.0 remain-map was `map[string]string`, so a list value never decoded — and that config now fails to load with a decode error rather than quietly changing meaning. Nothing else about generic claim predicates changes.
+- **`all_of`, `any_of`, `none_of`, and `claims` are reserved keys under `conditions:`.** Generic claim predicates are collected by a remain-map, which only ever gathered keys no named field claimed, so a raw claim literally named `all_of`/`any_of`/`none_of` now parses as a boolean group. In practice the only affected config is one that gave such a key a plain string value — the pre-3.0.0 remain-map was `map[string]string`, so a list value never decoded — and that config now fails to load with a decode error rather than quietly changing meaning. `claims:` is the escape hatch that makes the reservation lossless: its keys are **always** raw claim names, never operators, so a claim named `any_of` (or `ref`, or anything else a named field would otherwise capture) stays gateable. A `claims:` block is AND-ed with everything else on the same node, and its errors are reported under a `claims.` path.
 
 - **The condition engine moved to `internal/config/condition.go`** — the `Condition` type, cloning, compilation, structural validation, and evaluation — so the authorization gate can be read in one sitting instead of spread across a 1500-line `config.go`. No behavior change.
 
@@ -565,7 +567,7 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[2.5.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.1...v2.5.0
+[3.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.1...v3.0.0
 [2.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.2...v2.3.0

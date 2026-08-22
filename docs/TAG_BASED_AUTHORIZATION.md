@@ -61,7 +61,7 @@ The combining rules:
 | `event_name`                 | `aow/event-name`     | exact                                                               |
 | `workflow_ref` (regex)       | `aow/workflow-ref`   | exact                                                               |
 | `environment`                | `aow/environment`    | exact (matches the `runner_environment` claim, same as constraints) |
-| `actor_matches` (regex list) | `aow/actor`          | exact; space-list = OR                                              |
+| `actor` (regex list)        | `aow/actor`          | exact; space-list = OR                                              |
 
 ---
 
@@ -177,7 +177,7 @@ Key consequences:
 
 Three behaviors are intentional but easy to misjudge. Review them before enabling tag-auth in production:
 
-1. **Tag-auth is an additive fallback, not a tightening.** Enabling it lets a role's `aow/*` tags authorize claims **independently of** `role_mappings` conditions. A role you constrain via a mapping (e.g. `branch: main`) can still be assumed from any branch if its tags match and it carries no matching `aow/branch` tag. **Do not rely on a mapping condition alone to _deny_ a role that also publishes matching `aow/*` tags.** See [Precedence](#precedence-mappings--tags-together).
+1. **Tag-auth is an additive fallback, not a tightening.** Enabling it lets a role's `aow/*` tags authorize claims **independently of** `role_mappings` conditions. A role you constrain via a mapping (e.g. `ref: "refs/heads/main"`) can still be assumed from any branch if its tags match and it carries no matching `aow/branch` tag. **Do not rely on a mapping condition alone to _deny_ a role that also publishes matching `aow/*` tags.** See [Precedence](#precedence-mappings--tags-together).
 
 2. **`cross_account.enabled: false` (or omitted) hard-blocks all cross-account use** — both assumes and tag reads fail closed with an error; it is not a silent no-op. Once enabled, an **empty `allowed_accounts` still fails open**: the warden may assume into **any** member account. Config load only logs a warning in that case. Always populate `allowed_accounts` in production. See [Target account allow-list](#target-account-allow-list).
 

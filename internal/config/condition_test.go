@@ -61,11 +61,11 @@ func TestClaimMatches_ArrayClaims(t *testing.T) {
 	}
 }
 
-// TestClaimMatches_ActorMatchesUsesTheSameMatcher proves actor_matches routes
+// TestClaimMatches_ActorUsesTheSameMatcher proves `actor` routes
 // through the same leaf matcher, so an array-valued actor claim behaves like
 // every other array claim rather than through a second, divergent code path.
-func TestClaimMatches_ActorMatchesUsesTheSameMatcher(t *testing.T) {
-	cfg := condCfg(t, &Condition{ActorMatches: Patterns{"release-bot", "alice"}})
+func TestClaimMatches_ActorUsesTheSameMatcher(t *testing.T) {
+	cfg := condCfg(t, &Condition{Actor: Patterns{"release-bot", "alice"}})
 
 	cases := []struct {
 		name   string
@@ -155,7 +155,7 @@ func TestAllOf(t *testing.T) {
 func TestNoneOf(t *testing.T) {
 	cfg := condCfg(t, &Condition{
 		NoneOf: []*Condition{
-			{Environment: Patterns{"sandbox"}},
+			{RunnerEnvironment: Patterns{"sandbox"}},
 			{EventName: Patterns{"pull_request"}},
 		},
 	})
@@ -183,7 +183,7 @@ func TestNoneOf(t *testing.T) {
 }
 
 // TestTopLevelStaysImplicitAnd proves the new groups compose with the existing
-// flat fields on the same node: leaves AND actor_matches AND all_of AND any_of
+// flat fields on the same node: leaves AND actor AND all_of AND any_of
 // AND none_of must all hold. This is what makes every pre-existing config keep
 // its exact meaning.
 func TestTopLevelStaysImplicitAnd(t *testing.T) {
@@ -194,7 +194,7 @@ func TestTopLevelStaysImplicitAnd(t *testing.T) {
 			{Ref: Patterns{`refs/tags/hotfix-.+`}},
 		},
 		NoneOf: []*Condition{
-			{Environment: Patterns{"sandbox"}},
+			{RunnerEnvironment: Patterns{"sandbox"}},
 		},
 	})
 
@@ -231,11 +231,11 @@ func TestNestedGroups(t *testing.T) {
 			}},
 			{AllOf: []*Condition{
 				{EventName: Patterns{"workflow_dispatch"}},
-				{ActorMatches: Patterns{"release-bot", "alice"}},
+				{Actor: Patterns{"release-bot", "alice"}},
 				{NoneOf: []*Condition{{Ref: Patterns{"refs/heads/wip-.+"}}}},
 			}},
 		},
-		NoneOf: []*Condition{{Environment: Patterns{"sandbox"}}},
+		NoneOf: []*Condition{{RunnerEnvironment: Patterns{"sandbox"}}},
 	})
 
 	cases := []struct {
@@ -332,7 +332,7 @@ func TestValidate_RejectsDefeatedGroups(t *testing.T) {
 		{"member whose only pattern is empty", &Condition{AnyOf: []*Condition{{EventName: Patterns{""}}}}, true},
 		{"member whose only generic claim pattern is empty", &Condition{AnyOf: []*Condition{{Claims: map[string]Patterns{"x": {""}}}}}, true},
 		{"bare wildcard leaf nested two levels deep", &Condition{AnyOf: []*Condition{{AllOf: []*Condition{{EventName: Patterns{".*"}}}}}}, true},
-		{"bare wildcard in a nested actor_matches", &Condition{NoneOf: []*Condition{{ActorMatches: Patterns{".+"}}}}, true},
+		{"bare wildcard in a nested actor", &Condition{NoneOf: []*Condition{{Actor: Patterns{".+"}}}}, true},
 		{"invalid regex nested", &Condition{AnyOf: []*Condition{{Ref: Patterns{"refs/heads/("}}}}, true},
 		{"valid nested group", &Condition{AnyOf: []*Condition{{EventName: Patterns{"push"}}, {EventName: Patterns{"workflow_dispatch"}}}}, false},
 		{"empty top-level condition stays legal", &Condition{}, false},
@@ -380,9 +380,9 @@ role_mappings:
           ref: "refs/heads/main"
         - all_of:
             - event_name: "workflow_dispatch"
-            - actor_matches: ["release-bot"]
+            - actor: ["release-bot"]
       none_of:
-        - environment: "sandbox"
+        - runner_environment: "sandbox"
 `
 
 // TestNestedConditionsDecodeFromYAML proves mapstructure routes the three
@@ -406,9 +406,9 @@ func TestNestedConditionsDecodeFromYAML(t *testing.T) {
 	require.Len(t, cond.AnyOf, 2)
 	require.Equal(t, Patterns{"push"}, cond.AnyOf[0].EventName)
 	require.Len(t, cond.AnyOf[1].AllOf, 2)
-	require.Equal(t, Patterns{"release-bot"}, cond.AnyOf[1].AllOf[1].ActorMatches)
+	require.Equal(t, Patterns{"release-bot"}, cond.AnyOf[1].AllOf[1].Actor)
 	require.Len(t, cond.NoneOf, 1)
-	require.Equal(t, Patterns{"sandbox"}, cond.NoneOf[0].Environment)
+	require.Equal(t, Patterns{"sandbox"}, cond.NoneOf[0].RunnerEnvironment)
 }
 
 // TestNestedConditionsSurviveJSONClone proves the hot-reload path preserves the
@@ -437,9 +437,10 @@ func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 			Subject: "acme/app",
 			Roles:   []string{role},
 			Conditions: &Condition{
-				AnyOf:  []*Condition{{EventName: Patterns{"push"}}, {EventName: Patterns{"workflow_dispatch"}}},
-				NoneOf: []*Condition{{Environment: Patterns{"sandbox"}}},
-				Claims: map[string]Patterns{"sha": {"[0-9a-f]{40}"}},
+				AnyOf:          []*Condition{{EventName: Patterns{"push"}}, {EventName: Patterns{"workflow_dispatch"}}},
+				NoneOf:         []*Condition{{RunnerEnvironment: Patterns{"sandbox"}}},
+				Claims:         map[string]Patterns{"sha": {"[0-9a-f]{40}"}},
+				ExplicitClaims: map[string]Patterns{"environment": {"production"}},
 			},
 		}},
 	}
@@ -449,9 +450,10 @@ func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, clone.Validate())
 
-	allow := map[string]any{"event_name": "push", "sha": "0123456789abcdef0123456789abcdef01234567"}
-	deny := map[string]any{"event_name": "push", "sha": "0123456789abcdef0123456789abcdef01234567", "runner_environment": "sandbox"}
-	denyNoSha := map[string]any{"event_name": "push"}
+	allow := map[string]any{"event_name": "push", "sha": "0123456789abcdef0123456789abcdef01234567", "environment": "production"}
+	deny := map[string]any{"event_name": "push", "sha": "0123456789abcdef0123456789abcdef01234567", "environment": "production", "runner_environment": "sandbox"}
+	denyNoSha := map[string]any{"event_name": "push", "environment": "production"}
+	denyNoEnv := map[string]any{"event_name": "push", "sha": "0123456789abcdef0123456789abcdef01234567"}
 
 	for name, cfg := range map[string]*Config{"original": orig, "clone": clone} {
 		t.Run(name, func(t *testing.T) {
@@ -461,6 +463,8 @@ func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 			require.False(t, ok, "none_of must still deny after the round trip")
 			ok, _ = cfg.AuthorizeRoles(vIss, "acme/app", denyNoSha)
 			require.False(t, ok, "the generic-claim leaf must still deny after the round trip")
+			ok, _ = cfg.AuthorizeRoles(vIss, "acme/app", denyNoEnv)
+			require.False(t, ok, "the claims: leaf must still deny after the round trip")
 		})
 	}
 }
@@ -545,7 +549,7 @@ func TestNestedConditionIndexParity(t *testing.T) {
 			Roles:   []string{"arn:aws:iam::111111111111:role/service"},
 			Conditions: &Condition{
 				RefType: Patterns{"tag"},
-				NoneOf:  []*Condition{{Environment: Patterns{"sandbox"}}},
+				NoneOf:  []*Condition{{RunnerEnvironment: Patterns{"sandbox"}}},
 			},
 		},
 		{ // "any" bucket (top-level alternation has no literal prefix)

@@ -49,7 +49,7 @@ role_mappings:
     roles:
       - arn:aws:iam::222222222222:role/aow/deploy-staging
     conditions:
-      branch: "refs/heads/main"
+      ref: "refs/heads/main"
 
   # Deploy to production (member 333333333333) from version tags only,
   # further restricted by an inline session policy.

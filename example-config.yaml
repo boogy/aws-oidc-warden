@@ -193,8 +193,14 @@ role_sets:
 # `all_of`/`any_of`/`none_of` groups nest inside for richer logic. A claim whose
 # value is itself a list matches when any element does.
 #
-# Deprecated (still work, Validate() warns): `branch` -> use `ref`,
-# `environment` -> use `runner_environment`, `actor_matches` -> use `actor`.
+# Four keys are reserved and are NOT claim names: `all_of`, `any_of`,
+# `none_of`, and `claims`. A claim actually named like one of them goes under
+# `claims:`, whose keys are always raw claim names (see the release mapping).
+#
+# v3 removed the three keys that did not match their claim: `branch` -> `ref`,
+# `actor_matches` -> `actor`, `environment` -> `runner_environment`. NOTE that
+# `environment` still exists as a key — it now checks GitHub's deployment
+# environment claim, NOT the runner type. See docs/MIGRATION_V3.md.
 ####################################################################################
 role_mappings:
   # Simple mapping, main branch only (inherits default_issuer = GitHub).
@@ -229,7 +235,8 @@ role_mappings:
     conditions:
       ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
       ref_type: "tag"
-      runner_environment: "production"
+      environment: "production" # the deployment environment the job declares
+      runner_environment: "github-hosted" # the runner type (a different claim)
       actor: ["release-bot", "release-manager"] # OR: either actor satisfies it
       sha: "[0-9a-f]{40}" # patterns are auto-anchored; no ^...$ needed
     # Overrides the global role_session_name for roles granted by THIS
@@ -256,7 +263,12 @@ role_mappings:
             - ref: "refs/tags/hotfix-.+"
             - actor: ["release-bot", "release-manager"]
       none_of:
-        - runner_environment: "sandbox"
+        - runner_environment: "self-hosted"
+      # `claims:` keys are ALWAYS raw claim names — the escape hatch for a
+      # claim named like a reserved key. Otherwise identical to a top-level
+      # entry, AND'd with everything else on this node.
+      claims:
+        environment: "production"
 
   # A GitLab mapping — bound explicitly to the GitLab issuer. Its `subject` is
   # the canonical value produced by claim_mappings.subject (project_path).
