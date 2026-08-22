@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -38,6 +40,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	// Create a request context with tracking information and timeout
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
+	headers := albRequestHeaders(event)
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
 	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
 	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
@@ -52,7 +55,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		slog.String("path", event.Path),
 		slog.String("method", event.HTTPMethod),
 		slog.String("targetGroupArn", event.RequestContext.ELB.TargetGroupArn),
-		slog.String("userAgent", event.Headers["user-agent"]),
+		slog.String("userAgent", headerValue(headers, "user-agent")),
 	)
 	if sourceIP != "" {
 		log = log.With(slog.String("sourceIp", sourceIP))
@@ -65,7 +68,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	}
 
 	// Build extraction input: prefer ALB OIDC data header when present.
-	oidcData := event.Headers["x-amzn-oidc-data"]
+	oidcData := headerValue(headers, "x-amzn-oidc-data")
 	region := h.region
 
 	// Bound before body parsing to reject oversized ALB OIDC headers early.
@@ -74,7 +77,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	}
 
 	// Parse request data
-	requestData, err := h.unmarshalRequestData(event)
+	requestData, err := h.unmarshalRequestData(event.Body, oidcData)
 	if err != nil {
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
@@ -99,13 +102,41 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	return h.respondJSON(ctx, credentials)
 }
 
+// albRequestHeaders flattens the two header maps an ALB event can carry.
+//
+// An ALB target group with lambda.multi_value_headers.enabled=true populates
+// multiValueHeaders and leaves headers EMPTY; with it disabled the reverse
+// holds. Reading only event.Headers therefore made every header invisible on a
+// multi-value target group: x-amzn-oidc-data (so ALB delegated mode fell back
+// to token-in-body and failed closed with a confusing error), x-forwarded-for
+// (so the audit record's sourceIp was blank) and user-agent all vanished.
+//
+// Repeated values are folded with ", " per RFC 9110 §5.3, which is exactly the
+// form X-Forwarded-For already uses — so clientIP's rightmost-hop rule keeps
+// working on a target group that appends its hop as a separate header line. A
+// header that is not list-valued (x-amzn-oidc-data) would be corrupted by
+// folding rather than silently accepting one of two attacker-chosen values,
+// and a corrupted token fails closed at validation.
+func albRequestHeaders(event events.ALBTargetGroupRequest) map[string]string {
+	headers := make(map[string]string, len(event.Headers)+len(event.MultiValueHeaders))
+	maps.Copy(headers, event.Headers)
+	for name, values := range event.MultiValueHeaders {
+		if len(values) == 0 {
+			continue
+		}
+		headers[name] = strings.Join(values, ", ")
+	}
+	return headers
+}
+
 // createRequestContext creates an enhanced context with request tracking information
 func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, event events.ALBTargetGroupRequest) (context.Context, context.CancelFunc) {
 	// ALB supplies neither a request ID nor a source-IP field, so both
 	// resolveRequestID and clientIP fall back to their non-frontend paths:
 	// a fresh UUID, and the rightmost X-Forwarded-For hop.
 	requestID, frontendRequestID := resolveRequestID(ctx, "")
-	sourceIP, sourceIPFrom := clientIP("", event.Headers)
+	headers := albRequestHeaders(event)
+	sourceIP, sourceIPFrom := clientIP("", headers)
 
 	// Start request timer
 	startTime := time.Now()
@@ -116,21 +147,23 @@ func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, e
 	ctx = context.WithValue(ctx, StartTimeContextKey, startTime)
 	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
 	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
-	ctx = context.WithValue(ctx, UserAgentContextKey, event.Headers["user-agent"])
+	ctx = context.WithValue(ctx, UserAgentContextKey, headerValue(headers, "user-agent"))
 
 	// Create a context with timeout. The caller must invoke the returned cancel
 	// (via defer) to release the timer when the request completes.
 	return context.WithTimeout(ctx, DefaultTimeout)
 }
 
-// unmarshalRequestData parses and validates the request data from an ALB event.
+// unmarshalRequestData parses and validates the request data from an ALB body.
 // When x-amzn-oidc-data is present the body only needs to carry the role (token
-// comes from the header), so we use the role-only parser in that case.
-func (h *AwsApplicationLoadBalancer) unmarshalRequestData(event events.ALBTargetGroupRequest) (*RequestData, error) {
-	if event.Headers["x-amzn-oidc-data"] != "" {
-		return ParseRoleOnlyRequestBody(event.Body)
+// comes from the header), so we use the role-only parser in that case. The
+// header value is passed in rather than re-read from the event, so the parser
+// choice cannot disagree with the extraction input the caller built.
+func (h *AwsApplicationLoadBalancer) unmarshalRequestData(body, oidcData string) (*RequestData, error) {
+	if oidcData != "" {
+		return ParseRoleOnlyRequestBody(body)
 	}
-	return ParseRequestBody(event.Body)
+	return ParseRequestBody(body)
 }
 
 // respondError formats a response with an error message

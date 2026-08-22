@@ -79,10 +79,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// All extraction errors wrap ErrTokenValidationFailed so adapters map them to HTTP 401.
 	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
-		rec.Stage = "extract"
-		rec.Reason = err.Error()
+		rec.setErrorReason("extract", err)
 		rec.ProcessingMS = elapsed()
-		log.Error("Claims extraction failed", slog.String("stage", rec.Stage), slog.String("error", err.Error()))
+		log.Error("Claims extraction failed", slog.String("stage", rec.Stage), rec.reasonAttr(cfg.LogClaimValues))
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err))
 	}
 
@@ -128,10 +127,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// disabled-means-hub-only (fail closed).
 	ok, aerr := r.consumer.IsTargetAccountAllowed(requestedRole)
 	if aerr != nil {
-		rec.Stage = "account_check"
-		rec.Reason = aerr.Error()
+		rec.setErrorReason("account_check", aerr)
 		rec.ProcessingMS = elapsed()
-		log.Error("Account allow-list check failed", slog.String("stage", rec.Stage), slog.String("error", aerr.Error()))
+		log.Error("Account allow-list check failed", slog.String("stage", rec.Stage), rec.reasonAttr(cfg.LogClaimValues))
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrAssumeRoleFailed)
 	}
 	if !ok {
@@ -205,10 +203,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// Attempting to get session policy
 	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, log, claims.Issuer, claims.Subject, requestedRole, claimsMap)
 	if err != nil {
-		rec.Stage = "session_policy"
-		rec.Reason = err.Error()
+		rec.setErrorReason("session_policy", err)
 		rec.ProcessingMS = elapsed()
-		log.Error("Failed to read session policy", slog.String("stage", rec.Stage), slog.String("error", err.Error()))
+		log.Error("Failed to read session policy", slog.String("stage", rec.Stage), rec.reasonAttr(cfg.LogClaimValues))
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, err)
 	}
 
@@ -233,11 +230,10 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	sessionTagSpec := cfg.IssuerSessionTags(claims.Issuer)
 	credentials, err := r.consumer.AssumeRole(requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
 	if err != nil {
-		rec.Stage = "assume_role"
-		rec.Reason = err.Error()
+		rec.setErrorReason("assume_role", err)
 		rec.ProcessingMS = elapsed()
 		log.Error("Failed to assume role",
-			slog.String("stage", rec.Stage), slog.String("error", err.Error()))
+			slog.String("stage", rec.Stage), rec.reasonAttr(cfg.LogClaimValues))
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, fmt.Errorf("failed to assume role: %w", ErrAssumeRoleFailed))
 	}
 

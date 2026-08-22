@@ -35,6 +35,12 @@ func TestFormatClaimValue(t *testing.T) {
 		// Past float64's exact-integer range an int64 conversion would print a
 		// value the token never carried, so fall back to %v.
 		{"beyond exact integer range", float64(1 << 60), "1.152921504606847e+18"},
+		// 2^53 is the last exactly-representable integer, so it converts
+		// losslessly and must be printed as an integer; 2^53+2 is the next
+		// representable one above the bound and must not be.
+		{"at exact integer bound", float64(1 << 53), "9007199254740992"},
+		{"negative exact integer bound", float64(-(1 << 53)), "-9007199254740992"},
+		{"just past exact integer bound", float64(1<<53) + 2, "9.007199254740994e+15"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, utils.FormatClaimValue(tc.raw))

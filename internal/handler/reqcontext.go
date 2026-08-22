@@ -77,16 +77,41 @@ func clientIP(directIP string, headers map[string]string) (ip, source string) {
 	if parsed := net.ParseIP(strings.TrimSpace(directIP)); parsed != nil {
 		return parsed.String(), ipSourceFrontend
 	}
-	for name, value := range headers {
-		if !strings.EqualFold(name, "x-forwarded-for") {
-			continue
-		}
-		// Only the final field is examined, never an earlier one: see the
-		// no-fallback rationale in the doc comment above.
-		hops := strings.Split(value, ",")
-		if parsed := net.ParseIP(strings.TrimSpace(hops[len(hops)-1])); parsed != nil {
-			return parsed.String(), ipSourceForwardedFor
-		}
+	value := headerValue(headers, "x-forwarded-for")
+	if value == "" {
+		return "", ""
+	}
+	// Only the final field is examined, never an earlier one: see the
+	// no-fallback rationale in the doc comment above.
+	hops := strings.Split(value, ",")
+	if parsed := net.ParseIP(strings.TrimSpace(hops[len(hops)-1])); parsed != nil {
+		return parsed.String(), ipSourceForwardedFor
 	}
 	return "", ""
+}
+
+// headerValue looks up a header case-insensitively, deterministically.
+//
+// Lambda event header maps are plain Go maps, so a range over them visits keys
+// in a random order. A caller that sent both "X-Forwarded-For" and
+// "x-forwarded-for" could therefore have either value picked, varying per
+// invocation — for the audit trail's source IP that means two invocations of
+// the same request can be recorded with different origins, and a caller can
+// make the recorded value unpredictable on purpose. The exact (already
+// canonical, lowercase) key wins; otherwise the lexicographically smallest
+// case variant is chosen, so the same event always yields the same answer.
+func headerValue(headers map[string]string, name string) string {
+	if v, ok := headers[name]; ok {
+		return v
+	}
+	bestKey, bestValue := "", ""
+	for k, v := range headers {
+		if !strings.EqualFold(k, name) {
+			continue
+		}
+		if bestKey == "" || k < bestKey {
+			bestKey, bestValue = k, v
+		}
+	}
+	return bestValue
 }

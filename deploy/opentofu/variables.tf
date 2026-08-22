@@ -394,6 +394,25 @@ variable "force_destroy_buckets" {
   default     = false
 }
 
+# ---- Audit bucket retention ----
+variable "audit_log_retention_days" {
+  type        = number
+  description = "Days audit objects are kept in the log bucket before expiring. Must be >= audit_log_object_lock_days when Object Lock is on, or locked versions outlive the rule and are never removed."
+  default     = 90
+}
+
+variable "audit_log_object_lock_mode" {
+  type        = string
+  description = "S3 Object Lock mode for the audit bucket: \"GOVERNANCE\" (overridable by a principal with s3:BypassGovernanceRetention), \"COMPLIANCE\" (not overridable by anyone, including root), or null to leave Object Lock off. Can only be set when the bucket is first created."
+  default     = null
+}
+
+variable "audit_log_object_lock_days" {
+  type        = number
+  description = "Days each audit object version is retained under audit_log_object_lock_mode. Ignored when Object Lock is off."
+  default     = 365
+}
+
 # ---- JWT Validation Mode ----
 variable "jwt_validation_mode" {
   type        = string

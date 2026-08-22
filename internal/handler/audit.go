@@ -69,6 +69,15 @@ type auditRecord struct {
 	// slog attribute set in auditLogAttrs — one name for the same value in both
 	// the log line and the audit record. Deny only.
 	Reason string `json:"reason,omitempty"`
+	// reasonFromError marks a Reason built from an error string rather than a
+	// fixed phrase. Error strings routinely quote claim VALUES — an expired
+	// token names its subject, an STS denial quotes the role ARN and session
+	// name — so an error-derived reason is claim-bearing and must follow the
+	// same log_claim_values gate as Subject/Claims. It is unexported (and thus
+	// not serialized) because the record's shape must not change with the
+	// gate: `reason` is always present, carrying the stage summary rather than
+	// the raw error when values are suppressed. Set via setErrorReason.
+	reasonFromError bool
 
 	Issuer   string   `json:"issuer,omitempty"`
 	Provider string   `json:"provider,omitempty"`
@@ -128,6 +137,54 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.Audience = nil
 	rec.SessionTags = nil
 	rec.Claims = nil
+	// Reason is replaced, not cleared: an audit record must still say why a
+	// request was denied when claim values are suppressed.
+	rec.Reason = rec.effectiveReason(logClaimValues)
+	rec.reasonFromError = false
+}
+
+// setErrorReason records a deny reason taken from an error, marking it
+// claim-bearing so the log_claim_values gate applies to it. Every stage that
+// reports err.Error() as the reason must go through this rather than
+// assigning rec.Reason directly, or the error text escapes the gate.
+func (rec *auditRecord) setErrorReason(stage string, err error) {
+	rec.Stage = stage
+	rec.Reason = err.Error()
+	rec.reasonFromError = true
+}
+
+// effectiveReason is the reason as it may be emitted: the raw text when claim
+// values are permitted or the reason was a fixed phrase, otherwise the stage
+// summary. One resolver for both the log line and the durable record, so the
+// two can never disagree about what a denial said.
+func (rec *auditRecord) effectiveReason(logClaimValues bool) string {
+	if logClaimValues || !rec.reasonFromError {
+		return rec.Reason
+	}
+	return stageSummary(rec.Stage)
+}
+
+// reasonAttr returns the deny reason as the standardized "error" log attr,
+// gated identically to the durable record.
+func (rec *auditRecord) reasonAttr(logClaimValues bool) slog.Attr {
+	return slog.String("error", rec.effectiveReason(logClaimValues))
+}
+
+// stageSummary is the claim-free replacement for an error-derived reason: it
+// names the stage that failed and nothing about the identity that failed it.
+func stageSummary(stage string) string {
+	switch stage {
+	case "extract":
+		return "token validation failed"
+	case "account_check":
+		return "account allow-list check failed"
+	case "session_policy":
+		return "session policy read failed"
+	case "assume_role":
+		return "role assumption failed"
+	default:
+		return "request denied"
+	}
 }
 
 // matchedRole is the role the decision pertains to, for the standardized
@@ -179,7 +236,10 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 	appendIf("sessionName", rec.SessionName)
 	// Deny-only: absent on an allow rather than emitted empty.
 	appendIf("stage", rec.Stage)
-	appendIf("reason", rec.Reason)
+	// recordDecision redacts before building these attrs, so rec.Reason is
+	// already the gated form; resolve again anyway so a future caller that
+	// builds attrs from an unredacted record cannot leak it.
+	appendIf("reason", rec.effectiveReason(logClaimValues))
 	// Claim values: omitted entirely when the gate is off, not blanked.
 	if logClaimValues {
 		appendIf("jwtSub", rec.JWTSub)
@@ -414,12 +474,17 @@ func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) ma
 			continue
 		}
 		key := name
-		// Only rename when the alias target is not itself a claim in this
-		// token; otherwise both would land on one key and one would vanish.
-		if alias, ok := claimAliases[name]; ok {
-			if _, taken := rawClaims[alias]; !taken {
-				key = alias
-			}
+		// Only rename when the alias target is itself EMITTED for this token;
+		// otherwise both would land on one key and one would vanish. The test
+		// is "will it appear in this record", not "is the raw claim present":
+		// a claim the issuer's claim_mappings exclude, or one that is nil or
+		// formats empty, is dropped above and can collide with nothing. Asking
+		// only whether rawClaims held the key suppressed the rename for a
+		// claim that was never recorded, so a generic issuer carrying both
+		// repository and an unmapped repo silently lost the repo/repo_id audit
+		// vocabulary the alias exists to guarantee.
+		if alias, ok := claimAliases[name]; ok && !claimEmitted(rawClaims, alias, include) {
+			key = alias
 		}
 		out[key] = value
 	}
@@ -427,6 +492,19 @@ func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) ma
 		return nil
 	}
 	return out
+}
+
+// claimEmitted reports whether name would itself be recorded by auditClaims,
+// applying the same three drop rules as the loop above (absent/nil, excluded
+// by the issuer's claim_mappings, empty formatted value). It is the collision
+// test for claimAliases: only a claim that actually reaches the record can be
+// overwritten by a rename onto its key.
+func claimEmitted(rawClaims map[string]any, name string, include func(string) bool) bool {
+	raw, ok := rawClaims[name]
+	if !ok || raw == nil || !include(name) {
+		return false
+	}
+	return utils.FormatClaimValue(raw) != ""
 }
 
 // issuerClaimMappings returns an issuer's claim_mappings (canonical field ->

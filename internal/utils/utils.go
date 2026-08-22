@@ -25,8 +25,10 @@ import (
 // different number formatters would break exactly that.
 func FormatClaimValue(raw any) string {
 	// The 1<<53 bound is float64's exact-integer range; past it the int64
-	// conversion would print a value the token never carried.
-	if f, ok := raw.(float64); ok && f == math.Trunc(f) && math.Abs(f) < 1<<53 {
+	// conversion would print a value the token never carried. 2^53 itself is
+	// exactly representable, so the bound is inclusive — an exclusive test
+	// pushed that one value into %g and printed "9.007199254740992e+15".
+	if f, ok := raw.(float64); ok && f == math.Trunc(f) && math.Abs(f) <= 1<<53 {
 		return strconv.FormatInt(int64(f), 10)
 	}
 	return fmt.Sprintf("%v", raw)

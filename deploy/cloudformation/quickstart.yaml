@@ -91,6 +91,31 @@ Parameters:
       (fail-closed). Implies EnableS3Logs, since the guarantee needs a bucket
       to write to. Set false for the best-effort batched trail, which in Lambda
       can lose buffered records at container reclaim.
+  AuditLogRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    Description: >-
+      Days audit objects are kept in the log bucket before expiring. Keep this
+      at or above AuditLogObjectLockDays when Object Lock is on, or locked
+      versions outlive the rule and are never removed.
+  AuditLogObjectLockMode:
+    Type: String
+    Default: ""
+    AllowedValues: ["", "GOVERNANCE", "COMPLIANCE"]
+    Description: >-
+      S3 Object Lock mode for the audit bucket. GOVERNANCE can be overridden by
+      a principal holding s3:BypassGovernanceRetention; COMPLIANCE cannot be
+      overridden by anyone, including the root account, for the full retention
+      period. Empty leaves Object Lock off. Object Lock can only be enabled
+      when the bucket is created, so changing this later replaces the bucket.
+  AuditLogObjectLockDays:
+    Type: Number
+    Default: 365
+    MinValue: 1
+    Description: >-
+      Days each audit object version is retained under AuditLogObjectLockMode.
+      Ignored when Object Lock is off.
   SessionTagsTransitive:
     Type: String
     Default: "false"
@@ -212,6 +237,7 @@ Conditions:
   UseAnyCache: !Or [!Condition UseDynamoDB, !Condition UseS3Cache]
   UseAuditRequired: !Equals [!Ref AuditRequired, "true"]
   UseS3Logs: !Or [!Equals [!Ref EnableS3Logs, "true"], !Equals [!Ref AuditRequired, "true"]]
+  UseAuditObjectLock: !Not [!Equals [!Ref AuditLogObjectLockMode, ""]]
   UseSessionPolicyBucket: !Equals [!Ref EnableSessionPolicyBucket, "true"]
   UseTagAuth: !Equals [!Ref EnableTagAuth, "true"]
   CreateConfigBucket: !Equals [!Ref ConfigBucket, ""]
@@ -265,6 +291,9 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
 
+  # The durable record of every credential the warden ever issued. Versioning
+  # is on unconditionally so an overwrite or delete leaves the previous version
+  # recoverable; AuditLogObjectLockMode makes that retention non-negotiable.
   LogBucket:
     Type: AWS::S3::Bucket
     Condition: UseS3Logs
@@ -281,11 +310,26 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      ObjectLockEnabled: !If [UseAuditObjectLock, true, !Ref "AWS::NoValue"]
+      ObjectLockConfiguration: !If
+        - UseAuditObjectLock
+        - ObjectLockEnabled: Enabled
+          Rule:
+            DefaultRetention:
+              Mode: !Ref AuditLogObjectLockMode
+              Days: !Ref AuditLogObjectLockDays
+        - !Ref "AWS::NoValue"
       LifecycleConfiguration:
         Rules:
+          # Versioning turns an expiration into a noncurrent version that would
+          # otherwise be kept (and billed) forever. A version under Object Lock
+          # still survives until its retention expires, whatever this says.
           - Id: expire-objects
             Status: Enabled
-            ExpirationInDays: 90
+            ExpirationInDays: !Ref AuditLogRetentionDays
+            NoncurrentVersionExpirationInDays: !Ref AuditLogRetentionDays
 
   SessionPolicyBucket:
     Type: AWS::S3::Bucket

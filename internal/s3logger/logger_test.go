@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -290,9 +291,14 @@ func TestSuccessfulLogDelivery(t *testing.T) {
 		assert.Equal(t, "application/json", *params.ContentType)
 		assert.Equal(t, "gzip", *params.ContentEncoding)
 
-		// Check tags and metadata
-		assert.Contains(t, *params.Tagging, "source=aws-oidc-warden")
-		assert.Contains(t, *params.Tagging, "created-at=2025-05-19T12:30:45Z")
+		// Check tags and metadata. Tagging is a URL query string, so the
+		// values are percent-encoded: parsing it back is what proves the
+		// round-trip, since asserting on the raw text would pass for a
+		// string that no S3 tag parser can decode.
+		parsedTags, tagErr := url.ParseQuery(*params.Tagging)
+		assert.NoError(t, tagErr)
+		assert.Equal(t, "aws-oidc-warden", parsedTags.Get("source"))
+		assert.Equal(t, "2025-05-19T12:30:45Z", parsedTags.Get("created-at"))
 		assert.Contains(t, params.Metadata, "source")
 		assert.Equal(t, "aws-oidc-warden", params.Metadata["source"])
 

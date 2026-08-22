@@ -109,3 +109,81 @@ func TestAudit_GetSessionPolicyDebug_UsesRequestLoggerAndHonoursClaimGate(t *tes
 		})
 	}
 }
+
+// --- error-derived deny reasons follow the claim-value gate ---
+
+// TestAudit_ErrorReasonRedactedWhenClaimValuesOff pins that a deny reason
+// built from an error string is gated like any other claim value.
+//
+// Extraction, session-policy and STS errors routinely quote the identity that
+// failed — an expired token names its subject, an STS denial quotes the role
+// ARN and session name. log_claim_values=false promises those values stay out
+// of both the log stream and the durable record, but `reason` was emitted raw
+// on both, so the operator who turned the gate on still shipped the subject to
+// the audit bucket.
+func TestAudit_ErrorReasonRedactedWhenClaimValuesOff(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	cfg := auditTestCfg(t, false, false) // log_claim_values = false
+	sink := &fakeAuditSink{}
+	leaky := errors.New("token expired for subject org/secret-repo:ref:refs/heads/main")
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&stubExtractor{err: leaky}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-reason-gate", log)
+	require.Error(t, err)
+
+	rec := sink.last(t)
+	require.Equal(t, "deny", rec["decision"])
+	assert.Equal(t, "token validation failed", rec["reason"],
+		"the raw error text reached the durable audit record despite log_claim_values=false")
+	assert.NotContains(t, buf.String(), "org/secret-repo",
+		"the raw error text reached the log stream despite log_claim_values=false")
+
+	// The field must stay present: an audit record that cannot say why a
+	// request was denied is not an audit record.
+	require.NotEmpty(t, rec["reason"], "reason must be replaced, never dropped")
+	require.Equal(t, "extract", rec["stage"])
+}
+
+// With the gate on, the full diagnostic text is preserved — the fix must not
+// cost operators their error detail in the default configuration.
+func TestAudit_ErrorReasonPreservedWhenClaimValuesOn(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	cfg := auditTestCfg(t, false, true) // log_claim_values = true
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&stubExtractor{err: errors.New("token expired for subject org/secret-repo")}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-reason-open", log)
+	require.Error(t, err)
+
+	assert.Equal(t, "token expired for subject org/secret-repo", sink.last(t)["reason"])
+	assert.Contains(t, buf.String(), "org/secret-repo")
+}
+
+// A fixed-phrase reason carries no claim value and must survive the gate
+// verbatim — replacing it with the stage summary would lose the more specific
+// explanation for no benefit.
+func TestAudit_StaticReasonSurvivesClaimValueGate(t *testing.T) {
+	cfg := auditTestCfg(t, false, false)
+	sink := &fakeAuditSink{}
+	// Subject matches no mapping → deny at authorize with a fixed phrase.
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: allowClaims("org/other-repo")}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-reason-static", slog.Default())
+	require.Error(t, err)
+
+	assert.Equal(t, "role not allowed for repository or doesn't meet constraints",
+		sink.last(t)["reason"])
+}
