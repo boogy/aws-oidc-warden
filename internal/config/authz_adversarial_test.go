@@ -354,8 +354,15 @@ func TestConditionSemantics(t *testing.T) {
 	if ok(map[string]any{"ref": "refs/heads/main", "event_name": 42}) {
 		t.Error("TYPE CONFUSION: numeric claim satisfied a string condition")
 	}
-	if ok(map[string]any{"ref": "refs/heads/main", "event_name": []any{"push"}}) {
-		t.Error("TYPE CONFUSION: array claim satisfied a string condition")
+	if ok(map[string]any{"ref": "refs/heads/main", "event_name": []any{"pull_request"}}) {
+		t.Error("TYPE CONFUSION: array claim with no matching element satisfied a condition")
+	}
+	if ok(map[string]any{"ref": "refs/heads/main", "event_name": []any{42, true}}) {
+		t.Error("TYPE CONFUSION: array claim of non-strings satisfied a condition")
+	}
+	// Array claims match on ANY string element (GitLab/Okta group lists).
+	if !ok(map[string]any{"ref": "refs/heads/main", "event_name": []any{"pull_request", "push"}}) {
+		t.Error("array claim with a matching element should authorize")
 	}
 	if ok(map[string]any{"ref": "refs/heads/main", "event_name": nil}) {
 		t.Error("TYPE CONFUSION: null claim satisfied a string condition")

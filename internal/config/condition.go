@@ -159,6 +159,48 @@ func compileAnchoredCondition(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile("^(?:" + pattern + ")$")
 }
 
+// valueMatches reports whether one raw verified claim VALUE satisfies pattern
+// (already anchored at compile time).
+//
+// A string value matches when the pattern matches it. An ARRAY value — a
+// GitLab/Okta/Entra group, scope, or role list — matches when ANY string
+// element matches; this is the only place list semantics exist on the claim
+// side, and it is deliberately ANY rather than ALL, since "the caller is in
+// group X" is what a list claim means.
+//
+// Every other shape denies: a nil (absent or null), a number, a bool, an
+// object, and a non-string element inside an array. Conditions gate an
+// authorization decision, so an unmatched or unexpected shape is false, never
+// true. Numbers stay unmatched on purpose — regexing a float64 would mean
+// operators writing patterns against Go's %v rendering of a JSON number.
+//
+// Cost is bounded without an element cap: the token is already length-capped
+// upstream by max_token_bytes (default 8192), so the number of array elements
+// a request can carry is bounded by the same limit that bounds the claim set.
+func valueMatches(v any, pattern *regexp.Regexp) bool {
+	switch t := v.(type) {
+	case string:
+		return pattern.MatchString(t)
+	case []any:
+		for _, el := range t {
+			if s, ok := el.(string); ok && pattern.MatchString(s) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// claimMatches looks the named claim up and applies valueMatches. Call sites
+// that check several patterns against the SAME claim (actor_matches) should
+// hoist the lookup and call valueMatches directly instead of calling this in a
+// loop, so the map lookup and the type switch happen once.
+func claimMatches(claims map[string]any, claim string, pattern *regexp.Regexp) bool {
+	return valueMatches(claims[claim], pattern)
+}
+
 // satisfiesConditions reports whether claims satisfy every AND'd condition
 // (both the named-field conditions and any generic Extra entries), plus the
 // OR'd actor_matches dimension. A nil Condition always satisfies (no gate).
@@ -168,20 +210,16 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	}
 
 	for _, cc := range cond.compiled {
-		val, ok := claims[cc.claim].(string)
-		if !ok || !cc.pattern.MatchString(val) {
+		if !claimMatches(claims, cc.claim, cc.pattern) {
 			return false
 		}
 	}
 
 	if len(cond.actorPatterns) > 0 {
-		actor, ok := claims["actor"].(string)
-		if !ok {
-			return false
-		}
+		actor := claims["actor"] // hoisted: one lookup + one type switch, as today
 		matched := false
 		for _, pattern := range cond.actorPatterns {
-			if pattern.MatchString(actor) {
+			if valueMatches(actor, pattern) {
 				matched = true
 				break
 			}
