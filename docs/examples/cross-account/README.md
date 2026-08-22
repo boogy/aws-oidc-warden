@@ -194,7 +194,7 @@ role_mappings:
     roles:
       - arn:aws:iam::222222222222:role/aow/deploy-staging
     conditions:
-      branch: "refs/heads/main"
+      ref: "refs/heads/main"
 ```
 
 Authorization works exactly as in a single account — a member-account role ARN in `role_mappings` needs nothing special, and `tag_auth` can stay disabled. Optionally enable `tag_auth` as well: roles tagged with `aow/*` tags become assumable without any mapping, cross-account included (see [TAG_BASED_AUTHORIZATION.md](../../TAG_BASED_AUTHORIZATION.md)).

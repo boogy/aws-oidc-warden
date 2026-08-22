@@ -43,7 +43,7 @@ role_mappings:
     roles:
       - "arn:aws:iam::123456789012:role/ci"
     conditions:
-      branch: "main"
+      ref: "refs/heads/main"
 `)
 	p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) {
 		return yamlCfg, nil
@@ -56,7 +56,7 @@ role_mappings:
 
 	// The overlaid mapping's regex pattern must be compiled (the bug fix:
 	// otherwise AuthorizeRoles skips nil-pattern mappings).
-	matched, roles := cfg.AuthorizeRoles(base.Issuers[0].Issuer, "owner/repo", map[string]any{"ref": "main"})
+	matched, roles := cfg.AuthorizeRoles(base.Issuers[0].Issuer, "owner/repo", map[string]any{"ref": "refs/heads/main"})
 	assert.True(t, matched)
 	assert.Equal(t, []string{"arn:aws:iam::123456789012:role/ci"}, roles)
 

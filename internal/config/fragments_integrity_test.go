@@ -135,7 +135,7 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 		RoleSets:        map[string][]string{"prod": {"arn:aws:iam::111111111111:role/prod"}},
 		RoleMappings: []RoleMapping{
 			{Subject: "o/r", Roles: []string{"@prod"}, SessionPolicyFile: "p.json",
-				Conditions: &Condition{Branch: "main", Extra: map[string]string{"custom": "v"}}},
+				Conditions: &Condition{Ref: Patterns{"main"}, Claims: map[string]Patterns{"custom": {"v"}}}},
 		},
 		TagAuth:                 &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "acme", TransitiveSessionTags: true},
 		CrossAccount:            &CrossAccount{Enabled: true, SpokeRoleName: "aow-spoke", ExternalID: "eid", AllowedAccounts: []string{"222222222222"}},
@@ -450,7 +450,7 @@ role_mappings:
   - subject: "o/r"
     roles: ["@fragset"]
     conditions:
-      branch: "main"
+      ref: "refs/heads/main"
 role_groups:
   - subjects: ["g/one", "g/two"]
     defaults:
@@ -469,14 +469,14 @@ role_groups:
 	require.NotNil(t, cached)
 	snap := []string{}
 	snap = append(snap, cached.parsed.RoleMappings[0].Roles...)
-	condBranch := cached.parsed.RoleMappings[0].Conditions.Branch
+	condBranch := cached.parsed.RoleMappings[0].Conditions.Ref
 	setLen := len(cached.parsed.RoleSets["fragset"])
 
 	for i := 0; i < 5; i++ {
 		require.NoError(t, p.Refresh(context.Background()))
 		cfg := p.Get()
 		// Grants must be stable across reloads.
-		ok, roles := cfg.AuthorizeRoles(cfg.Issuers[0].Issuer, "o/r", map[string]any{"ref": "main"})
+		ok, roles := cfg.AuthorizeRoles(cfg.Issuers[0].Issuer, "o/r", map[string]any{"ref": "refs/heads/main"})
 		require.True(t, ok, "iteration %d: mapping lost", i)
 		require.Equal(t, []string{
 			"arn:aws:iam::111111111111:role/a",
@@ -490,7 +490,7 @@ role_groups:
 
 	c2 := p.fragments[f]
 	assert.Equal(t, snap, c2.parsed.RoleMappings[0].Roles, "cached fragment Roles mutated (@role_set expanded in place)")
-	assert.Equal(t, condBranch, c2.parsed.RoleMappings[0].Conditions.Branch)
+	assert.Equal(t, condBranch, c2.parsed.RoleMappings[0].Conditions.Ref)
 	assert.Equal(t, setLen, len(c2.parsed.RoleSets["fragset"]))
 	// Unexported per-mapping state must not have leaked into the cached parse.
 	assert.Nil(t, c2.parsed.RoleMappings[0].compiledPattern, "compiledPattern leaked into cached fragment")

@@ -95,6 +95,8 @@ CloudFormation exposes the same three knobs as `AuditLogRetentionDays`, `AuditLo
 - `AOW_S3_CONFIG_PATH` — object key (`config.yaml`)
 - `AOW_JWT_VALIDATION_MODE` — set from `var.jwt_validation_mode`; the extractor implementation is wired at cold start from this env var, not from `config.yaml` (which is hot-reloadable), so it must match the deployed Lambda binary variant
 
+> **v3:** `var.role_mappings[].conditions` follows the service's v3 condition schema — every key is the raw claim it checks. `branch` and `actor_matches` are gone (`ref`, `actor`), `runner_environment` is the new name for the runner-type check, and `environment` now renders a gate on GitHub's deployment-environment claim. Rename these in `terraform.tfvars` before applying: a plan against the old attribute names fails at plan time, and an `environment` left unrenamed plans clean but gates a different claim. The module still renders only these named keys — the `all_of`/`any_of`/`none_of` groups and the `claims:` escape hatch are `config.yaml`-only. See [docs/MIGRATION_V3.md](../docs/MIGRATION_V3.md).
+
 On startup the Lambda fetches and parses this file. All complex configuration (repo mappings, nested objects) lives here; scalar overrides can also be set via `AOW_*` env vars.
 
 ---

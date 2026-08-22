@@ -27,6 +27,7 @@
 | [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                 | Per-issuer session tags applied to every STS call, ABAC patterns                                                 |
 | [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) | Tag-based authorization, hub/spoke cross-account model                                                           |
 | [docs/LOGGING.md](docs/LOGGING.md)                                 | Structured logging, durable audit trail, `audit_required`, SIEM signals, alerts                                  |
+| [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md)                       | Upgrading from v2 to v3 — condition keys are claim names; `environment` changed meaning                          |
 | [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md)                       | Upgrading from v1 (single-issuer) to the v2 `issuers[]` model — breaking-change checklist                        |
 
 ---
@@ -37,7 +38,7 @@
 - **Hardened Token Validation**: Strict algorithm allow-list (RS/ES 256–512, never `none`/`HS*`), `kid`+`alg`+key-type key pinning, RSA≥2048 / EC on-curve checks, SSRF-safe JWKS fetching, and bounded time/size — full detail in [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)
 - **Delegated Validation Modes**: Let API Gateway (HTTP API v2 JWT Authorizer) or ALB OIDC verify the signature, while the service still re-validates every claim (`jwt_validation.mode: self`/`apigw`/`alb`)
 - **Multiple Deployment Options**: API Gateway (REST v1 + HTTP v2), Lambda URLs, Application Load Balancer, and a local development server
-- **Fine-Grained Access Control**: Authorization on a provider-neutral canonical **subject**; auto-anchored regex `conditions` on any verified claim (branch/actor/event/workflow/environment + arbitrary claims), all AND-ed
+- **Fine-Grained Access Control**: Authorization on a provider-neutral canonical **subject**; auto-anchored regex `conditions` keyed by the claim name itself (`ref`, `actor`, `event_name`, `project_path`, `groups`, … — any verified claim, any provider), each taking one pattern or a list of alternatives, AND-ed by default and composable with `all_of` / `any_of` / `none_of` boolean groups
 - **Session Policy Support**: Inline JSON or S3-stored policy files to scope AWS permissions per mapping
 - **Per-Issuer Session Tagging & ABAC**: Claims are forwarded as STS session tags for auditability and attribute-based access control — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)
 - **Tag-Based Authorization & Cross-Account (hub/spoke)**: Authorize role assumptions via IAM role tags without enumerating roles in config; extend to other AWS accounts through a spoke role — see [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md)
@@ -99,9 +100,11 @@ role_mappings:
     roles:
       - arn:aws:iam::123456789012:role/github-actions-role
     conditions:
-      branch: "refs/heads/main"
+      ref: "refs/heads/main"
 ```
 
+> **v3 note:** every `conditions:` key is the claim it checks. `branch`/`actor_matches` were renamed to `ref`/`actor`, and `environment` now checks the deployment-environment claim rather than `runner_environment` — see [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md).
+>
 > **v2 note:** the top-level `issuer`/`audiences` and `repo_role_mappings`/`constraints` keys from v1 were replaced by `issuers[]`, `role_mappings`, and `conditions`. See [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md).
 
 For the full reference — all keys, condition fields, session-policy options, remote S3 hot-reload, multi-issuer setup, and tag-auth config — see [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md), and [`example-config.yaml`](example-config.yaml).

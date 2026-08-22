@@ -49,7 +49,7 @@ default_issuer: "https://token.actions.githubusercontent.com"
 role_mappings:
   - subject: "myorg/api" # inherits default_issuer (GitHub)
     roles: ["arn:aws:iam::123456789012:role/gh-api"]
-    conditions: { branch: "refs/heads/main" }
+    conditions: { ref: "refs/heads/main" }
 
   - subject: "mygroup/myproject" # GitLab
     issuer: "https://gitlab.com"

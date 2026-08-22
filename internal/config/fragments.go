@@ -64,7 +64,7 @@ func parseFragment(data []byte, format, source string) (*FragmentConfig, error) 
 	}
 
 	var frag FragmentConfig
-	if err := v.Unmarshal(&frag); err != nil {
+	if err := v.Unmarshal(&frag, decoderOptions()...); err != nil {
 		return nil, fmt.Errorf("config fragment %q: failed to unmarshal: %w", source, err)
 	}
 	return &frag, nil

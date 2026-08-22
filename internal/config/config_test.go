@@ -966,7 +966,7 @@ func TestFindRoleSessionName_RespectsConditions(t *testing.T) {
 		RoleSessionName: "aws-oidc-warden",
 		RoleMappings: []RoleMapping{
 			{Subject: "acme/api", Roles: []string{role}, RoleSessionName: "prod-only",
-				Conditions: &Condition{Extra: map[string]string{"ref": "refs/heads/main"}}},
+				Conditions: &Condition{Claims: map[string]Patterns{"ref": {"refs/heads/main"}}}},
 		},
 	}
 	require.NoError(t, cfg.Validate())

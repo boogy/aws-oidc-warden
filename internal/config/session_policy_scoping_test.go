@@ -42,6 +42,7 @@ func TestFindSessionPolicy_ScopedToGrantingRole(t *testing.T) {
 	}
 	if policy == nil {
 		t.Fatal("deploy role assumed WITHOUT its restrictive session policy (regression)")
+		return // unreachable: t.Fatal exits the goroutine. Keeps staticcheck SA5011 quiet.
 	}
 	if *policy != restrictive {
 		t.Fatalf("wrong policy for deploy role:\n got %q\nwant %q", *policy, restrictive)
@@ -74,7 +75,7 @@ func TestFindSessionPolicy_ConditionsGateThePolicy(t *testing.T) {
 		RoleMappings: []RoleMapping{
 			// order 0: grants role but only on refs/heads/main, with a policy.
 			{Subject: "acme/app", Roles: []string{role}, SessionPolicy: mainOnly,
-				Conditions: &Condition{Ref: "refs/heads/main"}},
+				Conditions: &Condition{Ref: Patterns{"refs/heads/main"}}},
 			// order 1: grants role on any branch, no policy.
 			{Subject: "acme/app", Roles: []string{role}},
 		},

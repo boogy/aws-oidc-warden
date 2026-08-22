@@ -50,7 +50,7 @@ role_mappings:
   - subject: "org/api" # was `repo:`
     roles: ["arn:aws:iam::123456789012:role/deploy"]
     conditions: # was `constraints:`
-      branch: "refs/heads/main"
+      ref: "refs/heads/main" # `branch:` was removed in v3 — see MIGRATION_V3.md
 ```
 
 With a single issuer you may omit `default_issuer` (mappings inherit the sole issuer). With **two or more** issuers, each mapping must set `issuer:` or rely on `default_issuer`.

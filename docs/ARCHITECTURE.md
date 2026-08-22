@@ -364,8 +364,8 @@ role_mappings:
     roles:
       - "arn:aws:iam::123456789012:role/github-actions-role"
     conditions:
-      branch: "refs/heads/main" # regex against the raw 'ref' claim
-      actor_matches: ["admin-.*"] # Actor constraints
+      ref: "refs/heads/main" # regex against the raw 'ref' claim
+      actor: ["admin-.*"] # Actor constraints
       event_name: "push" # Event type constraints
     session_policy: | # Inline session policy
       {
@@ -408,27 +408,34 @@ flowchart TD
 
 ### 2. Condition Validation
 
-Every named field and every `Extra` (arbitrary-claim) entry compiles through the same anchored-regex mechanism, so a plain string is a widened `==`, not a special case:
+Every key under `conditions:` other than the three boolean groups names a raw verified claim, and every one of them compiles through the same anchored-regex mechanism, so a plain string is a widened `==`, not a special case. `Patterns` is a `[]string` that decodes from either a single scalar or a list, and the named fields are discoverability sugar over what the remain-map does generically:
 
 ```go
 type Condition struct {
-    Branch       string            `mapstructure:"branch"`        // checks the raw 'ref' claim
-    Ref          string            `mapstructure:"ref"`           // also checks 'ref' (alias of Branch)
-    RefType      string            `mapstructure:"ref_type"`      // branch, tag
-    EventName    string            `mapstructure:"event_name"`    // push, pull_request
-    WorkflowRef  string            `mapstructure:"workflow_ref"`  // .github/workflows/deploy.yml
-    Environment  string            `mapstructure:"environment"`   // checks the raw 'runner_environment' claim
-    ActorMatches []string          `mapstructure:"actor_matches"` // ["admin-.*", "specific-user"]
-    Extra        map[string]string `mapstructure:",remain"`       // any other raw claim, by name
+    Ref               Patterns `mapstructure:"ref"`                // "refs/heads/main" or a list of patterns
+    RefType           Patterns `mapstructure:"ref_type"`           // branch, tag
+    EventName         Patterns `mapstructure:"event_name"`         // push, pull_request
+    WorkflowRef       Patterns `mapstructure:"workflow_ref"`       // .github/workflows/deploy.yml
+    Actor             Patterns `mapstructure:"actor"`              // the triggering principal
+    RunnerEnvironment Patterns `mapstructure:"runner_environment"` // github-hosted, self-hosted
+    Environment       Patterns `mapstructure:"environment"`        // the deployment environment a job declares
+
+    AllOf  []*Condition `mapstructure:"all_of"`  // every member must be satisfied
+    AnyOf  []*Condition `mapstructure:"any_of"`  // at least one member must be satisfied
+    NoneOf []*Condition `mapstructure:"none_of"` // no member may be satisfied
+
+    ExplicitClaims map[string]Patterns `mapstructure:"claims"`   // escape hatch: keys are always claim names
+    Claims         map[string]Patterns `mapstructure:",remain"`  // any other raw claim, by name
 }
 ```
 
 **Validation Logic:**
 
-- All specified conditions must be satisfied (AND logic) — this includes a named field and an `Extra` entry that happen to target the same underlying claim; both apply and both must match.
+- Patterns listed for ONE claim are OR-ed; separate claims are AND-ed — including a named field and a `claims:` entry naming the same claim; both apply and both must match. `all_of` / `any_of` / `none_of` groups nest inside for richer logic, and on a single node the flat fields and all three groups are AND-ed together, so the top level of a `conditions:` block stays an implicit AND. Nesting is capped at 5 levels and one mapping's tree at 64 nodes, both rejected in `Validate()`.
 - Every pattern is auto-anchored (`^(?:pattern)$`) and regex-capable.
-- Claims are extracted from the validated JWT token; `Extra` claim values must be string-typed (a numeric claim like `run_id` never satisfies a condition).
-- Condition compilation happens once, in `Validate()`, never per request.
+- Claims are extracted from the validated JWT token. A **string** claim matches its anchored pattern; a **list** claim matches when any string element does (GitLab/Okta/Entra group, scope, and role lists). Every other shape denies — absent, `null`, numbers (a claim like `run_id` never satisfies a condition), bools, and objects.
+- Condition compilation happens once, in `Validate()`, never per request. `Validate()` additionally emits an advisory warning, on a `provider: github` issuer, for a claim name GitHub does not issue — a typo that would otherwise deny silently.
+- An empty pattern or an empty pattern list is rejected: both read as a predicate but gate nothing.
 
 ### 3. Caching Strategy
 
@@ -479,13 +486,13 @@ flowchart TD
     B --> C{Find Matching Subject Pattern<br/>issuer-bound, owner-bucketed index}
     C -->|No Match| D[Access Denied]
     C -->|Match Found| E[Load Conditions]
-    E --> F{Validate Branch/Ref}
+    E --> F{Validate ref}
     F -->|Failed| G[Access Denied]
-    F -->|Passed| H{Validate Actor}
+    F -->|Passed| H{Validate actor}
     H -->|Failed| I[Access Denied]
-    H -->|Passed| J{Validate Event}
+    H -->|Passed| J{Validate event_name}
     J -->|Failed| K[Access Denied]
-    J -->|Passed| L{Validate Environment/Extra claims}
+    J -->|Passed| L{Validate remaining claim conditions}
     L -->|Failed| M[Access Denied]
     L -->|Passed| N[Authorization Granted]
 ```
