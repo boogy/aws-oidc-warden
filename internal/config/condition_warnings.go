@@ -82,34 +82,47 @@ func knownClaimsFor(iss *IssuerConfig) map[string]bool {
 // can go straight to the line. known may be nil to skip the unknown-claim
 // check.
 func warnConditionKeys(cond *Condition, path, where string, known map[string]bool) {
+	warnConditionKeysAt(cond, path, where, known, false)
+}
+
+// warnConditionKeysAt carries one extra fact down the tree: whether this node
+// sits under a none_of, where a typo flips direction. Elsewhere a claim that
+// can never match stops the mapping authorizing; under none_of it is a veto
+// that can never fire, so the mapping authorizes what the file refuses. Same
+// typo, opposite blast radius — hence its own message.
+func warnConditionKeysAt(cond *Condition, path, where string, known map[string]bool, underNoneOf bool) {
 	if cond == nil {
 		return
 	}
 
 	if known != nil {
-		warnUnknownClaims(cond.Claims, path, where, known)
-		warnUnknownClaims(cond.ExplicitClaims, path+".claims", where, known)
+		warnUnknownClaims(cond.Claims, path, where, known, underNoneOf)
+		warnUnknownClaims(cond.ExplicitClaims, path+".claims", where, known, underNoneOf)
 	}
 
-	warnConditionGroup(cond.AllOf, path, "all_of", where, known)
-	warnConditionGroup(cond.AnyOf, path, "any_of", where, known)
-	warnConditionGroup(cond.NoneOf, path, "none_of", where, known)
+	warnConditionGroup(cond.AllOf, path, "all_of", where, known, underNoneOf)
+	warnConditionGroup(cond.AnyOf, path, "any_of", where, known, underNoneOf)
+	warnConditionGroup(cond.NoneOf, path, "none_of", where, known, true)
 }
 
 // warnUnknownClaims flags a claim name the issuer does not issue — a typo that
 // denies silently. prefix is the operator-facing path of the map's own node.
-func warnUnknownClaims(claims map[string]Patterns, prefix, where string, known map[string]bool) {
+func warnUnknownClaims(claims map[string]Patterns, prefix, where string, known map[string]bool, underNoneOf bool) {
+	msg := "condition references a claim this issuer does not issue; it can never match — check the spelling"
+	if underNoneOf {
+		msg = "none_of references a claim this issuer does not issue; it can never match, so this member can never veto and the mapping authorizes what it was meant to refuse — check the spelling"
+	}
 	for _, claim := range sortedKeys(claims) {
 		if !known[claim] {
-			slog.Warn("condition references a claim this issuer does not issue; it can never match — check the spelling",
+			slog.Warn(msg,
 				slog.String("mapping", where),
 				slog.String("key", prefix+"."+claim))
 		}
 	}
 }
 
-func warnConditionGroup(nodes []*Condition, path, name, where string, known map[string]bool) {
+func warnConditionGroup(nodes []*Condition, path, name, where string, known map[string]bool, underNoneOf bool) {
 	for i, child := range nodes {
-		warnConditionKeys(child, fmt.Sprintf("%s.%s[%d]", path, name, i), where, known)
+		warnConditionKeysAt(child, fmt.Sprintf("%s.%s[%d]", path, name, i), where, known, underNoneOf)
 	}
 }

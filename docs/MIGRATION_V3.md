@@ -2,15 +2,15 @@
 
 v3 makes `conditions:` say what it checks. Every key is now the **raw verified claim name**, for every issuer, and every value takes one anchored pattern or a list of them. The three keys whose names did not match their claim are gone, and nothing is deprecated-but-working: an old spelling is either renamed or it means something else.
 
-Nothing outside `conditions:` changes. Issuers, subjects, role sets, session policies, session tags, caching, and the request/response shape are identical to v2.
+One thing outside `conditions:` changes with it: the `aow/environment` IAM role tag followed the same rename (see [Tag-based authorization](#tag-based-authorization-follows-the-same-rename)). Issuers, subjects, role sets, session policies, session tags, caching, and the request/response shape are identical to v2.
 
 ## Rename table
 
-| v2 key                     | v3 key                       | Claim checked                                     |
-| -------------------------- | ---------------------------- | ------------------------------------------------- |
-| `branch: "refs/heads/main"` | `ref: "refs/heads/main"`     | `ref` — unchanged; `branch` never checked a branch name |
-| `actor_matches: [...]`     | `actor: [...]`               | `actor` — unchanged                                |
-| `environment: "github-hosted"` | `runner_environment: "github-hosted"` | `runner_environment` — **read the warning below** |
+| v2 key                         | v3 key                                | Claim checked                                           |
+| ------------------------------ | ------------------------------------- | ------------------------------------------------------- |
+| `branch: "refs/heads/main"`    | `ref: "refs/heads/main"`              | `ref` — unchanged; `branch` never checked a branch name |
+| `actor_matches: [...]`         | `actor: [...]`                        | `actor` — unchanged                                     |
+| `environment: "github-hosted"` | `runner_environment: "github-hosted"` | `runner_environment` — **read the warning below**       |
 
 A leftover `branch:` or `actor_matches:` does **not** stop the service from starting. Both now read as predicates on claims of those literal names, which GitHub does not issue, so the mapping denies every request and the boot log carries a warning naming the key (step 5 of the checklist). Fail-closed, but the failure shows up as a broken pipeline rather than a failed deploy — do the rename before you ship, not after.
 
@@ -18,9 +18,9 @@ A leftover `branch:` or `actor_matches:` does **not** stop the service from star
 
 `environment` still exists as a condition key, but it no longer means what it meant in v2.
 
-| Version | `environment:` checks                                        |
-| ------- | ------------------------------------------------------------ |
-| v2      | the `runner_environment` claim (`github-hosted` / `self-hosted`) |
+| Version | `environment:` checks                                                                                           |
+| ------- | --------------------------------------------------------------------------------------------------------------- |
+| v2      | the `runner_environment` claim (`github-hosted` / `self-hosted`)                                                |
 | v3      | the `environment` claim — the deployment environment a job declares (`environment: production` in the workflow) |
 
 A v2 config that carries `environment: "github-hosted"` **loads without error in v3** and then denies: it is now asking for a deployment environment literally named `github-hosted`, which no job declares. Rename it to `runner_environment` before upgrading.
@@ -29,9 +29,20 @@ This is also what v3 buys you: the deployment-environment claim was unreachable 
 
 ```yaml
 conditions:
-  environment: "production"           # deployment environment declared by the job
+  environment: "production" # deployment environment declared by the job
   runner_environment: "github-hosted" # runner type — a different claim
 ```
+
+## Tag-based authorization follows the same rename
+
+Role tags name claims the same way conditions do, so the tag moved with the key:
+
+| Tag                      | v2 claim             | v3 claim             |
+| ------------------------ | -------------------- | -------------------- |
+| `aow/environment`        | `runner_environment` | `environment`        |
+| `aow/runner-environment` | —                    | `runner_environment` |
+
+A role tagged `aow/environment: github-hosted` stops matching (fail-closed, same as the condition key). Retag it `aow/runner-environment: github-hosted`. Nothing else about tag-auth changes.
 
 ## Reserved keys and the `claims:` escape hatch
 
@@ -54,7 +65,9 @@ Entries under `claims:` are AND-ed with everything else on the node. It is a spe
 3. `environment:` → `runner_environment:` **unless** you actually meant the deployment environment, in which case leave it.
 4. Anything under a `constraints:` key is still v1 — see [MIGRATION_V2.md](MIGRATION_V2.md) first.
 5. Start the service and read the boot log. On a `provider: github` issuer, a condition naming a claim GitHub does not issue is reported by name — that catches a typo'd rename, since a claim that does not exist can never match and would otherwise deny silently.
-6. Values may now be lists (`actor: ["release-bot", "release-manager"]`), which often collapses a duplicated mapping or an `any_of` group into one line.
+6. `aws resourcegroupstaggingapi get-resources --tag-filters Key=aow/environment` — any role that turns up needs the tag renamed to `aow/runner-environment`, unless it really meant a deployment environment.
+7. Remove any condition key you left written with no value (`environment:` and nothing after it), and any `conditions:` written with nothing under it — including an explicit `conditions: null` from a generator, which YAML cannot tell apart from the typo. v3 rejects both at load: they used to decode as if the key were absent, so the mapping authorized more than the file said. An unconditional mapping omits the key.
+8. Values may now be lists (`actor: ["release-bot", "release-manager"]`), which often collapses a duplicated mapping or an `any_of` group into one line.
 
 ## What did NOT change
 

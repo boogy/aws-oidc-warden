@@ -659,3 +659,141 @@ run "role_mapping_issuer_must_be_configured_single_issuer" {
 
   expect_failures = [aws_s3_object.config]
 }
+
+# (v) A `conditions` object with every field null gates nothing. The rendered
+# config must omit the key entirely rather than emit a bare `conditions:` —
+# which the service rejects at boot since 3.0.0 — and var.role_mappings
+# rejects the shape at plan time, before either happens.
+run "all_null_conditions_rejected" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject    = "my-org/my-repo"
+        roles      = ["arn:aws:iam::111122223333:role/deploy"]
+        conditions = {}
+      },
+    ]
+  }
+
+  expect_failures = [var.role_mappings]
+}
+
+# (v2) Same gate, one step subtler: `claims = {}` and `actor = []` are NOT null,
+# so a `!= null` check would wave them through — and each renders a key that
+# gates nothing. Empties count as absent here.
+run "empty_collection_conditions_rejected" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject = "my-org/my-repo"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+        conditions = {
+          actor  = []
+          claims = {}
+        }
+      },
+    ]
+  }
+
+  expect_failures = [var.role_mappings]
+}
+
+# (v3) An empty field hiding BESIDE a real one. The mapping is genuinely gated
+# on `ref`, so the gates-nothing check passes — but `actor: []` still reaches
+# the config, and an empty pattern list fails the service at boot rather than
+# denying, which turns a clean apply into a crash-loop.
+run "empty_field_beside_real_condition_rejected" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject = "my-org/my-repo"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+        conditions = {
+          ref   = "refs/heads/main"
+          actor = []
+        }
+      },
+    ]
+  }
+
+  expect_failures = [var.role_mappings]
+}
+
+# (v4) The string form of the same mistake.
+run "empty_string_condition_rejected" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject = "my-org/my-repo"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+        conditions = {
+          ref = ""
+        }
+      },
+    ]
+  }
+
+  expect_failures = [var.role_mappings]
+}
+
+# (v5) And one level deeper: a claims entry naming a real claim with no
+# alternatives under it.
+run "empty_claims_pattern_list_rejected" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject = "my-org/my-repo"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+        conditions = {
+          claims = {
+            base_ref = []
+          }
+        }
+      },
+    ]
+  }
+
+  expect_failures = [var.role_mappings]
+}
+
+# (w) `claims` reaches any claim the named fields do not cover — the v3
+# escape hatch — and its values are a list of OR-ed alternatives.
+run "conditions_claims_map_renders" {
+  command = plan
+
+  variables {
+    role_mappings = [
+      {
+        subject = "my-org/my-repo"
+        roles   = ["arn:aws:iam::111122223333:role/deploy"]
+        conditions = {
+          environment = "production"
+          claims = {
+            repository_visibility = ["private"]
+            base_ref              = ["refs/heads/main", "refs/heads/release/.+"]
+          }
+        }
+      },
+    ]
+  }
+
+  assert {
+    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].conditions.environment == "production"
+    error_message = "A named condition field must render alongside the claims map."
+  }
+
+  assert {
+    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].conditions.claims.base_ref == ["refs/heads/main", "refs/heads/release/.+"]
+    error_message = "Each claims entry must render as its full list of alternatives, in order."
+  }
+}

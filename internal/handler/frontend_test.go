@@ -1,18 +1,75 @@
 package handler_test
 
+// The per-frontend adapters: event parse and response serialization for API
+// Gateway v2 and ALB (including multi-value headers), plus the log-schema
+// adapter each one feeds.
 import (
 	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAwsApiGatewayV2_Handler_ExtractsClaims(t *testing.T) {
+	event := events.APIGatewayV2HTTPRequest{
+		Body: `{"role":"arn:aws:iam::123456789012:role/MyRole"}`,
+		RequestContext: events.APIGatewayV2HTTPRequestContext{
+			Authorizer: &events.APIGatewayV2HTTPRequestContextAuthorizerDescription{
+				JWT: &events.APIGatewayV2HTTPRequestContextAuthorizerJWTDescription{
+					Claims: map[string]string{
+						"iss":        "https://token.actions.githubusercontent.com",
+						"repository": "org/repo",
+						"ref":        "refs/heads/main",
+						"ref_type":   "branch",
+						"actor":      "octocat",
+						"exp":        "9999999999",
+						"iat":        "1000000000",
+					},
+				},
+			},
+		},
+	}
+
+	// Use a fixed extractor so claims are returned directly without token validation.
+	// This isolates the adapter's routing logic from the extractor implementation.
+	ex := &fixedExtractor{claims: &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "org/repo"},
+		Repository:       "org/repo",
+		Ref:              "refs/heads/main",
+		Actor:            "octocat",
+	}}
+
+	h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex, nil)
+	resp, err := h.Handler(context.Background(), event)
+	require.NoError(t, err)
+	assert.Equal(t, 200, resp.StatusCode)
+}
+
+func TestAwsApiGatewayV2_Handler_MissingAuthorizer(t *testing.T) {
+	// No authorizer claims → extractor should reject with ErrTokenValidationFailed → 401.
+	event := events.APIGatewayV2HTTPRequest{
+		Body: `{"role":"arn:aws:iam::123456789012:role/MyRole"}`,
+	}
+
+	// Use a stub extractor that always fails (simulates missing authorizer context).
+	ex := &stubExtractor{err: handler.ErrTokenValidationFailed}
+
+	h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex, nil)
+	resp, err := h.Handler(context.Background(), event)
+	require.NoError(t, err)
+	assert.Equal(t, 401, resp.StatusCode)
+}
+
+// ---------- ALB multi-value headers ----------
 
 // captureExtractor records the ExtractionInput the adapter built and then
 // fails the request, so a test can assert on adapter behaviour alone.
@@ -133,4 +190,56 @@ func TestALBHandler_MultiValueWinsOverSingleValue(t *testing.T) {
 	_, err := h.Handler(context.Background(), event)
 	require.NoError(t, err)
 	assert.Equal(t, "multi-value-oidc", ex.input.ALBOIDCData)
+}
+
+// ---------- log-schema adapter ----------
+
+// TestALBHandler_NoXFF_OmitsEmptySourceIPKeys drives the real ALB adapter
+// (handler.AwsApplicationLoadBalancer.Handler) rather than hand-composing its
+// slog.With bindings, because logschema_test.go's alb-without-xff sub-test
+// only reproduces those bindings — it can't detect a regression in alb.go
+// itself. If alb.go ever goes back to binding sourceIp/sourceIpFrom
+// unconditionally, this is the only guard that would catch it.
+//
+// The stub extractor fails immediately, so this also exercises the "request
+// dies before the decision" path the brief calls out: the standardized
+// decision line is still emitted (via finalizeDeny), and it must still omit
+// the empty IP keys.
+func TestALBHandler_NoXFF_OmitsEmptySourceIPKeys(t *testing.T) {
+	var buf bytes.Buffer
+	prevDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	defer slog.SetDefault(prevDefault)
+
+	ex := &stubExtractor{err: handler.ErrTokenValidationFailed}
+	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+
+	event := events.ALBTargetGroupRequest{
+		HTTPMethod: "POST",
+		Path:       "/assume-role",
+		Body:       `{"role":"arn:aws:iam::123456789012:role/MyRole"}`,
+		Headers: map[string]string{
+			// Deliberately no x-forwarded-for key: clientIP("", headers)
+			// returns ("", "") for ALB in this case.
+			"x-amzn-oidc-data": "dummy-oidc-data",
+		},
+		RequestContext: events.ALBTargetGroupRequestContext{
+			ELB: events.ELBContext{TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/test/abc"},
+		},
+	}
+
+	resp, err := h.Handler(context.Background(), event)
+	require.NoError(t, err)
+	assert.Equal(t, 401, resp.StatusCode)
+
+	lines := 0
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		lines++
+		assert.NotContains(t, line, `"sourceIp":""`, "sourceIp must be omitted, not emitted empty, on the real ALB adapter: %s", line)
+		assert.NotContains(t, line, `"sourceIpFrom":""`, "sourceIpFrom must be omitted, not emitted empty, on the real ALB adapter: %s", line)
+	}
+	require.NotZero(t, lines, "expected at least one captured log line")
 }

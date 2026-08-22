@@ -53,15 +53,20 @@ The combining rules:
 
 ### Equivalence with `role_mappings.conditions`
 
-| `conditions` field           | Tag (default prefix) | Matching difference                                                 |
-| ---------------------------- | -------------------- | ------------------------------------------------------------------- |
-| `branch` (regex on `ref`)    | `aow/branch`         | exact; matches full `ref` **or** short branch name                  |
-| `ref` (regex)                | `aow/ref`            | exact full ref                                                      |
-| `ref_type`                   | `aow/ref-type`       | exact                                                               |
-| `event_name`                 | `aow/event-name`     | exact                                                               |
-| `workflow_ref` (regex)       | `aow/workflow-ref`   | exact                                                               |
-| `environment`                | `aow/environment`    | exact (matches the `runner_environment` claim, same as constraints) |
-| `actor` (regex list)        | `aow/actor`          | exact; space-list = OR                                              |
+Every tag suffix is its claim name with underscores written as dashes, so a tag and a condition on the same claim are spelled the same way. Tags match exactly; conditions compile anchored regex.
+
+| `conditions` key       | Tag (default prefix)     | Claim              | Matching difference                                   |
+| ---------------------- | ------------------------ | ------------------ | ----------------------------------------------------- |
+| `ref` (regex)          | `aow/ref`                | `ref`              | exact full ref                                        |
+| —                      | `aow/branch`             | `ref`              | tag-only convenience: full `ref` **or** short name     |
+| `ref_type`             | `aow/ref-type`           | `ref_type`         | exact                                                 |
+| `event_name`           | `aow/event-name`         | `event_name`       | exact                                                 |
+| `workflow_ref` (regex) | `aow/workflow-ref`       | `workflow_ref`     | exact                                                 |
+| `environment`          | `aow/environment`        | `environment`      | exact; the deployment environment a job declares      |
+| `runner_environment`   | `aow/runner-environment` | `runner_environment` | exact; `github-hosted` / `self-hosted`              |
+| `actor` (regex list)   | `aow/actor`              | `actor`            | exact; space-list = OR                                |
+
+> **Changed in 3.0.0** — `aow/environment` checked `runner_environment` in v2, while `conditions.environment` checked it too; both now check the deployment-environment claim, and the runner type has its own key on each side. A role still tagged `aow/environment: github-hosted` no longer matches (fail-closed) — retag it `aow/runner-environment`. There is no `aow/branch` equivalent under `conditions:`; write `ref` with a regex.
 
 ---
 
@@ -80,7 +85,8 @@ Tag keys use a configurable prefix (`tag_auth.tag_prefix`, default `aow/`).
 | `aow/ref-type`       | `ref_type` (`branch`/`tag`)      | exact or space-list                                                |
 | `aow/event-name`     | `event_name` (`push`, …)         | exact or space-list                                                |
 | `aow/workflow-ref`   | `workflow_ref`                   | exact full `owner/repo/.github/workflows/x.yml@ref`                |
-| `aow/environment`    | `runner_environment`             | mirrors `constraints.environment`                                  |
+| `aow/environment`    | `environment`                    | deployment environment a job declares; **changed in 3.0.0**        |
+| `aow/runner-environment` | `runner_environment`         | `github-hosted` / `self-hosted`; **new in 3.0.0**                  |
 | `aow/actor`          | `actor`                          | exact or space-list                                                |
 
 ### Example
@@ -155,7 +161,7 @@ This is **allow-if-either**, with explicit mappings short-circuiting:
 Key consequences:
 
 - A mapping that **authorizes** the role always wins and supplies the session policy. Tag-auth never overrides or tightens a mapping. The policy comes from the mapping that authorized _this role_ (subject match + conditions satisfied + grants the role); if several qualify, the first-declared wins — see the ordering foot-gun in [CONFIGURATION.md](CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets).
-- A mapping that **fails** (role not listed, or constraints not satisfied) does **not** hard-deny when tag-auth is enabled — the request falls through to the tag check. Tag-auth can therefore _broaden_ access beyond what mappings allow. If you rely on a mapping to _deny_, do not also publish matching `aow/*` tags on that role.
+- A mapping that **fails** (role not listed, or conditions not satisfied) does **not** hard-deny when tag-auth is enabled — the request falls through to the tag check. Tag-auth can therefore _broaden_ access beyond what mappings allow. If you rely on a mapping to _deny_, do not also publish matching `aow/*` tags on that role.
 
 ---
 

@@ -121,12 +121,12 @@ role_groups:
         event_name: "push"
 ```
 
-| Concept         | Replaces (v1)        | Notes                                                                                                                                                                                                                        |
-| --------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `role_mappings` | `repo_role_mappings` | `subject` replaces `repo`; each entry binds to one `issuer` (explicit, `default_issuer`, or the sole configured issuer).                                                                                                     |
+| Concept         | Replaces (v1)        | Notes                                                                                                                                                                                                 |
+| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role_mappings` | `repo_role_mappings` | `subject` replaces `repo`; each entry binds to one `issuer` (explicit, `default_issuer`, or the sole configured issuer).                                                                              |
 | `conditions`    | `constraints`        | Any raw claim name as the key (`ref`, `event_name`, `repository`, `project_path`, …), with one pattern or a list of patterns as the value, plus the `all_of`/`any_of`/`none_of` boolean groups below. |
-| `role_sets`     | (new)                | Named `[]string` ARN lists; reference as `"@name"` inside any `roles` list. Resolved once at `Validate()`, before the requested-role gate.                                                                                   |
-| `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.                                                             |
+| `role_sets`     | (new)                | Named `[]string` ARN lists; reference as `"@name"` inside any `roles` list. Resolved once at `Validate()`, before the requested-role gate.                                                            |
+| `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.                                      |
 
 `subject` is matched with the same auto-anchored-regex semantics `repo` used (`^(?:pattern)$`) — keep patterns specific. A bare `.*`/`.+` is rejected by `Validate()` wherever it gates an authorization decision: both in `conditions` fields and as a `subject` (including `role_groups.subjects`), since a wildcard subject would grant its roles to every subject of the bound issuer. The check is literal, so an equivalent pattern written another way (`(.*)`, `[\s\S]*`) still compiles — it stops the accident, not a determined operator.
 
@@ -170,7 +170,7 @@ conditions:
 
 Entries under `claims:` are AND-ed with everything else on the node — it is a spelling, not a separate evaluation mode.
 
-For an issuer configured with `provider: github`, `Validate()` warns when a condition names a claim GitHub does not issue (`reposiory`, `event-name`) — a misspelled claim can never match, so the mapping would silently stop authorizing. It is a warning, not an error: the issuer's own `claim_mappings` / `required_claims` / `session_tags` claims count as known, and generic issuers are never warned about, since their claim vocabulary is whatever their provider mints.
+For an issuer configured with `provider: github`, `Validate()` warns when a condition names a claim GitHub does not issue (`reposiory`, `event-name`) — a misspelled claim can never match, so the mapping would silently stop authorizing. It is a warning, not an error: the issuer's own `claim_mappings` / `required_claims` / `session_tags` claims count as known, and generic issuers are never warned about, since their claim vocabulary is whatever their provider mints. The same typo inside a `none_of` is warned about in stronger terms — there it removes a veto rather than adding one; see [Semantics to know](#boolean-logic-in-conditions) below.
 
 ### Boolean logic in conditions
 
@@ -208,7 +208,7 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 - Nesting is capped at **5 levels** (the top-level `conditions:` block is level 1).
 - One mapping's condition tree is capped at **64 nodes** total.
 - An empty group (`any_of: []`) is rejected — it reduces the gate to a constant.
-- A group member that gates nothing (`- {}`) is rejected — an always-true member makes an `any_of` always pass and a `none_of` always fail. An empty top-level `conditions: {}` stays legal; it has always meant "no gate".
+- A group member that gates nothing (`- {}`) is rejected — an always-true member makes an `any_of` always pass and a `none_of` always fail. The whole block is checked the same way: `conditions: {}`, `conditions:` with nothing under it (an explicit `conditions: null` included — YAML cannot tell the two apart), or a block whose every key was written with no value, is rejected — each would authorize every request that reaches the mapping. Omit `conditions` entirely for an unconditional mapping.
 - The bare-wildcard rejection (`.*`, `.+`) applies at every nesting level, exactly as it does at the top.
 - A key that names no claim (`"": "pattern"`) is rejected — it reads as a gate but can never match any claim.
 - Errors name the offending node by path, e.g. `conditions.any_of[1].all_of[0]: invalid pattern for "ref"`. When a block has more than one bad entry, the reported one is stable across restarts (claim keys are compiled in sorted order).
@@ -216,9 +216,18 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 **Semantics to know:**
 
 - **`none_of` is exact negation.** A member naming a claim the token does not carry cannot match, so its negation holds and the `none_of` **passes**. If you need the claim to be present, add it as a flat predicate alongside the group, or list it in that issuer's `required_claims`.
+- **`none_of` is the one place a typo fails open.** Everywhere else a key that can never match makes the mapping stop authorizing; inside a `none_of` it makes a veto that can never fire, so the mapping authorizes what you wrote it to refuse. `Validate()` warns about this specifically for `provider: github` (with different wording from the ordinary typo warning), but a generic issuer has no vocabulary to check against — spell claim names in a `none_of` against the token you actually receive.
+- **A `none_of` member with two keys is a negated AND, not two vetoes.** `none_of: [{actor: mallory, event_name: pull_request}]` denies only a run that is both, so `mallory` on a `push` is still authorized. Write one member per thing you want to refuse:
+
+  ```yaml
+  none_of:
+    - actor: "mallory"
+    - event_name: "pull_request"
+  ```
+
 - **A missing or wrong-typed claim never satisfies a positive predicate.** Absent, `null`, number, bool, and object claims all fail to match, so a condition on one denies.
-- **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Non-string elements are ignored. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra. Note the two lists are independent: a list of *patterns* is satisfied when any pattern matches, and a list-valued *claim* is matched when any element matches.
-- **An empty pattern (`ref: ""`) or an empty list (`ref: []`) is rejected at load time.** Both read as a predicate but gate nothing; before v3.0.0 an empty string was silently ignored.
+- **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Non-string elements are ignored. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra. Note the two lists are independent: a list of _patterns_ is satisfied when any pattern matches, and a list-valued _claim_ is matched when any element matches.
+- **An empty pattern (`ref: ""`), an empty list (`ref: []`), or a key written with no value at all (`ref:`) is rejected at load time.** All three read as a predicate but gate nothing; before v3.0.0 an empty string was silently ignored and a valueless key was indistinguishable from an omitted one, which quietly widened the gate.
 - **Claim keys are matched lowercase.** The config loader folds every key to lower case before it is read, so a claim whose name has upper-case letters (`emailVerified`) becomes `emailverified` and can never match the claim the token actually carries. This is fail-closed — the mapping denies rather than over-grants — but it means a mixed-case claim is not gateable by name. Gate on a different claim the same token carries, or have the issuer emit a lower-case alias.
 - **Pattern values are coerced to strings.** A YAML scalar written unquoted (`ref: 123`, `ref: true`) is decoded as the pattern `123` / `1`, not rejected. Always quote patterns.
 - **`all_of`, `any_of`, `none_of`, and `claims` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it at the top level — it parses as a boolean group (or as the `claims:` block), and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nest it under `claims:` instead, whose keys are always claim names. Nothing else changes about generic claim predicates.

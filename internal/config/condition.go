@@ -177,12 +177,24 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 	// and without this the compiled order — and, more importantly, WHICH bad
 	// entry a config with two of them reports — would differ run to run, so the
 	// same broken config could produce a different error on each restart.
+	//
+	// A key present in the map with a nil value is `repository:` written with
+	// nothing after it. add() treats nil as "not written" — correct for the
+	// named fields above, where absent and nil are indistinguishable — so the
+	// map keys are checked here, where presence IS observable. Left alone it
+	// would compile to no predicate at all and silently widen the gate.
 	for _, claim := range sortedKeys(cond.Claims) {
+		if cond.Claims[claim] == nil {
+			return errNoPatternForKey(path, claim)
+		}
 		if err := add(claim, claim, cond.Claims[claim]); err != nil {
 			return err
 		}
 	}
 	for _, claim := range sortedKeys(cond.ExplicitClaims) {
+		if cond.ExplicitClaims[claim] == nil {
+			return errNoPatternForKey(path, "claims."+claim)
+		}
 		if err := add("claims."+claim, claim, cond.ExplicitClaims[claim]); err != nil {
 			return err
 		}
@@ -194,7 +206,29 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 	if err := compileGroup("any_of", cond.AnyOf, path, depth, budget); err != nil {
 		return err
 	}
-	return compileGroup("none_of", cond.NoneOf, path, depth, budget)
+	if err := compileGroup("none_of", cond.NoneOf, path, depth, budget); err != nil {
+		return err
+	}
+
+	// A top-level node that gates nothing is rejected for the same reason a
+	// group member that gates nothing is: it authorizes unconditionally. The
+	// check has to be here, on the aggregate, because a named field written
+	// with no value (`environment:`) decodes to exactly the same zero value as
+	// a field that was never written, so the only place the mistake is visible
+	// is that the whole block compiled to no predicate. Writing `conditions: {}`
+	// deliberately is the same mistake typed on purpose: drop the key.
+	if depth == 1 && conditionIsEmpty(cond) {
+		return fmt.Errorf("%s: declares no predicate, so it would authorize every request that reaches it; remove the `conditions` key if the mapping is meant to be unconditional, or give the key you wrote a pattern", path)
+	}
+	return nil
+}
+
+// errNoPatternForKey reports a condition key written with no value at all.
+// Distinct from the empty-list error: `repository: []` says "match nothing"
+// and `repository:` says nothing at all, but both compile to no predicate,
+// which is the one thing a gate must never do by accident.
+func errNoPatternForKey(path, key string) error {
+	return fmt.Errorf("%s: %q has no value; a condition key with no pattern gates nothing — give it a pattern or remove the key", path, key)
 }
 
 // sortedKeys returns m's keys in lexical order. Compilation walks the claim
@@ -219,8 +253,10 @@ func sortedKeys(m map[string]Patterns) []string {
 //     for all_of/none_of, and in neither case what the operator meant;
 //   - a member that declares no predicate (`- {}` or a null entry) — always
 //     true, so a single one makes an any_of always pass and a none_of always
-//     fail. An empty TOP-LEVEL condition stays legal (it has always meant "no
-//     gate", identical to omitting the key); only group members are rejected.
+//     fail.
+//
+// compileConditionAt applies the same no-predicate check to the top-level node
+// once its groups are compiled, so `conditions: {}` is rejected too.
 func compileGroup(name string, nodes []*Condition, path string, depth int, budget *int) error {
 	if nodes == nil {
 		return nil

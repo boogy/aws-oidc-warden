@@ -89,7 +89,7 @@ role_mappings:${length(cfg.role_mappings) == 0 ? " []" : ""}
 %{ if m.role_session_name != null ~}
     role_session_name: ${jsonencode(m.role_session_name)}
 %{ endif ~}
-%{ if m.conditions != null ~}
+%{ if m.conditions != null && anytrue([for v in values(m.conditions) : v != null]) ~}
     conditions:
 %{ if m.conditions.ref != null ~}
       ref: ${jsonencode(m.conditions.ref)}
@@ -113,6 +113,15 @@ role_mappings:${length(cfg.role_mappings) == 0 ? " []" : ""}
       actor:${length(m.conditions.actor) == 0 ? " []" : ""}
 %{ for a in m.conditions.actor ~}
         - ${jsonencode(a)}
+%{ endfor ~}
+%{ endif ~}
+%{ if m.conditions.claims != null ~}
+      claims:${length(m.conditions.claims) == 0 ? " {}" : ""}
+%{ for name in sort(keys(m.conditions.claims)) ~}
+        ${jsonencode(name)}:${length(m.conditions.claims[name]) == 0 ? " []" : ""}
+%{ for p in m.conditions.claims[name] ~}
+          - ${jsonencode(p)}
+%{ endfor ~}
 %{ endfor ~}
 %{ endif ~}
 %{ endif ~}

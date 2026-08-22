@@ -23,8 +23,9 @@ import (
 //
 // The supported dimensions mirror role_mapping conditions (subject, repo,
 // repo-owner, branch, ref, ref-type, event-name, workflow-ref, environment,
-// actor) so a role can require, e.g., subject==X AND ref==Y. Unlike
-// conditions, tag matching is exact (AWS tag values cannot hold regex).
+// runner-environment, actor) so a role can require, e.g., subject==X AND
+// ref==Y. Unlike conditions, tag matching is exact (AWS tag values cannot
+// hold regex).
 func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, verifiedIssuer, subject string) bool {
 	if t == nil || !t.Enabled {
 		return false
@@ -80,7 +81,12 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, v
 		{"ref-type", "ref_type"},         // "branch" or "tag"
 		{"event-name", "event_name"},     // e.g. "push", "pull_request"
 		{"workflow-ref", "workflow_ref"}, // e.g. org/repo/.github/workflows/deploy.yml@refs/heads/main
-		{"environment", "runner_environment"},
+		// Every suffix is its claim name with underscores written as dashes.
+		// `environment` checked runner_environment until 3.0.0 — the same word
+		// meaning two claims depending on where it was written. It now checks
+		// the deployment-environment claim; the runner type has its own tag.
+		{"environment", "environment"},
+		{"runner-environment", "runner_environment"},
 		{"actor", "actor"},
 	}
 	for _, d := range dims {

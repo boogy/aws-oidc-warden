@@ -1,14 +1,14 @@
 package aws
 
-// Adversarial verification of role assumption: cross-account fail-closed
-// paths, ARN guard bypass attempts, session policy/tag handling, and duration
-// clamping. Asserts on exactly what would have been sent to STS.
-
+// AssumeRole: adversarial verification of the call it builds — the session
+// tags derived from verified claims, the role-name length rule, and the
+// confused-deputy protections (external ID, source identity).
 import (
 	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
@@ -17,6 +17,9 @@ import (
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 const hubAcct = "111111111111"
@@ -327,4 +330,172 @@ func TestSessionNameSanitized(t *testing.T) {
 	if len(*f.lastAssume.RoleSessionName) > 64 {
 		t.Errorf("session name over 64 chars: %d", len(*f.lastAssume.RoleSessionName))
 	}
+}
+
+// ---------- session tags ----------
+
+func TestGetRoleTags_SameAccount(t *testing.T) {
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetRole", mock.MatchedBy(func(in *iam.GetRoleInput) bool {
+		return *in.RoleName == "app"
+	})).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+		Tags: []iamtypes.Tag{
+			{Key: aws.String("aow/repo"), Value: aws.String("acme/api")},
+			{Key: aws.String("Team"), Value: aws.String("platform")},
+		},
+	}}, nil).Once()
+
+	c := newTagAuthConsumer(m) // helper from consumer_spoke_test.go
+	tags, err := c.GetRoleTags("arn:aws:iam::111111111111:role/app")
+	require.NoError(t, err)
+	assert.Equal(t, "acme/api", tags["aow/repo"])
+	assert.Equal(t, "platform", tags["Team"])
+	// cached second call → GetRole still Once
+	_, err = c.GetRoleTags("arn:aws:iam::111111111111:role/app")
+	require.NoError(t, err)
+	m.AssertExpectations(t)
+}
+
+func TestGetRoleTags_CrossAccount_UsesSpokeCreds(t *testing.T) {
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount").Return("111111111111", nil)
+	exp := time.Now().Add(time.Hour)
+	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
+	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
+		SessionToken: aws.String("ST"), Expiration: &exp,
+	}}, nil).Once()
+	m.On("GetRoleAs", mock.MatchedBy(func(in *iam.GetRoleInput) bool {
+		return *in.RoleName == "app"
+	}), mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+		Tags: []iamtypes.Tag{{Key: aws.String("aow/repo"), Value: aws.String("acme/api")}},
+	}}, nil).Once()
+
+	c := newTagAuthConsumer(m)
+	tags, err := c.GetRoleTags("arn:aws:iam::222222222222:role/app")
+	require.NoError(t, err)
+	assert.Equal(t, "acme/api", tags["aow/repo"])
+	m.AssertExpectations(t)
+}
+
+// ---------- role name length ----------
+
+// IAM's 64-character cap applies to the role NAME, not to the whole identifier:
+// a role may carry a path (`/team/sub/Name`, up to 512 characters) and the name
+// is the final segment. Measuring the full string would reject valid roles with
+// deep paths — so these cases pin that the length is taken after the last '/'.
+func TestValidateRoleNameLength_PathIsNotCountedTowardTheNameCap(t *testing.T) {
+	name64 := strings.Repeat("a", 64)
+	name65 := strings.Repeat("a", 65)
+	deepPath := "/" + strings.Repeat("segment/", 20) // 160 chars of path alone
+
+	cases := []struct {
+		desc    string
+		input   string
+		wantErr bool
+	}{
+		{"plain name at the cap", name64, false},
+		{"plain name one over the cap", name65, true},
+		{"short name behind a deep path", deepPath + "Deploy", false},
+		{"name at the cap behind a deep path", deepPath + name64, false},
+		{"name over the cap behind a deep path", deepPath + name65, true},
+		{"single path segment, short name", "team/Deploy", false},
+		{"empty (rejected earlier by the caller, not here)", "", false},
+		{"trailing slash yields an empty name", "team/", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := validateRoleNameLength(tc.input)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected rejection for %q (len %d)", tc.input, len(tc.input))
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected rejection for %q (len %d): %v", tc.input, len(tc.input), err)
+			}
+		})
+	}
+}
+
+// The whole point of rejecting instead of truncating: the previous code silently
+// rewrote an over-long identifier to its first 64 characters and looked THAT up,
+// so tag-based authorization read a different role's tags than the caller named.
+// The error must therefore name the offending role rather than quietly succeed.
+func TestValidateRoleNameLength_RejectionNamesTheRole(t *testing.T) {
+	over := strings.Repeat("b", 70)
+	err := validateRoleNameLength("path/to/" + over)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), over) {
+		t.Fatalf("error should identify the role name, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "path/to/") {
+		t.Fatalf("error should report the NAME, not the full path, got: %v", err)
+	}
+}
+
+// ---------- confused deputy ----------
+
+// GetRoleAs must refuse a nil credentials provider rather than silently falling
+// back to the hub credentials the client was built from. Doing so would read a
+// same-named role in the HUB account while the caller believes it read a member
+// account's — the confused deputy GetRoleTags explicitly guards against.
+//
+// Unreachable through its one caller today; the point is that the guarantee
+// should not depend on that caller staying correct.
+func TestGetRoleAs_RejectsNilCredentials(t *testing.T) {
+	s := &AwsServiceWrapper{defaultTimeout: time.Second}
+
+	// A nil iamClient would panic if the guard let execution continue, so this
+	// also proves the guard returns BEFORE any client use.
+	out, err := s.GetRoleAs(&iam.GetRoleInput{RoleName: aws.String("deploy")}, nil)
+
+	require.Error(t, err, "nil credentials must be refused")
+	assert.Nil(t, out)
+	assert.Contains(t, err.Error(), "refusing to fall back to hub credentials")
+}
+
+// GetRoleTags hands back a COPY of its cached tag map. Returning the cached map
+// itself lets any caller that mutates the result poison every later
+// authorization decision for that role — a silent, cross-request failure. The
+// sole caller (TagAuth.Authorize) only reads, so this pins the defensive
+// property rather than a live bug.
+func TestGetRoleTags_CachedMapIsNotAliased(t *testing.T) {
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount").Return("111111111111", nil)
+	// .Once(): a second IAM read would mean we missed the cache and the test
+	// would be proving nothing about the cached map.
+	m.On("GetRole", mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+		Tags: []iamtypes.Tag{{Key: aws.String("aow/subject"), Value: aws.String("acme/app")}},
+	}}, nil).Once()
+
+	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}}
+	c := NewAwsConsumer(cfg)
+	c.SetConfigSource(func() *gtvcfg.Config { return cfg })
+	c.AWS = m
+	c.now = time.Now
+
+	const arn = "arn:aws:iam::111111111111:role/app"
+
+	first, err := c.GetRoleTags(arn)
+	require.NoError(t, err)
+	require.Equal(t, "acme/app", first["aow/subject"])
+
+	// Poison the returned map as a careless consumer might.
+	first["aow/subject"] = "attacker/repo"
+	delete(first, "aow/subject")
+	first["aow/issuer"] = "https://evil.example"
+
+	// The next read is a cache hit and must be unaffected.
+	second, err := c.GetRoleTags(arn)
+	require.NoError(t, err)
+	assert.Equal(t, "acme/app", second["aow/subject"],
+		"mutating a returned map corrupted the cached tags")
+	assert.NotContains(t, second, "aow/issuer",
+		"a key injected into a returned map leaked into the cache")
+
+	m.AssertExpectations(t)
 }

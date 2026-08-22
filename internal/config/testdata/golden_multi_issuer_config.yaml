@@ -65,11 +65,13 @@ role_mappings:
       - "arn:aws:iam::111122223333:role/acme-deploy"
     session_policy: null
     session_policy_file: null
-    conditions: null
+    # No `conditions: null` here on purpose: unlike every other optional key,
+    # a null `conditions` is rejected since 3.0.0 — it is indistinguishable
+    # from `conditions:` typed with nothing under it, which reads as a gate
+    # and gates nothing. A generator with no conditions omits the key.
   - subject: "my-org/my-repo"
     issuer: null
     roles:
       - "arn:aws:iam::111122223333:role/github-actions-example"
     session_policy: null
     session_policy_file: null
-    conditions: null

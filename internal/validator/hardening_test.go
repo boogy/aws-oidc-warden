@@ -1,19 +1,17 @@
 package validator_test
 
-// Adversarial coverage for crypto/time hardening: alg-confusion and
-// duplicate-kid-different-type key selection (genKeyFuncForIssuer), OIDC
-// discovery issuer mismatch (RFC 8414), zero-key JWKS never cached, and
-// singleflight collapsing concurrent cold fetches for one issuer into a
-// single upstream call.
-
+// Hardening properties (algorithm allow-list, `none`, confusables) and the
+// end-to-end integration path they protect.
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -250,4 +248,118 @@ func TestFetchJWKS_SingleflightCollapsesConcurrentFetches(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, int64(1), jwksHits.Load(), "concurrent cold fetches for the same issuer must collapse to one upstream call")
+}
+
+// ---------- integration ----------
+
+// This is an integration test to ensure our refactoring of JWKS and JSONWebKey types
+// doesn't break the actual OIDC token validation flow
+func TestTokenValidationFlow(t *testing.T) {
+	// Generate a test key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	publicKey := &privateKey.PublicKey
+
+	// Create a key ID
+	keyID := "test-key-id"
+
+	// Create a JWKS with our test key
+	jwks := &types.JWKS{
+		Keys: []types.JSONWebKey{
+			{
+				KeyID:     keyID,
+				KeyType:   "RSA",
+				Algorithm: "RS256",
+				Use:       "sig",
+				N:         base64.RawURLEncoding.EncodeToString(publicKey.N.Bytes()),
+				E:         base64.RawURLEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes()),
+			},
+		},
+	}
+
+	// Create a mock OIDC server
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			config := struct {
+				Issuer  string `json:"issuer"`
+				JwksURI string `json:"jwks_uri"`
+			}{
+				Issuer:  serverURL,
+				JwksURI: fmt.Sprintf("http://%s/jwks", r.Host),
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(config); err != nil {
+				t.Logf("Failed to encode config: %v", err)
+			}
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(jwks); err != nil {
+				t.Logf("Failed to encode jwks: %v", err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	// Create a valid GitHub token
+	issuer := server.URL
+	audience := "test-audience"
+	repository := "owner/repo"
+
+	// Create claims
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    issuer,
+			Subject:   repository,
+			Audience:  jwt.ClaimStrings{audience},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		// Sub (depth-0) is what actually marshals to "sub" -- it shadows
+		// RegisteredClaims.Subject above for JSON purposes.
+		Sub:                  repository,
+		Actor:                "testuser",
+		ActorID:              "12345",
+		Repository:           repository,
+		RepositoryOwner:      "owner",
+		RepositoryID:         "67890",
+		RepositoryOwnerID:    "54321",
+		RepositoryVisibility: "public",
+		Workflow:             "Test Workflow",
+		Ref:                  "refs/heads/main",
+		RefType:              "branch",
+		EventName:            "push",
+	}
+
+	// Create and sign token
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = keyID
+	tokenString, err := token.SignedString(privateKey)
+	require.NoError(t, err)
+
+	// Create config and validator
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: []string{audience}, RequiredClaims: []string{"repository"}},
+		},
+		RoleSessionName:      "aws-oidc-warden",
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
+	}
+	require.NoError(t, cfg.Validate())
+
+	tokenValidator := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
+
+	// Validate the token
+	resultClaims, err := tokenValidator.Validate(tokenString)
+	require.NoError(t, err)
+	require.NotNil(t, resultClaims)
+	assert.Equal(t, repository, resultClaims.Repository)
+	assert.Equal(t, repository, resultClaims.Subject)
+	assert.Equal(t, issuer, resultClaims.Issuer)
+	assert.Equal(t, audience, resultClaims.Audience[0])
 }
