@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -521,4 +522,67 @@ func TestValidate_RejectsTooManyNodes(t *testing.T) {
 	err := validateCond(build(maxConditionNodes))
 	require.Error(t, err, "a tree one node past the cap must be rejected")
 	require.Contains(t, err.Error(), "condition nodes")
+}
+
+// TestNestedConditionIndexParity proves the owner-bucketed index stays
+// equivalent to a full linear scan once conditions carry boolean groups.
+// Bucketing is a performance detail whose correctness rests on candidatesFor
+// never hiding a mapping that would have matched; conditions do not affect
+// bucketing, and this test is what keeps that true as the condition engine
+// grows.
+func TestNestedConditionIndexParity(t *testing.T) {
+	mappings := []RoleMapping{
+		{ // exact-literal subject bucket
+			Subject: "acme/app",
+			Roles:   []string{"arn:aws:iam::111111111111:role/app"},
+			Conditions: &Condition{AnyOf: []*Condition{
+				{EventName: "push", Ref: "refs/heads/main"},
+				{EventName: "workflow_dispatch"},
+			}},
+		},
+		{ // byOwner bucket
+			Subject: `acme/service-.+`,
+			Roles:   []string{"arn:aws:iam::111111111111:role/service"},
+			Conditions: &Condition{
+				RefType: "tag",
+				NoneOf:  []*Condition{{Environment: "sandbox"}},
+			},
+		},
+		{ // "any" bucket (top-level alternation has no literal prefix)
+			Subject: `acme/app|other/app`,
+			Roles:   []string{"arn:aws:iam::111111111111:role/either"},
+			Conditions: &Condition{AllOf: []*Condition{
+				{EventName: "push"},
+				{AnyOf: []*Condition{{Ref: "refs/heads/main"}, {Ref: "refs/heads/release"}}},
+			}},
+		},
+	}
+	cfg := vcfg(t, mappings)
+
+	subjects := []string{"acme/app", "acme/service-a", "other/app", "acme/nope"}
+	claimSets := []map[string]any{
+		{},
+		{"event_name": "push", "ref": "refs/heads/main"},
+		{"event_name": "push", "ref": "refs/heads/release"},
+		{"event_name": "push", "ref": "refs/heads/wip"},
+		{"event_name": "workflow_dispatch"},
+		{"ref_type": "tag"},
+		{"ref_type": "tag", "runner_environment": "sandbox"},
+		{"ref_type": "tag", "runner_environment": []any{"production", "sandbox"}},
+	}
+
+	for _, subject := range subjects {
+		for i, claims := range claimSets {
+			gotOK, gotRoles := cfg.AuthorizeRoles(vIss, subject, claims)
+			wantOK, wantRoles := linearAuthorize(cfg, vIss, subject, claims)
+			if gotOK != wantOK {
+				t.Fatalf("subject %q claims[%d]: indexed matched=%v, linear matched=%v", subject, i, gotOK, wantOK)
+			}
+			slices.Sort(gotRoles)
+			slices.Sort(wantRoles)
+			if !slices.Equal(gotRoles, wantRoles) {
+				t.Fatalf("subject %q claims[%d]: indexed roles=%v, linear roles=%v", subject, i, gotRoles, wantRoles)
+			}
+		}
+	}
 }
