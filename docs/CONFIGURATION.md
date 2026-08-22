@@ -124,13 +124,60 @@ role_groups:
 | Concept         | Replaces (v1)        | Notes                                                                                                                                                             |
 | --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `role_mappings` | `repo_role_mappings` | `subject` replaces `repo`; each entry binds to one `issuer` (explicit, `default_issuer`, or the sole configured issuer).                                          |
-| `conditions`    | `constraints`        | Same fields (`branch`, `ref`, `ref_type`, `event_name`, `workflow_ref`, `environment`, `actor_matches`), plus an open-ended map of `claim_name: pattern` entries. |
+| `conditions`    | `constraints`        | Same fields (`branch`, `ref`, `ref_type`, `event_name`, `workflow_ref`, `environment`, `actor_matches`), plus an open-ended map of `claim_name: pattern` entries, plus the `all_of`/`any_of`/`none_of` boolean groups below. |
 | `role_sets`     | (new)                | Named `[]string` ARN lists; reference as `"@name"` inside any `roles` list. Resolved once at `Validate()`, before the requested-role gate.                        |
 | `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.  |
 
 `subject` is matched with the same auto-anchored-regex semantics `repo` used (`^(?:pattern)$`) — keep patterns specific. A bare `.*`/`.+` is rejected by `Validate()` wherever it gates an authorization decision: both in `conditions` fields and as a `subject` (including `role_groups.subjects`), since a wildcard subject would grant its roles to every subject of the bound issuer. The check is literal, so an equivalent pattern written another way (`(.*)`, `[\s\S]*`) still compiles — it stops the accident, not a determined operator.
 
 `conditions.branch` and `conditions.ref` both check the raw `ref` claim (`refs/heads/main`, `refs/tags/v1.2.3`, ...) — this is intentional, not a bug; use whichever name reads better for your pattern.
+
+### Boolean logic in conditions
+
+Entries at the same level are AND-ed — that has always been true and still is, so every pre-v2.5 config keeps its exact meaning. Three group keys add the rest of boolean logic:
+
+| Key       | Holds when                                            |
+| --------- | ----------------------------------------------------- |
+| `all_of`  | every listed condition holds                          |
+| `any_of`  | at least one listed condition holds                   |
+| `none_of` | no listed condition holds (one entry = a plain "not") |
+
+Each group takes a **list of conditions**, and each entry is a full condition block — flat claim fields, `actor_matches`, and further groups. On one node, the flat fields and all three groups are AND-ed together.
+
+```yaml
+role_mappings:
+  - subject: "octo-org/api"
+    roles: ["@deployers"]
+    conditions:
+      ref_type: "tag" # AND'd with both groups below
+      any_of:
+        - ref: 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+'
+        - all_of:
+            - ref: "refs/tags/hotfix-.+"
+            - actor_matches: ["release-bot"]
+      none_of:
+        - environment: "sandbox"
+```
+
+Reads as: a tag build, from either a release tag or a bot-driven hotfix tag, never on the sandbox runner.
+
+There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` / `none_of` with nesting is functionally complete — every boolean expression can be written as nested `any_of`-of-`all_of` — and a one-entry `none_of` already is `not`.
+
+**Rules `Validate()` enforces at load time** (never at request time — nothing here costs a request anything):
+
+- Nesting is capped at **5 levels** (the top-level `conditions:` block is level 1).
+- One mapping's condition tree is capped at **64 nodes** total.
+- An empty group (`any_of: []`) is rejected — it reduces the gate to a constant.
+- A group member that gates nothing (`- {}`) is rejected — an always-true member makes an `any_of` always pass and a `none_of` always fail. An empty top-level `conditions: {}` stays legal; it has always meant "no gate".
+- The bare-wildcard rejection (`.*`, `.+`) applies at every nesting level, exactly as it does at the top.
+- Errors name the offending node by path, e.g. `conditions.any_of[1].all_of[0]: invalid pattern for "ref"`.
+
+**Semantics to know:**
+
+- **`none_of` is exact negation.** A member naming a claim the token does not carry cannot match, so its negation holds and the `none_of` **passes**. If you need the claim to be present, add it as a flat predicate alongside the group, or list it in that issuer's `required_claims`.
+- **A missing or wrong-typed claim never satisfies a positive predicate.** Absent, `null`, number, bool, and object claims all fail to match, so a condition on one denies.
+- **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Non-string elements are ignored. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra.
+- **`all_of`, `any_of`, and `none_of` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it directly — it now parses as a boolean group, and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nothing else changes about generic claim predicates.
 
 Authorization is evaluated by `Config.AuthorizeRoles(issuer, subject, claims)`, which unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping. `Config.FindSessionPolicy(issuer, subject, role, claims)` then picks the session policy using the **same** match semantics, so a role's scoping policy always travels with the grant: the policy comes from a mapping that matches the subject, satisfies its conditions, **and** lists the role being assumed. Where several mappings qualify, the first-declared (config order) wins.
 

@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-08-22
+
+Conditions gain boolean logic. `all_of`, `any_of`, and `none_of` compose the existing claim predicates into a readable expression, so a mapping no longer has to be duplicated to express "or" — and a condition on a list-valued claim, which could never match before, now does. The top level stays an implicit AND, so every existing config keeps its exact meaning.
+
+### Added
+
+- **Boolean logic in `conditions`: `all_of`, `any_of`, and `none_of`.** Every entry in a `conditions:` block was AND-ed, so "the main branch **or** a version tag" could only be expressed by duplicating the whole mapping — and a duplicated mapping is exactly the shape that drops a privileged role's `session_policy`, since `FindSessionPolicy` resolves the policy from the lowest-`order` mapping that grants the role. The three group keys take a list of nested conditions and compose: on any node the flat claim fields, the OR'd `actor_matches`, and all three groups are AND-ed together, so **the top level stays an implicit AND and every existing config keeps its exact meaning**. Groups nest, which makes the operator set functionally complete — every boolean expression is expressible as nested `any_of`-of-`all_of`, and a one-entry `none_of` is a `not` — so no `not`/`xor`/`n_of` operator was added. `none_of` is exact negation: a member naming a claim the token does not carry cannot match, so its negation holds and the group passes; pair it with `required_claims` when presence matters. Evaluation allocates nothing and compiles nothing per request — the tree is cloned and compiled once in `Validate()`, as every condition pattern already was.
+
+- **Load-time guards on condition complexity.** `Validate()` rejects an empty group (`any_of: []`) and a group member that gates nothing (`- {}`): both reduce their group to a constant, an always-true member making an `any_of` always pass and a `none_of` always fail. An empty top-level `conditions: {}` stays legal — it has always meant "no gate". Nesting is capped at 5 levels and one mapping's tree at 64 nodes: readability limits first, since a gate a reviewer cannot hold in their head is a gate nobody reviews, and per-request cost limits second. The bare-wildcard rejection (`.*`/`.+`) applies at every nesting level, and every error names the offending node by path (`conditions.any_of[1].all_of[0]`).
+
+### Fixed
+
+- **A condition on a list-valued claim could never match.** Claim matching type-asserted `.(string)`, so a claim whose JSON value is an array — a GitLab `groups`, an Okta or Entra group/scope/role list — failed the assertion and the condition denied unconditionally, with nothing in the config or the logs to say why. A list claim now matches when **any** string element matches the anchored pattern, which is what "the caller is in group X" means and what makes `any_of`/`none_of` usable against group membership. Non-string elements are ignored, and numbers, bools, objects, nulls, and absent claims still never match, so every previously-denying shape except the array case denies exactly as before. No element cap is needed: `max_token_bytes` (default 8192) already bounds how many elements a request can carry.
+
+### Changed
+
+- **`all_of`, `any_of`, and `none_of` are now reserved keys under `conditions:`.** Generic claim predicates are collected by a remain-map, which only ever gathered keys no named field claimed, so a raw claim literally named `all_of`/`any_of`/`none_of` now parses as a boolean group. In practice the only affected config is one that gave such a key a plain string value — the remain-map is `map[string]string`, so a list value never decoded — and that config now fails to load with a decode error rather than quietly changing meaning. Nothing else about generic claim predicates changes.
+
+- **The condition engine moved to `internal/config/condition.go`** — the `Condition` type, cloning, compilation, structural validation, and evaluation — so the authorization gate can be read in one sitting instead of spread across a 1500-line `config.go`. No behavior change.
+
 ## [2.4.1] - 2026-08-22
 
 Follow-up to the 2.4.0 audit hardening. A review of that release found defects in the audit path itself: paths that only open up after a hot reload, an ALB configuration in which no request header was visible at all, and three ways the audit record could disagree with the request it describes.
@@ -535,6 +555,7 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[2.5.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.2.2...v2.3.0

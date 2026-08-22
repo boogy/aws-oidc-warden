@@ -12,7 +12,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 - **`internal/validator/`** → [CLAUDE.md](internal/validator/CLAUDE.md) — multi-issuer JWT parse + JWKS signature/claims verification (`TokenValidatorInterface`). Routes on the unverified `iss` to a per-issuer registry spec, then verifies signature → re-asserted issuer → audience (ANY-match) → time bounds → required*claims → canonical-subject normalization. Allowed algorithms only (ES/RS 256–512, never `none`). Delegated `apigw`/`alb` share the same claim-check path. \_Go here when* touching token verification, JWKS fetching, or audience handling.
 
-- **`internal/config/`** → [CLAUDE.md](internal/config/CLAUDE.md) — Viper config (`AOW_` env prefix > file > defaults), the `issuers[]` model, issuer-bound subject/condition matching over an owner-bucketed index, config fragments, and the remote `Provider` (lazy refresh via injected `FetchFunc`, atomic swap from a pristine base). Key methods: `AuthorizeRoles(issuer, subject, claims)`, `FindSessionPolicy(issuer, subject, role, claims)` (role- and condition-aware: the policy comes from the mapping that authorized the role), `IssuerSessionTags(issuer)`, `Validate()` (compiles anchored regex once, builds the index). _Go here when_ adding config keys, constraint logic, or remote-refresh behavior.
+- **`internal/config/`** → [CLAUDE.md](internal/config/CLAUDE.md) — Viper config (`AOW_` env prefix > file > defaults), the `issuers[]` model, issuer-bound subject/condition matching over an owner-bucketed index, the boolean condition engine (`condition.go`: `all_of`/`any_of`/`none_of`, nestable), config fragments, and the remote `Provider` (lazy refresh via injected `FetchFunc`, atomic swap from a pristine base). Key methods: `AuthorizeRoles(issuer, subject, claims)`, `FindSessionPolicy(issuer, subject, role, claims)` (role- and condition-aware: the policy comes from the mapping that authorized the role), `IssuerSessionTags(issuer)`, `Validate()` (compiles anchored regex once, builds the index). _Go here when_ adding config keys, constraint logic, or remote-refresh behavior.
 
 - **`internal/cache/`** → [CLAUDE.md](internal/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects). _Go here when_ changing cache backends, TTL handling, or eviction.
 
@@ -41,7 +41,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 - Never log full tokens/credentials — redact via `internal/utils`.
 - Validate JWT signature, issuer, audience, expiration.
-- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific. A bare `.*`/`.+` is **rejected by `Validate()`** for both (shared `bareWildcards` guard) — the check is literal, so an equivalent pattern still compiles. Conditions are AND'd.
+- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific. A bare `.*`/`.+` is **rejected by `Validate()`** for both (shared `bareWildcards` guard) — the check is literal, so an equivalent pattern still compiles. Conditions at the same level are AND'd; `all_of`/`any_of`/`none_of` groups nest inside for richer logic (capped at 5 levels / 64 nodes, enforced in `Validate()`).
 - Validate JSON and bound reads (`io.LimitReader`) before processing external input.
 - Never commit credentials/secrets. Sign commits and tags. Do not add a Claude co-author.
 

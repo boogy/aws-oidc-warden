@@ -187,9 +187,10 @@ role_sets:
 # assumable roles, scoped to a single issuer, optionally gated by `conditions`.
 # The requested role must be one of the mapping's resolved roles — a token can
 # never select an arbitrary role. `issuer` defaults to default_issuer above.
-# `conditions` are regexes against RAW verified claim names (AND across
-# dimensions); any claim not covered by a named field can be matched directly
-# by its claim name.
+# `conditions` are regexes against RAW verified claim names; any claim not
+# covered by a named field can be matched directly by its claim name. Entries
+# at the same level are AND'd; `all_of`/`any_of`/`none_of` groups nest inside
+# for richer logic. A claim whose value is a LIST matches when any element does.
 ####################################################################################
 role_mappings:
   # Simple mapping, main branch only (inherits default_issuer = GitHub).
@@ -224,10 +225,32 @@ role_mappings:
       ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
       ref_type: "tag"
       environment: "production" # regex against the raw 'runner_environment' claim
-      sha: "^[0-9a-f]{40}$" # generic: any raw claim name works (must be string-typed)
+      sha: "^[0-9a-f]{40}$" # generic: any raw claim name works (string, or a list matching any element)
     # Overrides the global role_session_name for roles granted by THIS
     # mapping only, so CloudTrail names the requester instead of the service.
     role_session_name: "org-prod-repo-deploy"
+
+  # Boolean conditions. The top level is still an implicit AND: every flat
+  # field AND every group below must hold. Groups nest up to 5 levels deep.
+  #
+  #   all_of  — every listed condition must hold
+  #   any_of  — at least one listed condition must hold
+  #   none_of — no listed condition may hold (a one-entry none_of is a "not")
+  #
+  # This reads: a tag build, from a release tag or a hotfix tag, never on the
+  # sandbox runner.
+  - subject: "org/release-repo"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-release
+    conditions:
+      ref_type: "tag" # flat field: AND'd with both groups below
+      any_of:
+        - ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
+        - all_of:
+            - ref: "refs/tags/hotfix-.+"
+            - actor_matches: ["release-bot", "release-manager"]
+      none_of:
+        - environment: "sandbox" # regex against the raw 'runner_environment' claim
 
   # A GitLab mapping — bound explicitly to the GitLab issuer. Its `subject` is
   # the canonical value produced by claim_mappings.subject (project_path).

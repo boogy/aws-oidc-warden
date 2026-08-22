@@ -419,15 +419,18 @@ type Condition struct {
     WorkflowRef  string            `mapstructure:"workflow_ref"`  // .github/workflows/deploy.yml
     Environment  string            `mapstructure:"environment"`   // checks the raw 'runner_environment' claim
     ActorMatches []string          `mapstructure:"actor_matches"` // ["admin-.*", "specific-user"]
+    AllOf        []*Condition      `mapstructure:"all_of"`        // every member must be satisfied
+    AnyOf        []*Condition      `mapstructure:"any_of"`        // at least one member must be satisfied
+    NoneOf       []*Condition      `mapstructure:"none_of"`       // no member may be satisfied
     Extra        map[string]string `mapstructure:",remain"`       // any other raw claim, by name
 }
 ```
 
 **Validation Logic:**
 
-- All specified conditions must be satisfied (AND logic) — this includes a named field and an `Extra` entry that happen to target the same underlying claim; both apply and both must match.
+- Conditions at the same level are AND-ed — this includes a named field and an `Extra` entry that happen to target the same underlying claim; both apply and both must match. `all_of` / `any_of` / `none_of` groups nest inside for richer logic, and on a single node the flat fields and all three groups are AND-ed together, so a pre-2.5.0 `conditions:` block keeps its exact meaning. Nesting is capped at 5 levels and one mapping's tree at 64 nodes, both rejected in `Validate()`.
 - Every pattern is auto-anchored (`^(?:pattern)$`) and regex-capable.
-- Claims are extracted from the validated JWT token; `Extra` claim values must be string-typed (a numeric claim like `run_id` never satisfies a condition).
+- Claims are extracted from the validated JWT token. A **string** claim matches its anchored pattern; a **list** claim matches when any string element does (GitLab/Okta/Entra group, scope, and role lists). Every other shape denies — absent, `null`, numbers (a claim like `run_id` never satisfies a condition), bools, and objects.
 - Condition compilation happens once, in `Validate()`, never per request.
 
 ### 3. Caching Strategy
