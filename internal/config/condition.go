@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 // This file is the condition engine: the shape of a `conditions:` block, how it
@@ -423,11 +424,123 @@ func valueMatches(v any, pattern *regexp.Regexp) bool {
 	}
 }
 
+// foldedClaim is one entry of the case-folded claim index: the value, plus how
+// many raw claims fold to that name. n > 1 is a collision, and a collision
+// denies — see claimResolver.
+type foldedClaim struct {
+	value any
+	n     int
+}
+
+// claimResolver resolves a compiled condition key to the token's claim value.
+//
+// It exists because the config loader cannot preserve the case an operator
+// wrote. Viper lowercases every key it reads, from the main file, from
+// MergeBytes, and from every fragment, so `isContractor:` reaches the compiler
+// as `iscontractor` no matter how it was spelled. A plain map lookup against
+// the raw claims would then miss the claim entirely — and a leaf that resolves
+// to "no value" is not merely a denial: under none_of it is a veto that can
+// never fire, which authorizes exactly what the config was written to refuse.
+// GitHub never exposed this because every GitHub Actions claim is already
+// lowercase; any issuer that mints camelCase claims does.
+//
+// Resolution is collision-first, then exact, then case-folded:
+//   - if two or more raw claims fold to the key, the lookup is ambiguous and
+//     the whole evaluation denies. This is checked BEFORE the exact match,
+//     which is the whole point: the key reaching this code is already
+//     lower-cased, so `iscontractor` may be what the operator wrote or may be
+//     what `isContractor` was folded into. When a token carries both spellings
+//     there is no way to tell which claim the config meant, and preferring the
+//     exact one silently picks a claim the operator may never have named. That
+//     is not academic — with `none_of` it disarms the veto, so a token that
+//     adds a lower-case twin of the vetoed claim is authorized outright.
+//   - otherwise a claim whose name matches the key exactly wins;
+//   - otherwise the single claim that folds to the key is used.
+//
+// The original case is unrecoverable by the time the compiler sees the key, so
+// guessing between two candidates is the one thing a gate must not do.
+//
+// Cost: the folded index is built at most once per authorization call, and not
+// at all unless some raw claim name actually carries an upper-case letter. A
+// token whose claim names are all lower-case — every GitHub Actions token —
+// takes a scan that allocates nothing and then the same single map access it
+// always made.
+type claimResolver struct {
+	raw    map[string]any
+	folded map[string]foldedClaim // nil unless some claim name is mixed-case
+	built  bool                   // folded has been computed (it may stay nil)
+	// ambiguous records that some lookup during this evaluation hit a name two
+	// differently-cased claims fold to. It is sticky for the whole walk: see
+	// satisfiesConditions for why it cannot be handled at the leaf.
+	ambiguous bool
+}
+
+func newClaimResolver(claims map[string]any) *claimResolver {
+	return &claimResolver{raw: claims}
+}
+
+// lookup returns the value for claim name, or nil when no claim resolves to it.
+// A name two differently-cased claims fold to sets r.ambiguous, which denies
+// the whole evaluation once the walk finishes.
+func (r *claimResolver) lookup(name string) any {
+	if !r.built {
+		r.buildFolded()
+	}
+	if r.folded != nil {
+		// Collision check first, and deliberately not skipped when the exact
+		// lookup below would succeed: an exact hit alongside a differently
+		// cased twin is still two candidate claims for one folded key.
+		if e := r.folded[strings.ToLower(name)]; e.n > 1 {
+			r.ambiguous = true
+		}
+	}
+	if v, ok := r.raw[name]; ok {
+		return v
+	}
+	if r.folded == nil {
+		return nil
+	}
+	if e := r.folded[strings.ToLower(name)]; e.n == 1 {
+		return e.value
+	}
+	return nil
+}
+
+// buildFolded indexes every claim under its lower-cased name, counting how many
+// claims fold to each. It runs once per resolver and leaves folded nil when no
+// claim name has an upper-case letter, since without one no two names can fold
+// together and exact lookup answers everything.
+func (r *claimResolver) buildFolded() {
+	r.built = true
+	mixed := false
+	for name := range r.raw {
+		// strings.ToLower returns its argument unchanged when there is nothing
+		// to lower, so this scan allocates nothing on the all-lower-case path.
+		if strings.ToLower(name) != name {
+			mixed = true
+			break
+		}
+	}
+	if !mixed {
+		return
+	}
+	r.folded = make(map[string]foldedClaim, len(r.raw))
+	for name, v := range r.raw {
+		lowered := strings.ToLower(name)
+		e := r.folded[lowered]
+		e.n++
+		if e.n == 1 {
+			e.value = v
+		}
+		r.folded[lowered] = e
+	}
+}
+
 // claimMatches looks the named claim up and reports whether ANY of the entry's
 // patterns match it. The lookup is hoisted out of the pattern loop so the map
 // access happens once per claim, not once per pattern.
-func claimMatches(claims map[string]any, cc compiledCondition) bool {
-	v := claims[cc.claim]
+func claimMatches(res *claimResolver, cc compiledCondition) bool {
+	v := res.lookup(cc.claim)
 	for _, pattern := range cc.patterns {
 		if valueMatches(v, pattern) {
 			return true
@@ -456,15 +569,45 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	if cond == nil {
 		return true
 	}
+	res := newClaimResolver(claims)
+	ok := satisfiesConditionsWith(cond, res)
+	// An ambiguous claim denies the whole mapping, not just its leaf. Denying
+	// only the leaf is polarity-dependent: under none_of a leaf that cannot
+	// match is a veto that cannot fire, so `none_of: [{isContractor: "true"}]`
+	// would authorize precisely the caller it was written to refuse as soon as
+	// the token carried a second casing of that claim — including a decoy
+	// casing whose value does not even match the pattern. That is the exact
+	// hazard the case-folded lookup above exists to close, so it cannot be
+	// reintroduced by the branch that handles a collision.
+	//
+	// Absence and ambiguity are different: an absent claim genuinely gives a
+	// veto nothing to fire on, while an ambiguous one means the gate cannot
+	// determine the value it was told to gate on. A gate that cannot know must
+	// deny. Checking after the walk rather than short-circuiting inside it is
+	// what makes the deny independent of where in the tree the collision sat
+	// and of how many negations enclose it.
+	if res.ambiguous {
+		return false
+	}
+	return ok
+}
+
+// satisfiesConditionsWith is the recursive walk. The resolver is threaded down
+// the whole tree so its folded index is built at most once per evaluation
+// rather than once per node.
+func satisfiesConditionsWith(cond *Condition, res *claimResolver) bool {
+	if cond == nil {
+		return true
+	}
 
 	for _, cc := range cond.compiled {
-		if !claimMatches(claims, cc) {
+		if !claimMatches(res, cc) {
 			return false
 		}
 	}
 
 	for _, child := range cond.AllOf {
-		if !satisfiesConditions(child, claims) {
+		if !satisfiesConditionsWith(child, res) {
 			return false
 		}
 	}
@@ -472,7 +615,7 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	if len(cond.AnyOf) > 0 {
 		matched := false
 		for _, child := range cond.AnyOf {
-			if satisfiesConditions(child, claims) {
+			if satisfiesConditionsWith(child, res) {
 				matched = true
 				break
 			}
@@ -483,7 +626,7 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	}
 
 	for _, child := range cond.NoneOf {
-		if satisfiesConditions(child, claims) {
+		if satisfiesConditionsWith(child, res) {
 			return false
 		}
 	}

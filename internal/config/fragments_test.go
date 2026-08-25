@@ -315,7 +315,7 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 		LogToS3:                 true,
 		LogBucket:               "b",
 		ConfigFragments:         []string{"/tmp/f.yaml"},
-		ConfigFragmentChecksums: map[string]string{"/tmp/f.yaml": "sha256:deadbeef"},
+		ConfigFragmentChecksums: []FragmentChecksum{{URI: "/tmp/f.yaml", Checksum: "sha256:deadbeef"}},
 	}
 	require.NoError(t, c.Validate())
 
@@ -398,7 +398,7 @@ func TestAudit_ChecksumPinNotReappliedToCachedFragment(t *testing.T) {
 	// Cycle 2: operator now pins a DIFFERENT (wrong) checksum on the base.
 	// The file is unchanged, so the etag matches the cache — this is exactly
 	// the incident-response case: quarantine content that is ALREADY applied.
-	base.ConfigFragmentChecksums = map[string]string{f: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}
+	base.ConfigFragmentChecksums = []FragmentChecksum{{URI: f, Checksum: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}}
 	err := p.Refresh(context.Background())
 	t.Logf("refresh with mismatched pin on unchanged fragment: err=%v", err)
 
@@ -419,7 +419,7 @@ func TestAudit_ChecksumPinNotReappliedToCachedFragment(t *testing.T) {
 func TestAudit_ChecksumPinTrustsFetcherETagNotContent(t *testing.T) {
 	base := a2Base(t)
 	base.ConfigFragments = []string{"s3://bucket/frag.yaml"}
-	base.ConfigFragmentChecksums = map[string]string{"s3://bucket/frag.yaml": "pinned-etag"}
+	base.ConfigFragmentChecksums = []FragmentChecksum{{URI: "s3://bucket/frag.yaml", Checksum: "pinned-etag"}}
 	require.NoError(t, base.Validate())
 
 	evil := []byte("role_mappings:\n  - subject: \"victim/.+\"\n    roles: [\"arn:aws:iam::999999999999:role/attacker\"]\n")

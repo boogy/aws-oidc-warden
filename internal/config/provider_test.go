@@ -479,7 +479,7 @@ func TestProvider_FragmentChecksumMismatchRejected(t *testing.T) {
 
 	base := baseConfig(t)
 	base.ConfigFragments = []string{uri}
-	base.ConfigFragmentChecksums = map[string]string{uri: "sha256:deadbeef"}
+	base.ConfigFragmentChecksums = []FragmentChecksum{{URI: uri, Checksum: "sha256:deadbeef"}}
 	require.NoError(t, base.Validate())
 
 	p := NewProvider(base, time.Minute, "yaml", noopBaseFetch, WithFragmentFetcher(store.fetch))
@@ -501,7 +501,7 @@ role_mappings:
 
 	base := baseConfig(t)
 	base.ConfigFragments = []string{uri}
-	base.ConfigFragmentChecksums = map[string]string{uri: etagOf(content)}
+	base.ConfigFragmentChecksums = []FragmentChecksum{{URI: uri, Checksum: etagOf(content)}}
 	require.NoError(t, base.Validate())
 
 	p := NewProvider(base, time.Minute, "yaml", noopBaseFetch, WithFragmentFetcher(store.fetch))

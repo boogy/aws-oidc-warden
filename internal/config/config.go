@@ -45,11 +45,16 @@ var (
 	// session name, which is the most likely thing an operator will try.
 	sessionNameCharset = regexp.MustCompile(`^[\w+=,.@-]+$`)
 
-	// reservedClaims are JWT-standard claim names that claim_mappings may never
-	// target, since doing so could shadow a verified claim used for security
-	// decisions (issuer, audience, timing, canonical sub).
-	reservedClaims = map[string]bool{
-		"iss": true, "aud": true, "exp": true, "nbf": true, "iat": true, "sub": true,
+	// nonIdentityClaims are raw claim names claim_mappings.subject may never
+	// point at. Each is either identical for every token the issuer mints (iss,
+	// aud) or carries no identity at all (exp, nbf, iat), so making one the
+	// canonical subject collapses every caller from that issuer into a single
+	// subject — any authenticated caller then satisfies any other's subject
+	// pattern. "sub" is deliberately absent: it is the natural, correct mapping
+	// for most non-GitHub IdPs and shadows nothing, since claim_mappings is a
+	// read-only projection over the already-verified claims.
+	nonIdentityClaims = map[string]bool{
+		"iss": true, "aud": true, "exp": true, "nbf": true, "iat": true,
 	}
 )
 
@@ -112,6 +117,12 @@ type IssuerConfig struct {
 
 	// SessionTags maps an STS session tag key to the raw verified claim name
 	// whose value populates it.
+	// Keys must be written lower-case. A key here is a CONFIG key, and the
+	// loader case-folds every key it reads, so `CostCenter: cost_center`
+	// reaches STS as `costcenter`. The case is gone before this struct is
+	// populated, so it cannot be recovered or rejected later — the
+	// constraint is the loader's, and lower-case in, lower-case out is the
+	// only form that round-trips.
 	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
 }
 
@@ -252,7 +263,15 @@ type Config struct {
 	// doesn't match exactly is rejected (S9); entries with no pinned value
 	// are unauthenticated beyond transport — their etag is then used only
 	// for reload change-detection (provider.go).
-	ConfigFragmentChecksums map[string]string `mapstructure:"config_fragment_checksums" json:"config_fragment_checksums,omitempty"`
+	//
+	// This is a LIST of {uri, checksum} pairs, not a map keyed by URI,
+	// because the URI cannot survive being a config key: viper lower-cases
+	// every key it reads and splits it on ".", so the map form turned
+	// "/etc/fragments/team.yaml" into a nested map under a truncated,
+	// lower-cased path and failed to decode at all — i.e. it could not pin
+	// any fragment whose path contains a dot, which is every *.yaml file.
+	// A URI written as a VALUE is passed through untouched.
+	ConfigFragmentChecksums []FragmentChecksum `mapstructure:"config_fragment_checksums" json:"config_fragment_checksums,omitempty"`
 
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
 	LogToS3   bool   `mapstructure:"log_to_s3"  json:"log_to_s3,omitempty"`  // LogToS3 is a flag to enable logging to S3
@@ -317,9 +336,10 @@ type Config struct {
 	// Rebuilt fresh by Validate() every time (from RoleMappings/RoleGroups/
 	// RoleSets), so Validate() stays idempotent and safe to call repeatedly
 	// (e.g. after a hot-reload clone).
-	estimatedRolesPerMapping int            `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
-	effective                []*RoleMapping `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
-	index                    authzIndex     `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
+	estimatedRolesPerMapping int                        `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
+	effective                []*RoleMapping             `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
+	index                    authzIndex                 `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
+	auditable                map[string]map[string]bool `mapstructure:"-" json:"-"` // per-issuer claim names the config references (see auditable.go)
 }
 
 // envKeyReplacer mirrors the SetEnvKeyReplacer configured on viper in
@@ -778,12 +798,15 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("issuers[%d] (%s): non-github issuers must define claim_mappings.subject", i, iss.Issuer)
 		}
 
-		// Reject claim_mappings that target a JWT-reserved claim name; doing
-		// so could shadow a verified claim used for security decisions.
-		for target := range iss.ClaimMappings {
-			if reservedClaims[target] {
-				return fmt.Errorf("issuers[%d] (%s): claim_mappings cannot target reserved claim %q", i, iss.Issuer, target)
-			}
+		// claim_mappings maps a canonical field name (the key) to a raw claim
+		// name (the value). Only the VALUE side is constrained, and only for
+		// `subject`. The key side deliberately is not: `subject` is the one
+		// field the validator reads (providerAdapter.subject), but every
+		// entry's value also joins this issuer's auditable-claim set
+		// (auditableClaimsFor), so a non-subject key is a supported way to say
+		// "also record this claim" rather than a no-op to reject.
+		if claimName := iss.ClaimMappings["subject"]; nonIdentityClaims[claimName] {
+			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}
 
 		for tagKey := range iss.SessionTags {
@@ -1005,7 +1028,19 @@ func (c *Config) Validate() error {
 			slog.Int("issuerCount", len(c.Issuers)))
 	}
 
+	if err := c.validateFragmentChecksums(); err != nil {
+		return err
+	}
+
 	c.index = buildAuthzIndex(c.effective)
+
+	// Per-issuer set of claim names the config explicitly references, for the
+	// audit record's inclusion test on non-github providers (see auditable.go).
+	c.auditable = make(map[string]map[string]bool, len(c.Issuers))
+	for i := range c.Issuers {
+		iss := c.Issuers[i].Issuer
+		c.auditable[iss] = auditableClaimsFor(iss, &c.Issuers[i], c.effective)
+	}
 	warnUnscopedRoleGrants(c.effective)
 	warnTagAuthBypassesMappingScoping(c.TagAuth, c.effective)
 
@@ -1073,6 +1108,48 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// FragmentChecksum pins the expected integrity value of one config_fragments
+// entry. URI must match the config_fragments entry it pins, byte for byte.
+type FragmentChecksum struct {
+	URI      string `mapstructure:"uri"      json:"uri"`
+	Checksum string `mapstructure:"checksum" json:"checksum"`
+}
+
+// fragmentChecksum returns the pinned integrity value for uri, if one is
+// configured. The list is at most a handful of entries — one per fragment —
+// so a scan costs less than the map it replaced.
+func (c *Config) fragmentChecksum(uri string) (string, bool) {
+	for _, p := range c.ConfigFragmentChecksums {
+		if p.URI == uri {
+			return p.Checksum, true
+		}
+	}
+	return "", false
+}
+
+// validateFragmentChecksums rejects malformed or inert pins. A pin naming a
+// URI that no config_fragments entry lists is not a harmless typo: it looks
+// like the fragment is integrity-pinned while nothing is ever checked against
+// it, which is precisely the state the pin exists to prevent. Fail at boot
+// rather than serve traffic with an imaginary guarantee.
+func (c *Config) validateFragmentChecksums() error {
+	seen := make(map[string]bool, len(c.ConfigFragmentChecksums))
+	for i, p := range c.ConfigFragmentChecksums {
+		switch {
+		case p.URI == "":
+			return fmt.Errorf("config_fragment_checksums[%d]: uri is required", i)
+		case p.Checksum == "":
+			return fmt.Errorf("config_fragment_checksums[%d] (%s): checksum is required", i, p.URI)
+		case seen[p.URI]:
+			return fmt.Errorf("config_fragment_checksums[%d]: duplicate pin for %q", i, p.URI)
+		case !slices.Contains(c.ConfigFragments, p.URI):
+			return fmt.Errorf("config_fragment_checksums[%d]: %q is not listed in config_fragments, so nothing would ever be checked against it", i, p.URI)
+		}
+		seen[p.URI] = true
+	}
+	return nil
+}
+
 // resolveRoleSet expands any "@name" alias in roles to c.RoleSets[name],
 // leaving literal role ARNs untouched. Resolution happens once, at Validate()
 // time, before AuthorizeRoles' role∈roles security gate ever runs, so an
@@ -1086,7 +1163,17 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 			continue
 		}
 		name := strings.TrimPrefix(r, "@")
+		// Exact first, then case-folded. viper lower-cases every map KEY it
+		// reads, so a role_set declared as `ProdDeployers:` is stored as
+		// `proddeployers`, while this reference — a map VALUE — keeps the
+		// case the operator wrote. Without the folded retry the two halves of
+		// the operator's own config cannot see each other and every
+		// mixed-case role_set name is "not defined". Same resolution order as
+		// condition keys and AuditableClaims, for the same reason.
 		set, ok := c.RoleSets[name]
+		if !ok {
+			set, ok = c.RoleSets[strings.ToLower(name)]
+		}
 		if !ok {
 			return nil, fmt.Errorf("role_sets: %q is not defined", name)
 		}

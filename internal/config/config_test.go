@@ -211,7 +211,13 @@ func TestValidate(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "claim_mappings targets reserved claim",
+			// The KEY side is NOT constrained. "sub" is not a canonical field
+			// the validator reads, but a non-subject entry still contributes
+			// its value to the issuer's auditable-claim set, so it is a
+			// meaningful config, not a no-op. The pre-3.0.0 guard rejected
+			// this shape while checking the wrong side of the map entirely:
+			// keys are field names, and no key can shadow a verified claim.
+			name: "claim_mappings key that is not a canonical field is allowed",
 			config: Config{
 				Issuers: []IssuerConfig{{
 					Issuer:        "https://issuer.com",
@@ -221,7 +227,53 @@ func TestValidate(t *testing.T) {
 				}},
 				RoleSessionName: "session",
 			},
+			expectErr: false,
+		},
+		{
+			// The VALUE side is where the security risk actually lives: `iss`
+			// is byte-identical in every token this issuer mints, so making it
+			// the canonical subject gives every caller the same subject and any
+			// one of them matches any other's subject pattern.
+			name: "claim_mappings.subject targets iss (identity collapse)",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:        "https://gitlab.example.com",
+					Provider:      "generic",
+					Audiences:     []string{"audience"},
+					ClaimMappings: map[string]string{"subject": "iss"},
+				}},
+				RoleSessionName: "session",
+			},
 			expectErr: true,
+		},
+		{
+			name: "claim_mappings.subject targets aud (identity collapse)",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:        "https://gitlab.example.com",
+					Provider:      "generic",
+					Audiences:     []string{"audience"},
+					ClaimMappings: map[string]string{"subject": "aud"},
+				}},
+				RoleSessionName: "session",
+			},
+			expectErr: true,
+		},
+		{
+			// `sub` must stay ALLOWED: it is the ordinary canonical subject for
+			// most non-GitHub IdPs. claim_mappings is a read-only projection
+			// over already-verified claims, so naming `sub` shadows nothing.
+			name: "claim_mappings.subject targets sub (the normal generic case)",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:        "https://gitlab.example.com",
+					Provider:      "generic",
+					Audiences:     []string{"audience"},
+					ClaimMappings: map[string]string{"subject": "sub"},
+				}},
+				RoleSessionName: "session",
+			},
+			expectErr: false,
 		},
 		{
 			name: "non-github provider without claim_mappings.subject",
