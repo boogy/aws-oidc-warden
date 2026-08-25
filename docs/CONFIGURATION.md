@@ -12,7 +12,7 @@ AWS OIDC Warden can be configured using:
 
 See [example-config.yaml](../example-config.yaml) for a complete, annotated reference configuration.
 
-## The v2 issuer model
+## The issuer model
 
 > **Breaking change from v1**: the single top-level `issuer` / `audience` / `audiences` scalars are gone. Every trusted OIDC issuer — GitHub Actions, GitLab CI/CD, a custom IdP, or several of each — is declared as an entry in `issuers`. See [MIGRATION_V2.md](MIGRATION_V2.md) for the exact rename table and upgrade steps, and [MULTI_ISSUER.md](MULTI_ISSUER.md) for a walkthrough of onboarding a new provider.
 
@@ -48,13 +48,18 @@ issuers:
 | `provider`        | `"github"` (native `types.Claims` struct unmarshal) or `"generic"` (mapped-only via `claim_mappings`).                            | `"generic"`  |
 | `audiences`       | Accepted `aud` values for this issuer; ANY-match. At least one required.                                                          | (required)   |
 | `jwks_uri`        | Explicit JWKS URI; when set, skips OIDC discovery (`<issuer>/.well-known/openid-configuration`).                                  | (discovered) |
-| `claim_mappings`  | Canonical field name → raw verified claim name (e.g. `subject: project_path`). May never target a JWT-reserved claim (see below). | (empty)      |
+| `claim_mappings`  | Canonical field name → raw verified claim name (e.g. `subject: project_path`). `subject` is the only field read; see below.           | (empty)      |
 | `required_claims` | Raw verified claim names that must be present and non-empty for a token from this issuer.                                         | (empty)      |
 | `session_tags`    | STS session tag key → raw verified claim name, applied at `AssumeRole` time.                                                      | (empty)      |
 
-Reserved claim names that `claim_mappings` may **never** target (shadowing them could let a claim override a security-relevant field): `iss`, `aud`, `exp`, `nbf`, `iat`, `sub`.
+An entry's **key** is a canonical field name and its **value** is a raw claim name. `subject` is the only field the validator reads, and it is the only one `Validate()` constrains:
 
-`session_tags` keys must match the STS tag-key charset `^[A-Za-z0-9 _.:/=+@-]{1,128}$`; a key that doesn't is a config validation error.
+- `claim_mappings.subject` may **never** target `iss`, `aud`, `exp`, `nbf`, or `iat`. Each is identical across every token the issuer mints, or carries no identity at all, so making one the canonical subject collapses every caller from that issuer into a single subject — any authenticated caller would then satisfy any other caller's subject pattern.
+- `sub` **is** allowed and is the normal mapping for most non-GitHub IdPs. `claim_mappings` is a read-only projection over claims the validator has already verified; naming a claim there cannot shadow or override it.
+
+Keys other than `subject` are accepted rather than rejected: the validator ignores them, but every entry's **value** joins this issuer's auditable-claim set, so `pipeline: pipeline_id` is a supported way to say "also record this claim". The trade-off is that a misspelled `subject` key is not caught — on a `generic` issuer the missing `claim_mappings.subject` is still a load error, but a `github` issuer silently keeps its `repository` default.
+
+`session_tags` keys must match the STS tag-key charset `^[A-Za-z0-9 _.:/=+@-]{1,128}$`; a key that doesn't is a config validation error. **Write them lower-case.** The config loader lower-cases every key before the spec is unmarshalled, so `CostCenter: cost_center` reaches STS as `costcenter` — the case is gone before validation could object, and no error is raised. If an ABAC policy needs a mixed-case tag key, the warden cannot produce one.
 
 **Provider-specific behavior**: `provider: "github"` unmarshals the token into the native `types.Claims` struct (all of GitHub's OIDC claims — `repository`, `ref`, `actor`, `workflow_ref`, etc. — are available for `conditions` without any `claim_mappings`), and its canonical `subject` defaults to the `repository` claim (`owner/repo`) unless overridden. Every other `provider` value is `"generic"`: only the claims listed in `claim_mappings` are given canonical names, and `claim_mappings.subject` **must** be set — `Validate()` rejects a non-`github` issuer that omits it.
 
@@ -228,7 +233,7 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 - **A missing or wrong-typed claim never satisfies a positive predicate.** Absent, `null`, number, bool, and object claims all fail to match, so a condition on one denies.
 - **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Non-string elements are ignored. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra. Note the two lists are independent: a list of _patterns_ is satisfied when any pattern matches, and a list-valued _claim_ is matched when any element matches.
 - **An empty pattern (`ref: ""`), an empty list (`ref: []`), or a key written with no value at all (`ref:`) is rejected at load time.** All three read as a predicate but gate nothing; before v3.0.0 an empty string was silently ignored and a valueless key was indistinguishable from an omitted one, which quietly widened the gate.
-- **Claim keys are matched lowercase.** The config loader folds every key to lower case before it is read, so a claim whose name has upper-case letters (`emailVerified`) becomes `emailverified` and can never match the claim the token actually carries. This is fail-closed — the mapping denies rather than over-grants — but it means a mixed-case claim is not gateable by name. Gate on a different claim the same token carries, or have the issuer emit a lower-case alias.
+- **A mixed-case claim name is gateable, and matching is exact-first.** The config loader folds every key to lower case before it is read, so `emailVerified:` reaches the matcher as `emailverified`. Claim lookup compensates: a claim whose name matches the key exactly wins, and only if there is no exact match are the token's claim names compared case-insensitively. Write the claim name in whatever case the issuer mints — `isContractor`, `emailVerified`, `groupIds` all work. The one case that denies is genuine ambiguity: if a token carries two claims that differ only in case (`Role` and `role`) and neither matches the key exactly, the lookup refuses to guess and the predicate fails. Before v3.0.0 a mixed-case key could never match at all, which was safe under a plain AND but not under `none_of`, where a veto that cannot fire silently authorizes what it was written to refuse.
 - **Pattern values are coerced to strings.** A YAML scalar written unquoted (`ref: 123`, `ref: true`) is decoded as the pattern `123` / `1`, not rejected. Always quote patterns.
 - **`all_of`, `any_of`, `none_of`, and `claims` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it at the top level — it parses as a boolean group (or as the `claims:` block), and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nest it under `claims:` instead, whose keys are always claim names. Nothing else changes about generic claim predicates.
 
@@ -364,9 +369,12 @@ config_fragments:
   - "/etc/aws-oidc-warden/fragments/team-data.yaml"
 
 # Optional: pin an expected content hash per fragment. A fetched value that
-# doesn't match exactly is rejected.
+# doesn't match exactly is rejected. `uri` must match its config_fragments
+# entry exactly; a pin naming a URI that is not listed above is a boot error,
+# because it would look like a pinned fragment while checking nothing.
 config_fragment_checksums:
-  "/etc/aws-oidc-warden/fragments/team-platform.yaml": "sha256:a1b2c3d4e5f6..."
+  - uri: "/etc/aws-oidc-warden/fragments/team-platform.yaml"
+    checksum: "sha256:a1b2c3d4e5f6..."
 ```
 
 Rules enforced on every merge:

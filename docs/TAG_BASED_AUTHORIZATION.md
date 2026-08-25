@@ -50,21 +50,23 @@ The combining rules:
 - **Identity gate** — the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo` / `aow/repo-owner` aliases (GitHub-shaped subjects, retained through the v2 migration window) — and match it. A role with no identity tag is never assumable via tag-auth (prevents an untagged role from being broadly assumable).
 - **Issuer gate (multi-issuer)** — once **more than one** issuer is configured, a role must also carry a matching `aow/issuer` tag or tag-auth fails closed for it: without the tag, tag-auth cannot tell which issuer's identity namespace the role trusts, and one issuer's subject could collide with another's. With a single issuer the tag is optional, but still checked if present.
 - **Exact matching** — unlike `role_mappings` (which compile anchored regex), tag values are matched **exactly**. AWS tag values allow only letters, digits, spaces, and `_ . : / = + - @` — no regex metacharacters. Use a space-list for several specific values, or `aow/repo-owner` for a whole org.
+- **Any claim, any issuer** — every named suffix below (`ref`, `actor`, `workflow-ref`, …) spells a GitHub Actions claim. `aow/claim.<name>` reaches any other verified claim by its raw name, so a non-GitHub issuer is not limited to `aow/subject`: `aow/claim.project_path: acme/api` for GitLab, `aow/claim.groups: platform` for an OIDC provider that mints group lists. It ANDs with everything else and, because it is not an identity tag, it can only narrow access. See [Constraining any claim](#constraining-any-claim-aowclaimname).
 
 ### Equivalence with `role_mappings.conditions`
 
 Every tag suffix is its claim name with underscores written as dashes, so a tag and a condition on the same claim are spelled the same way. Tags match exactly; conditions compile anchored regex.
 
-| `conditions` key       | Tag (default prefix)     | Claim              | Matching difference                                   |
-| ---------------------- | ------------------------ | ------------------ | ----------------------------------------------------- |
-| `ref` (regex)          | `aow/ref`                | `ref`              | exact full ref                                        |
-| —                      | `aow/branch`             | `ref`              | tag-only convenience: full `ref` **or** short name     |
-| `ref_type`             | `aow/ref-type`           | `ref_type`         | exact                                                 |
-| `event_name`           | `aow/event-name`         | `event_name`       | exact                                                 |
-| `workflow_ref` (regex) | `aow/workflow-ref`       | `workflow_ref`     | exact                                                 |
-| `environment`          | `aow/environment`        | `environment`      | exact; the deployment environment a job declares      |
-| `runner_environment`   | `aow/runner-environment` | `runner_environment` | exact; `github-hosted` / `self-hosted`              |
-| `actor` (regex list)   | `aow/actor`              | `actor`            | exact; space-list = OR                                |
+| `conditions` key       | Tag (default prefix)     | Claim                | Matching difference                                |
+| ---------------------- | ------------------------ | -------------------- | -------------------------------------------------- |
+| `ref` (regex)          | `aow/ref`                | `ref`                | exact full ref                                     |
+| —                      | `aow/branch`             | `ref`                | tag-only convenience: full `ref` **or** short name |
+| `ref_type`             | `aow/ref-type`           | `ref_type`           | exact                                              |
+| `event_name`           | `aow/event-name`         | `event_name`         | exact                                              |
+| `workflow_ref` (regex) | `aow/workflow-ref`       | `workflow_ref`       | exact                                              |
+| `environment`          | `aow/environment`        | `environment`        | exact; the deployment environment a job declares   |
+| `runner_environment`   | `aow/runner-environment` | `runner_environment` | exact; `github-hosted` / `self-hosted`             |
+| `actor` (regex list)   | `aow/actor`              | `actor`              | exact; space-list = OR                             |
+| _any claim name_       | `aow/claim.<name>`       | `<name>`             | exact; issuer-agnostic; **new in 3.0.0**           |
 
 > **Changed in 3.0.0** — `aow/environment` checked `runner_environment` in v2, while `conditions.environment` checked it too; both now check the deployment-environment claim, and the runner type has its own key on each side. A role still tagged `aow/environment: github-hosted` no longer matches (fail-closed) — retag it `aow/runner-environment`. There is no `aow/branch` equivalent under `conditions:`; write `ref` with a regex.
 
@@ -74,20 +76,21 @@ Every tag suffix is its claim name with underscores written as dashes, so a tag 
 
 Tag keys use a configurable prefix (`tag_auth.tag_prefix`, default `aow/`).
 
-| Tag (default prefix) | Claim checked                    | Notes                                                              |
-| -------------------- | -------------------------------- | ------------------------------------------------------------------ |
-| `aow/subject`        | canonical subject (any issuer)   | **canonical identity tag**; exact or space-list                    |
-| `aow/issuer`         | verified `iss`                   | **required with >1 configured issuer**; optional with a single one |
-| `aow/repo`           | `repository` (e.g. `acme/api`)   | legacy identity alias (GitHub); exact or space-list                |
-| `aow/repo-owner`     | `repository_owner` (e.g. `acme`) | legacy identity alias; whole org; OR with `aow/repo`/`aow/subject` |
-| `aow/branch`         | `ref` **or** short branch name   | `main` or `refs/heads/main`                                        |
-| `aow/ref`            | `ref`                            | exact full ref                                                     |
-| `aow/ref-type`       | `ref_type` (`branch`/`tag`)      | exact or space-list                                                |
-| `aow/event-name`     | `event_name` (`push`, …)         | exact or space-list                                                |
-| `aow/workflow-ref`   | `workflow_ref`                   | exact full `owner/repo/.github/workflows/x.yml@ref`                |
-| `aow/environment`    | `environment`                    | deployment environment a job declares; **changed in 3.0.0**        |
-| `aow/runner-environment` | `runner_environment`         | `github-hosted` / `self-hosted`; **new in 3.0.0**                  |
-| `aow/actor`          | `actor`                          | exact or space-list                                                |
+| Tag (default prefix)     | Claim checked                    | Notes                                                              |
+| ------------------------ | -------------------------------- | ------------------------------------------------------------------ |
+| `aow/subject`            | canonical subject (any issuer)   | **canonical identity tag**; exact or space-list                    |
+| `aow/issuer`             | verified `iss`                   | **required with >1 configured issuer**; optional with a single one |
+| `aow/repo`               | `repository` (e.g. `acme/api`)   | legacy identity alias (GitHub); exact or space-list                |
+| `aow/repo-owner`         | `repository_owner` (e.g. `acme`) | legacy identity alias; whole org; OR with `aow/repo`/`aow/subject` |
+| `aow/branch`             | `ref` **or** short branch name   | `main` or `refs/heads/main`                                        |
+| `aow/ref`                | `ref`                            | exact full ref                                                     |
+| `aow/ref-type`           | `ref_type` (`branch`/`tag`)      | exact or space-list                                                |
+| `aow/event-name`         | `event_name` (`push`, …)         | exact or space-list                                                |
+| `aow/workflow-ref`       | `workflow_ref`                   | exact full `owner/repo/.github/workflows/x.yml@ref`                |
+| `aow/environment`        | `environment`                    | deployment environment a job declares; **changed in 3.0.0**        |
+| `aow/runner-environment` | `runner_environment`             | `github-hosted` / `self-hosted`; **new in 3.0.0**                  |
+| `aow/actor`              | `actor`                          | exact or space-list                                                |
+| `aow/claim.<name>`       | the raw claim `<name>`           | any issuer, any claim; exact or space-list; **new in 3.0.0**       |
 
 ### Example
 
@@ -165,12 +168,39 @@ Key consequences:
 
 ---
 
+## Constraining any claim: `aow/claim.<name>`
+
+The named suffixes above are GitHub Actions claim names. Any other issuer — GitLab, Okta, an internal provider — reaches its own claims through `aow/claim.<name>`, where `<name>` is the raw verified claim, spelled exactly as the issuer mints it:
+
+```
+aow/issuer            = https://gitlab.example.com
+aow/subject           = project_path:acme/api:ref_type:branch:ref:main
+aow/claim.project_path = acme/api
+aow/claim.namespace_path = acme platform
+```
+
+That role is assumable only by a GitLab identity whose canonical subject matches **and** whose `project_path` is `acme/api` **and** whose `namespace_path` is `acme` or `platform`.
+
+Rules:
+
+- **AND with everything else.** Each `aow/claim.*` tag is one more condition on top of the issuer gate, the identity gate, and any named dimension tags.
+- **Never grants, only narrows.** `aow/claim.*` is not an identity tag: a role carrying only `aow/claim.*` tags and no `aow/subject` / `aow/repo` / `aow/repo-owner` is denied by the identity gate before these are read.
+- **Exact match, space-list = OR** — same as every other tag.
+- **List claims match any element**; a non-string, non-list claim never matches.
+- **Case-sensitive**, because IAM preserves tag-key case.
+
+It also works for GitHub, for claims with no named suffix — e.g. `aow/claim.job_workflow_ref`.
+
+---
+
 ## Corner cases
 
 - **No identity tag → deny.** A role with none of `aow/subject`, `aow/repo`, or `aow/repo-owner` is never tag-authorized, even if other `aow/*` tags match.
 - **Multi-issuer without `aow/issuer` → deny.** Once a second issuer is configured, a role with no `aow/issuer` tag is unreachable via tag-auth (fails closed) — add the tag when you add the issuer.
 - **Tag read fails → deny (logged, not fatal).** If `iam:GetRole` errors (role missing, no permission, spoke assume failed), tag-auth treats the role as not authorized and logs a warning; the explicit-mapping result still stands.
 - **Empty claim never matches.** If a claim is absent/empty (e.g. no `environment`), a role requiring that tag is denied. Don't tag dimensions the workflow won't present.
+- **`aow/claim.` names are case-sensitive.** IAM stores tag keys verbatim, so `aow/claim.isContractor` reads the claim `isContractor` exactly — unlike `conditions:` keys, which viper lower-cases on the way in and which therefore fall back to a case-folded lookup. Spell the claim the way the issuer mints it. A bare `aow/claim.` names no claim and denies.
+- **`aow/claim.<name>` on a list claim matches any element.** A claim holding `["platform","sre"]` satisfies `aow/claim.groups: sre`. A claim that is neither a string nor a list of strings (a number, an object) never matches.
 - **Prefix collisions.** Only keys under `tag_prefix` are inspected; unrelated tags (cost-center, team, …) are ignored. Changing `tag_prefix` changes which keys are read — keep it consistent with how roles are tagged.
 - **Tag charset.** `*`, `(`, `)`, `[`, `]`, `|`, `^`, `$`, `\`, `?`, `,` are rejected by AWS in tag values. Lists are **space**-separated, not comma.
 - **`aow/branch` vs `aow/ref`.** `aow/branch` is forgiving (matches the full ref _or_ the short name); `aow/ref` is strict (full ref only). Prefer `aow/ref` when you need an exact ref including tags like `refs/tags/v1.2.3`.

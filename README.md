@@ -6,7 +6,7 @@
 
 ## Overview
 
-**AWS OIDC Warden** is a secure, lightweight Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS AssumeRole. It acts as a trusted intermediary between CI/CD workflows and AWS resources, enforcing fine-grained access control based on repository, branch, actor, and other configurable constraints — without storing long-lived credentials.
+**AWS OIDC Warden** is a secure, lightweight Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS AssumeRole. It acts as a trusted intermediary between CI/CD workflows and AWS resources, enforcing fine-grained access control on the token's verified subject and on any claim its issuer publishes — combined with `all_of`/`any_of`/`none_of` boolean groups — without storing long-lived credentials.
 
 <!-- prettier-ignore -->
 > [!CAUTION]
@@ -242,7 +242,7 @@ The audience requested by `getIDToken(...)` must match the audience configured o
 
 #### Deploying to AWS Lambda
 
-Four Lambda variants are available — API Gateway REST v1 (recommended for production, `self` mode), API Gateway HTTP v2 (`apigw` delegated mode), Lambda URLs (simple setups), and ALB (high traffic). All share the same core logic; only the entry point differs.
+Four Lambda variants are available — API Gateway HTTP v2 (recommended: `apigw` delegated mode puts a JWT Authorizer in front of the Lambda and the source IP is platform-attested), API Gateway REST v1 (`self` mode, the only flavor AWS WAF can attach to), Lambda URLs (simple setups), and ALB (high traffic). All share the same core logic; only the entry point differs.
 
 **Quickstart with pre-built container images (recommended):**
 
@@ -284,7 +284,7 @@ For full build commands, ECR pull-through cache setup, and infrastructure detail
 
 Tag-based authorization lets a repository assume an IAM role authorized by **tags on the role itself**, without listing the role in `role_mappings`. This is especially useful when roles are managed across many accounts or teams: add `aow/subject` (or the legacy `aow/repo`), `aow/ref`, and similar tags to the IAM role and the warden will evaluate them against the OIDC claims.
 
-For cross-account (hub/spoke) scenarios, enable the separate top-level `cross_account` block: the warden reads and assumes roles in member accounts by first assuming a convention-named spoke role (`aow-spoke` by default) in the target account. The transport is independent of tag-auth — explicit `role_mappings` can target member-account ARNs on their own. Explicit `role_mappings` are always evaluated first; tag-auth is a fallback path only.
+For cross-account (hub/spoke) scenarios, enable the separate top-level `cross_account` block. The target role is always assumed **directly**, in one hop, with the warden's own hub credentials — never through an intermediate role. A convention-named spoke role (`aow-spoke` by default) is assumed only to call `iam:GetRole` and read a member-account role's tags, which is needed for cross-account tag-auth alone; it is never an assume target. The transport is independent of tag-auth — explicit `role_mappings` can target member-account ARNs on their own. Explicit `role_mappings` are always evaluated first; tag-auth is a fallback path only.
 
 Both features are opt-in (`tag_auth.enabled` / `cross_account.enabled`, default `false`); cross-account supports a target-account allow-list and an external ID for spoke-role trust. Independently of either, the top-level `session_tags_transitive` (RECOMMENDED, default `false`) marks every session tag transitive so the requester's identity survives role chaining instead of being dropped at the first hop — see [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags) for setup, tag reference, and IAM examples, and [docs/examples/cross-account/](docs/examples/cross-account/) for a full worked cross-account example (config + IAM roles + StackSets template).
 

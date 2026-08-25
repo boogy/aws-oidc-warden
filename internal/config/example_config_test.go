@@ -104,3 +104,98 @@ func TestExampleConfigLoadsAndValidates(t *testing.T) {
 		})
 	}
 }
+
+// TestExampleConfigGenericIssuer exercises the GitLab (`provider: generic`)
+// half of the shipped example through the same authorization path.
+//
+// TestExampleConfigLoadsAndValidates only drives the GitHub issuer, so every
+// generic-issuer line in the example — the claim-native condition keys that
+// name GitLab's own claims, the list-valued `groups` claim, and the issuer
+// binding that keeps the two issuers' subject namespaces apart — was shipped
+// unexercised. That is the half of the config a non-GitHub operator copies.
+func TestExampleConfigGenericIssuer(t *testing.T) {
+	data, err := os.ReadFile(exampleConfigPath)
+	require.NoError(t, err)
+
+	cfg := &config.Config{}
+	require.NoError(t, cfg.MergeBytes(data, "yaml"))
+
+	const (
+		gitlab = "https://gitlab.com"
+		gh     = "https://token.actions.githubusercontent.com"
+		subj   = "mygroup/myproject"
+	)
+
+	// The canonical subject for this issuer comes from claim_mappings.subject,
+	// so the example must map it — a generic issuer without it is a Validate()
+	// error, and the mapping below could never be reached.
+	var gitlabSpec *config.IssuerConfig
+	for i := range cfg.Issuers {
+		if cfg.Issuers[i].Issuer == gitlab {
+			gitlabSpec = &cfg.Issuers[i]
+		}
+	}
+	require.NotNil(t, gitlabSpec, "the example must keep a generic issuer")
+	require.Equal(t, "generic", gitlabSpec.Provider)
+	require.NotEmpty(t, gitlabSpec.ClaimMappings["subject"])
+
+	base := func() map[string]any {
+		return map[string]any{
+			"ref":          "main",
+			"project_path": subj,
+			"groups":       []any{"platform-team", "docs"},
+		}
+	}
+
+	cases := []struct {
+		name    string
+		issuer  string
+		subject string
+		mutate  func(map[string]any)
+		want    bool
+	}{
+		{name: "every claim-native condition satisfied", issuer: gitlab, subject: subj, want: true},
+		{
+			name: "list claim matches on any element", issuer: gitlab, subject: subj,
+			mutate: func(c map[string]any) { c["groups"] = []any{"unrelated", "sre"} },
+			want:   true,
+		},
+		{
+			name: "no group matches", issuer: gitlab, subject: subj,
+			mutate: func(c map[string]any) { c["groups"] = []any{"contractors"} },
+			want:   false,
+		},
+		{
+			name: "the groups claim is absent", issuer: gitlab, subject: subj,
+			mutate: func(c map[string]any) { delete(c, "groups") },
+			want:   false,
+		},
+		{
+			name: "a GitLab-named claim still gates", issuer: gitlab, subject: subj,
+			mutate: func(c map[string]any) { c["project_path"] = "other/project" },
+			want:   false,
+		},
+		{
+			name: "the ref condition still gates", issuer: gitlab, subject: subj,
+			mutate: func(c map[string]any) { c["ref"] = "feature/x" },
+			want:   false,
+		},
+		// Issuer binding: the same subject string presented by the other
+		// configured issuer must not reach this mapping.
+		{name: "same subject, wrong issuer", issuer: gh, subject: subj, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := base()
+			if tc.mutate != nil {
+				tc.mutate(claims)
+			}
+			ok, roles := cfg.AuthorizeRoles(tc.issuer, tc.subject, claims)
+			require.Equal(t, tc.want, ok)
+			if tc.want {
+				require.NotEmpty(t, roles)
+			}
+		})
+	}
+}

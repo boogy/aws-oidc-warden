@@ -29,11 +29,11 @@ Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec
 6. `required_claims` present and non-empty on the verified raw claims.
 7. `normalizeClaims` — see below.
 
-Steps 5-7 (key-pinning refinement, `sub`/`nbf` enforcement, lifetime/age caps, per-`(issuer,kid)` refetch rate limiting) are Group C's hardening layer, added in place around this flow.
+The hardening steps — key-pinning refinement (`kid` + `alg` + `use=sig` + key-type↔alg-family), `sub`/`nbf` enforcement, the optional lifetime/age caps, and per-`(issuer, kid)` refetch rate limiting — are not entries of their own in the list above. They layer onto the baseline the per-call parser and `GenKeyFunc` already provide, inside steps 3-7.
 
-## `normalizeClaims` and the `ProviderAdapter` seam
+## `normalizeClaims` and the `providerAdapter` seam
 
-`normalizeClaims(raw, provider, mappings)` converts verified raw claims into canonical `types.Claims`: populates the standard registered claims for every provider (`populateRegisteredClaims`), then dispatches to a `providerAdapter` (`providerAdapters["github"|"generic"]`) for provider-specific struct population, and **always** sets `claims.Subject` from `adapter.subject(raw, mappings)` — never from raw JSON directly (SHARED.md invariant #4: no self-asserted canonical identity).
+`normalizeClaims(raw, provider, mappings)` converts verified raw claims into canonical `types.Claims`: populates the standard registered claims for every provider (`populateRegisteredClaims`), then dispatches to a `providerAdapter` (`providerAdapters["github"|"generic"]`) for provider-specific struct population, and **always** sets `claims.Subject` from `adapter.subject(raw, mappings)` — never from raw JSON directly (the no-self-asserted-canonical-identity invariant: the authorization subject comes from config, never from a field the token chose for itself).
 
 ```go
 type providerAdapter interface {
@@ -61,7 +61,7 @@ Adding a new OIDC provider = implement `providerAdapter` and register it in `pro
 - `kid` must match a JWKS key; a miss forces one cache-bypassing refetch, not an automatic retry loop.
 - `ParseToken` and the old single-issuer `Unmarshal` method were dropped — nothing in the pipeline called them; use `Validate()`.
 
-Tests: `validator_test.go` (core `Validate()` table-driven cases, JWKS fetch/size/count limits, `GenKeyFunc`), `multi_audience_test.go` (ANY-match audience table), `rotation_audience_test.go` (key rotation, EC keys, insecure-issuer rejection, concurrent hot-swap `-race` test), `integration_test.go` (end-to-end mock JWKS server + generated JWT).
+Tests: `validator_test.go` (core `Validate()` cases, unknown-issuer denial, per-issuer audience isolation, required claims), `jwks_test.go` (key rotation, refetch limiter under flood, audience ANY-match, end-to-end mock JWKS server), `hardening_test.go` (`GenKeyFunc` alg confusion RS/ES, `use:enc` rejection, duplicate-kid selection, discovery issuer mismatch), `delegated_test.go` (self-vs-delegated parity single and multi-issuer, cross-issuer key confusion, `alg:none`, time bounds, and proof an unconfigured `iss` triggers zero network fetches), `extractor_test.go` (the three `ClaimsExtractorInterface` implementations), `internal_test.go` (SSRF guards: blocked IPs, secure-URL and redirect policy, refetch limiter), `alg_allowlist_test.go` (algorithms outside the allowlist).
 
 ## Extractors
 

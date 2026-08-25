@@ -33,9 +33,12 @@ issuers:
     #   subject: "repository"
     required_claims:
       - "repository"
-    # session_tags: STS tag key <- raw claim name. Tag KEYS must match
-    # [A-Za-z0-9 _.:/=+@-]{1,128}. NOTE (v2 change): the `repo` tag now carries
-    # the FULL "owner/repo" (raw `repository` claim); v1 stripped the owner.
+    # session_tags: STS tag key <- raw claim name. Tag KEYS must be written
+    # lower-case, matching [a-z0-9 _.:/=+@-]{1,128}: the config loader
+    # case-folds every key it reads, so "CostCenter" is attached to the STS
+    # session as "costcenter". Key your ABAC policies on the lower-case form.
+    # NOTE (v2 change): the `repo` tag now carries the FULL "owner/repo"
+    # (raw `repository` claim); v1 stripped the owner.
     session_tags:
       repo: "repository"
       repo-owner: "repository_owner"
@@ -72,6 +75,10 @@ role_session_name: aws-oidc-warden
 ## not set its own `issuer`. Required to resolve unbound mappings when more than
 ## one issuer is configured. Must reference an issuer defined above.
 default_issuer: "https://token.actions.githubusercontent.com"
+## NOTE: because this file configures two issuers and leaves most mappings
+## unbound to demonstrate the inheritance, it emits an advisory WARN at boot
+## naming the mapping count. That is expected HERE; in a real multi-issuer
+## config, set `issuer:` explicitly on every mapping and the WARN goes away.
 
 ####################################################################################
 # TOKEN HARDENING KNOBS (all optional; shown with their defaults)
@@ -168,7 +175,8 @@ session_policy_bucket: "aws-oidc-warden-session-policies"
 #   - "/etc/aws-oidc-warden/fragments/local.yaml"
 ## Optional integrity pin per fragment path (sha256 of the file contents).
 # config_fragment_checksums:
-#   "/etc/aws-oidc-warden/fragments/team-a.yaml": "sha256:..."
+#   - uri: "/etc/aws-oidc-warden/fragments/team-a.yaml"
+#     checksum: "sha256:..."
 
 ####################################################################################
 # ROLE SETS (named, reusable role lists; reference with "@name" in roles)
@@ -219,10 +227,10 @@ role_sets:
 #     none_of: [{}]          # nothing: always-true members make any_of always
 #                            # pass and none_of always fail
 #
-# TWO THAT LOAD BUT DENY: a v2 `branch:`/`actor_matches:` (now read as claims
-# of those literal names, which GitHub does not issue — a boot WARN names the
-# key), and a camelCase claim key: viper lower-cases every config key, so
-# `emailVerified:` becomes the claim `emailverified` and can never match.
+# ONE THAT LOADS BUT DENIES: a v2 `branch:`/`actor_matches:`, now read as a
+# claim of that literal name, which GitHub does not issue — a boot WARN names
+# the key. (A camelCase claim key such as `emailVerified:` is fine: viper
+# lower-cases it, and claim lookup falls back to a case-insensitive match.)
 ####################################################################################
 role_mappings:
   # Simple mapping, main branch only (inherits default_issuer = GitHub).
@@ -231,11 +239,16 @@ role_mappings:
     conditions:
       ref: "refs/heads/main"
 
-  # External session policy file in S3.
+  # External session policy file in S3. This mapping names its role directly
+  # rather than reusing @deployers: a role granted BOTH here and by a
+  # policy-less mapping earlier in the file would trip the unscoped-grant WARN
+  # at boot, because that check shares roles rather than computing subject
+  # overlap (see warnUnscopedRoleGrants). Keeping scoped roles distinct from
+  # unscoped ones is the habit worth copying.
   - subject: "org/main-branch-repo"
     session_policy_file: "session-policies/org/main-branch-repo/policy.json"
     roles:
-      - arn:aws:iam::123456789012:role/github-actions-create-repo
+      - arn:aws:iam::123456789012:role/github-actions-scoped-deploy
     conditions:
       ref: "refs/heads/main"
 
@@ -391,6 +404,15 @@ role_groups:
 #   aow/environment        environment          (deployment environment)
 #   aow/runner-environment runner_environment   (github-hosted/self-hosted)
 #
+#   aow/claim.<name>       the raw verified claim <name>, for ANY issuer
+#                          e.g. aow/claim.project_path: acme/api  (GitLab)
+#                               aow/claim.groups: platform sre    (list claim)
+#                          Every suffix above names a GitHub Actions claim;
+#                          this is how a non-GitHub issuer constrains anything
+#                          beyond aow/subject. ANDs with the rest, and is NOT
+#                          an identity tag, so it can only narrow access.
+#                          Case-SENSITIVE (IAM keeps tag keys verbatim).
+#
 # CHANGED IN 3.0.0: aow/environment used to check runner_environment. Retag
 # such roles aow/runner-environment — until then they simply stop matching.
 tag_auth:
@@ -427,10 +449,15 @@ cross_account:
 #
 # "self"  (default) full JWKS signature verification here (multi-issuer aware).
 # "apigw" trust an API Gateway HTTP API v2 JWT Authorizer (claims from the
-#         authorizer context). Delegated modes require EXACTLY ONE configured
-#         issuer and still re-validate issuer/audience/exp/nbf/sub/time-bounds.
+#         authorizer context). Any number of configured issuers: each route's
+#         Authorizer pins its own, and the verified iss it forwards selects the
+#         spec per request.
 # "alb"   trust ALB OIDC; the ES256-signed x-amzn-oidc-data header is verified.
-#         Set alb_expected_signer to the ALB ARN to prevent cross-ALB spoofing.
+#         Requires EXACTLY ONE configured issuer -- an ALB has one OIDC IdP, so
+#         a multi-issuer config is genuinely ambiguous there and is rejected at
+#         startup. Set alb_expected_signer to the ALB ARN to prevent cross-ALB
+#         spoofing.
+# Both delegated modes still re-validate issuer/audience/exp/nbf/sub/time-bounds.
 ####################################################################################
 jwt_validation:
   mode: "self"

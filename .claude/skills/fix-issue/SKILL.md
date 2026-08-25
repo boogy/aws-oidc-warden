@@ -32,7 +32,7 @@ Each `internal/<pkg>/CLAUDE.md` maps its package — read the one for the area b
 
 ### 4. Implement
 
-Follow codebase patterns: interfaces for testability, explicit error handling, `slog` structured logging, pre-compiled regex, validated and size-bounded external input. New sentinel errors go in `internal/handler/types.go` and must be mapped to HTTP status in every frontend adapter (`apigateway.go`, `alb.go`, `lambdaurl.go`).
+Follow codebase patterns: interfaces for testability, explicit error handling, `slog` structured logging, pre-compiled regex, validated and size-bounded external input. New sentinel errors go in `internal/handler/types.go` and must be mapped to HTTP status in every frontend adapter (`apigateway.go`, `apigatewayv2.go`, `alb.go`, `lambdaurl.go`).
 
 ### 5. Test
 

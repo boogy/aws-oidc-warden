@@ -69,9 +69,12 @@ Entries under `claims:` are AND-ed with everything else on the node. It is a spe
 7. Remove any condition key you left written with no value (`environment:` and nothing after it), and any `conditions:` written with nothing under it — including an explicit `conditions: null` from a generator, which YAML cannot tell apart from the typo. v3 rejects both at load: they used to decode as if the key were absent, so the mapping authorized more than the file said. An unconditional mapping omits the key.
 8. Values may now be lists (`actor: ["release-bot", "release-manager"]`), which often collapses a duplicated mapping or an `any_of` group into one line.
 
+## Also new in v3: boolean groups
+
+`all_of` / `any_of` / `none_of` are new in this release. They nest inside a `conditions:` block for logic the implicit AND cannot express, up to 5 levels deep and 64 nodes per mapping (both enforced at load). A v2 config contains none of them, so there is nothing to migrate — they are what a decision that used to need two separate mappings can now collapse into one.
+
 ## What did NOT change
 
 - Entries at the same level are AND-ed; patterns within one key are OR-ed.
 - Every pattern is auto-anchored (`^(?:pattern)$`), and a bare `.*` / `.+` is rejected wherever it gates a decision.
-- `all_of` / `any_of` / `none_of` nest as before (5 levels, 64 nodes per mapping).
 - A claim whose value is a list matches when any element matches.

@@ -2,7 +2,7 @@
 
 The AWS OIDC Warden attaches STS session tags when assuming a role, for ABAC, audit trails, and cost allocation.
 
-## v2: session tags are per-issuer and spec-driven
+## Session tags are per-issuer and spec-driven
 
 Each issuer declares its own `session_tags` map — **STS tag key ← raw claim name** — and only those tags are attached for that issuer's tokens. There is no hard-coded GitHub tag set; a tag's value is the verified claim's value, taken verbatim.
 
@@ -10,6 +10,7 @@ Each issuer declares its own `session_tags` map — **STS tag key ← raw claim 
 issuers:
   - issuer: "https://token.actions.githubusercontent.com"
     provider: "github"
+    audiences: ["sts.amazonaws.com"]
     session_tags:
       repo: "repository" # NOTE: full "owner/repo" (see below)
       repo-owner: "repository_owner"
@@ -19,7 +20,7 @@ issuers:
       event-name: "event_name"
 ```
 
-Tag **keys** must match `[A-Za-z0-9 _.:/=+@-]{1,128}`; values are capped at 256 chars. An invalid key or value is **skipped and logged — never sanitized or truncated**, so an ABAC condition can trust that a tag it sees carries the exact claim value (a silently mangled value would be a security bug).
+Tag **keys** must be written lower-case, matching `[a-z0-9 _.:/=+@-]{1,128}`; values are capped at 256 chars. The lower-case restriction is a loader constraint, not an AWS one: a `session_tags` key is a _config key_, and the config loader case-folds every key it reads. `CostCenter: cost_center` is therefore attached as `costcenter`, and the original case is gone before any validation could object — so write the key in the case you want STS to receive, and key ABAC policies on that. This applies only to the tag **key**; the tag **value** is a config value and is passed through with the claim's case untouched. An invalid key or value is **skipped and logged — never sanitized or truncated**, so an ABAC condition can trust that a tag it sees carries the exact claim value (a silently mangled value would be a security bug).
 
 > **Breaking change from v1:** the default `repo` tag now carries the **full `owner/repo`** (the raw `repository` claim). v1 stripped the owner to a bare repo name. If an ABAC policy matched a bare repo name, update it — or map `repo` to a claim that is already bare.
 
@@ -241,6 +242,12 @@ WHERE userIdentity.sessionContext.sessionIssuer.tags.ref != 'refs/heads/main'
 4. **Use cost allocation tags** to track spending by repository or team
 5. **Regularly audit** which repositories have access to which roles
 6. **Implement least privilege** by combining session tags with restrictive policies
+
+## Surviving a role chain (`session_tags_transitive`)
+
+A session tag is attached to the session the warden issues. By default it is dropped the moment that session assumes another role, so any ABAC policy past that hop can no longer see who the original caller was. The top-level `session_tags_transitive: true` (**RECOMMENDED**, default `false`) marks every attached tag transitive, so it propagates immutably through subsequent role chaining.
+
+It defaults off only for upgrade safety: a transitive tag cannot be changed downstream, so enabling it breaks a target role that re-tags with the same keys while chaining. If yours does not (the common case), turn it on. The deprecated `tag_auth.transitive_session_tags` still works as a fallback but is scoped to tag-auth; the top-level key applies to every request. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags).
 
 ## Limitations
 
