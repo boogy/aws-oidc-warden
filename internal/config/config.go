@@ -805,6 +805,12 @@ func (c *Config) Validate() error {
 		// entry's value also joins this issuer's auditable-claim set
 		// (auditableClaimsFor), so a non-subject key is a supported way to say
 		// "also record this claim" rather than a no-op to reject.
+		// The comparison is against the value as literally written, and map
+		// values are not viper-folded, so `subject: ISS` is not caught by name.
+		// That is sufficient: reaching the identity collapse this guard prevents
+		// would need the IdP to mint a claim named `ISS` *as well as* the real
+		// `iss`, and absent that the mapping resolves no claim at all and
+		// stringClaim fails the token outright rather than yielding a subject.
 		if claimName := iss.ClaimMappings["subject"]; nonIdentityClaims[claimName] {
 			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}

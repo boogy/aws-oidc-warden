@@ -3,6 +3,7 @@ package utils_test
 import (
 	"encoding/json"
 	"log/slog"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -117,6 +118,40 @@ func TestRedactToken(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := utils.RedactToken(tt.token, tt.firstN, tt.lastN); got != tt.want {
 				t.Errorf("RedactToken(%q, %d, %d) = %q, want %q", tt.token, tt.firstN, tt.lastN, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRedactToken_OversizedCountsDoNotPanic guards the other half of the clamp.
+// Clamping only the negatives is not enough: firstN+lastN is summed before the
+// too-short guard, and for counts near MaxInt that sum overflows and wraps
+// negative, so `tokenLen <= firstN+lastN` is false and execution falls through
+// to a slice that is guaranteed out of range. Each count is therefore clamped
+// to the token length before the sum, which also makes every oversized case
+// collapse onto the fully-masked answer a too-long request should give.
+func TestRedactToken_OversizedCountsDoNotPanic(t *testing.T) {
+	const token = "sometoken1234567890"
+	masked := strings.Repeat("*", len(token))
+	cases := []struct {
+		name          string
+		firstN, lastN int
+		want          string
+	}{
+		{"first overflows the sum", math.MaxInt, 1, masked},
+		{"last overflows the sum", 1, math.MaxInt, masked},
+		{"both overflow the sum", math.MaxInt, math.MaxInt, masked},
+		{"first alone is oversized", math.MaxInt, 0, masked},
+		{"merely longer than the token", len(token) + 1, len(token) + 1, masked},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := utils.RedactToken(token, c.firstN, c.lastN)
+			if got != c.want {
+				t.Errorf("RedactToken(token, %d, %d) = %q, want %q", c.firstN, c.lastN, got, c.want)
+			}
+			if strings.Contains(got, "token12345") {
+				t.Errorf("RedactToken(token, %d, %d) leaked the token: %q", c.firstN, c.lastN, got)
 			}
 		})
 	}

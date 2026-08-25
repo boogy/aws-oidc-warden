@@ -1,10 +1,13 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -548,4 +551,145 @@ func TestGenericIssuer_TagAuthClaimDimensionMatchesListClaim(t *testing.T) {
 	_, err = vRun(t, cfg, rec2, claims2, gTagRole)
 	require.Error(t, err, "non-membership must deny")
 	assert.Zero(t, rec2.assumeCalls)
+}
+
+// ---------- The request log line's identity fields ----------
+
+// vRunLogged is vRun with a caller-supplied logger, so a test can inspect what
+// the pipeline actually wrote. Every other e2e case discards log output, which
+// is why the identity attrs went unguarded.
+func vRunLogged(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.Claims, role string, log *slog.Logger) error {
+	t.Helper()
+	p := handler.NewRequestProcessor(
+		config.NewStaticProvider(cfg), rec, &vExtractor{claims: claims}, nil, "test")
+	ctx := context.WithValue(context.Background(), handler.StartTimeContextKey, time.Now())
+	_, err := p.ProcessRequest(ctx, &handler.RequestData{Role: role},
+		validator.ExtractionInput{Token: "t"}, "req-1", log)
+	return err
+}
+
+// requestGroups returns the "request" group of every JSON log record in buf.
+func requestGroups(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &rec), "log line is not JSON: %s", line)
+		if g, ok := rec["request"].(map[string]any); ok {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated
+// pins identityAttrs against real captured log output, for both provider
+// shapes at once.
+//
+// The two halves are one guarantee, not two: `subject` is the only field every
+// provider populates, and repository/ref/branch/actor are GitHub-native struct
+// fields a generic issuer's adapter never fills. Emitting the four
+// unconditionally stamped four empty strings on every non-GitHub log line —
+// which reads as "the claim is missing" rather than "this issuer has no such
+// claim" — while omitting the one field that actually identifies the caller.
+//
+// Asserting presence alone would not catch that: the pre-fix version also
+// emitted the GitHub fields for a GitHub caller. What pins the fix is the
+// generic case asserting those keys are ABSENT, plus both cases asserting
+// `subject` is present.
+func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t *testing.T) {
+	githubFields := []string{"repository", "ref", "branch", "actor"}
+
+	t.Run("github issuer carries subject and the populated github fields", func(t *testing.T) {
+		role := "arn:aws:iam::111111111111:role/app"
+		cfg := vE2ECfg(t, []config.RoleMapping{{Subject: "myorg/repo", Roles: []string{role}}})
+		var buf bytes.Buffer
+		log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+		// identityAttrs is claim-value data, so the whole group is gated on
+		// LogClaimValues. A struct-built config defaults it to false (the
+		// default is applied by viper, not by the zero value), so it must be
+		// set explicitly or this test would assert on a group that was never
+		// emitted and pass for the wrong reason.
+		cfg.LogClaimValues = true
+
+		// vE2EClaims carries `actor` only in Raw; identityAttrs reads the
+		// struct field, so set it here rather than changing a fixture every
+		// other case in this file shares.
+		claims := vE2EClaims("myorg/repo", "refs/heads/main")
+		claims.Actor = "alice"
+
+		require.NoError(t, vRunLogged(t, cfg, &vRecorder{allowAccount: true}, claims, role, log))
+
+		groups := requestGroups(t, &buf)
+		require.NotEmpty(t, groups, "pipeline logged no request group")
+		for _, g := range groups {
+			assert.Equal(t, "myorg/repo", g["subject"], "subject must identify the caller")
+			assert.Equal(t, "myorg/repo", g["repository"])
+			assert.Equal(t, "refs/heads/main", g["ref"])
+			assert.Equal(t, "main", g["branch"], "branch is derived from ref")
+			assert.Equal(t, "alice", g["actor"])
+		}
+	})
+
+	t.Run("generic issuer carries subject and omits the github fields", func(t *testing.T) {
+		role := "arn:aws:iam::111111111111:role/app"
+		cfg := gE2ECfg(t, []config.RoleMapping{
+			{Subject: "mygroup/myproject", Roles: []string{role}, Issuer: gE2EIssuer},
+		})
+		var buf bytes.Buffer
+		log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+		cfg.LogClaimValues = true
+
+		require.NoError(t, vRunLogged(t, cfg, &vRecorder{allowAccount: true},
+			gE2EClaims("mygroup/myproject", "push", []any{"devs"}), role, log))
+
+		groups := requestGroups(t, &buf)
+		require.NotEmpty(t, groups, "pipeline logged no request group")
+		for _, g := range groups {
+			assert.Equal(t, "mygroup/myproject", g["subject"],
+				"subject is the ONLY identity field a generic issuer populates; "+
+					"without it the log line cannot say who called")
+			for _, f := range githubFields {
+				assert.NotContains(t, g, f,
+					"%q is a GitHub-native field this issuer never populates; "+
+						"emitting it stamps an empty string that reads as a missing claim", f)
+			}
+		}
+	})
+
+	// The deny path logs identity through the same helper, and a denied
+	// attempt is exactly when knowing the caller matters most.
+	t.Run("deny path carries the same identity", func(t *testing.T) {
+		granted := "arn:aws:iam::111111111111:role/app"
+		other := "arn:aws:iam::111111111111:role/forbidden"
+		cfg := gE2ECfg(t, []config.RoleMapping{
+			{Subject: "mygroup/myproject", Roles: []string{granted}, Issuer: gE2EIssuer},
+		})
+		var buf bytes.Buffer
+		log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+		cfg.LogClaimValues = true
+
+		err := vRunLogged(t, cfg, &vRecorder{allowAccount: true},
+			gE2EClaims("mygroup/myproject", "push", []any{"devs"}), other, log)
+		require.Error(t, err, "role was never granted; expected a deny")
+
+		groups := requestGroups(t, &buf)
+		require.NotEmpty(t, groups, "deny path logged no request group")
+		var sawSubject bool
+		for _, g := range groups {
+			if g["subject"] == "mygroup/myproject" {
+				sawSubject = true
+			}
+			for _, f := range githubFields {
+				assert.NotContains(t, g, f, "deny path leaked empty GitHub field %q", f)
+			}
+		}
+		assert.True(t, sawSubject, "a deny must record which subject was denied")
+	})
 }

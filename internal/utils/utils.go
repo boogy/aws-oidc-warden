@@ -75,15 +75,20 @@ func ParseLogLevel(level string) (slog.Level, error) {
 }
 
 // RedactToken redacts a token string for safe logging, preserving only the
-// first firstN and last lastN characters. A token too short to survive that
-// split is masked entirely, so the function never reveals more of a short
-// token than of a long one.
+// first firstN and last lastN bytes. A token too short to survive that split is
+// masked entirely, so the function never reveals more of a short token than of
+// a long one. The counts are byte offsets, not runes: a multi-byte token can be
+// cut mid-rune, which is acceptable for an opaque credential that is never
+// rendered as text.
 //
-// Negative counts are clamped to zero. They cannot arise from any current
-// caller — the pipeline keeps token material out of logs entirely rather than
-// logging it redacted, so this has no callers by design — but an unclamped
-// negative would slice out of range and panic inside a log call, which is the
-// one place a redaction helper must not fail.
+// Every count is clamped — negatives to zero, oversized ones to the token
+// length. Neither can arise from a current caller, since the pipeline keeps
+// token material out of logs entirely rather than logging it redacted and this
+// has no callers by design. Both are still clamped because either one would
+// otherwise panic inside a log call, which is the one place a redaction helper
+// must not fail: a negative slices out of range directly, and an oversized pair
+// overflows int when summed, wrapping negative so the too-short guard below is
+// skipped and the slice panics anyway.
 func RedactToken(token string, firstN, lastN int) string {
 	if token == "" {
 		return ""
@@ -96,6 +101,16 @@ func RedactToken(token string, firstN, lastN int) string {
 	}
 
 	tokenLen := len(token)
+
+	// Clamp each count to the token length *before* summing them: firstN+lastN
+	// overflows for adversarially large counts and the comparison below would
+	// then be against a negative number.
+	if firstN > tokenLen {
+		firstN = tokenLen
+	}
+	if lastN > tokenLen {
+		lastN = tokenLen
+	}
 
 	// If token is shorter than firstN + lastN, just mask it all
 	if tokenLen <= firstN+lastN {
