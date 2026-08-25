@@ -89,7 +89,7 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 	if options.awsConfig.Credentials != nil {
 		cfg = options.awsConfig
 	} else {
-		cfg, err = config.LoadDefaultConfig(context.TODO(),
+		cfg, err = config.LoadDefaultConfig(context.Background(),
 			config.WithRetryMaxAttempts(Defaults.MaxRetries),
 		)
 		if err != nil {
@@ -302,7 +302,8 @@ func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time
 	}
 
 	// Check for size limit
-	// DynamoDB has a limit of 400KB for item size, but we use a smaller limit for safety
+	// DynamoDB's hard item-size limit is 400KB; oversized entries are dropped
+	// rather than written, since the PutItem would fail anyway.
 	if len(valueJSON) > int(Defaults.DynamoDBMaxItemSize) {
 		slog.Error("Cache item too large to store in DynamoDB",
 			"key", key,

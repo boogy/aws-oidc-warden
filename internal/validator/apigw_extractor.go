@@ -111,10 +111,16 @@ func mapClaimsFromStrings(raw map[string]string) (jwt.MapClaims, error) {
 // single-value aud that legitimately looks bracketed (e.g. "[internal]")
 // still matches an identically-configured audience. Splitting assumes
 // audience values contain no spaces (they are URIs/identifiers in practice);
-// an audience value WITH spaces could fragment into a piece that matches a
-// configured audience — acceptable here because this check is
-// defense-in-depth behind API Gateway's own audience validation, which has
-// already run against the authorizer's configured audience list.
+// an audience value WITH spaces fragments, and a piece can then satisfy the
+// ANY-match in delegated_claims.go. The ambiguity is inherent and not fixable
+// here: the authorizer context is map[string]string, so ["a b"] and ["a","b"]
+// arrive as the identical string "[a b]" with the distinction already lost.
+// Keeping both readings is the permissive choice, and it is acceptable only
+// because of what has to be true to exploit it: API Gateway's own JWT
+// Authorizer must ALREADY have accepted that space-containing aud, meaning the
+// exact string "a b" is in the Authorizer's configured audience list, while
+// this issuer's `audiences` lists only the fragment "a". Keep the two audience
+// lists identical and the gap cannot open.
 func parseAuthorizerAudience(v string) any {
 	if len(v) < 2 || v[0] != '[' || v[len(v)-1] != ']' {
 		return v

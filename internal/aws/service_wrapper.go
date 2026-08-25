@@ -57,7 +57,7 @@ type AwsServiceWrapper struct {
 
 func NewAwsServiceWrapper() *AwsServiceWrapper {
 	initOnce.Do(func() {
-		cfg, err := config.LoadDefaultConfig(context.TODO(),
+		cfg, err := config.LoadDefaultConfig(context.Background(),
 			config.WithRetryMaxAttempts(3),
 		)
 		if err != nil {
@@ -83,7 +83,7 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 // where clients might need refreshing periodically
 func (s *AwsServiceWrapper) RefreshClients() {
 	slog.Info("Refreshing AWS clients") // Refresh the config to pick up any environment changes
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
+	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRetryMaxAttempts(3),
 	)
 	if err != nil {
