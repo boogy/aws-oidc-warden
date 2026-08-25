@@ -21,11 +21,18 @@ import (
 // (no cross-issuer identity collision). With a
 // single issuer, the issuer tag is optional but still checked if present.
 //
-// The supported dimensions mirror role_mapping conditions (subject, repo,
+// The named dimensions mirror role_mapping conditions (subject, repo,
 // repo-owner, branch, ref, ref-type, event-name, workflow-ref, environment,
 // runner-environment, actor) so a role can require, e.g., subject==X AND
-// ref==Y. Unlike conditions, tag matching is exact (AWS tag values cannot
-// hold regex).
+// ref==Y. Those suffixes name GitHub Actions claims; every other issuer
+// reaches its own claims through the issuer-agnostic `<prefix>claim.<name>`
+// form, which matches the raw verified claim <name> — e.g.
+// `aow/claim.project_path` for GitLab. Both forms AND together with the rest.
+//
+// Unlike conditions, tag matching is exact (AWS tag values cannot hold regex),
+// and unlike condition keys, a `claim.` suffix is matched case-sensitively:
+// IAM tag keys are stored verbatim, so no case is lost on the way in and an
+// exact lookup is always what the operator wrote.
 func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, verifiedIssuer, subject string) bool {
 	if t == nil || !t.Enabled {
 		return false
@@ -38,6 +45,29 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, v
 	claim := func(key string) string {
 		s, _ := claims[key].(string)
 		return s
+	}
+	// claimMatchesTag reports whether the raw claim satisfies a tag value.
+	// A scalar string matches directly; a list claim (groups, aud, roles)
+	// matches when any string element does, mirroring how conditions treat
+	// list claims. Any other shape never matches (fail closed).
+	claimMatchesTag := func(key, tagVal string) bool {
+		switch v := claims[key].(type) {
+		case string:
+			return valueInList(v, tagVal)
+		case []any:
+			for _, elem := range v {
+				if s, ok := elem.(string); ok && valueInList(s, tagVal) {
+					return true
+				}
+			}
+		case []string:
+			for _, s := range v {
+				if valueInList(s, tagVal) {
+					return true
+				}
+			}
+		}
+		return false
 	}
 
 	// Issuer gate: cross-issuer identity collision guard.
@@ -94,6 +124,24 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, v
 			if !valueInList(claim(d.claimKey), v) {
 				return false
 			}
+		}
+	}
+
+	// Issuer-agnostic dimensions: `<prefix>claim.<name>` constrains the raw
+	// verified claim <name>. This is the only dimension form available to a
+	// non-GitHub issuer beyond `subject`, since every suffix above names a
+	// GitHub Actions claim. Each one is a further AND; a role carrying only
+	// claim.* tags and no identity tag was already rejected by the identity
+	// gate, so these can narrow access but never grant it. An empty name
+	// (a bare `<prefix>claim.` tag) names no claim and denies.
+	claimPrefix := p + "claim."
+	for key, tagVal := range roleTags {
+		name, ok := strings.CutPrefix(key, claimPrefix)
+		if !ok {
+			continue
+		}
+		if !claimMatchesTag(name, tagVal) {
+			return false
 		}
 	}
 	return true
