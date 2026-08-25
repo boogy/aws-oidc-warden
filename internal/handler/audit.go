@@ -118,10 +118,11 @@ type auditRecord struct {
 	// available without threading a stage-timer through every branch of
 	// ProcessRequest). Emitted on both allow and deny.
 	//
-	// TODO(v2): optional EMF metrics — emit ProcessingMS/decision/stage as
-	// CloudWatch Embedded Metric Format instead of (or alongside) this JSON
-	// record, for native CloudWatch Metrics dashboards/alarms without a log
-	// insights query. Deferred: no EMF dependency added yet.
+	// Deliberately not EMF: emitting ProcessingMS/decision/stage as CloudWatch
+	// Embedded Metric Format would give native dashboards and alarms without a
+	// Logs Insights query, but it needs an EMF dependency this service does not
+	// carry. Revisit only if the metric is wanted; the JSON record stays either
+	// way, since the audit trail is not a metrics format.
 	ProcessingMS int64 `json:"processingMs"`
 }
 
@@ -439,12 +440,20 @@ var claimAliases = map[string]string{
 // beats a curated list that silently omits whatever the investigation
 // actually needs (and that has to be revised whenever GitHub adds a claim).
 //
-// Every other provider gets only the claims its own claim_mappings
-// reference. This is deliberate and not a symmetry oversight: an arbitrary
-// OIDC issuer can put email addresses, group memberships, or entitlements in
-// a token, and this service must not be what copies them into an S3 object.
-// Naming a claim in claim_mappings is the operator's statement that it is
-// both meaningful and safe to record.
+// Every other provider gets only the claims its own configuration
+// references: claim_mappings targets, required_claims, session_tags targets,
+// and every claim named by a condition on one of that issuer's role_mappings
+// (cfg.AuditableClaims). This is deliberate and not a symmetry oversight: an
+// arbitrary OIDC issuer can put email addresses, group memberships, or
+// entitlements in a token, and this service must not be what copies them into
+// an S3 object. Writing a claim into the config is the operator's statement
+// that it is both meaningful and safe to record; a claim the issuer happens
+// to mint that nothing references is never recorded.
+//
+// Conditions are part of that set because a record that omits the claim which
+// DECIDED the request cannot explain its own decision — the `groups` a none_of
+// vetoed on, or the entitlement an any_of required, is exactly what a reader
+// of the record needs to see.
 //
 // Values are formatted exactly as BuildSessionTags formats session tag
 // values, so a claim reported here and the same claim attached as a session
@@ -457,11 +466,7 @@ func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) ma
 
 	include := func(string) bool { return true } // github: everything
 	if issuerProvider(cfg, issuer) != "github" {
-		mapped := make(map[string]bool)
-		for _, claimName := range issuerClaimMappings(cfg, issuer) {
-			mapped[claimName] = true
-		}
-		include = func(name string) bool { return mapped[name] }
+		include = func(name string) bool { return cfg.AuditableClaims(issuer, name) }
 	}
 
 	out := make(map[string]string, len(rawClaims))
@@ -505,17 +510,6 @@ func claimEmitted(rawClaims map[string]any, name string, include func(string) bo
 		return false
 	}
 	return utils.FormatClaimValue(raw) != ""
-}
-
-// issuerClaimMappings returns an issuer's claim_mappings (canonical field ->
-// raw claim name), or nil when the issuer is unknown/unmapped.
-func issuerClaimMappings(cfg *config.Config, issuer string) map[string]string {
-	for i := range cfg.Issuers {
-		if cfg.Issuers[i].Issuer == issuer {
-			return cfg.Issuers[i].ClaimMappings
-		}
-	}
-	return nil
 }
 
 // resolvedSessionTags computes the actual STS session tag values that would

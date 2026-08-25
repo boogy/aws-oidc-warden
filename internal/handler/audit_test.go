@@ -1071,7 +1071,7 @@ func TestAudit_StaticReasonSurvivesClaimValueGate(t *testing.T) {
 		validator.ExtractionInput{Token: "t"}, "req-reason-static", slog.Default())
 	require.Error(t, err)
 
-	assert.Equal(t, "role not allowed for repository or doesn't meet constraints",
+	assert.Equal(t, "role not allowed for this subject or its conditions are not met",
 		sink.last(t)["reason"])
 }
 
@@ -1201,4 +1201,87 @@ func TestAudit_APIGatewayHandler_SuccessResponseHeadersAndBody(t *testing.T) {
 	assert.NotContains(t, resp.Headers, "Access-Control-Allow-Origin")
 	assert.NotContains(t, resp.Headers, "Access-Control-Allow-Credentials")
 	assert.Contains(t, strings.ToLower(resp.Headers["Content-Type"]), "json")
+}
+
+// TestAuditClaims_GenericIssuerRecordsDecisionRelevantClaims pins the widened
+// inclusion rule for non-github providers: the record carries every claim the
+// issuer's own config references — claim_mappings targets, required_claims,
+// session_tags targets, and every claim named by a condition on one of that
+// issuer's role_mappings — and nothing else.
+//
+// The condition half is the one that matters. Before 3.0.0 the record held
+// only claim_mappings targets, so a request that turned on a `groups` claim
+// (an any_of requiring it, a none_of vetoing on it) produced a record that
+// could not explain its own decision: the deciding value was absent. A claim
+// nothing in the config mentions (`email` here) still stays out.
+func TestAuditClaims_GenericIssuerRecordsDecisionRelevantClaims(t *testing.T) {
+	const genericIssuer = "https://issuer.example.com"
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:    genericIssuer,
+			Provider:  "generic",
+			Audiences: []string{"sts.amazonaws.com"},
+			ClaimMappings: map[string]string{
+				"subject": "project_path",
+			},
+			RequiredClaims: []string{"project_id"},
+			SessionTags:    map[string]string{"Tier": "plan_tier"},
+		}},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 0},
+		RoleMappings: []config.RoleMapping{{
+			Subject: "group/project",
+			Issuer:  genericIssuer,
+			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Conditions: &config.Condition{
+				Claims: map[string]config.Patterns{"groups": {"platform"}},
+				NoneOf: []*config.Condition{{
+					Claims: map[string]config.Patterns{"quarantined": {"true"}},
+				}},
+			},
+		}},
+		LogClaimValues: true,
+	}
+	require.NoError(t, cfg.Validate())
+
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:   genericIssuer,
+			Subject:  "group/project",
+			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
+		},
+		Sub: "group/project",
+		Raw: map[string]any{
+			"project_path": "group/project", // claim_mappings target
+			"project_id":   "4242",          // required_claims
+			"plan_tier":    "gold",          // session_tags target
+			"groups":       "platform",      // condition claim (flat)
+			"quarantined":  "false",         // condition claim (inside none_of)
+			"email":        "alice@example.com",
+			"name":         "Alice",
+		},
+	}
+
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), &fixedExtractor{claims: claims}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"},
+		"req-claims-generic-decision", slog.Default())
+	require.NoError(t, err)
+
+	got := recClaims(t, sink.last(t))
+	require.NotNil(t, got)
+	assert.Equal(t, map[string]any{
+		"project_path": "group/project",
+		"project_id":   "4242",
+		"plan_tier":    "gold",
+		"groups":       "platform",
+		"quarantined":  "false",
+	}, got, "every config-referenced claim, and only those")
+
+	// Claims the operator never named anywhere must never be copied out.
+	assert.NotContains(t, got, "email")
+	assert.NotContains(t, got, "name")
 }
