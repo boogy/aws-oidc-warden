@@ -229,7 +229,9 @@ role_sets:
 #
 # ONE THAT LOADS BUT DENIES: a v2 `branch:`/`actor_matches:`, now read as a
 # claim of that literal name, which GitHub does not issue — a boot WARN names
-# the key. (A camelCase claim key such as `emailVerified:` is fine: viper
+# the key. Inside a `none_of` the same leftover key instead AUTHORIZES what it
+# was written to refuse (a veto that can never match can never fire), which the
+# WARN calls out separately. (A camelCase claim key such as `emailVerified:` is fine: viper
 # lower-cases it, and claim lookup falls back to a case-insensitive match.)
 ####################################################################################
 role_mappings:
@@ -342,6 +344,15 @@ role_mappings:
   # member with two keys is a negated AND (it vetoes only when BOTH hold).
   # Write one member per thing you mean to refuse, as here: never a fork's
   # self-hosted runner, and never a manually dispatched run.
+  # A member naming a claim the token does not carry cannot match, so its
+  # negation holds and the group PASSES. A member naming a claim that IS
+  # present is decided on its VALUE whatever JSON type it arrived as: a
+  # bool `false` or a number 9 is compared through its text, so
+  # `email_verified: "false"` vetoes the JSON bool false and does NOT veto
+  # true. Only a value with no readable text — an object, or a list
+  # carrying one — cannot be decided; there the veto fires and the mapping
+  # denies. Only non-GitHub issuers mint non-string claims at all — every
+  # GitHub Actions claim is a string.
   - subject: "org/guarded-repo"
     roles: ["@readonly"]
     conditions:

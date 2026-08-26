@@ -1176,10 +1176,14 @@ role_mappings:
 	}
 	t.Setenv("CONFIG_PATH", dir)
 
-	c, err := NewConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Reset viper and load into a fresh Config, for the reasons ambigCfg
+	// documents below: viper's AddConfigPath ACCUMULATES across calls, so
+	// without a reset this test can read an earlier test's temp-dir config,
+	// and NewConfig is sync.Once-cached, so it would hand back a Config another
+	// test already populated and this YAML would merge into it rather than
+	// replace it. Either one makes this veto guard silently stop guarding.
+	viper.Reset()
+	c := &Config{}
 	if err := c.LoadConfig(); err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -1414,4 +1418,266 @@ func TestAllLowerCaseClaimsTakeTheUnfoldedPath(t *testing.T) {
 	if res.ambiguous {
 		t.Fatal("all-lower-case claims marked ambiguous")
 	}
+}
+
+// TestLeftoverV2KeyUnderNoneOfAuthorizes pins the one shape in which a v2
+// config that was never migrated fails OPEN rather than closed, because the
+// migration guide, the changelog, and example-config.yaml all now promise
+// exactly this and nothing else asserted it.
+//
+// `branch:` was removed in 3.0.0, so it is read as a claim of that literal
+// name. GitHub does not issue one, the member can never match, and a member
+// that can never match under `none_of` is a veto that can never fire — so the
+// group passes and the mapping authorizes precisely the push the operator
+// wrote it to refuse. Deny-listing a branch is the natural `none_of` use case,
+// which is what makes this worth pinning rather than a curiosity.
+//
+// The renamed half is what keeps this test honest: swap `branch:` for `ref:`
+// and the same push must be refused. Without it the test would pass against a
+// build where `none_of` did nothing at all.
+func TestLeftoverV2KeyUnderNoneOfAuthorizes(t *testing.T) {
+	const ghIss = "https://token.actions.githubusercontent.com"
+
+	load := func(t *testing.T, key string) *Config {
+		t.Helper()
+		dir := t.TempDir()
+		yaml := `
+issuers:
+  - issuer: "` + ghIss + `"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+role_session_name: "test"
+role_mappings:
+  - subject: "acme/app"
+    issuer: "` + ghIss + `"
+    roles: ["arn:aws:iam::123456789012:role/Deploy"]
+    conditions:
+      none_of:
+        - ` + key + `: "refs/heads/release/.*"
+`
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yaml), 0o600))
+		t.Setenv("CONFIG_PATH", dir)
+		viper.Reset()
+		c := &Config{}
+		require.NoError(t, c.LoadConfig())
+		require.NoError(t, c.Validate(), "a leftover v2 key must still LOAD; that is the whole hazard")
+		return c
+	}
+
+	// The exact push the deny-list was written to block.
+	claims := map[string]any{
+		"repository": "acme/app",
+		"ref":        "refs/heads/release/1.0",
+	}
+
+	t.Run("leftover branch: authorizes the push it meant to refuse", func(t *testing.T) {
+		matched, roles := load(t, "branch").AuthorizeRoles(ghIss, "acme/app", claims)
+		require.True(t, matched,
+			"documented fail-open: an unmatchable none_of member is a veto that never fires")
+		require.Equal(t, []string{"arn:aws:iam::123456789012:role/Deploy"}, roles)
+	})
+
+	t.Run("renamed ref: refuses it", func(t *testing.T) {
+		matched, roles := load(t, "ref").AuthorizeRoles(ghIss, "acme/app", claims)
+		require.False(t, matched, "after the rename the veto fires; got roles %v", roles)
+	})
+}
+
+// jsonClaims decodes a claim set the way the pipeline does, so a JSON number
+// arrives as float64 and a JSON bool as bool. Hand-built maps would let this
+// test pass against shapes a real token can never carry.
+func jsonClaims(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &m))
+	return m
+}
+
+// TestNoneOfReadsNonStringClaimValues pins the polarity fix for claim shapes
+// valueMatches declines.
+//
+// valueMatches answers false for a bool, a number, an object, and a non-string
+// array element. In positive polarity false denies, which is conservative and
+// correct. Under none_of it is the opposite: a member that cannot match is a
+// veto that cannot fire, so the group passes and the mapping authorizes exactly
+// the caller the deny-list names. GitHub Actions mints only string claims, so
+// this is invisible there; an issuer that mints `email_verified` as a bool or a
+// risk score as a number hits it on the most natural deny-list there is.
+//
+// The fix reads the value rather than giving up on its Go type, which is what
+// makes the two halves below the point of this test: `email_verified: false`
+// must be vetoed by `none_of: [{email_verified: "false"}]`, and
+// `email_verified: true` must NOT be — none_of refuses this claim at THIS
+// value, not every token that happens to carry the claim.
+//
+// Absence stays exact negation and is deliberately untouched: an absent claim
+// gives the veto nothing to fire on.
+func TestNoneOfReadsNonStringClaimValues(t *testing.T) {
+	t.Run("bool claim", func(t *testing.T) {
+		cfg := condCfg(t, &Condition{NoneOf: []*Condition{
+			{Claims: map[string]Patterns{"email_verified": {"false"}}},
+		}})
+
+		cases := []struct {
+			name string
+			raw  string
+			want bool
+		}{
+			// The fix: the veto can no longer be disarmed by the claim being a
+			// JSON bool rather than the string the pattern was written against.
+			{"bool false is the refused value, so the veto fires", `{"email_verified":false}`, false},
+			// The other half, and the one that keeps the fix honest: the value
+			// is readable and is NOT the refused one, so nothing is vetoed.
+			{"bool true is not the refused value", `{"email_verified":true}`, true},
+			// Unchanged behaviour: a string claim already decided on its value.
+			{"string false vetoes", `{"email_verified":"false"}`, false},
+			{"string true does not veto", `{"email_verified":"true"}`, true},
+			{"absent claim leaves the veto nothing to fire on", `{}`, true},
+			{"null claim is absence, not a value", `{"email_verified":null}`, true},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if got := authorizes(cfg, jsonClaims(t, tc.raw)); got != tc.want {
+					t.Fatalf("authorized = %v, want %v", got, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("number claim", func(t *testing.T) {
+		cfg := condCfg(t, &Condition{NoneOf: []*Condition{
+			{Claims: map[string]Patterns{"risk_score": {"9"}}},
+		}})
+
+		cases := []struct {
+			name string
+			raw  string
+			want bool
+		}{
+			{"the refused score vetoes", `{"risk_score":9}`, false},
+			{"another score does not", `{"risk_score":1}`, true},
+			// Claim text comes from utils.FormatClaimValue, the formatter audit
+			// records and session tags use, so an integral JSON number reads as
+			// "9" and never as Go's default "9e+00"-style float rendering.
+			{"an integral number is not rendered in scientific notation", `{"risk_score":9.0}`, false},
+			{"a fractional score keeps its fraction and does not match", `{"risk_score":9.5}`, true},
+			{"string 9 vetoes", `{"risk_score":"9"}`, false},
+			{"string 1 does not veto", `{"risk_score":"1"}`, true},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if got := authorizes(cfg, jsonClaims(t, tc.raw)); got != tc.want {
+					t.Fatalf("authorized = %v, want %v", got, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("array claim", func(t *testing.T) {
+		cfg := condCfg(t, &Condition{NoneOf: []*Condition{
+			{Claims: map[string]Patterns{"groups": {"admins"}}},
+		}})
+
+		cases := []struct {
+			name string
+			raw  string
+			want bool
+		}{
+			{"matching element vetoes", `{"groups":["admins"]}`, false},
+			{"no matching element does not veto", `{"groups":["devs"]}`, true},
+			{"empty array carries no values, so nothing vetoes", `{"groups":[]}`, true},
+			// A non-string element is read like any other scalar rather than
+			// disarming the veto, so it decides on its own value too.
+			{"a numeric element the pattern does not name is still readable", `{"groups":["devs",42]}`, true},
+			// An element with no readable text at all is the case that fires.
+			{"an object element cannot be read, so the veto fires", `{"groups":["devs",{"x":1}]}`, false},
+			{"object claim cannot be read, so the veto fires", `{"groups":{"a":"admins"}}`, false},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				if got := authorizes(cfg, jsonClaims(t, tc.raw)); got != tc.want {
+					t.Fatalf("authorized = %v, want %v", got, tc.want)
+				}
+			})
+		}
+	})
+
+	// A numeric element IS readable, so it vetoes when it is the value named.
+	t.Run("a numeric element vetoes on its own value", func(t *testing.T) {
+		cfg := condCfg(t, &Condition{NoneOf: []*Condition{
+			{Claims: map[string]Patterns{"group_ids": {"42"}}},
+		}})
+		if authorizes(cfg, jsonClaims(t, `{"group_ids":[7,42]}`)) {
+			t.Fatal("the refused group id must veto")
+		}
+		if !authorizes(cfg, jsonClaims(t, `{"group_ids":[7,8]}`)) {
+			t.Fatal("group ids that are not refused must not veto")
+		}
+	})
+
+	// The blast radius is exactly one polarity. A leaf outside any none_of
+	// answered false for a non-string claim before and must still, or a config
+	// that used to deny would start authorizing on upgrade.
+	t.Run("positive polarity is unchanged", func(t *testing.T) {
+		cfg := condCfg(t, &Condition{Claims: map[string]Patterns{
+			"email_verified": {"true"},
+			"risk_score":     {"1"},
+		}})
+
+		for _, raw := range []string{
+			`{"email_verified":true,"risk_score":1}`,
+			`{"email_verified":"true","risk_score":1}`,
+			`{"email_verified":true,"risk_score":"1"}`,
+		} {
+			if authorizes(cfg, jsonClaims(t, raw)) {
+				t.Fatalf("claims %s must still deny in positive polarity", raw)
+			}
+		}
+		if !authorizes(cfg, jsonClaims(t, `{"email_verified":"true","risk_score":"1"}`)) {
+			t.Fatal("all-string claims must still authorize")
+		}
+	})
+
+	// The deny is local to the branch that could not decide, not sticky for the
+	// whole evaluation — unlike the `ambiguous` flag, which must be sticky
+	// because a collision means the gate cannot trust ANY reading of the claim.
+	// Here another any_of branch has decided on its own evidence.
+	t.Run("an unreadable none_of does not poison a sibling any_of branch", func(t *testing.T) {
+		cfg := condCfg(t, &Condition{AnyOf: []*Condition{
+			{Claims: map[string]Patterns{"repository": {"acme/app"}}},
+			{NoneOf: []*Condition{{Claims: map[string]Patterns{"attrs": {"admin"}}}}},
+		}})
+
+		if !authorizes(cfg, jsonClaims(t, `{"repository":"acme/app","attrs":{"role":"admin"}}`)) {
+			t.Fatal("the matching any_of branch must still authorize")
+		}
+		if authorizes(cfg, jsonClaims(t, `{"repository":"other/app","attrs":{"role":"admin"}}`)) {
+			t.Fatal("with no branch able to decide, the mapping must deny")
+		}
+	})
+
+	// Polarity toggles per none_of rather than latching, so a none_of nested in
+	// a none_of is positive again — the double negation the operator wrote.
+	t.Run("nesting toggles polarity rather than latching it", func(t *testing.T) {
+		leaf := func() *Condition {
+			return &Condition{Claims: map[string]Patterns{"email_verified": {"false"}}}
+		}
+		claims := jsonClaims(t, `{"email_verified":false}`)
+
+		// NOT(NOT(match)) == match, and a bool claim never matches in positive
+		// polarity, so this denies. A latching flag would answer the opposite:
+		// it would read the leaf as matched, make the inner group fail, leave
+		// the outer member unsatisfied, and authorize.
+		doubleNeg := condCfg(t, &Condition{NoneOf: []*Condition{{NoneOf: []*Condition{leaf()}}}})
+		if authorizes(doubleNeg, claims) {
+			t.Fatal("double negation is positive polarity and must deny")
+		}
+
+		// NOT(NOT(NOT(match))) == NOT(match): negative again, the value reads
+		// as the refused one, so the veto fires.
+		tripleNeg := condCfg(t, &Condition{NoneOf: []*Condition{{NoneOf: []*Condition{{NoneOf: []*Condition{leaf()}}}}}})
+		if authorizes(tripleNeg, claims) {
+			t.Fatal("triple negation is negative polarity and must deny")
+		}
+	})
 }

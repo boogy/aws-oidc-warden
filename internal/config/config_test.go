@@ -13,6 +13,11 @@ import (
 )
 
 func TestNewConfig(t *testing.T) {
+	// Both resets are needed. `once` alone leaves viper holding every config
+	// path an earlier test registered — AddConfigPath accumulates and is never
+	// cleared by LoadConfig — so this test would try to read a t.TempDir() that
+	// has already been removed and fail on a file it never asked for.
+	viper.Reset()
 	once = sync.Once{}
 
 	cfg, err := NewConfig()
@@ -656,6 +661,13 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 		"AOW_LOG_TO_S3",
 		"AOW_LOG_BUCKET",
 		"AOW_LOG_PREFIX",
+		// CONFIG_NAME is set below to force the env-var path. It belongs in
+		// this list: without it the "nonexistent-config-file" value leaked for
+		// the rest of the binary, so every later test that loads a real
+		// config.yaml found none, silently loaded an empty config, and
+		// authorized nothing. That is why this package failed under
+		// `go test -shuffle`.
+		"CONFIG_NAME",
 	}
 
 	for _, env := range envVarsToSet {

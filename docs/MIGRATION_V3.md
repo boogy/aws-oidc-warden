@@ -14,6 +14,8 @@ One thing outside `conditions:` changes with it: the `aow/environment` IAM role 
 
 A leftover `branch:` or `actor_matches:` does **not** stop the service from starting. Both now read as predicates on claims of those literal names, which GitHub does not issue, so the mapping denies every request and the boot log carries a warning naming the key (step 5 of the checklist). Fail-closed, but the failure shows up as a broken pipeline rather than a failed deploy — do the rename before you ship, not after.
 
+With one exception, which is the reason to do the rename rather than wait for the pipeline to break: **inside a `none_of`, the polarity inverts.** A member that can never match is a veto that can never fire, so the group passes and the mapping authorizes exactly the caller the rule was written to refuse. Deny-listing a branch or an actor is the natural `none_of` use case, so this is precisely where a leftover `branch:`/`actor_matches:` is most likely to sit. The boot WARN for that placement says so in those words — it is worded differently from the ordinary unknown-claim warning for this reason.
+
 ## `environment` is the one that bites
 
 `environment` still exists as a condition key, but it no longer means what it meant in v2.

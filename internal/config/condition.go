@@ -1,11 +1,14 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 // This file is the condition engine: the shape of a `conditions:` block, how it
@@ -399,11 +402,19 @@ func compileAnchoredCondition(pattern string) (*regexp.Regexp, error) {
 // side, and it is deliberately ANY rather than ALL, since "the caller is in
 // group X" is what a list claim means.
 //
-// Every other shape denies: a nil (absent or null), a number, a bool, an
-// object, and a non-string element inside an array. Conditions gate an
+// Every other shape is unmatched here: a nil (absent or null), a number, a
+// bool, an object, and a non-string element inside an array. Conditions gate an
 // authorization decision, so an unmatched or unexpected shape is false, never
 // true. Numbers stay unmatched on purpose — regexing a float64 would mean
 // operators writing patterns against Go's %v rendering of a JSON number.
+//
+// "Unmatched" is the conservative answer only in positive polarity. Under a
+// none_of an unmatched leaf is a veto that never fires, which authorizes rather
+// than denies, so the caller — claimMatches — re-decides a declined leaf there
+// through negatedMatches, which reads a scalar's canonical text instead of
+// giving up on its Go type. Do not fold that back in here: valueMatches answers
+// "does this value match", not "should this mapping authorize", and widening it
+// would loosen every positive predicate a config already relies on to deny.
 //
 // Cost is bounded without an element cap: the token is already length-capped
 // upstream by max_token_bytes (default 8192), so the number of array elements
@@ -536,17 +547,98 @@ func (r *claimResolver) buildFolded() {
 	}
 }
 
+// claimText renders a scalar claim VALUE as the text a pattern can be compared
+// against, reporting false when the shape has no such rendering.
+//
+// It goes through utils.FormatClaimValue, the single formatter this project
+// uses for a verified claim on its way into an audit record or an STS session
+// tag, so a bool or a number a condition decides on reads identically to the
+// value the audit record reports for the same claim. A JSON object — and nil,
+// []any, and anything else structural — has no canonical text and returns
+// false; those are handled by the caller.
+func claimText(v any) (string, bool) {
+	switch v.(type) {
+	case string, bool, float64, float32,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		json.Number:
+		return utils.FormatClaimValue(v), true
+	}
+	return "", false
+}
+
+func matchesAny(patterns []*regexp.Regexp, s string) bool {
+	for _, pattern := range patterns {
+		if pattern.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// negatedMatches decides a leaf that sits under an odd number of none_of
+// groups, once valueMatches has already declined it.
+//
+// Under negation "did not match" is not the conservative answer it is in
+// positive polarity: it disarms the veto, so the group passes and the mapping
+// authorizes precisely the caller the operator wrote it to refuse. valueMatches
+// declines every non-string shape, which means a bool or a numeric claim — the
+// natural deny-list on any issuer other than GitHub, whose claims are all
+// strings — silently disarmed its own veto.
+//
+// The answer is to read the value rather than to give up on its Go type: a
+// scalar is compared through its canonical text (claimText), so
+// `none_of: [{email_verified: "false"}]` vetoes a token whose email_verified is
+// the JSON bool false, and does NOT veto one whose value is true. That is what
+// none_of says — refuse THIS claim at THIS value — and a value the gate can
+// read must decide on its own merits regardless of the JSON type it arrived as.
+//
+// Two shapes have no such reading and count as satisfied, so the veto fires:
+// an object, and a list carrying an element that is itself structural. Absence
+// (nil, from a missing claim or a JSON null) is deliberately NOT one of them:
+// it is a known state, its negation genuinely holds, and none_of's documented
+// exact-negation semantics depend on it.
+func negatedMatches(v any, patterns []*regexp.Regexp) bool {
+	switch t := v.(type) {
+	case nil:
+		return false
+	case []any:
+		for _, el := range t {
+			s, ok := claimText(el)
+			if !ok {
+				return true
+			}
+			if matchesAny(patterns, s) {
+				return true
+			}
+		}
+		return false
+	default:
+		s, ok := claimText(v)
+		if !ok {
+			return true
+		}
+		return matchesAny(patterns, s)
+	}
+}
+
 // claimMatches looks the named claim up and reports whether ANY of the entry's
 // patterns match it. The lookup is hoisted out of the pattern loop so the map
 // access happens once per claim, not once per pattern.
-func claimMatches(res *claimResolver, cc compiledCondition) bool {
+//
+// negated says whether an odd number of none_of groups encloses this leaf. It
+// changes nothing for a claim valueMatches already accepted, and nothing at all
+// in positive polarity — where a shape that does not match denies, which is
+// both conservative and what every existing config already gets. It matters
+// only for a leaf about to report "no match" under a veto; see negatedMatches.
+func claimMatches(res *claimResolver, cc compiledCondition, negated bool) bool {
 	v := res.lookup(cc.claim)
 	for _, pattern := range cc.patterns {
 		if valueMatches(v, pattern) {
 			return true
 		}
 	}
-	return false
+	return negated && negatedMatches(v, cc.patterns)
 }
 
 // satisfiesConditions reports whether claims satisfy cond. A nil Condition
@@ -560,7 +652,9 @@ func claimMatches(res *claimResolver, cc compiledCondition) bool {
 //   - no none_of member is satisfied.
 //
 // none_of is exact negation: a member naming an ABSENT claim cannot match, so
-// its negation holds and the none_of passes.
+// its negation holds and the none_of passes. A member naming a PRESENT claim is
+// decided on the claim's value whatever JSON type it arrived as, and a value
+// with no readable text at all vetoes — see negatedMatches.
 //
 // The walk allocates nothing and compiles nothing — every pattern was compiled
 // at Validate() time — and its depth is bounded by the config, never by request
@@ -570,7 +664,7 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 		return true
 	}
 	res := newClaimResolver(claims)
-	ok := satisfiesConditionsWith(cond, res)
+	ok := satisfiesConditionsWith(cond, res, false)
 	// An ambiguous claim denies the whole mapping, not just its leaf. Denying
 	// only the leaf is polarity-dependent: under none_of a leaf that cannot
 	// match is a veto that cannot fire, so `none_of: [{isContractor: "true"}]`
@@ -595,19 +689,26 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 // satisfiesConditionsWith is the recursive walk. The resolver is threaded down
 // the whole tree so its folded index is built at most once per evaluation
 // rather than once per node.
-func satisfiesConditionsWith(cond *Condition, res *claimResolver) bool {
+//
+// negated tracks polarity: it is false at the root and flips on every descent
+// into a none_of member, so a none_of nested inside a none_of is positive again
+// (double negation), which is what the operator wrote. all_of and any_of
+// preserve polarity — they change how members combine, not whether the result
+// is negated. Only claimMatches reads it, and only for a claim it cannot
+// compare; every other leaf answers identically in both polarities.
+func satisfiesConditionsWith(cond *Condition, res *claimResolver, negated bool) bool {
 	if cond == nil {
 		return true
 	}
 
 	for _, cc := range cond.compiled {
-		if !claimMatches(res, cc) {
+		if !claimMatches(res, cc, negated) {
 			return false
 		}
 	}
 
 	for _, child := range cond.AllOf {
-		if !satisfiesConditionsWith(child, res) {
+		if !satisfiesConditionsWith(child, res, negated) {
 			return false
 		}
 	}
@@ -615,7 +716,7 @@ func satisfiesConditionsWith(cond *Condition, res *claimResolver) bool {
 	if len(cond.AnyOf) > 0 {
 		matched := false
 		for _, child := range cond.AnyOf {
-			if satisfiesConditionsWith(child, res) {
+			if satisfiesConditionsWith(child, res, negated) {
 				matched = true
 				break
 			}
@@ -626,7 +727,7 @@ func satisfiesConditionsWith(cond *Condition, res *claimResolver) bool {
 	}
 
 	for _, child := range cond.NoneOf {
-		if satisfiesConditionsWith(child, res) {
+		if satisfiesConditionsWith(child, res, !negated) {
 			return false
 		}
 	}
