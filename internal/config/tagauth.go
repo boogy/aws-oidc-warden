@@ -28,6 +28,10 @@ import (
 // reaches its own claims through the issuer-agnostic `<prefix>claim.<name>`
 // form, which matches the raw verified claim <name> — e.g.
 // `aow/claim.project_path` for GitLab. Both forms AND together with the rest.
+// A `claim.` tag compares against the claim VALUE, not its JSON type: a claim
+// minted as a bool or a number is rendered the same way conditions and session
+// tags render it, so `aow/claim.email_verified = "true"` matches both `true`
+// and `"true"`.
 //
 // Unlike conditions, tag matching is exact (AWS tag values cannot hold regex),
 // and unlike condition keys, a `claim.` suffix is matched case-sensitively:
@@ -47,16 +51,22 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, v
 		return s
 	}
 	// claimMatchesTag reports whether the raw claim satisfies a tag value.
-	// A scalar string matches directly; a list claim (groups, aud, roles)
-	// matches when any string element does, mirroring how conditions treat
-	// list claims. Any other shape never matches (fail closed).
+	// A scalar claim matches directly; a list claim (groups, aud, roles)
+	// matches when any element does, mirroring how conditions treat list
+	// claims. Scalars are read through claimText, the same renderer conditions
+	// and session tags use, so a claim minted as a JSON bool or number is
+	// comparable here too: `aow/claim.email_verified = "true"` matches whether
+	// the issuer sends `true` or `"true"`. Without it the `claim.` form — the
+	// ONLY dimension a non-GitHub issuer has beyond subject — silently never
+	// matched a non-string claim, so the tag the operator wrote to narrow
+	// access instead denied every caller. A value with no reading (object,
+	// null, absent) still never matches, which is fail-closed: claim.* tags
+	// only ever narrow, so an unreadable claim can only deny.
 	claimMatchesTag := func(key, tagVal string) bool {
 		switch v := claims[key].(type) {
-		case string:
-			return valueInList(v, tagVal)
 		case []any:
 			for _, elem := range v {
-				if s, ok := elem.(string); ok && valueInList(s, tagVal) {
+				if s, ok := claimText(elem); ok && valueInList(s, tagVal) {
 					return true
 				}
 			}
@@ -65,6 +75,10 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, v
 				if valueInList(s, tagVal) {
 					return true
 				}
+			}
+		default:
+			if s, ok := claimText(v); ok {
+				return valueInList(s, tagVal)
 			}
 		}
 		return false

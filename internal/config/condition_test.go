@@ -1615,26 +1615,67 @@ func TestNoneOfReadsNonStringClaimValues(t *testing.T) {
 		}
 	})
 
-	// The blast radius is exactly one polarity. A leaf outside any none_of
-	// answered false for a non-string claim before and must still, or a config
-	// that used to deny would start authorizing on upgrade.
-	t.Run("positive polarity is unchanged", func(t *testing.T) {
+	// Positive polarity reads the same value the same way. A predicate must not
+	// mean one thing under a none_of and another outside it: before this, a
+	// positive `email_verified: "true"` denied every caller on an issuer that
+	// mints the claim as a JSON bool, while the none_of spelling read it
+	// correctly. The JSON type a value arrived as is not a thing an operator
+	// writing a gate should have to know.
+	t.Run("positive polarity decides on the value too", func(t *testing.T) {
 		cfg := condCfg(t, &Condition{Claims: map[string]Patterns{
 			"email_verified": {"true"},
 			"risk_score":     {"1"},
 		}})
 
+		// Every mix of JSON types for the SAME values authorizes identically.
 		for _, raw := range []string{
 			`{"email_verified":true,"risk_score":1}`,
 			`{"email_verified":"true","risk_score":1}`,
 			`{"email_verified":true,"risk_score":"1"}`,
+			`{"email_verified":"true","risk_score":"1"}`,
 		} {
-			if authorizes(cfg, jsonClaims(t, raw)) {
-				t.Fatalf("claims %s must still deny in positive polarity", raw)
+			if !authorizes(cfg, jsonClaims(t, raw)) {
+				t.Fatalf("claims %s must authorize: the values match whatever type they arrived as", raw)
 			}
 		}
-		if !authorizes(cfg, jsonClaims(t, `{"email_verified":"true","risk_score":"1"}`)) {
-			t.Fatal("all-string claims must still authorize")
+
+		// Reading the value is not the same as ignoring it. A value that does
+		// not match still denies, which is the whole point of the gate.
+		for _, raw := range []string{
+			`{"email_verified":false,"risk_score":1}`,
+			`{"email_verified":true,"risk_score":9}`,
+			`{"email_verified":true}`,
+			`{"email_verified":null,"risk_score":1}`,
+			`{"email_verified":{"nested":true},"risk_score":1}`,
+		} {
+			if authorizes(cfg, jsonClaims(t, raw)) {
+				t.Fatalf("claims %s must deny", raw)
+			}
+		}
+	})
+
+	// The two spellings of one predicate must be exact complements for every
+	// value the gate can read. This is the property the old type-dispatch broke:
+	// it made `x: v` and `none_of: [{x: v}]` both deny for a non-string claim,
+	// so neither branch of a decision an operator thought was total was taken.
+	t.Run("positive and none_of are exact complements", func(t *testing.T) {
+		positive := condCfg(t, &Condition{Claims: map[string]Patterns{"email_verified": {"true"}}})
+		negative := condCfg(t, &Condition{NoneOf: []*Condition{
+			{Claims: map[string]Patterns{"email_verified": {"true"}}},
+		}})
+
+		for _, raw := range []string{
+			`{"email_verified":true}`,
+			`{"email_verified":false}`,
+			`{"email_verified":"true"}`,
+			`{"email_verified":"false"}`,
+			`{"email_verified":1}`,
+		} {
+			claims := jsonClaims(t, raw)
+			if authorizes(positive, claims) == authorizes(negative, claims) {
+				t.Fatalf("claims %s: a predicate and its none_of must not agree; both said %v",
+					raw, authorizes(positive, claims))
+			}
 		}
 	})
 
@@ -1664,13 +1705,14 @@ func TestNoneOfReadsNonStringClaimValues(t *testing.T) {
 		}
 		claims := jsonClaims(t, `{"email_verified":false}`)
 
-		// NOT(NOT(match)) == match, and a bool claim never matches in positive
-		// polarity, so this denies. A latching flag would answer the opposite:
-		// it would read the leaf as matched, make the inner group fail, leave
-		// the outer member unsatisfied, and authorize.
+		// NOT(NOT(match)) == match. The claim reads as the named value, so the
+		// leaf matches and the whole expression authorizes. This identity is
+		// exactly what the old type-dispatch broke: a bool never matched in
+		// positive polarity, so double negation denied a claim that plainly
+		// held, and NOT(NOT(x)) == x failed for every non-string value.
 		doubleNeg := condCfg(t, &Condition{NoneOf: []*Condition{{NoneOf: []*Condition{leaf()}}}})
-		if authorizes(doubleNeg, claims) {
-			t.Fatal("double negation is positive polarity and must deny")
+		if !authorizes(doubleNeg, claims) {
+			t.Fatal("double negation is positive polarity: the value matches, so it must authorize")
 		}
 
 		// NOT(NOT(NOT(match))) == NOT(match): negative again, the value reads

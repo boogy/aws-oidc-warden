@@ -470,6 +470,16 @@ func TestTagAuth_GenericClaimDimension(t *testing.T) {
 		"groups":         []any{"platform", "sre"},
 		"groups_typed":   []string{"platform", "sre"},
 		"seats":          42, // non-string scalar
+		// What encoding/json actually hands back for a JSON number and a JSON
+		// bool. GitHub mints every claim as a string, so these shapes only
+		// appear on other issuers — which is exactly who the `claim.` form
+		// exists for.
+		"seats_decoded":  float64(42),
+		"email_verified": true,
+		"mfa":            false,
+		"scores":         []any{float64(1), float64(2)},
+		"profile":        map[string]any{"tier": "gold"},
+		"nulled":         nil,
 	}
 
 	cases := []struct {
@@ -526,9 +536,56 @@ func TestTagAuth_GenericClaimDimension(t *testing.T) {
 			tags: map[string]string{"aow/subject": sub, "aow/claim.groups": "admins"},
 			want: false,
 		},
+		// A tag compares against the claim VALUE, not its JSON type. Before
+		// this, `claim.` read strings only, so an operator narrowing access
+		// with `aow/claim.email_verified = "true"` on an issuer minting a JSON
+		// bool got a tag that denied every caller — the rule silently could not
+		// hold rather than holding when it should.
 		{
-			name: "non-string scalar claim never matches",
+			name: "non-string scalar claim matches on its value",
 			tags: map[string]string{"aow/subject": sub, "aow/claim.seats": "42"},
+			want: true,
+		},
+		{
+			name: "a decoded JSON number matches its integer rendering",
+			tags: map[string]string{"aow/subject": sub, "aow/claim.seats_decoded": "42"},
+			want: true,
+		},
+		{
+			name: "a decoded number is not rendered in scientific notation",
+			tags: map[string]string{"aow/subject": sub, "aow/claim.seats_decoded": "4.2e+01"},
+			want: false,
+		},
+		{
+			name: "bool true matches \"true\"",
+			tags: map[string]string{"aow/subject": sub, "aow/claim.email_verified": "true"},
+			want: true,
+		},
+		{
+			name: "bool false does not match \"true\"",
+			tags: map[string]string{"aow/subject": sub, "aow/claim.mfa": "true"},
+			want: false,
+		},
+		{
+			name: "bool false matches \"false\"",
+			tags: map[string]string{"aow/subject": sub, "aow/claim.mfa": "false"},
+			want: true,
+		},
+		{
+			name: "a numeric list element matches on its own value",
+			tags: map[string]string{"aow/subject": sub, "aow/claim.scores": "2"},
+			want: true,
+		},
+		// A shape with no scalar reading still never matches. claim.* tags only
+		// ever narrow, so this is fail-closed by construction.
+		{
+			name: "an object claim has no reading and denies",
+			tags: map[string]string{"aow/subject": sub, "aow/claim.profile": "gold"},
+			want: false,
+		},
+		{
+			name: "a null claim has no reading and denies",
+			tags: map[string]string{"aow/subject": sub, "aow/claim.nulled": "anything"},
 			want: false,
 		},
 		{

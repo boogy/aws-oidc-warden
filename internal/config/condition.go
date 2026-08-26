@@ -396,42 +396,49 @@ func compileAnchoredCondition(pattern string) (*regexp.Regexp, error) {
 // valueMatches reports whether one raw verified claim VALUE satisfies pattern
 // (already anchored at compile time).
 //
-// A string value matches when the pattern matches it. An ARRAY value — a
-// GitLab/Okta/Entra group, scope, or role list — matches when ANY string
-// element matches; this is the only place list semantics exist on the claim
-// side, and it is deliberately ANY rather than ALL, since "the caller is in
-// group X" is what a list claim means.
+// A value is compared through its canonical text — utils.FormatClaimValue via
+// claimText, the single formatter this project uses for a verified claim on its
+// way into an audit record or an STS session tag — so a condition decides on
+// the same rendering the audit record reports for that claim. That covers
+// strings unchanged (the formatter passes them through) and every other scalar:
+// a bool, a number, a json.Number. An ARRAY value — a GitLab/Okta/Entra group,
+// scope, or role list — matches when ANY element's text matches; this is the
+// only place list semantics exist on the claim side, and it is deliberately ANY
+// rather than ALL, since "the caller is in group X" is what a list claim means.
 //
-// Every other shape is unmatched here: a nil (absent or null), a number, a
-// bool, an object, and a non-string element inside an array. Conditions gate an
-// authorization decision, so an unmatched or unexpected shape is false, never
-// true. Numbers stay unmatched on purpose — regexing a float64 would mean
-// operators writing patterns against Go's %v rendering of a JSON number.
+// Two shapes have no canonical text and never match: an object, and a list
+// carrying one. Absence (nil, from a missing claim or a JSON null) never
+// matches either. Conditions gate an authorization decision, so a value the
+// gate cannot read is false, never true.
 //
-// "Unmatched" is the conservative answer only in positive polarity. Under a
-// none_of an unmatched leaf is a veto that never fires, which authorizes rather
-// than denies, so the caller — claimMatches — re-decides a declined leaf there
-// through negatedMatches, which reads a scalar's canonical text instead of
-// giving up on its Go type. Do not fold that back in here: valueMatches answers
-// "does this value match", not "should this mapping authorize", and widening it
-// would loosen every positive predicate a config already relies on to deny.
+// This reads the VALUE rather than dispatching on its Go type, and it does so
+// in BOTH polarities on purpose. Deciding a bool or a number only under a
+// none_of made the two polarities disagree about the same claim and the same
+// pattern: `conditions: {email_verified: "true"}` denied every caller on an
+// issuer that mints that claim as a JSON bool, while the none_of spelling of
+// the same predicate read it correctly. Worse, it broke double negation — a
+// none_of inside a none_of is positive polarity, so the identity
+// NOT(NOT(x)) == x did not hold for any claim that was not a string. One
+// reading of a value, used everywhere, is what makes the gate mean what it
+// says.
 //
 // Cost is bounded without an element cap: the token is already length-capped
 // upstream by max_token_bytes (default 8192), so the number of array elements
 // a request can carry is bounded by the same limit that bounds the claim set.
 func valueMatches(v any, pattern *regexp.Regexp) bool {
 	switch t := v.(type) {
-	case string:
-		return pattern.MatchString(t)
+	case nil:
+		return false
 	case []any:
 		for _, el := range t {
-			if s, ok := el.(string); ok && pattern.MatchString(s) {
+			if s, ok := claimText(el); ok && pattern.MatchString(s) {
 				return true
 			}
 		}
 		return false
 	default:
-		return false
+		s, ok := claimText(v)
+		return ok && pattern.MatchString(s)
 	}
 }
 
@@ -567,58 +574,40 @@ func claimText(v any) (string, bool) {
 	return "", false
 }
 
-func matchesAny(patterns []*regexp.Regexp, s string) bool {
-	for _, pattern := range patterns {
-		if pattern.MatchString(s) {
-			return true
-		}
-	}
-	return false
-}
-
-// negatedMatches decides a leaf that sits under an odd number of none_of
-// groups, once valueMatches has already declined it.
+// valueIsUndecidable reports whether a claim VALUE has no reading a pattern
+// could ever be compared against. It is the second half of a leaf's answer
+// under negation, and it exists because "did not match" means opposite things
+// in the two polarities.
 //
-// Under negation "did not match" is not the conservative answer it is in
-// positive polarity: it disarms the veto, so the group passes and the mapping
-// authorizes precisely the caller the operator wrote it to refuse. valueMatches
-// declines every non-string shape, which means a bool or a numeric claim — the
-// natural deny-list on any issuer other than GitHub, whose claims are all
-// strings — silently disarmed its own veto.
+// In positive polarity a value the gate cannot read must deny, and valueMatches
+// returning false does exactly that. Under an odd number of none_of groups that
+// same false disarms the veto: the group passes and the mapping authorizes
+// precisely the caller the operator wrote it to refuse. So under negation a
+// leaf that could not be read counts as MATCHED, which fires the veto and
+// denies.
 //
-// The answer is to read the value rather than to give up on its Go type: a
-// scalar is compared through its canonical text (claimText), so
-// `none_of: [{email_verified: "false"}]` vetoes a token whose email_verified is
-// the JSON bool false, and does NOT veto one whose value is true. That is what
-// none_of says — refuse THIS claim at THIS value — and a value the gate can
-// read must decide on its own merits regardless of the JSON type it arrived as.
+// Only two shapes qualify: an object, and a list carrying an element that is
+// itself structural. Absence is deliberately NOT one of them — nil, from a
+// missing claim or a JSON null, is a known state, its negation genuinely holds,
+// and none_of's documented exact-negation semantics depend on it.
 //
-// Two shapes have no such reading and count as satisfied, so the veto fires:
-// an object, and a list carrying an element that is itself structural. Absence
-// (nil, from a missing claim or a JSON null) is deliberately NOT one of them:
-// it is a known state, its negation genuinely holds, and none_of's documented
-// exact-negation semantics depend on it.
-func negatedMatches(v any, patterns []*regexp.Regexp) bool {
+// A value that CAN be read never reaches this as a veto: valueMatches already
+// decided it on its canonical text, in both polarities, so `none_of` refuses a
+// claim at a VALUE rather than a claim of a TYPE.
+func valueIsUndecidable(v any) bool {
 	switch t := v.(type) {
 	case nil:
 		return false
 	case []any:
 		for _, el := range t {
-			s, ok := claimText(el)
-			if !ok {
-				return true
-			}
-			if matchesAny(patterns, s) {
+			if _, ok := claimText(el); !ok {
 				return true
 			}
 		}
 		return false
 	default:
-		s, ok := claimText(v)
-		if !ok {
-			return true
-		}
-		return matchesAny(patterns, s)
+		_, ok := claimText(v)
+		return !ok
 	}
 }
 
@@ -627,10 +616,11 @@ func negatedMatches(v any, patterns []*regexp.Regexp) bool {
 // access happens once per claim, not once per pattern.
 //
 // negated says whether an odd number of none_of groups encloses this leaf. It
-// changes nothing for a claim valueMatches already accepted, and nothing at all
-// in positive polarity — where a shape that does not match denies, which is
-// both conservative and what every existing config already gets. It matters
-// only for a leaf about to report "no match" under a veto; see negatedMatches.
+// changes nothing for a value the gate can read — those are decided on their
+// canonical text in both polarities, so the two spellings of a predicate agree.
+// It matters only for a value with no reading at all: in positive polarity that
+// denies, which is conservative, while under a veto the same "no match" would
+// disarm the veto and authorize. See valueIsUndecidable.
 func claimMatches(res *claimResolver, cc compiledCondition, negated bool) bool {
 	v := res.lookup(cc.claim)
 	for _, pattern := range cc.patterns {
@@ -638,7 +628,7 @@ func claimMatches(res *claimResolver, cc compiledCondition, negated bool) bool {
 			return true
 		}
 	}
-	return negated && negatedMatches(v, cc.patterns)
+	return negated && valueIsUndecidable(v)
 }
 
 // satisfiesConditions reports whether claims satisfy cond. A nil Condition
@@ -654,7 +644,7 @@ func claimMatches(res *claimResolver, cc compiledCondition, negated bool) bool {
 // none_of is exact negation: a member naming an ABSENT claim cannot match, so
 // its negation holds and the none_of passes. A member naming a PRESENT claim is
 // decided on the claim's value whatever JSON type it arrived as, and a value
-// with no readable text at all vetoes — see negatedMatches.
+// with no readable text at all vetoes — see valueIsUndecidable.
 //
 // The walk allocates nothing and compiles nothing — every pattern was compiled
 // at Validate() time — and its depth is bounded by the config, never by request
@@ -694,8 +684,9 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 // into a none_of member, so a none_of nested inside a none_of is positive again
 // (double negation), which is what the operator wrote. all_of and any_of
 // preserve polarity — they change how members combine, not whether the result
-// is negated. Only claimMatches reads it, and only for a claim it cannot
-// compare; every other leaf answers identically in both polarities.
+// is negated. Only claimMatches reads it, and only for a claim it cannot read
+// at all; every other leaf answers identically in both polarities, which is
+// what makes NOT(NOT(x)) == x hold for every value the gate can compare.
 func satisfiesConditionsWith(cond *Condition, res *claimResolver, negated bool) bool {
 	if cond == nil {
 		return true
