@@ -3,6 +3,7 @@ package validator
 // Unexported internals: claim normalization shared by the delegated
 // extractors, and the SSRF guard's redirect/depth limits.
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -564,5 +565,84 @@ func TestSnapshotForNeverServesAnotherConfigsRegistry(t *testing.T) {
 
 	if mismatched > 0 {
 		t.Errorf("%d callers were served a registry built from a different config", mismatched)
+	}
+}
+
+// stubPinnedValidator records which config generation actually decided the
+// token. It implements TokenValidatorInterface AND the unexported
+// pinnedValidator seam, so it exercises the same dispatch *TokenValidator does.
+type stubPinnedValidator struct {
+	provider *config.Provider
+	sawCfg   func(*config.Config)
+}
+
+func (s *stubPinnedValidator) Validate(string) (*types.Claims, error) {
+	// The unpinned path: a second, independent read of the provider — exactly
+	// what every extractor did before ExtractionInput.Config existed.
+	s.sawCfg(s.provider.Get())
+	return &types.Claims{}, nil
+}
+
+func (s *stubPinnedValidator) validateWith(cfg *config.Config, _ string) (*types.Claims, error) {
+	s.sawCfg(cfg)
+	return &types.Claims{}, nil
+}
+
+// TestSelfExtractorIsDecidedByThePinnedConfig is the cross-stage drift guard.
+//
+// A request captures one config generation for authorization and must have its
+// token decided by that same generation. When extraction re-read the provider
+// instead, a reload landing between the two reads split one request across two
+// generations: validated by N+1's issuers/audiences/claim mappings, authorized
+// by N's role mappings. A refresh that widens validation while narrowing
+// authorization then authorizes a caller neither generation allows alone.
+//
+// The refresh here is driven directly rather than raced, so the test fails
+// deterministically rather than by scheduling luck.
+func TestSelfExtractorIsDecidedByThePinnedConfig(t *testing.T) {
+	pinned := &config.Config{Issuers: []config.IssuerConfig{{Issuer: "https://pinned.example"}}}
+	swapped := &config.Config{Issuers: []config.IssuerConfig{{Issuer: "https://swapped.example"}}}
+
+	provider := config.NewProvider(swapped, 0, "yaml", nil)
+
+	var got *config.Config
+	ext := NewSelfExtractor(&stubPinnedValidator{
+		provider: provider,
+		sawCfg:   func(c *config.Config) { got = c },
+	})
+
+	// The provider has already moved on to `swapped`; the request pinned
+	// `pinned` before that happened.
+	if _, err := ext.Extract(context.Background(), ExtractionInput{
+		Token:  "any.token.value",
+		Config: pinned,
+	}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	if got != pinned {
+		t.Errorf("token was decided by the provider's current config, not the config the request pinned; "+
+			"got issuers %v, want %v", got.Issuers, pinned.Issuers)
+	}
+}
+
+// TestSelfExtractorFallsBackWhenNoConfigPinned keeps the seam optional: a
+// caller that builds an input by hand, and every external mock of
+// TokenValidatorInterface, must still work through plain Validate.
+func TestSelfExtractorFallsBackWhenNoConfigPinned(t *testing.T) {
+	current := &config.Config{Issuers: []config.IssuerConfig{{Issuer: "https://current.example"}}}
+	provider := config.NewProvider(current, 0, "yaml", nil)
+
+	var got *config.Config
+	ext := NewSelfExtractor(&stubPinnedValidator{
+		provider: provider,
+		sawCfg:   func(c *config.Config) { got = c },
+	})
+
+	if _, err := ext.Extract(context.Background(), ExtractionInput{Token: "any.token.value"}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if got != current {
+		t.Errorf("unpinned extraction should read the provider; got %v", got)
 	}
 }

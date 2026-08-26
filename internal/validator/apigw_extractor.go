@@ -47,7 +47,7 @@ func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*typ
 		return nil, err
 	}
 
-	cfg := a.provider.Get()
+	cfg := input.configOr(a.provider)
 
 	// Resolve the spec from the issuer the upstream verified. API Gateway
 	// forwards authorizer claims only after checking the signature AND an

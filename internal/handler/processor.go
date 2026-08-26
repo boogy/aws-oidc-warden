@@ -47,6 +47,12 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	r.provider.MaybeRefresh(ctx)
 	cfg := r.provider.Get()
 
+	// Pin that snapshot for claim extraction too. The extractors would
+	// otherwise read the provider a second time, and a reload landing between
+	// the two reads would have this request validated by one config generation
+	// and authorized by another. See validator.ExtractionInput.Config.
+	input.Config = cfg
+
 	jwtMode := inputMode(input)
 	log.Debug("Extracting claims", slog.String("jwtMode", jwtMode))
 

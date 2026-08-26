@@ -77,6 +77,7 @@ Populate only the `ExtractionInput` fields relevant to the configured mode:
 
 | Field              | Used by        |
 | ------------------ | -------------- |
+| `Config`           | all three      |
 | `Token`            | SelfExtractor  |
 | `AuthorizerClaims` | APIGWExtractor |
 | `ALBOIDCData`      | ALBExtractor   |
@@ -87,5 +88,7 @@ Populate only the `ExtractionInput` fields relevant to the configured mode:
 - `SelfExtractor` — default; wraps `TokenValidatorInterface.Validate()`. Full JWKS signature + claims verification, multi-issuer aware.
 - `APIGWExtractor` — reads pre-validated `map[string]string` claims from API Gateway HTTP API v2 JWT Authorizer. Rejects if `AuthorizerClaims` is nil (bypass guard). No signature verification. Resolves the matching issuer spec per request by exact match against the authorizer-verified `iss` claim (`resolveIssuerSpec`); an issuer with no config entry fails closed with `ErrUnknownIssuer` rather than falling back to another issuer's spec.
 - `ALBExtractor` — fetches ALB EC public key via HTTPS, verifies ES256 JWT from `x-amzn-oidc-data`. Validates the `ALBExpectedSigner` ARN (required in `alb` mode by `config.Validate()`). Use `WithALBKeyEndpoint` to override in tests. Caches keys for 5 minutes to avoid per-request latency.
+
+`ExtractionInput.Config` pins the config generation for the request. `ProcessRequest` captures one `*Config` and puts it here, so extraction and the authorization that follows are decided by the SAME generation. Every extractor previously called `provider.Get()` itself — a second read of a pointer a concurrent hot reload can swap in between — which split one request across two generations: validated by N+1's issuers/audiences/claim mappings, authorized by N's role mappings. That is not the benign "in-flight request sees a stale config" case, where one consistent generation decides everything; a refresh that widens validation while narrowing authorization (rotating an audience while retiring a role mapping in the same push) authorizes a caller NEITHER generation allows alone. Nil means "read the provider", so hand-built inputs and tests are unchanged. `SelfExtractor` reaches the pinned path through the unexported `pinnedValidator` seam (`validateWith`), which only `*TokenValidator` can satisfy — an external mock of `TokenValidatorInterface` cannot accidentally implement it and simply takes the `Validate` path. Guarded by `TestSelfExtractorIsDecidedByThePinnedConfig` and `TestSelfExtractorFallsBackWhenNoConfigPinned`.
 
 The factory `newClaimsExtractor(provider, validator)` in `bootstrap.go` selects the implementation from `cfg.JWTValidation.Mode`. Only `alb` mode additionally requires exactly one configured issuer at cold start (`singleDelegatedIssuer`) — an ALB has exactly one OIDC IdP, so a multi-issuer config is genuinely ambiguous there. `apigw` mode has no such restriction: each route's JWT Authorizer pins its own issuer, so `APIGWExtractor` resolves the spec per request instead of at cold start.

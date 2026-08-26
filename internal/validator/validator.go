@@ -274,8 +274,18 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 	// Read config once; time bounds and the length guard are derived live
 	// from it (not frozen at construction) so a hot config reload takes
 	// effect immediately, like the registry.
-	cfg := t.currentConfig()
+	return t.validateWith(t.currentConfig(), tokenString)
+}
 
+// validateWith is Validate against an explicit config generation.
+//
+// It exists so a caller that already captured a *Config for this request can
+// have the token decided by that same generation instead of re-reading the
+// provider, which a concurrent hot reload can have swapped in between. The
+// method is unexported on purpose: it is an internal seam for SelfExtractor,
+// not a second public validation entry point, and keeping it off
+// TokenValidatorInterface leaves every existing mock of that interface valid.
+func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*types.Claims, error) {
 	maxTokenBytes := cfg.MaxTokenBytes
 	if maxTokenBytes <= 0 {
 		maxTokenBytes = defaultMaxTokenBytes
