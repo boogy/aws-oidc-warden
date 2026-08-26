@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
@@ -45,6 +46,12 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// then use a single config snapshot for the whole request.
 	r.provider.MaybeRefresh(ctx)
 	cfg := r.provider.Get()
+
+	// Pin that snapshot for claim extraction too. The extractors would
+	// otherwise read the provider a second time, and a reload landing between
+	// the two reads would have this request validated by one config generation
+	// and authorized by another. See validator.ExtractionInput.Config.
+	input.Config = cfg
 
 	jwtMode := inputMode(input)
 	log.Debug("Extracting claims", slog.String("jwtMode", jwtMode))
@@ -104,19 +111,12 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// Add request context to the logger. The requested role ARN is not a claim
-	// value and is always logged; repository/ref/branch/actor ARE claim values,
-	// so they're only attached when log_claim_values permits (suppress claim
-	// values in the log stream, not just the audit record).
+	// value and is always logged; subject/repository/ref/branch/actor ARE claim
+	// values, so they're only attached when log_claim_values permits (suppress
+	// claim values in the log stream, not just the audit record).
 	if cfg.LogClaimValues {
-		log = log.With(
-			slog.Group("request",
-				slog.String("repository", claims.Repository),
-				slog.String("ref", claims.Ref),
-				slog.String("branch", utils.ExtractBranchFromRef(claims.Ref)),
-				slog.String("role", requestedRole),
-				slog.String("actor", claims.Actor),
-			),
-		)
+		log = log.With(slog.Group("request",
+			append([]any{slog.String("role", requestedRole)}, identityAttrs(claims)...)...))
 	} else {
 		log = log.With(slog.Group("request", slog.String("role", requestedRole)))
 	}
@@ -186,16 +186,13 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 
 	if !allowed {
 		rec.Stage = "authorize"
-		rec.Reason = "role not allowed for repository or doesn't meet constraints"
+		rec.Reason = "role not allowed for this subject or its conditions are not met"
 		rec.ProcessingMS = elapsed()
 		denyAttrs := []any{slog.String("stage", rec.Stage), slog.Any("allowedRoles", roles)}
 		if cfg.LogClaimValues {
-			denyAttrs = append(denyAttrs,
-				slog.String("repository", claims.Repository),
-				slog.String("ref", claims.Ref),
-				slog.String("branch", utils.ExtractBranchFromRef(claims.Ref)))
+			denyAttrs = append(denyAttrs, identityAttrs(claims)...)
 		}
-		log.Error("Role not allowed for repository or doesn't meet constraints", denyAttrs...)
+		log.Error("Role not allowed for this subject or its conditions are not met", denyAttrs...)
 
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrRoleNotPermitted)
 	}
@@ -356,4 +353,33 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger
 	}
 
 	return sessionPolicyString, policyRef, nil
+}
+
+// identityAttrs builds the "who made this request" log attributes for a
+// verified token. Only the canonical subject is guaranteed for every provider:
+// repository/ref/actor are GitHub-native fields that a `generic` issuer's
+// adapter never populates, so emitting them unconditionally stamped four empty
+// strings on every non-GitHub log line — noise that reads as "the claim is
+// missing" when the issuer simply names its claims differently — while leaving
+// out the one field that actually identifies the caller.
+//
+// Every value here is a claim value, so callers must only use it when
+// cfg.LogClaimValues permits claim values.
+func identityAttrs(claims *gtypes.Claims) []any {
+	if claims == nil {
+		return nil
+	}
+	attrs := []any{slog.String("subject", claims.Subject)}
+	if claims.Repository != "" {
+		attrs = append(attrs, slog.String("repository", claims.Repository))
+	}
+	if claims.Ref != "" {
+		attrs = append(attrs,
+			slog.String("ref", claims.Ref),
+			slog.String("branch", utils.ExtractBranchFromRef(claims.Ref)))
+	}
+	if claims.Actor != "" {
+		attrs = append(attrs, slog.String("actor", claims.Actor))
+	}
+	return attrs
 }

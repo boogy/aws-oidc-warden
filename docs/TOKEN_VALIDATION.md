@@ -279,7 +279,7 @@ sequenceDiagram
 | SSRF-hardened HTTP client                        | `internal/validator/ssrf.go`             |
 | Forced-refetch rate limiter                      | `internal/validator/refetch_limiter.go`  |
 | Issuer-scoped key memoization                    | `internal/validator/keymemo.go`          |
-| Extractor interface + self/apigw/alb             | `internal/validator/*_extractor.go`      |
+| Extractor interface + self/apigw/alb             | `internal/validator/extractor.go`, `internal/validator/*_extractor.go` |
 | Canonical claim struct                           | `internal/types/github.go`               |
 
 See also: [ARCHITECTURE.md](ARCHITECTURE.md) · [CONFIGURATION.md](CONFIGURATION.md) · [MULTI_ISSUER.md](MULTI_ISSUER.md) · [LOGGING.md](LOGGING.md) · `internal/validator/CLAUDE.md` (contributor notes).

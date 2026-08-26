@@ -1,9 +1,16 @@
 package config
 
+// MergeBytes: the remote-overlay path. Only keys present in the overlay are
+// written, an env var still outranks what S3 says, and a null-valued key
+// leaves the base value alone.
+
 import (
+	"os"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -165,3 +172,104 @@ func TestMergeBytes_BoolEnvFormsAppliedToEveryBoolKey(t *testing.T) {
 	require.NotNil(t, c.CrossAccount)
 	assert.True(t, c.CrossAccount.Enabled, "AOW_CROSS_ACCOUNT_ENABLED=t")
 }
+
+// TestMergeBytesNullKeysDoNotClobberBase pins the blast radius of DecodeNil.
+//
+// decoderOptions sets DecodeNil so the decode hooks see a key written with no
+// value — the only way to tell `conditions:` (a gate that gates nothing) from
+// an omitted key. The flag is global to the decoder, so what matters as much
+// as what it enables is what it must NOT change: a remote overlay (MergeBytes,
+// the S3 config path) that writes an unrelated key as null still leaves the
+// base value alone. A generator that emits explicit nulls for unset keys would
+// otherwise silently disarm audit enforcement on the next reload.
+//
+// The reason it holds is one level below this package: viper's AllSettings()
+// — what Unmarshal decodes — drops a null-valued TOP-LEVEL key entirely
+// (AllKeys() still reports it, which is why MergeBytes uses AllKeys for the
+// issuers check). Nulls nested inside a non-null value, such as a mapping's
+// `conditions:`, are carried through as raw data and do reach the hooks. So
+// this is a characterization test: it fails if that boundary moves — e.g. if
+// MergeBytes ever decodes the raw parsed map instead of AllSettings — not if
+// DecodeNil is toggled.
+func TestMergeBytesNullKeysDoNotClobberBase(t *testing.T) {
+	base := func(t *testing.T) *Config {
+		t.Helper()
+		c := &Config{}
+		require.NoError(t, c.MergeBytes([]byte(`
+role_session_name: "aow"
+audit_required: true
+log_to_s3: true
+log_bucket: "audit-bucket"
+cache:
+  type: "memory"
+  ttl: "1h"
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+`), "yaml"))
+		return c
+	}
+
+	t.Run("null bool keeps the declared audit intent", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte("audit_required: null\n"), "yaml"))
+		require.True(t, c.AuditRequired)
+		require.True(t, c.AuditEnforced())
+	})
+
+	t.Run("null string keeps the audit bucket", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte("log_bucket: null\n"), "yaml"))
+		require.Equal(t, "audit-bucket", c.LogBucket)
+		require.True(t, c.AuditEnforced())
+	})
+
+	t.Run("null struct pointer keeps the cache config", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte("cache: null\n"), "yaml"))
+		require.NotNil(t, c.Cache)
+		require.Equal(t, "memory", c.Cache.Type)
+	})
+
+	t.Run("null duration keeps the leeway default", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte("jwt_leeway: null\n"), "yaml"))
+		require.Equal(t, defaultJWTLeeway, c.LeewayOrDefault())
+	})
+}
+
+// TestMergeBytesExplicitNullIssuersRejectsSeed pins the other half of the
+// same "issuers declared ⇒ replace the seed" invariant: v.InConfig("issuers")
+// returns false for an explicitly null value (viper can't tell "absent" from
+// "present but nil" apart), so "issuers: null" used to fall through to the
+// additive merge, keep the zero-config GitHub seed, and boot open trusting
+// GitHub Actions tokens. It must now be treated as declared, same as any
+// other value, and rejected by Validate()'s zero-issuers check.
+func TestMergeBytesExplicitNullIssuersRejectsSeed(t *testing.T) {
+	viper.Reset()
+	once = sync.Once{}
+
+	origName := os.Getenv("CONFIG_NAME")
+	defer func() {
+		if origName == "" {
+			_ = os.Unsetenv("CONFIG_NAME")
+		} else {
+			_ = os.Setenv("CONFIG_NAME", origName)
+		}
+	}()
+	t.Setenv("CONFIG_NAME", "nonexistent-config-file")
+
+	c := &Config{}
+	require.NoError(t, c.LoadConfig())
+	require.Len(t, c.Issuers, 1) // the GitHub seed, the trap this test pins.
+
+	err := c.MergeBytes([]byte("issuers: null\n"), "yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one issuer is required")
+}
+
+// TestFindRoleSessionName_ComesFromAuthorizingMapping pins that the session
+// name travels with the grant, exactly as the session policy does. A broad
+// mapping declared first must not shadow the narrow mapping that granted the
+// role — that is the bug FindSessionPolicy's doc comment describes.

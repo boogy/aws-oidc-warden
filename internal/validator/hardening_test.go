@@ -1,19 +1,15 @@
 package validator_test
 
-// Adversarial coverage for crypto/time hardening: alg-confusion and
-// duplicate-kid-different-type key selection (genKeyFuncForIssuer), OIDC
-// discovery issuer mismatch (RFC 8414), zero-key JWKS never cached, and
-// singleflight collapsing concurrent cold fetches for one issuer into a
-// single upstream call.
-
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -250,4 +246,258 @@ func TestFetchJWKS_SingleflightCollapsesConcurrentFetches(t *testing.T) {
 	wg.Wait()
 
 	assert.Equal(t, int64(1), jwksHits.Load(), "concurrent cold fetches for the same issuer must collapse to one upstream call")
+}
+
+// ---------- integration ----------
+
+// This is an integration test to ensure our refactoring of JWKS and JSONWebKey types
+// doesn't break the actual OIDC token validation flow
+func TestTokenValidationFlow(t *testing.T) {
+	// Generate a test key pair
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	publicKey := &privateKey.PublicKey
+
+	// Create a key ID
+	keyID := "test-key-id"
+
+	// Create a JWKS with our test key
+	jwks := &types.JWKS{
+		Keys: []types.JSONWebKey{
+			{
+				KeyID:     keyID,
+				KeyType:   "RSA",
+				Algorithm: "RS256",
+				Use:       "sig",
+				N:         base64.RawURLEncoding.EncodeToString(publicKey.N.Bytes()),
+				E:         base64.RawURLEncoding.EncodeToString(big.NewInt(int64(publicKey.E)).Bytes()),
+			},
+		},
+	}
+
+	// Create a mock OIDC server
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			config := struct {
+				Issuer  string `json:"issuer"`
+				JwksURI string `json:"jwks_uri"`
+			}{
+				Issuer:  serverURL,
+				JwksURI: fmt.Sprintf("http://%s/jwks", r.Host),
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(config); err != nil {
+				t.Logf("Failed to encode config: %v", err)
+			}
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(jwks); err != nil {
+				t.Logf("Failed to encode jwks: %v", err)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	// Create a valid GitHub token
+	issuer := server.URL
+	audience := "test-audience"
+	repository := "owner/repo"
+
+	// Create claims
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    issuer,
+			Subject:   repository,
+			Audience:  jwt.ClaimStrings{audience},
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		// Sub (depth-0) is what actually marshals to "sub" -- it shadows
+		// RegisteredClaims.Subject above for JSON purposes.
+		Sub:                  repository,
+		Actor:                "testuser",
+		ActorID:              "12345",
+		Repository:           repository,
+		RepositoryOwner:      "owner",
+		RepositoryID:         "67890",
+		RepositoryOwnerID:    "54321",
+		RepositoryVisibility: "public",
+		Workflow:             "Test Workflow",
+		Ref:                  "refs/heads/main",
+		RefType:              "branch",
+		EventName:            "push",
+	}
+
+	// Create and sign token
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = keyID
+	tokenString, err := token.SignedString(privateKey)
+	require.NoError(t, err)
+
+	// Create config and validator
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: []string{audience}, RequiredClaims: []string{"repository"}},
+		},
+		RoleSessionName:      "aws-oidc-warden",
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
+	}
+	require.NoError(t, cfg.Validate())
+
+	tokenValidator := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
+
+	// Validate the token
+	resultClaims, err := tokenValidator.Validate(tokenString)
+	require.NoError(t, err)
+	require.NotNil(t, resultClaims)
+	assert.Equal(t, repository, resultClaims.Repository)
+	assert.Equal(t, repository, resultClaims.Subject)
+	assert.Equal(t, issuer, resultClaims.Issuer)
+	assert.Equal(t, audience, resultClaims.Audience[0])
+}
+
+// Signing-algorithm restriction: only RS/ES 256-384-512 may ever verify.
+//
+// Three independent guards enforce this, and none of them was pinned by a test
+// that could fail — deleting jwt.WithValidMethods left the entire suite green:
+//
+//  1. the parser's allowlist (jwt.WithValidMethods in validator.go);
+//  2. the keyfunc's key-type/alg-family check (RSA+"RS*", EC+"ES*");
+//  3. the JWKS key's own declared `alg`, when the issuer publishes one.
+//
+// They overlap, so removing any single one changes no observable behavior.
+// This test therefore pins the *property* rather than one mechanism, and the
+// fixture deliberately publishes a JWKS with NO declared `alg` — permitted by
+// RFC 7517 and common in the wild — so guard 3 is out of the picture and the
+// test exercises the two guards that are always present. It fails when guards
+// 1 and 2 are both removed; that pair is what actually holds the line.
+//
+// PS256 is the interesting probe: jwt-go verifies RSA-PSS against the very same
+// *rsa.PublicKey the keyfunc returns, and the token below is signed with the
+// issuer's real private key, so nothing about the key stops it. `none` and
+// HS256 additionally die on key type (the keyfunc returns only *rsa.PublicKey /
+// *ecdsa.PublicKey, and HMAC demands []byte), but are pinned here so a future
+// keyfunc change cannot open them silently.
+
+func TestValidate_RejectsAlgorithmsOutsideTheAllowlist(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	pub := &privateKey.PublicKey
+	const keyID = "alg-allowlist-key"
+	const audience = "test-audience"
+
+	jwks := &types.JWKS{Keys: []types.JSONWebKey{{
+		KeyID:     keyID,
+		KeyType:   "RSA",
+		Algorithm: "", // no declared alg: the weakest realistic JWKS (see above)
+		Use:       "sig",
+		N:         base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+		E:         base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+	}}}
+
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			require.NoError(t, json.NewEncoder(w).Encode(struct {
+				Issuer  string `json:"issuer"`
+				JwksURI string `json:"jwks_uri"`
+			}{serverURL, fmt.Sprintf("http://%s/jwks", r.Host)}))
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			require.NoError(t, json.NewEncoder(w).Encode(jwks))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+	issuer := server.URL
+
+	newClaims := func() *types.Claims {
+		return &types.Claims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				Issuer:    issuer,
+				Subject:   "owner/repo",
+				Audience:  jwt.ClaimStrings{audience},
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+				IssuedAt:  jwt.NewNumericDate(time.Now()),
+			},
+			Sub:             "owner/repo",
+			Repository:      "owner/repo",
+			RepositoryOwner: "owner",
+		}
+	}
+
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer: issuer, Provider: "github",
+			Audiences: []string{audience}, RequiredClaims: []string{"repository"},
+		}},
+		RoleSessionName:      "aws-oidc-warden",
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
+	}
+	require.NoError(t, cfg.Validate())
+	v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
+
+	// Control: RS256 is on the allowlist and must verify, so a rejection below
+	// is attributable to the algorithm and not to the fixture.
+	t.Run("RS256 is accepted", func(t *testing.T) {
+		tok := jwt.NewWithClaims(jwt.SigningMethodRS256, newClaims())
+		tok.Header["kid"] = keyID
+		signed, err := tok.SignedString(privateKey)
+		require.NoError(t, err)
+
+		claims, err := v.Validate(signed)
+		require.NoError(t, err)
+		require.NotNil(t, claims)
+		assert.Equal(t, "owner/repo", claims.Repository)
+	})
+
+	// PS256: verifies against the same *rsa.PublicKey the keyfunc returns, and
+	// is signed here with the issuer's real private key. With no declared
+	// `alg` in the JWKS, only the parser allowlist and the keyfunc's RS/ES
+	// family check stand between this token and a successful validation.
+	t.Run("PS256 signed with the real issuer key is rejected", func(t *testing.T) {
+		tok := jwt.NewWithClaims(jwt.SigningMethodPS256, newClaims())
+		tok.Header["kid"] = keyID
+		signed, err := tok.SignedString(privateKey)
+		require.NoError(t, err)
+
+		claims, err := v.Validate(signed)
+		require.Error(t, err, "PS256 is not on the allowlist and must be refused")
+		assert.Nil(t, claims)
+	})
+
+	// These also die on key type, but pin them so a future keyfunc change
+	// cannot open them silently.
+	t.Run("alg none is rejected", func(t *testing.T) {
+		tok := jwt.NewWithClaims(jwt.SigningMethodNone, newClaims())
+		tok.Header["kid"] = keyID
+		signed, err := tok.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		require.NoError(t, err)
+
+		claims, err := v.Validate(signed)
+		require.Error(t, err)
+		assert.Nil(t, claims)
+	})
+
+	t.Run("HS256 signed with the RSA public key is rejected", func(t *testing.T) {
+		tok := jwt.NewWithClaims(jwt.SigningMethodHS256, newClaims())
+		tok.Header["kid"] = keyID
+		signed, err := tok.SignedString(pub.N.Bytes())
+		require.NoError(t, err)
+
+		claims, err := v.Validate(signed)
+		require.Error(t, err)
+		assert.Nil(t, claims)
+	})
 }

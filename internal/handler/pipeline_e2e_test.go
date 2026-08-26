@@ -1,13 +1,13 @@
 package handler_test
 
-// End-to-end verification of the request pipeline: what actually reaches STS
-// on an allow, and that every deny path stops before it.
-
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +19,8 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const vE2EIssuer = "https://token.actions.githubusercontent.com"
@@ -148,7 +150,7 @@ func TestPipeline_DenyPathsNeverReachSTS(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{{
 		Subject: "myorg/repo", Roles: []string{role},
-		Conditions: &config.Condition{Ref: "refs/heads/main"},
+		Conditions: &config.Condition{Ref: config.Patterns{"refs/heads/main"}},
 	}})
 
 	cases := []struct {
@@ -264,4 +266,430 @@ func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 	if rec3.gotPolicy != nil {
 		t.Errorf("POLICY LEAK: tag-authorized role inherited an unrelated mapping's policy %q", *rec3.gotPolicy)
 	}
+}
+
+// End-to-end verification that the pipeline is issuer-agnostic: a non-GitHub
+// OIDC issuer, with none of GitHub's claim names, must flow through claims
+// extraction, condition evaluation, session-policy selection, and session
+// tagging exactly as a GitHub issuer does.
+//
+// The GitHub e2e suite next door cannot catch an accidental dependency on
+// GitHub's vocabulary, because every claim it feeds happens to be one of the
+// names types.Claims models natively. Everything asserted here is driven from
+// claim names GitHub never issues (`project_path`, `pipeline_source`,
+// `groups`), a `provider: generic` issuer, and a subject that is not
+// `repo:owner/name:...`.
+
+const gE2EIssuer = "https://gitlab.example.com"
+
+// gE2ECfg builds a config whose ONLY issuer is a generic one, so nothing can
+// fall back to a GitHub default.
+func gE2ECfg(t *testing.T, mappings []config.RoleMapping) *config.Config {
+	t.Helper()
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:    gE2EIssuer,
+			Provider:  "generic",
+			Audiences: []string{"sts.amazonaws.com"},
+			ClaimMappings: map[string]string{
+				"subject": "project_path",
+			},
+			SessionTags: map[string]string{"project": "project_path"},
+		}},
+		RoleSessionName: "aow",
+		RoleMappings:    mappings,
+	}
+	require.NoError(t, cfg.Validate())
+	return cfg
+}
+
+// gE2EClaims mimics what the generic adapter produces: the canonical Subject
+// comes from claim_mappings.subject, every GitHub-native struct field stays
+// zero, and Raw carries the issuer's own vocabulary.
+//
+// Those three properties are not assumed here — they are pinned against a real
+// signed token in validator.TestValidate_GenericProvider_SubjectMappingIgnoresRogueClaim,
+// which is what makes this fixture faithful rather than a fiction. This suite
+// starts from claims on purpose: it covers the half of the pipeline AFTER
+// extraction, and the validator suite covers the half before it.
+func gE2EClaims(projectPath, pipelineSource string, groups []any) *types.Claims {
+	return &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: gE2EIssuer, Subject: projectPath},
+		Sub:              "project_path:" + projectPath + ":ref_type:branch",
+		Raw: map[string]any{
+			"iss":             gE2EIssuer,
+			"sub":             "project_path:" + projectPath + ":ref_type:branch",
+			"project_path":    projectPath,
+			"pipeline_source": pipelineSource,
+			"groups":          groups,
+		},
+	}
+}
+
+// A generic issuer's claims must drive the whole allow path: the subject match,
+// the condition gate (on a claim GitHub does not issue), the session policy
+// attached to the authorizing mapping, and the session tag spec handed to STS.
+func TestGenericIssuer_AllowPathReachesSTSWithPolicyAndTags(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/gitlab-deploy"
+	cfg := gE2ECfg(t, []config.RoleMapping{{
+		Subject: "acme/platform/api",
+		Issuer:  gE2EIssuer,
+		Roles:   []string{role},
+		Conditions: &config.Condition{
+			Claims: map[string]config.Patterns{"pipeline_source": {"push", "web"}},
+		},
+		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
+	}})
+
+	rec := &vRecorder{allowAccount: true}
+	creds, err := vRun(t, cfg, rec, gE2EClaims("acme/platform/api", "push", nil), role)
+
+	require.NoError(t, err)
+	require.NotNil(t, creds)
+	assert.Equal(t, 1, rec.assumeCalls, "STS must be reached exactly once")
+	assert.Equal(t, role, rec.assumedRole)
+	require.NotNil(t, rec.gotPolicy, "the mapping's session policy must reach STS")
+	assert.JSONEq(t, `{"Version":"2012-10-17","Statement":[]}`, *rec.gotPolicy)
+	assert.Equal(t, map[string]string{"project": "project_path"}, rec.gotTagSpec,
+		"the generic issuer's session_tags spec must reach AssumeRole")
+	assert.Zero(t, rec.tagAuthCalled, "tag-auth must not be consulted once a mapping authorizes")
+}
+
+// The condition gate must DENY on a generic issuer's own claim, not merely
+// fail open because the claim has no types.Claims field.
+func TestGenericIssuer_ConditionOnIssuerClaimDenies(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/gitlab-deploy"
+	cfg := gE2ECfg(t, []config.RoleMapping{{
+		Subject: "acme/platform/api",
+		Issuer:  gE2EIssuer,
+		Roles:   []string{role},
+		Conditions: &config.Condition{
+			Claims: map[string]config.Patterns{"pipeline_source": {"push"}},
+		},
+	}})
+
+	rec := &vRecorder{allowAccount: true}
+	// Same subject, same role — only the gated claim differs.
+	_, err := vRun(t, cfg, rec, gE2EClaims("acme/platform/api", "schedule", nil), role)
+
+	require.Error(t, err)
+	assert.Zero(t, rec.assumeCalls, "a denied request must never reach STS")
+}
+
+// An array-valued claim — the shape GitLab/Okta/Entra use for groups and
+// scopes, and one GitHub never issues — must gate correctly end to end.
+func TestGenericIssuer_ArrayClaimConditionGatesEndToEnd(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/gitlab-deploy"
+	cfg := gE2ECfg(t, []config.RoleMapping{{
+		Subject:    "acme/platform/api",
+		Issuer:     gE2EIssuer,
+		Roles:      []string{role},
+		Conditions: &config.Condition{Claims: map[string]config.Patterns{"groups": {"platform-admins"}}},
+	}})
+
+	t.Run("member of the required group is allowed", func(t *testing.T) {
+		rec := &vRecorder{allowAccount: true}
+		_, err := vRun(t, cfg, rec,
+			gE2EClaims("acme/platform/api", "push", []any{"everyone", "platform-admins"}), role)
+		require.NoError(t, err)
+		assert.Equal(t, 1, rec.assumeCalls)
+	})
+
+	t.Run("non-member is denied", func(t *testing.T) {
+		rec := &vRecorder{allowAccount: true}
+		_, err := vRun(t, cfg, rec,
+			gE2EClaims("acme/platform/api", "push", []any{"everyone", "contractors"}), role)
+		require.Error(t, err)
+		assert.Zero(t, rec.assumeCalls)
+	})
+}
+
+// A subject verified against one issuer must never authorize against another
+// issuer's mappings, even when the subject strings are identical. This is the
+// property that keeps a second issuer from being a privilege-escalation path
+// into the first issuer's grants.
+func TestGenericIssuer_SubjectDoesNotCrossIssuerBoundary(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/github-only"
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{
+			{
+				Issuer: vE2EIssuer, Provider: "github", Audiences: []string{"sts.amazonaws.com"},
+			},
+			{
+				Issuer: gE2EIssuer, Provider: "generic", Audiences: []string{"sts.amazonaws.com"},
+				ClaimMappings: map[string]string{"subject": "project_path"},
+			},
+		},
+		RoleSessionName: "aow",
+		// Granted to the GitHub issuer ONLY.
+		RoleMappings: []config.RoleMapping{{
+			Subject: "acme/platform", Issuer: vE2EIssuer, Roles: []string{role},
+		}},
+	}
+	require.NoError(t, cfg.Validate())
+
+	rec := &vRecorder{allowAccount: true}
+	// A GitLab token whose project_path is byte-identical to the GitHub repo.
+	_, err := vRun(t, cfg, rec, gE2EClaims("acme/platform", "push", nil), role)
+
+	require.Error(t, err, "a gitlab subject must not inherit a github mapping")
+	assert.Zero(t, rec.assumeCalls)
+}
+
+// Tag-based authorization for a non-GitHub issuer, end to end.
+//
+// Every named tag dimension (`repo`, `repo-owner`, `branch`, `actor`, …) spells
+// a GitHub Actions claim, so an issuer that emits none of them can only be
+// authorized through `<prefix>subject` plus the issuer-agnostic
+// `<prefix>claim.<name>` form. That is the documented escape hatch; these tests
+// exercise it through the real pipeline rather than through TagAuth.Authorize
+// alone, so a regression anywhere between claim extraction and the IAM tag read
+// is caught.
+
+const gTagRole = "arn:aws:iam::123456789012:role/gitlab-tagged"
+
+// gTagCfg is gE2ECfg plus tag-auth, and deliberately declares NO role mappings:
+// tag-auth is the only thing that can authorize, so a pass proves the tag path
+// carried the decision on its own.
+func gTagCfg(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := gE2ECfg(t, nil)
+	cfg.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
+	require.NoError(t, cfg.Validate())
+	return cfg
+}
+
+// The canonical subject tag plus an issuer-agnostic claim tag must authorize a
+// GitLab-shaped token that carries none of GitHub's claims.
+func TestGenericIssuer_TagAuthAuthorizesViaClaimDimension(t *testing.T) {
+	cfg := gTagCfg(t)
+	rec := &vRecorder{allowAccount: true, tags: map[string]string{
+		"aow/subject":               "acme/platform/api",
+		"aow/claim.pipeline_source": "push web",
+	}}
+
+	creds, err := vRun(t, cfg, rec, gE2EClaims("acme/platform/api", "push", nil), gTagRole)
+
+	require.NoError(t, err)
+	require.NotNil(t, creds)
+	assert.Equal(t, 1, rec.tagAuthCalled, "tag-auth is the only authorizer available")
+	assert.Equal(t, 1, rec.assumeCalls)
+	assert.Equal(t, gTagRole, rec.assumedRole)
+	assert.Nil(t, rec.gotPolicy, "a tag-authorized role carries no config-declared session policy")
+	assert.Equal(t, map[string]string{"project": "project_path"}, rec.gotTagSpec,
+		"the issuer's session_tags spec still applies on the tag-auth path")
+}
+
+// A claim tag that does not match must deny, even though the identity tag does.
+// Claim dimensions AND with the identity gate; they can narrow, never widen.
+func TestGenericIssuer_TagAuthClaimDimensionNarrows(t *testing.T) {
+	cfg := gTagCfg(t)
+	rec := &vRecorder{allowAccount: true, tags: map[string]string{
+		"aow/subject":               "acme/platform/api",
+		"aow/claim.pipeline_source": "schedule",
+	}}
+
+	_, err := vRun(t, cfg, rec, gE2EClaims("acme/platform/api", "push", nil), gTagRole)
+
+	require.Error(t, err, "pipeline_source=push must not satisfy claim.pipeline_source=schedule")
+	assert.Zero(t, rec.assumeCalls, "STS must not be reached on a denied request")
+}
+
+// A role tagged only with claim dimensions and no identity tag must be denied:
+// claim tags narrow an existing grant, they never establish identity.
+func TestGenericIssuer_TagAuthClaimDimensionAloneCannotGrant(t *testing.T) {
+	cfg := gTagCfg(t)
+	rec := &vRecorder{allowAccount: true, tags: map[string]string{
+		"aow/claim.pipeline_source": "push",
+		"aow/claim.project_path":    "acme/platform/api",
+	}}
+
+	_, err := vRun(t, cfg, rec, gE2EClaims("acme/platform/api", "push", nil), gTagRole)
+
+	require.Error(t, err, "claim tags alone must not pass the identity gate")
+	assert.Zero(t, rec.assumeCalls)
+}
+
+// GitHub's named dimensions must not accidentally authorize a generic issuer.
+// `aow/repo` reads the `repository` claim, which a GitLab token never carries,
+// so the identity gate has nothing to match and must fail closed rather than
+// treating the absent claim as a wildcard.
+func TestGenericIssuer_GitHubNamedTagDimensionsDoNotMatch(t *testing.T) {
+	cfg := gTagCfg(t)
+	for name, tags := range map[string]map[string]string{
+		"repo tag alone":       {"aow/repo": "acme/platform/api"},
+		"repo-owner tag alone": {"aow/repo-owner": "acme"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := &vRecorder{allowAccount: true, tags: tags}
+			_, err := vRun(t, cfg, rec, gE2EClaims("acme/platform/api", "push", nil), gTagRole)
+			require.Error(t, err, "an absent GitHub claim must not satisfy the identity gate")
+			assert.Zero(t, rec.assumeCalls)
+		})
+	}
+}
+
+// A claim tag naming a list claim matches when any element matches, mirroring
+// how conditions treat list claims. `groups` is a claim GitHub never issues.
+func TestGenericIssuer_TagAuthClaimDimensionMatchesListClaim(t *testing.T) {
+	cfg := gTagCfg(t)
+
+	rec := &vRecorder{allowAccount: true, tags: map[string]string{
+		"aow/subject":      "acme/platform/api",
+		"aow/claim.groups": "platform-admins",
+	}}
+	claims := gE2EClaims("acme/platform/api", "push", []any{"developers", "platform-admins"})
+	_, err := vRun(t, cfg, rec, claims, gTagRole)
+	require.NoError(t, err, "membership in the required group must authorize")
+	assert.Equal(t, 1, rec.assumeCalls)
+
+	rec2 := &vRecorder{allowAccount: true, tags: map[string]string{
+		"aow/subject":      "acme/platform/api",
+		"aow/claim.groups": "platform-admins",
+	}}
+	claims2 := gE2EClaims("acme/platform/api", "push", []any{"developers"})
+	_, err = vRun(t, cfg, rec2, claims2, gTagRole)
+	require.Error(t, err, "non-membership must deny")
+	assert.Zero(t, rec2.assumeCalls)
+}
+
+// ---------- The request log line's identity fields ----------
+
+// vRunLogged is vRun with a caller-supplied logger, so a test can inspect what
+// the pipeline actually wrote. Every other e2e case discards log output, which
+// is why the identity attrs went unguarded.
+func vRunLogged(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.Claims, role string, log *slog.Logger) error {
+	t.Helper()
+	p := handler.NewRequestProcessor(
+		config.NewStaticProvider(cfg), rec, &vExtractor{claims: claims}, nil, "test")
+	ctx := context.WithValue(context.Background(), handler.StartTimeContextKey, time.Now())
+	_, err := p.ProcessRequest(ctx, &handler.RequestData{Role: role},
+		validator.ExtractionInput{Token: "t"}, "req-1", log)
+	return err
+}
+
+// requestGroups returns the "request" group of every JSON log record in buf.
+func requestGroups(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &rec), "log line is not JSON: %s", line)
+		if g, ok := rec["request"].(map[string]any); ok {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated
+// pins identityAttrs against real captured log output, for both provider
+// shapes at once.
+//
+// The two halves are one guarantee, not two: `subject` is the only field every
+// provider populates, and repository/ref/branch/actor are GitHub-native struct
+// fields a generic issuer's adapter never fills. Emitting the four
+// unconditionally stamped four empty strings on every non-GitHub log line —
+// which reads as "the claim is missing" rather than "this issuer has no such
+// claim" — while omitting the one field that actually identifies the caller.
+//
+// Asserting presence alone would not catch that: the pre-fix version also
+// emitted the GitHub fields for a GitHub caller. What pins the fix is the
+// generic case asserting those keys are ABSENT, plus both cases asserting
+// `subject` is present.
+func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t *testing.T) {
+	githubFields := []string{"repository", "ref", "branch", "actor"}
+
+	t.Run("github issuer carries subject and the populated github fields", func(t *testing.T) {
+		role := "arn:aws:iam::111111111111:role/app"
+		cfg := vE2ECfg(t, []config.RoleMapping{{Subject: "myorg/repo", Roles: []string{role}}})
+		var buf bytes.Buffer
+		log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+		// identityAttrs is claim-value data, so the whole group is gated on
+		// LogClaimValues. A struct-built config defaults it to false (the
+		// default is applied by viper, not by the zero value), so it must be
+		// set explicitly or this test would assert on a group that was never
+		// emitted and pass for the wrong reason.
+		cfg.LogClaimValues = true
+
+		// vE2EClaims carries `actor` only in Raw; identityAttrs reads the
+		// struct field, so set it here rather than changing a fixture every
+		// other case in this file shares.
+		claims := vE2EClaims("myorg/repo", "refs/heads/main")
+		claims.Actor = "alice"
+
+		require.NoError(t, vRunLogged(t, cfg, &vRecorder{allowAccount: true}, claims, role, log))
+
+		groups := requestGroups(t, &buf)
+		require.NotEmpty(t, groups, "pipeline logged no request group")
+		for _, g := range groups {
+			assert.Equal(t, "myorg/repo", g["subject"], "subject must identify the caller")
+			assert.Equal(t, "myorg/repo", g["repository"])
+			assert.Equal(t, "refs/heads/main", g["ref"])
+			assert.Equal(t, "main", g["branch"], "branch is derived from ref")
+			assert.Equal(t, "alice", g["actor"])
+		}
+	})
+
+	t.Run("generic issuer carries subject and omits the github fields", func(t *testing.T) {
+		role := "arn:aws:iam::111111111111:role/app"
+		cfg := gE2ECfg(t, []config.RoleMapping{
+			{Subject: "mygroup/myproject", Roles: []string{role}, Issuer: gE2EIssuer},
+		})
+		var buf bytes.Buffer
+		log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+		cfg.LogClaimValues = true
+
+		require.NoError(t, vRunLogged(t, cfg, &vRecorder{allowAccount: true},
+			gE2EClaims("mygroup/myproject", "push", []any{"devs"}), role, log))
+
+		groups := requestGroups(t, &buf)
+		require.NotEmpty(t, groups, "pipeline logged no request group")
+		for _, g := range groups {
+			assert.Equal(t, "mygroup/myproject", g["subject"],
+				"subject is the ONLY identity field a generic issuer populates; "+
+					"without it the log line cannot say who called")
+			for _, f := range githubFields {
+				assert.NotContains(t, g, f,
+					"%q is a GitHub-native field this issuer never populates; "+
+						"emitting it stamps an empty string that reads as a missing claim", f)
+			}
+		}
+	})
+
+	// The deny path logs identity through the same helper, and a denied
+	// attempt is exactly when knowing the caller matters most.
+	t.Run("deny path carries the same identity", func(t *testing.T) {
+		granted := "arn:aws:iam::111111111111:role/app"
+		other := "arn:aws:iam::111111111111:role/forbidden"
+		cfg := gE2ECfg(t, []config.RoleMapping{
+			{Subject: "mygroup/myproject", Roles: []string{granted}, Issuer: gE2EIssuer},
+		})
+		var buf bytes.Buffer
+		log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+		cfg.LogClaimValues = true
+
+		err := vRunLogged(t, cfg, &vRecorder{allowAccount: true},
+			gE2EClaims("mygroup/myproject", "push", []any{"devs"}), other, log)
+		require.Error(t, err, "role was never granted; expected a deny")
+
+		groups := requestGroups(t, &buf)
+		require.NotEmpty(t, groups, "deny path logged no request group")
+		var sawSubject bool
+		for _, g := range groups {
+			if g["subject"] == "mygroup/myproject" {
+				sawSubject = true
+			}
+			for _, f := range githubFields {
+				assert.NotContains(t, g, f, "deny path leaked empty GitHub field %q", f)
+			}
+		}
+		assert.True(t, sawSubject, "a deny must record which subject was denied")
+	})
 }

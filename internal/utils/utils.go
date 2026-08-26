@@ -34,8 +34,11 @@ func FormatClaimValue(raw any) string {
 	return fmt.Sprintf("%v", raw)
 }
 
-// extractBranchFromRef extracts the branch name from a GitHub ref
-// e.g., "refs/heads/main" -> "main"
+// ExtractBranchFromRef reduces a Git ref to its short branch name,
+// e.g. "refs/heads/main" -> "main". Any ref that is not a branch ref — a tag
+// ref, or an issuer whose `ref` claim carries something else entirely — is
+// returned unchanged, so callers that compare against both forms (tag-auth's
+// `branch` dimension) still work for a non-GitHub issuer.
 func ExtractBranchFromRef(ref string) string {
 	if strings.HasPrefix(ref, "refs/heads/") {
 		return strings.TrimPrefix(ref, "refs/heads/")
@@ -43,6 +46,9 @@ func ExtractBranchFromRef(ref string) string {
 	return ref
 }
 
+// GetEnv returns the value of the environment variable key, or fallback when
+// the variable is unset. An explicitly empty variable is a set variable and
+// wins over fallback.
 func GetEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
@@ -50,7 +56,9 @@ func GetEnv(key, fallback string) string {
 	return fallback
 }
 
-// parseLogLevel converts a string to an slog.Level.
+// ParseLogLevel converts a level name to an slog.Level, case-insensitively.
+// "warn" and "warning" are both accepted; anything else is an error rather
+// than a silent fallback to info.
 func ParseLogLevel(level string) (slog.Level, error) {
 	switch strings.ToLower(level) {
 	case "debug":
@@ -66,13 +74,43 @@ func ParseLogLevel(level string) (slog.Level, error) {
 	}
 }
 
-// RedactToken redacts a token string for safe logging, preserving only the first and last N characters
+// RedactToken redacts a token string for safe logging, preserving only the
+// first firstN and last lastN bytes. A token too short to survive that split is
+// masked entirely, so the function never reveals more of a short token than of
+// a long one. The counts are byte offsets, not runes: a multi-byte token can be
+// cut mid-rune, which is acceptable for an opaque credential that is never
+// rendered as text.
+//
+// Every count is clamped — negatives to zero, oversized ones to the token
+// length. Neither can arise from a current caller, since the pipeline keeps
+// token material out of logs entirely rather than logging it redacted and this
+// has no callers by design. Both are still clamped because either one would
+// otherwise panic inside a log call, which is the one place a redaction helper
+// must not fail: a negative slices out of range directly, and an oversized pair
+// overflows int when summed, wrapping negative so the too-short guard below is
+// skipped and the slice panics anyway.
 func RedactToken(token string, firstN, lastN int) string {
 	if token == "" {
 		return ""
 	}
+	if firstN < 0 {
+		firstN = 0
+	}
+	if lastN < 0 {
+		lastN = 0
+	}
 
 	tokenLen := len(token)
+
+	// Clamp each count to the token length *before* summing them: firstN+lastN
+	// overflows for adversarially large counts and the comparison below would
+	// then be against a negative number.
+	if firstN > tokenLen {
+		firstN = tokenLen
+	}
+	if lastN > tokenLen {
+		lastN = tokenLen
+	}
 
 	// If token is shorter than firstN + lastN, just mask it all
 	if tokenLen <= firstN+lastN {
@@ -80,9 +118,5 @@ func RedactToken(token string, firstN, lastN int) string {
 	}
 
 	// Otherwise, keep firstN and lastN characters visible
-	first := token[:firstN]
-	last := token[tokenLen-lastN:]
-	middle := "..." // strings.Repeat("*", tokenLen-firstN-lastN)
-
-	return first + middle + last
+	return token[:firstN] + "..." + token[tokenLen-lastN:]
 }

@@ -50,18 +50,25 @@ The combining rules:
 - **Identity gate** — the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo` / `aow/repo-owner` aliases (GitHub-shaped subjects, retained through the v2 migration window) — and match it. A role with no identity tag is never assumable via tag-auth (prevents an untagged role from being broadly assumable).
 - **Issuer gate (multi-issuer)** — once **more than one** issuer is configured, a role must also carry a matching `aow/issuer` tag or tag-auth fails closed for it: without the tag, tag-auth cannot tell which issuer's identity namespace the role trusts, and one issuer's subject could collide with another's. With a single issuer the tag is optional, but still checked if present.
 - **Exact matching** — unlike `role_mappings` (which compile anchored regex), tag values are matched **exactly**. AWS tag values allow only letters, digits, spaces, and `_ . : / = + - @` — no regex metacharacters. Use a space-list for several specific values, or `aow/repo-owner` for a whole org.
+- **Any claim, any issuer** — every named suffix below (`ref`, `actor`, `workflow-ref`, …) spells a GitHub Actions claim. `aow/claim.<name>` reaches any other verified claim by its raw name, so a non-GitHub issuer is not limited to `aow/subject`: `aow/claim.project_path: acme/api` for GitLab, `aow/claim.groups: platform` for an OIDC provider that mints group lists. It ANDs with everything else and, because it is not an identity tag, it can only narrow access. See [Constraining any claim](#constraining-any-claim-aowclaimname).
 
 ### Equivalence with `role_mappings.conditions`
 
-| `conditions` field           | Tag (default prefix) | Matching difference                                                 |
-| ---------------------------- | -------------------- | ------------------------------------------------------------------- |
-| `branch` (regex on `ref`)    | `aow/branch`         | exact; matches full `ref` **or** short branch name                  |
-| `ref` (regex)                | `aow/ref`            | exact full ref                                                      |
-| `ref_type`                   | `aow/ref-type`       | exact                                                               |
-| `event_name`                 | `aow/event-name`     | exact                                                               |
-| `workflow_ref` (regex)       | `aow/workflow-ref`   | exact                                                               |
-| `environment`                | `aow/environment`    | exact (matches the `runner_environment` claim, same as constraints) |
-| `actor_matches` (regex list) | `aow/actor`          | exact; space-list = OR                                              |
+Every tag suffix is its claim name with underscores written as dashes, so a tag and a condition on the same claim are spelled the same way. Tags match exactly; conditions compile anchored regex.
+
+| `conditions` key       | Tag (default prefix)     | Claim                | Matching difference                                |
+| ---------------------- | ------------------------ | -------------------- | -------------------------------------------------- |
+| `ref` (regex)          | `aow/ref`                | `ref`                | exact full ref                                     |
+| —                      | `aow/branch`             | `ref`                | tag-only convenience: full `ref` **or** short name |
+| `ref_type`             | `aow/ref-type`           | `ref_type`           | exact                                              |
+| `event_name`           | `aow/event-name`         | `event_name`         | exact                                              |
+| `workflow_ref` (regex) | `aow/workflow-ref`       | `workflow_ref`       | exact                                              |
+| `environment`          | `aow/environment`        | `environment`        | exact; the deployment environment a job declares   |
+| `runner_environment`   | `aow/runner-environment` | `runner_environment` | exact; `github-hosted` / `self-hosted`             |
+| `actor` (regex list)   | `aow/actor`              | `actor`              | exact; space-list = OR                             |
+| _any claim name_       | `aow/claim.<name>`       | `<name>`             | exact; issuer-agnostic; **new in 3.0.0**           |
+
+> **Changed in 3.0.0** — `aow/environment` checked `runner_environment` in v2, while `conditions.environment` checked it too; both now check the deployment-environment claim, and the runner type has its own key on each side. A role still tagged `aow/environment: github-hosted` no longer matches (fail-closed) — retag it `aow/runner-environment`. There is no `aow/branch` equivalent under `conditions:`; write `ref` with a regex.
 
 ---
 
@@ -69,19 +76,21 @@ The combining rules:
 
 Tag keys use a configurable prefix (`tag_auth.tag_prefix`, default `aow/`).
 
-| Tag (default prefix) | Claim checked                    | Notes                                                              |
-| -------------------- | -------------------------------- | ------------------------------------------------------------------ |
-| `aow/subject`        | canonical subject (any issuer)   | **canonical identity tag**; exact or space-list                    |
-| `aow/issuer`         | verified `iss`                   | **required with >1 configured issuer**; optional with a single one |
-| `aow/repo`           | `repository` (e.g. `acme/api`)   | legacy identity alias (GitHub); exact or space-list                |
-| `aow/repo-owner`     | `repository_owner` (e.g. `acme`) | legacy identity alias; whole org; OR with `aow/repo`/`aow/subject` |
-| `aow/branch`         | `ref` **or** short branch name   | `main` or `refs/heads/main`                                        |
-| `aow/ref`            | `ref`                            | exact full ref                                                     |
-| `aow/ref-type`       | `ref_type` (`branch`/`tag`)      | exact or space-list                                                |
-| `aow/event-name`     | `event_name` (`push`, …)         | exact or space-list                                                |
-| `aow/workflow-ref`   | `workflow_ref`                   | exact full `owner/repo/.github/workflows/x.yml@ref`                |
-| `aow/environment`    | `runner_environment`             | mirrors `constraints.environment`                                  |
-| `aow/actor`          | `actor`                          | exact or space-list                                                |
+| Tag (default prefix)     | Claim checked                    | Notes                                                              |
+| ------------------------ | -------------------------------- | ------------------------------------------------------------------ |
+| `aow/subject`            | canonical subject (any issuer)   | **canonical identity tag**; exact or space-list                    |
+| `aow/issuer`             | verified `iss`                   | **required with >1 configured issuer**; optional with a single one |
+| `aow/repo`               | `repository` (e.g. `acme/api`)   | legacy identity alias (GitHub); exact or space-list                |
+| `aow/repo-owner`         | `repository_owner` (e.g. `acme`) | legacy identity alias; whole org; OR with `aow/repo`/`aow/subject` |
+| `aow/branch`             | `ref` **or** short branch name   | `main` or `refs/heads/main`                                        |
+| `aow/ref`                | `ref`                            | exact full ref                                                     |
+| `aow/ref-type`           | `ref_type` (`branch`/`tag`)      | exact or space-list                                                |
+| `aow/event-name`         | `event_name` (`push`, …)         | exact or space-list                                                |
+| `aow/workflow-ref`       | `workflow_ref`                   | exact full `owner/repo/.github/workflows/x.yml@ref`                |
+| `aow/environment`        | `environment`                    | deployment environment a job declares; **changed in 3.0.0**        |
+| `aow/runner-environment` | `runner_environment`             | `github-hosted` / `self-hosted`; **new in 3.0.0**                  |
+| `aow/actor`              | `actor`                          | exact or space-list                                                |
+| `aow/claim.<name>`       | the raw claim `<name>`           | any issuer, any claim; exact or space-list; **new in 3.0.0**       |
 
 ### Example
 
@@ -155,7 +164,32 @@ This is **allow-if-either**, with explicit mappings short-circuiting:
 Key consequences:
 
 - A mapping that **authorizes** the role always wins and supplies the session policy. Tag-auth never overrides or tightens a mapping. The policy comes from the mapping that authorized _this role_ (subject match + conditions satisfied + grants the role); if several qualify, the first-declared wins — see the ordering foot-gun in [CONFIGURATION.md](CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets).
-- A mapping that **fails** (role not listed, or constraints not satisfied) does **not** hard-deny when tag-auth is enabled — the request falls through to the tag check. Tag-auth can therefore _broaden_ access beyond what mappings allow. If you rely on a mapping to _deny_, do not also publish matching `aow/*` tags on that role.
+- A mapping that **fails** (role not listed, or conditions not satisfied) does **not** hard-deny when tag-auth is enabled — the request falls through to the tag check. Tag-auth can therefore _broaden_ access beyond what mappings allow. If you rely on a mapping to _deny_, do not also publish matching `aow/*` tags on that role.
+
+---
+
+## Constraining any claim: `aow/claim.<name>`
+
+The named suffixes above are GitHub Actions claim names. Any other issuer — GitLab, Okta, an internal provider — reaches its own claims through `aow/claim.<name>`, where `<name>` is the raw verified claim, spelled exactly as the issuer mints it:
+
+```
+aow/issuer            = https://gitlab.example.com
+aow/subject           = project_path:acme/api:ref_type:branch:ref:main
+aow/claim.project_path = acme/api
+aow/claim.namespace_path = acme platform
+```
+
+That role is assumable only by a GitLab identity whose canonical subject matches **and** whose `project_path` is `acme/api` **and** whose `namespace_path` is `acme` or `platform`.
+
+Rules:
+
+- **AND with everything else.** Each `aow/claim.*` tag is one more condition on top of the issuer gate, the identity gate, and any named dimension tags.
+- **Never grants, only narrows.** `aow/claim.*` is not an identity tag: a role carrying only `aow/claim.*` tags and no `aow/subject` / `aow/repo` / `aow/repo-owner` is denied by the identity gate before these are read.
+- **Exact match, space-list = OR** — same as every other tag.
+- **List claims match any element**; a non-string, non-list claim never matches.
+- **Case-sensitive**, because IAM preserves tag-key case.
+
+It also works for GitHub, for claims with no named suffix — e.g. `aow/claim.job_workflow_ref`.
 
 ---
 
@@ -165,6 +199,9 @@ Key consequences:
 - **Multi-issuer without `aow/issuer` → deny.** Once a second issuer is configured, a role with no `aow/issuer` tag is unreachable via tag-auth (fails closed) — add the tag when you add the issuer.
 - **Tag read fails → deny (logged, not fatal).** If `iam:GetRole` errors (role missing, no permission, spoke assume failed), tag-auth treats the role as not authorized and logs a warning; the explicit-mapping result still stands.
 - **Empty claim never matches.** If a claim is absent/empty (e.g. no `environment`), a role requiring that tag is denied. Don't tag dimensions the workflow won't present.
+- **`aow/claim.` names are case-sensitive.** IAM stores tag keys verbatim, so `aow/claim.isContractor` reads the claim `isContractor` exactly — unlike `conditions:` keys, which viper lower-cases on the way in and which therefore fall back to a case-folded lookup. Spell the claim the way the issuer mints it. A bare `aow/claim.` names no claim and denies.
+- **`aow/claim.<name>` on a list claim matches any element.** A claim holding `["platform","sre"]` satisfies `aow/claim.groups: sre`.
+- **The tag is compared to the claim VALUE, not its JSON type.** A scalar claim is rendered to its canonical text first — the same rendering conditions, audit records, and session tags use — so `aow/claim.email_verified = true` matches whether the issuer mints the bool `true` or the string `"true"`, and `aow/claim.seats = 42` matches the JSON number `42`. List elements are read the same way. A shape with no readable text — an object, `null`, or an absent claim — still never matches; since `aow/claim.*` can only narrow, that is fail-closed. Before v3.0.0 this form read strings only, so a tag naming a bool or numeric claim silently denied every caller instead of narrowing as written.
 - **Prefix collisions.** Only keys under `tag_prefix` are inspected; unrelated tags (cost-center, team, …) are ignored. Changing `tag_prefix` changes which keys are read — keep it consistent with how roles are tagged.
 - **Tag charset.** `*`, `(`, `)`, `[`, `]`, `|`, `^`, `$`, `\`, `?`, `,` are rejected by AWS in tag values. Lists are **space**-separated, not comma.
 - **`aow/branch` vs `aow/ref`.** `aow/branch` is forgiving (matches the full ref _or_ the short name); `aow/ref` is strict (full ref only). Prefer `aow/ref` when you need an exact ref including tags like `refs/tags/v1.2.3`.
@@ -177,7 +214,7 @@ Key consequences:
 
 Three behaviors are intentional but easy to misjudge. Review them before enabling tag-auth in production:
 
-1. **Tag-auth is an additive fallback, not a tightening.** Enabling it lets a role's `aow/*` tags authorize claims **independently of** `role_mappings` conditions. A role you constrain via a mapping (e.g. `branch: main`) can still be assumed from any branch if its tags match and it carries no matching `aow/branch` tag. **Do not rely on a mapping condition alone to _deny_ a role that also publishes matching `aow/*` tags.** See [Precedence](#precedence-mappings--tags-together).
+1. **Tag-auth is an additive fallback, not a tightening.** Enabling it lets a role's `aow/*` tags authorize claims **independently of** `role_mappings` conditions. A role you constrain via a mapping (e.g. `ref: "refs/heads/main"`) can still be assumed from any branch if its tags match and it carries no matching `aow/branch` tag. **Do not rely on a mapping condition alone to _deny_ a role that also publishes matching `aow/*` tags.** See [Precedence](#precedence-mappings--tags-together).
 
 2. **`cross_account.enabled: false` (or omitted) hard-blocks all cross-account use** — both assumes and tag reads fail closed with an error; it is not a silent no-op. Once enabled, an **empty `allowed_accounts` still fails open**: the warden may assume into **any** member account. Config load only logs a warning in that case. Always populate `allowed_accounts` in production. See [Target account allow-list](#target-account-allow-list).
 

@@ -112,7 +112,7 @@ func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error)
 	if options.awsConfig.Credentials != nil {
 		cfg = options.awsConfig
 	} else {
-		cfg, err = config.LoadDefaultConfig(context.TODO(),
+		cfg, err = config.LoadDefaultConfig(context.Background(),
 			config.WithRetryMaxAttempts(Defaults.MaxRetries),
 		)
 		if err != nil {

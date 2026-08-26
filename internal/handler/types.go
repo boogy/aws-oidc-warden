@@ -41,7 +41,7 @@ var (
 	ErrInvalidJSON           = errors.New("invalid JSON in request body")
 	ErrTokenValidationFailed = errors.New("token validation failed")
 	ErrSessionPolicyAccess   = errors.New("failed to access session policy")
-	ErrRoleNotPermitted      = errors.New("role not allowed for repository or doesn't meet constraints")
+	ErrRoleNotPermitted      = errors.New("role not allowed for this subject or its conditions are not met")
 	ErrAccountNotAllowed     = errors.New("target account is not in the allowed_accounts list")
 	ErrAssumeRoleFailed      = errors.New("failed to assume the requested role")
 	ErrAuditWriteFailed      = errors.New("audit record could not be durably written")

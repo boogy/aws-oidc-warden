@@ -74,7 +74,7 @@ locals {
   # audit_required=false case (best-effort batched trail, still to S3).
   s3_logs_enabled = var.enable_s3_logs || var.audit_required
 
-  # Rendered application configuration (v2 schema: issuers[] + role_mappings).
+  # Rendered application configuration (v3 schema: issuers[] + role_mappings).
   # Every key is unconditional so both branches of every ternary share the
   # same type (avoids e.g. log_to_s3 coercing to the string "true"); disabled
   # features render explicit nulls/false, which the service treats as absent.

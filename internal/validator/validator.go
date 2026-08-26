@@ -87,6 +87,18 @@ type issuerSpec struct {
 // duplicate-issuer check).
 type snapshot struct {
 	registry map[string]*issuerSpec
+
+	// builtFrom is the config pointer this registry was projected from. It
+	// lives INSIDE the snapshot on purpose: the snapshot and the identity of
+	// the config it came from are published together by a single atomic
+	// store, so a reader can never observe one without the other. Two
+	// separate atomic pointers could not give that — a goroutine preempted
+	// between the two stores lets a second goroutine publish its own pair in
+	// between, leaving the registry from config B labelled as built from
+	// config A, and the fast path then serves B's issuers to a caller holding
+	// A. In-flight requests DO hold the previous pointer across a reload, so
+	// that is a reachable state, not a theoretical one.
+	builtFrom *config.Config
 }
 
 // buildSnapshot projects cfg.Issuers into an issuer-keyed registry.
@@ -96,7 +108,7 @@ func buildSnapshot(cfg *config.Config) *snapshot {
 		ic := &cfg.Issuers[i]
 		registry[ic.Issuer] = newIssuerSpec(ic)
 	}
-	return &snapshot{registry: registry}
+	return &snapshot{registry: registry, builtFrom: cfg}
 }
 
 // newIssuerSpec projects one config.IssuerConfig into the immutable
@@ -119,6 +131,8 @@ func newIssuerSpec(ic *config.IssuerConfig) *issuerSpec {
 // result. Safe for concurrent use; a hot config reload swaps the snapshot
 // without locking the read path.
 type TokenValidator struct {
+	// snap is the current registry AND the identity of the config it was
+	// built from, published as one value so the two can never disagree.
 	snap     atomic.Pointer[snapshot]
 	cache    cache.Cache
 	provider *config.Provider
@@ -147,11 +161,6 @@ type TokenValidator struct {
 	keyMemo      *keyMemo
 	jwksURICache sync.Map
 	sfGroup      singleflight.Group
-
-	// builtFrom records which config pointer snap was built from, so
-	// currentSnapshot can detect a hot reload with a cheap pointer compare
-	// instead of rebuilding on every call.
-	builtFrom atomic.Pointer[config.Config]
 }
 
 // TokenValidatorOption customizes a TokenValidator at construction time.
@@ -213,20 +222,27 @@ func (t *TokenValidator) currentSnapshot() *snapshot {
 // (rather than re-reading the provider) lets Validate() do a single
 // provider.Get() and reuse it for both the snapshot and the live time
 // bounds.
+//
+// The identity check reads snap.builtFrom rather than a second atomic, so
+// the cache hit is decided against the very snapshot it returns. A racing
+// publisher can still make this call rebuild unnecessarily, which costs one
+// map build; it can never make it hand back a registry belonging to a
+// different config.
 func (t *TokenValidator) snapshotFor(cfg *config.Config) *snapshot {
-	if t.builtFrom.Load() == cfg {
-		if snap := t.snap.Load(); snap != nil {
-			return snap
-		}
+	if snap := t.snap.Load(); snap != nil && snap.builtFrom == cfg {
+		return snap
 	}
 	return t.rebuildSnapshot(cfg)
 }
 
 // rebuildSnapshot builds a fresh registry from cfg and publishes it.
+//
+// It RETURNS the snapshot it built rather than re-loading t.snap, so the
+// caller is served the registry for the cfg it asked about even when a
+// concurrent rebuild for a different config wins the store.
 func (t *TokenValidator) rebuildSnapshot(cfg *config.Config) *snapshot {
 	snap := buildSnapshot(cfg)
 	t.snap.Store(snap)
-	t.builtFrom.Store(cfg)
 	return snap
 }
 
@@ -258,8 +274,18 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 	// Read config once; time bounds and the length guard are derived live
 	// from it (not frozen at construction) so a hot config reload takes
 	// effect immediately, like the registry.
-	cfg := t.currentConfig()
+	return t.validateWith(t.currentConfig(), tokenString)
+}
 
+// validateWith is Validate against an explicit config generation.
+//
+// It exists so a caller that already captured a *Config for this request can
+// have the token decided by that same generation instead of re-reading the
+// provider, which a concurrent hot reload can have swapped in between. The
+// method is unexported on purpose: it is an internal seam for SelfExtractor,
+// not a second public validation entry point, and keeping it off
+// TokenValidatorInterface leaves every existing mock of that interface valid.
+func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*types.Claims, error) {
 	maxTokenBytes := cfg.MaxTokenBytes
 	if maxTokenBytes <= 0 {
 		maxTokenBytes = defaultMaxTokenBytes

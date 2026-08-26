@@ -50,7 +50,7 @@ role_mappings:
   - subject: "org/api" # was `repo:`
     roles: ["arn:aws:iam::123456789012:role/deploy"]
     conditions: # was `constraints:`
-      branch: "refs/heads/main"
+      ref: "refs/heads/main" # `branch:` was removed in v3 — see MIGRATION_V3.md
 ```
 
 With a single issuer you may omit `default_issuer` (mappings inherit the sole issuer). With **two or more** issuers, each mapping must set `issuer:` or rely on `default_issuer`.
@@ -64,7 +64,7 @@ With a single issuer you may omit `default_issuer` (mappings inherit the sole is
 5. **Tag-based auth.** If you use it, add `aow/issuer` to your roles and prefer `aow/subject` for identity. `aow/repo` / `aow/repo-owner` still work as aliases during the v2 migration window — plan to move to `aow/subject`.
 6. **Cross-account keys moved.** `tag_auth.spoke_role_name` / `external_id` / `spoke_session_duration` / `allowed_accounts` are now the top-level `cross_account:` block (with its own `enabled` flag; env prefix `AOW_CROSS_ACCOUNT_*`). Cross-account no longer requires tag-auth: set `cross_account.enabled: true` and explicit `role_mappings` can target member-account ARNs with `tag_auth` off (assumes go direct hub→target; the spoke role is only a tag-read broker for cross-account tag-auth). If you used tag-auth cross-account in v1, enable **both** blocks.
 7. **Delegated modes.** `alb` still requires **exactly one** configured issuer; `apigw` now supports multiple, one per route via per-route JWT Authorizers. See [MULTI_ISSUER.md](MULTI_ISSUER.md) for the detail.
-8. **snake_case S3/JSON config.** `PascalCase` keys are rejected (carried over from the prior release).
+8. **snake_case S3/JSON config.** Every key is `snake_case`. A `PascalCase` key is **not** rejected — the loader simply does not recognize it, so it is silently ignored and whatever it was meant to configure falls back to its default. A mis-cased `RoleMappings:` leaves you with no role mappings at all and `Validate()` still returns nil, so the service boots and denies every request. Convert the keys yourself; there is no load-time error to catch them for you.
 9. **Go embedders.** Update any code using the renamed types/functions above; `AssumeRole` now takes a trailing `sessionTags map[string]string`.
 
 ## Onboarding a non-GitHub provider

@@ -252,7 +252,7 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 		// quarantine already-applied fragment content was silently inert — the
 		// content stayed live precisely in the incident-response case the pin
 		// exists for.
-		if expected, pinned := cfg.ConfigFragmentChecksums[uri]; pinned && expected != etag {
+		if expected, pinned := cfg.fragmentChecksum(uri); pinned && expected != etag {
 			return nil, fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
 		}
 

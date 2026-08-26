@@ -89,13 +89,15 @@ CloudFormation exposes the same three knobs as `AuditLogRetentionDays`, `AuditLo
 
 ## How config.yaml is delivered
 
-`main.tf` renders a v2 config — `var.issuers` (or, if unset, the `var.issuer`/`var.audiences` shorthand rendered as a single GitHub `issuers[]` entry), `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. Each `var.role_mappings` entry may set `role_session_name` to override the global `var.role_session_name` for the roles it grants, so CloudTrail names the requester instead of the service — STS accepts 2–64 characters from `[\w+=,.@-]` (no `/`, so a repository name cannot be used verbatim); an invalid value fails the service at boot. `role_groups`, the analogous DRY convenience for many subjects sharing one set of defaults, is a `config.yaml`-only feature — it is not exposed as a Terraform variable in this module. The Lambda receives three env vars at startup:
+`main.tf` renders the service config — `var.issuers` (or, if unset, the `var.issuer`/`var.audiences` shorthand rendered as a single GitHub `issuers[]` entry), `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. Each `var.role_mappings` entry may set `role_session_name` to override the global `var.role_session_name` for the roles it grants, so CloudTrail names the requester instead of the service — STS accepts 2–64 characters from `[\w+=,.@-]` (no `/`, so a repository name cannot be used verbatim); an invalid value fails the service at boot. `role_groups`, the analogous DRY convenience for many subjects sharing one set of defaults, is a `config.yaml`-only feature — it is not exposed as a Terraform variable in this module. The Lambda receives three env vars at startup:
 
 - `AOW_S3_CONFIG_BUCKET` — bucket name
 - `AOW_S3_CONFIG_PATH` — object key (`config.yaml`)
 - `AOW_JWT_VALIDATION_MODE` — set from `var.jwt_validation_mode`; the extractor implementation is wired at cold start from this env var, not from `config.yaml` (which is hot-reloadable), so it must match the deployed Lambda binary variant
 
-On startup the Lambda fetches and parses this file. All complex configuration (repo mappings, nested objects) lives here; scalar overrides can also be set via `AOW_*` env vars.
+> **v3:** `var.role_mappings[].conditions` follows the service's v3 condition schema — every key is the raw claim it checks. `branch` and `actor_matches` are gone (`ref`, `actor`), `runner_environment` is the new name for the runner-type check, and `environment` now renders a gate on GitHub's deployment-environment claim. Rename these in `terraform.tfvars` before applying: a plan against the old attribute names fails at plan time, and an `environment` left unrenamed plans clean but gates a different claim. Beyond the named keys, `conditions.claims` is a `map(list(string))` reaching any other claim (`repository_visibility`, `base_ref`, a GitLab claim, or one named like a reserved key), each entry a list of OR-ed alternatives. The `all_of`/`any_of`/`none_of` groups remain `config.yaml`-only — a mapping that needs one belongs in a `config_fragments` file. A `conditions` object that carries no usable field — every field null, or only empties like `actor = []` / `claims = {}` — is rejected at plan time: it reads as a gated mapping and gates nothing. So is an empty value sitting beside a real condition (`ref = "refs/heads/main"` with `actor = []`): an empty pattern matches nothing, and the service refuses to boot on it rather than denying, so the apply would succeed and the Lambda would crash-loop. See [docs/MIGRATION_V3.md](../docs/MIGRATION_V3.md).
+
+On startup the Lambda fetches and parses this file. All complex configuration (role mappings, nested objects) lives here; scalar overrides can also be set via `AOW_*` env vars.
 
 ---
 
@@ -238,7 +240,7 @@ For the hardened multi-issuer posture (REST API + WAF), add:
 
 ### 3. Upload config.yaml
 
-By default the stack creates `<FunctionName>-config-<account-id>` (the `ConfigBucketName` output; set `ConfigBucket` to bring your own). `issuers[]` and `role_mappings` must come from this object — v2 has no `AOW_ISSUER`/`AOW_AUDIENCES` env vars, so the stack denies every request until it exists (see `docs/example-config.yaml`):
+By default the stack creates `<FunctionName>-config-<account-id>` (the `ConfigBucketName` output; set `ConfigBucket` to bring your own). `issuers[]` and `role_mappings` must come from this object — there are no `AOW_ISSUER`/`AOW_AUDIENCES` env vars, so the stack denies every request until it exists (see `example-config.yaml` at the repo root):
 
 ```bash
 aws s3 cp config.yaml s3://<ConfigBucketName>/config.yaml

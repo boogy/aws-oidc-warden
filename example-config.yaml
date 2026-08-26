@@ -1,10 +1,11 @@
 ####################################################################################
-# AWS OIDC Warden — Example Configuration (v2, multi-issuer)
+# AWS OIDC Warden — Example Configuration (v3, multi-issuer)
 #
-# v2 validates OIDC tokens from ANY number of issuers/providers and brokers
+# Validates OIDC tokens from ANY number of issuers/providers and brokers
 # short-lived AWS credentials. Precedence: AOW_-prefixed env vars > this file >
-# defaults. See docs/CONFIGURATION.md for the full reference and
-# docs/MIGRATION_V2.md if you are upgrading from a v1 single-issuer config.
+# defaults. See docs/CONFIGURATION.md for the full reference,
+# docs/MIGRATION_V3.md if you are upgrading a v2 `conditions:` block, and
+# docs/MIGRATION_V2.md if you are coming from a v1 single-issuer config.
 ####################################################################################
 
 ####################################################################################
@@ -32,9 +33,12 @@ issuers:
     #   subject: "repository"
     required_claims:
       - "repository"
-    # session_tags: STS tag key <- raw claim name. Tag KEYS must match
-    # [A-Za-z0-9 _.:/=+@-]{1,128}. NOTE (v2 change): the `repo` tag now carries
-    # the FULL "owner/repo" (raw `repository` claim); v1 stripped the owner.
+    # session_tags: STS tag key <- raw claim name. Tag KEYS must be written
+    # lower-case, matching [a-z0-9 _.:/=+@-]{1,128}: the config loader
+    # case-folds every key it reads, so "CostCenter" is attached to the STS
+    # session as "costcenter". Key your ABAC policies on the lower-case form.
+    # NOTE (v2 change): the `repo` tag now carries the FULL "owner/repo"
+    # (raw `repository` claim); v1 stripped the owner.
     session_tags:
       repo: "repository"
       repo-owner: "repository_owner"
@@ -71,6 +75,10 @@ role_session_name: aws-oidc-warden
 ## not set its own `issuer`. Required to resolve unbound mappings when more than
 ## one issuer is configured. Must reference an issuer defined above.
 default_issuer: "https://token.actions.githubusercontent.com"
+## NOTE: because this file configures two issuers and leaves most mappings
+## unbound to demonstrate the inheritance, it emits an advisory WARN at boot
+## naming the mapping count. That is expected HERE; in a real multi-issuer
+## config, set `issuer:` explicitly on every mapping and the WARN goes away.
 
 ####################################################################################
 # TOKEN HARDENING KNOBS (all optional; shown with their defaults)
@@ -167,7 +175,8 @@ session_policy_bucket: "aws-oidc-warden-session-policies"
 #   - "/etc/aws-oidc-warden/fragments/local.yaml"
 ## Optional integrity pin per fragment path (sha256 of the file contents).
 # config_fragment_checksums:
-#   "/etc/aws-oidc-warden/fragments/team-a.yaml": "sha256:..."
+#   - uri: "/etc/aws-oidc-warden/fragments/team-a.yaml"
+#     checksum: "sha256:..."
 
 ####################################################################################
 # ROLE SETS (named, reusable role lists; reference with "@name" in roles)
@@ -187,24 +196,63 @@ role_sets:
 # assumable roles, scoped to a single issuer, optionally gated by `conditions`.
 # The requested role must be one of the mapping's resolved roles — a token can
 # never select an arbitrary role. `issuer` defaults to default_issuer above.
-# `conditions` are regexes against RAW verified claim names (AND across
-# dimensions); any claim not covered by a named field can be matched directly
-# by its claim name.
+# Every key under `conditions` (other than the boolean groups) is the RAW
+# verified claim name it checks, and its value is one anchored regex or a LIST
+# of regexes, any of which may match. Entries at the same level are AND'd;
+# `all_of`/`any_of`/`none_of` groups nest inside for richer logic. A claim whose
+# value is itself a list matches when any element does.
+#
+# Four keys are reserved and are NOT claim names: `all_of`, `any_of`,
+# `none_of`, and `claims`. A claim actually named like one of them goes under
+# `claims:`, whose keys are always raw claim names (see the release mapping).
+#
+# v3 removed the three keys that did not match their claim: `branch` -> `ref`,
+# `actor_matches` -> `actor`, `environment` -> `runner_environment`. NOTE that
+# `environment` still exists as a key — it now checks GitHub's deployment
+# environment claim, NOT the runner type. See docs/MIGRATION_V3.md.
+#
+# SHAPES THAT ARE REJECTED AT LOAD (each reads as a gate and gates nothing, so
+# the service refuses to start rather than authorizing more than the file says):
+#
+#   conditions:              # the key with nothing under it, `conditions: {}`,
+#   conditions: {}           # and an explicit `conditions: null` alike —
+#                            # an unconditional mapping OMITS the key
+#   conditions:
+#     ref:                   # a claim key with no pattern
+#     event_name: ""         # an empty pattern
+#     actor: []              # an empty list
+#     repository: ".*"       # a bare wildcard (subjects too) — be specific
+#   conditions:
+#     any_of: []             # an empty group, or a group member that gates
+#     none_of: [{}]          # nothing: always-true members make any_of always
+#                            # pass and none_of always fail
+#
+# ONE THAT LOADS BUT DENIES: a v2 `branch:`/`actor_matches:`, now read as a
+# claim of that literal name, which GitHub does not issue — a boot WARN names
+# the key. Inside a `none_of` the same leftover key instead AUTHORIZES what it
+# was written to refuse (a veto that can never match can never fire), which the
+# WARN calls out separately. (A camelCase claim key such as `emailVerified:` is fine: viper
+# lower-cases it, and claim lookup falls back to a case-insensitive match.)
 ####################################################################################
 role_mappings:
   # Simple mapping, main branch only (inherits default_issuer = GitHub).
   - subject: "org/some-repo-name"
     roles: ["@deployers"] # role_set alias
     conditions:
-      branch: "refs/heads/main"
+      ref: "refs/heads/main"
 
-  # External session policy file in S3.
+  # External session policy file in S3. This mapping names its role directly
+  # rather than reusing @deployers: a role granted BOTH here and by a
+  # policy-less mapping earlier in the file would trip the unscoped-grant WARN
+  # at boot, because that check shares roles rather than computing subject
+  # overlap (see warnUnscopedRoleGrants). Keeping scoped roles distinct from
+  # unscoped ones is the habit worth copying.
   - subject: "org/main-branch-repo"
     session_policy_file: "session-policies/org/main-branch-repo/policy.json"
     roles:
-      - arn:aws:iam::123456789012:role/github-actions-create-repo
+      - arn:aws:iam::123456789012:role/github-actions-scoped-deploy
     conditions:
-      branch: "refs/heads/main"
+      ref: "refs/heads/main"
 
   # Inline session policy + subject pattern for many repos. role_session_name
   # here names the WHOLE matched set, not each repository individually — it
@@ -216,27 +264,115 @@ role_mappings:
       {"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["iam:*"],"Resource":"*"}]}
     role_session_name: "org-services"
 
-  # Multiple conditions (all must hold) incl. a generic claim by its raw name.
+  # Multiple conditions: different claims are AND'd, a list within one claim
+  # is OR'd. Any raw claim name works — there is no fixed field list.
   - subject: "org/prod-repo"
     roles:
       - arn:aws:iam::123456789012:role/github-actions-prod
     conditions:
       ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
       ref_type: "tag"
-      environment: "production" # regex against the raw 'runner_environment' claim
-      sha: "^[0-9a-f]{40}$" # generic: any raw claim name works (must be string-typed)
+      environment: "production" # the deployment environment the job declares
+      runner_environment: "github-hosted" # the runner type (a different claim)
+      actor: ["release-bot", "release-manager"] # OR: either actor satisfies it
+      sha: "[0-9a-f]{40}" # patterns are auto-anchored; no ^...$ needed
     # Overrides the global role_session_name for roles granted by THIS
     # mapping only, so CloudTrail names the requester instead of the service.
     role_session_name: "org-prod-repo-deploy"
 
+  # Boolean conditions. The top level is still an implicit AND: every flat
+  # field AND every group below must hold. Groups nest up to 5 levels deep.
+  #
+  #   all_of  — every listed condition must hold
+  #   any_of  — at least one listed condition must hold
+  #   none_of — no listed condition may hold (a one-entry none_of is a "not")
+  #
+  # This reads: a tag build, from a release tag or a hotfix tag, never on the
+  # sandbox runner.
+  - subject: "org/release-repo"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-release
+    conditions:
+      ref_type: "tag" # flat field: AND'd with both groups below
+      any_of:
+        - ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
+        - all_of:
+            - ref: "refs/tags/hotfix-.+"
+            - actor: ["release-bot", "release-manager"]
+      none_of:
+        - runner_environment: "self-hosted"
+      # `claims:` keys are ALWAYS raw claim names — the escape hatch for a
+      # claim named like a reserved key. Otherwise identical to a top-level
+      # entry, AND'd with everything else on this node.
+      claims:
+        environment: "production"
+
+  # Pin a REUSABLE WORKFLOW. `workflow_ref` is the entry workflow the run
+  # started from; `job_workflow_ref` is the workflow the job actually executes,
+  # which is what a caller cannot fake by copying a job into its own repo. Pin
+  # the reusable workflow to a tag or a SHA, never to a branch a caller can move.
+  - subject: "org/.+"
+    roles: ["@deployers"]
+    conditions:
+      job_workflow_ref: "org/ci-workflows/\\.github/workflows/deploy\\.yml@refs/tags/v[0-9]+"
+      repository_owner: "org" # only this org's repos may call it
+      runner_environment: "github-hosted"
+
+  # PULL-REQUEST gate: a PR job may read, but only from a public repo, only
+  # from a branch targeting main, and never from a fork's self-hosted runner.
+  # `ref_protected` is a STRING claim ("true"/"false"), not a boolean — quote it.
+  - subject: "org/pr-checks"
+    roles: ["@readonly"]
+    conditions:
+      event_name: "pull_request"
+      base_ref: "main"
+      repository_visibility: "public"
+      ref_protected: "true"
+
+  # Match on IMMUTABLE IDs rather than names. A repo or org can be renamed, and
+  # the new owner of a freed-up name inherits every mapping written against it;
+  # the numeric IDs never change hands. Belt and braces: name AND id.
+  - subject: "org/high-value-repo"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-sensitive
+    conditions:
+      repository_id: "123456789"
+      repository_owner_id: "987654"
+      ref: "refs/heads/main"
+
+  # `none_of` is exact negation, and each MEMBER is a whole condition — a
+  # member with two keys is a negated AND (it vetoes only when BOTH hold).
+  # Write one member per thing you mean to refuse, as here: never a fork's
+  # self-hosted runner, and never a manually dispatched run.
+  # A member naming a claim the token does not carry cannot match, so its
+  # negation holds and the group PASSES. A member naming a claim that IS
+  # present is decided on its VALUE whatever JSON type it arrived as: a
+  # bool `false` or a number 9 is compared through its text, so
+  # `email_verified: "false"` vetoes the JSON bool false and does NOT veto
+  # true. Only a value with no readable text — an object, or a list
+  # carrying one — cannot be decided; there the veto fires and the mapping
+  # denies. Only non-GitHub issuers mint non-string claims at all — every
+  # GitHub Actions claim is a string.
+  - subject: "org/guarded-repo"
+    roles: ["@readonly"]
+    conditions:
+      ref: "refs/heads/(main|release/.+)"
+      none_of:
+        - runner_environment: "self-hosted"
+        - event_name: "workflow_dispatch"
+
   # A GitLab mapping — bound explicitly to the GitLab issuer. Its `subject` is
   # the canonical value produced by claim_mappings.subject (project_path).
+  # Conditions use the same syntax for any provider: the key is whatever the
+  # issuer calls the claim, so no GitLab-specific fields are needed.
   - subject: "mygroup/myproject"
     issuer: "https://gitlab.com"
     roles:
       - arn:aws:iam::123456789012:role/gitlab-ci-deploy
     conditions:
       ref: "main"
+      project_path: "mygroup/myproject"
+      groups: ["platform-team", "sre"] # list claim: matches when any element does
 
 ####################################################################################
 # ROLE GROUPS (DRY: one entry expands to one mapping per subject, sharing
@@ -266,6 +402,30 @@ role_groups:
 # accepted as aliases through the v2 migration window). See
 # docs/TAG_BASED_AUTHORIZATION.md.
 ####################################################################################
+# Supported tags (prefix configurable below). Values match EXACTLY — AWS tag
+# values cannot carry regex — and a space-separated value means OR:
+#
+#   aow/subject            canonical subject; identity tag (required, or a
+#                          legacy aow/repo / aow/repo-owner alias)
+#   aow/issuer             verified iss; REQUIRED once >1 issuer is configured
+#   aow/branch             full ref or short branch name (tag-only convenience)
+#   aow/ref                ref            aow/ref-type          ref_type
+#   aow/event-name         event_name     aow/workflow-ref      workflow_ref
+#   aow/actor              actor
+#   aow/environment        environment          (deployment environment)
+#   aow/runner-environment runner_environment   (github-hosted/self-hosted)
+#
+#   aow/claim.<name>       the raw verified claim <name>, for ANY issuer
+#                          e.g. aow/claim.project_path: acme/api  (GitLab)
+#                               aow/claim.groups: platform sre    (list claim)
+#                          Every suffix above names a GitHub Actions claim;
+#                          this is how a non-GitHub issuer constrains anything
+#                          beyond aow/subject. ANDs with the rest, and is NOT
+#                          an identity tag, so it can only narrow access.
+#                          Case-SENSITIVE (IAM keeps tag keys verbatim).
+#
+# CHANGED IN 3.0.0: aow/environment used to check runner_environment. Retag
+# such roles aow/runner-environment — until then they simply stop matching.
 tag_auth:
   enabled: false
   tag_prefix: "aow/"
@@ -300,10 +460,15 @@ cross_account:
 #
 # "self"  (default) full JWKS signature verification here (multi-issuer aware).
 # "apigw" trust an API Gateway HTTP API v2 JWT Authorizer (claims from the
-#         authorizer context). Delegated modes require EXACTLY ONE configured
-#         issuer and still re-validate issuer/audience/exp/nbf/sub/time-bounds.
+#         authorizer context). Any number of configured issuers: each route's
+#         Authorizer pins its own, and the verified iss it forwards selects the
+#         spec per request.
 # "alb"   trust ALB OIDC; the ES256-signed x-amzn-oidc-data header is verified.
-#         Set alb_expected_signer to the ALB ARN to prevent cross-ALB spoofing.
+#         Requires EXACTLY ONE configured issuer -- an ALB has one OIDC IdP, so
+#         a multi-issuer config is genuinely ambiguous there and is rejected at
+#         startup. Set alb_expected_signer to the ALB ARN to prevent cross-ALB
+#         spoofing.
+# Both delegated modes still re-validate issuer/audience/exp/nbf/sub/time-bounds.
 ####################################################################################
 jwt_validation:
   mode: "self"

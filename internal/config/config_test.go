@@ -13,6 +13,11 @@ import (
 )
 
 func TestNewConfig(t *testing.T) {
+	// Both resets are needed. `once` alone leaves viper holding every config
+	// path an earlier test registered — AddConfigPath accumulates and is never
+	// cleared by LoadConfig — so this test would try to read a t.TempDir() that
+	// has already been removed and fail on a file it never asked for.
+	viper.Reset()
 	once = sync.Once{}
 
 	cfg, err := NewConfig()
@@ -211,7 +216,13 @@ func TestValidate(t *testing.T) {
 			expectErr: true,
 		},
 		{
-			name: "claim_mappings targets reserved claim",
+			// The KEY side is NOT constrained. "sub" is not a canonical field
+			// the validator reads, but a non-subject entry still contributes
+			// its value to the issuer's auditable-claim set, so it is a
+			// meaningful config, not a no-op. The pre-3.0.0 guard rejected
+			// this shape while checking the wrong side of the map entirely:
+			// keys are field names, and no key can shadow a verified claim.
+			name: "claim_mappings key that is not a canonical field is allowed",
 			config: Config{
 				Issuers: []IssuerConfig{{
 					Issuer:        "https://issuer.com",
@@ -221,7 +232,53 @@ func TestValidate(t *testing.T) {
 				}},
 				RoleSessionName: "session",
 			},
+			expectErr: false,
+		},
+		{
+			// The VALUE side is where the security risk actually lives: `iss`
+			// is byte-identical in every token this issuer mints, so making it
+			// the canonical subject gives every caller the same subject and any
+			// one of them matches any other's subject pattern.
+			name: "claim_mappings.subject targets iss (identity collapse)",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:        "https://gitlab.example.com",
+					Provider:      "generic",
+					Audiences:     []string{"audience"},
+					ClaimMappings: map[string]string{"subject": "iss"},
+				}},
+				RoleSessionName: "session",
+			},
 			expectErr: true,
+		},
+		{
+			name: "claim_mappings.subject targets aud (identity collapse)",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:        "https://gitlab.example.com",
+					Provider:      "generic",
+					Audiences:     []string{"audience"},
+					ClaimMappings: map[string]string{"subject": "aud"},
+				}},
+				RoleSessionName: "session",
+			},
+			expectErr: true,
+		},
+		{
+			// `sub` must stay ALLOWED: it is the ordinary canonical subject for
+			// most non-GitHub IdPs. claim_mappings is a read-only projection
+			// over already-verified claims, so naming `sub` shadows nothing.
+			name: "claim_mappings.subject targets sub (the normal generic case)",
+			config: Config{
+				Issuers: []IssuerConfig{{
+					Issuer:        "https://gitlab.example.com",
+					Provider:      "generic",
+					Audiences:     []string{"audience"},
+					ClaimMappings: map[string]string{"subject": "sub"},
+				}},
+				RoleSessionName: "session",
+			},
+			expectErr: false,
 		},
 		{
 			name: "non-github provider without claim_mappings.subject",
@@ -604,6 +661,13 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 		"AOW_LOG_TO_S3",
 		"AOW_LOG_BUCKET",
 		"AOW_LOG_PREFIX",
+		// CONFIG_NAME is set below to force the env-var path. It belongs in
+		// this list: without it the "nonexistent-config-file" value leaked for
+		// the rest of the binary, so every later test that loads a real
+		// config.yaml found none, silently loaded an empty config, and
+		// authorized nothing. That is why this package failed under
+		// `go test -shuffle`.
+		"CONFIG_NAME",
 	}
 
 	for _, env := range envVarsToSet {
@@ -895,40 +959,6 @@ func TestGoldenMultiIssuerConfigBoots(t *testing.T) {
 	assert.Equal(t, []string{"arn:aws:iam::111122223333:role/github-actions-example"}, roles)
 }
 
-// TestMergeBytesExplicitNullIssuersRejectsSeed pins the other half of the
-// same "issuers declared ⇒ replace the seed" invariant: v.InConfig("issuers")
-// returns false for an explicitly null value (viper can't tell "absent" from
-// "present but nil" apart), so "issuers: null" used to fall through to the
-// additive merge, keep the zero-config GitHub seed, and boot open trusting
-// GitHub Actions tokens. It must now be treated as declared, same as any
-// other value, and rejected by Validate()'s zero-issuers check.
-func TestMergeBytesExplicitNullIssuersRejectsSeed(t *testing.T) {
-	viper.Reset()
-	once = sync.Once{}
-
-	origName := os.Getenv("CONFIG_NAME")
-	defer func() {
-		if origName == "" {
-			_ = os.Unsetenv("CONFIG_NAME")
-		} else {
-			_ = os.Setenv("CONFIG_NAME", origName)
-		}
-	}()
-	t.Setenv("CONFIG_NAME", "nonexistent-config-file")
-
-	c := &Config{}
-	require.NoError(t, c.LoadConfig())
-	require.Len(t, c.Issuers, 1) // the GitHub seed, the trap this test pins.
-
-	err := c.MergeBytes([]byte("issuers: null\n"), "yaml")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one issuer is required")
-}
-
-// TestFindRoleSessionName_ComesFromAuthorizingMapping pins that the session
-// name travels with the grant, exactly as the session policy does. A broad
-// mapping declared first must not shadow the narrow mapping that granted the
-// role — that is the bug FindSessionPolicy's doc comment describes.
 func TestFindRoleSessionName_ComesFromAuthorizingMapping(t *testing.T) {
 	const iss = "https://token.actions.githubusercontent.com"
 	cfg := &Config{
@@ -966,7 +996,7 @@ func TestFindRoleSessionName_RespectsConditions(t *testing.T) {
 		RoleSessionName: "aws-oidc-warden",
 		RoleMappings: []RoleMapping{
 			{Subject: "acme/api", Roles: []string{role}, RoleSessionName: "prod-only",
-				Conditions: &Condition{Extra: map[string]string{"ref": "refs/heads/main"}}},
+				Conditions: &Condition{Claims: map[string]Patterns{"ref": {"refs/heads/main"}}}},
 		},
 	}
 	require.NoError(t, cfg.Validate())
@@ -1037,4 +1067,164 @@ func TestGlobalRoleSessionName_RejectedAtValidate(t *testing.T) {
 	err := cfg.Validate()
 	require.Error(t, err, "an unusable global session name must fail closed at boot")
 	assert.Contains(t, err.Error(), "role_session_name")
+}
+
+// gitlabLikeConfig builds a two-issuer config where neither issuer is GitHub,
+// so every assertion below exercises the provider-neutral path rather than the
+// `provider: github` native-unmarshal shortcut.
+func gitlabLikeConfig() *Config {
+	return &Config{
+		RoleSessionName: "aow-session",
+		Issuers: []IssuerConfig{
+			{
+				Issuer:        "https://gitlab.com",
+				Provider:      "generic",
+				Audiences:     []string{"aow"},
+				ClaimMappings: map[string]string{"subject": "project_path"},
+				SessionTags: map[string]string{
+					"project":   "project_path",
+					"namespace": "namespace_path",
+				},
+			},
+			{
+				Issuer:        "https://token.example.buildkite.com",
+				Provider:      "generic",
+				Audiences:     []string{"aow"},
+				ClaimMappings: map[string]string{"subject": "pipeline_slug"},
+				SessionTags:   map[string]string{"pipeline": "pipeline_slug"},
+			},
+		},
+	}
+}
+
+// TestIssuerSessionTags_PerIssuerIsolation pins the contract the session-tag
+// lookup relies on: the spec returned is the one declared by the issuer that
+// actually verified the token, and an issuer the config does not know gets
+// nothing. Without this, a token from issuer A could be tagged with issuer B's
+// spec and reach STS carrying claims A never asserted.
+func TestIssuerSessionTags_PerIssuerIsolation(t *testing.T) {
+	cfg := gitlabLikeConfig()
+
+	gitlab := cfg.IssuerSessionTags("https://gitlab.com")
+	if got, want := gitlab["project"], "project_path"; got != want {
+		t.Fatalf("gitlab project tag = %q, want %q", got, want)
+	}
+	if _, leaked := gitlab["pipeline"]; leaked {
+		t.Fatalf("gitlab spec leaked the buildkite tag key: %v", gitlab)
+	}
+
+	buildkite := cfg.IssuerSessionTags("https://token.example.buildkite.com")
+	if got, want := buildkite["pipeline"], "pipeline_slug"; got != want {
+		t.Fatalf("buildkite pipeline tag = %q, want %q", got, want)
+	}
+	if len(buildkite) != 1 {
+		t.Fatalf("buildkite spec = %v, want exactly one entry", buildkite)
+	}
+}
+
+// TestIssuerSessionTags_UnknownIssuerGetsNoSpec covers the fail-closed branch:
+// an issuer string that is not configured must return nil, never the first
+// issuer's spec as a fallback.
+func TestIssuerSessionTags_UnknownIssuerGetsNoSpec(t *testing.T) {
+	cfg := gitlabLikeConfig()
+	if got := cfg.IssuerSessionTags("https://token.actions.githubusercontent.com"); got != nil {
+		t.Fatalf("unknown issuer returned a spec: %v", got)
+	}
+}
+
+// TestIssuerSessionTags_MatchIsExact mirrors the validator's exact-match issuer
+// policy. A trailing slash or a case change is a different issuer everywhere
+// else in the pipeline, so it must be a different issuer here too.
+func TestIssuerSessionTags_MatchIsExact(t *testing.T) {
+	cfg := gitlabLikeConfig()
+	for _, near := range []string{
+		"https://gitlab.com/",
+		"https://GitLab.com",
+		" https://gitlab.com",
+	} {
+		if got := cfg.IssuerSessionTags(near); got != nil {
+			t.Errorf("near-miss issuer %q returned a spec: %v", near, got)
+		}
+	}
+}
+
+// TestIssuerSessionTags_NoSpecDeclared covers an issuer that declares no
+// session_tags at all: the lookup returns an empty spec, which BuildSessionTags
+// treats as "attach nothing".
+func TestIssuerSessionTags_NoSpecDeclared(t *testing.T) {
+	cfg := &Config{
+		RoleSessionName: "aow-session",
+		Issuers: []IssuerConfig{{
+			Issuer:        "https://oidc.circleci.com/org/abc",
+			Provider:      "generic",
+			Audiences:     []string{"aow"},
+			ClaimMappings: map[string]string{"subject": "oidc.circleci.com/project-id"},
+		}},
+	}
+	if got := cfg.IssuerSessionTags("https://oidc.circleci.com/org/abc"); len(got) != 0 {
+		t.Fatalf("issuer with no session_tags returned %v, want empty", got)
+	}
+}
+
+// TestValidate_GenericIssuerMustDeclareSubjectMapping proves the provider-neutral
+// guardrail: a non-github issuer has no native struct to derive a canonical
+// subject from, so booting without claim_mappings.subject must be rejected
+// rather than silently authorizing on an empty subject.
+func TestValidate_GenericIssuerMustDeclareSubjectMapping(t *testing.T) {
+	cfg := &Config{
+		RoleSessionName: "aow-session",
+		Issuers: []IssuerConfig{{
+			Issuer:    "https://gitlab.com",
+			Provider:  "generic",
+			Audiences: []string{"aow"},
+		}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted a generic issuer with no claim_mappings.subject")
+	}
+	if !strings.Contains(err.Error(), "claim_mappings.subject") {
+		t.Fatalf("error does not name the missing key: %v", err)
+	}
+}
+
+// TestValidate_ProviderDefaultsToGeneric pins the default: omitting `provider`
+// selects the provider-neutral adapter, not GitHub. It also proves the default
+// is written back through the pointer, since the same loop then enforces the
+// generic-only claim_mappings.subject rule against it.
+func TestValidate_ProviderDefaultsToGeneric(t *testing.T) {
+	cfg := &Config{
+		RoleSessionName: "aow-session",
+		Issuers: []IssuerConfig{{
+			Issuer:        "https://gitlab.com",
+			Audiences:     []string{"aow"},
+			ClaimMappings: map[string]string{"subject": "project_path"},
+		}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := cfg.Issuers[0].Provider; got != "generic" {
+		t.Fatalf("provider defaulted to %q, want %q", got, "generic")
+	}
+}
+
+// TestValidate_RejectsUnknownProvider keeps the adapter registry closed: an
+// unregistered provider name must fail at boot, not at the first token, where
+// normalizeClaims would reject every request instead.
+func TestValidate_RejectsUnknownProvider(t *testing.T) {
+	for _, provider := range []string{"gitlab", "GitHub", "Generic", "GITHUB"} {
+		cfg := &Config{
+			RoleSessionName: "aow-session",
+			Issuers: []IssuerConfig{{
+				Issuer:        "https://gitlab.com",
+				Provider:      provider,
+				Audiences:     []string{"aow"},
+				ClaimMappings: map[string]string{"subject": "project_path"},
+			}},
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate accepted provider %q", provider)
+		}
+	}
 }

@@ -45,45 +45,18 @@ var (
 	// session name, which is the most likely thing an operator will try.
 	sessionNameCharset = regexp.MustCompile(`^[\w+=,.@-]+$`)
 
-	// reservedClaims are JWT-standard claim names that claim_mappings may never
-	// target, since doing so could shadow a verified claim used for security
-	// decisions (issuer, audience, timing, canonical sub).
-	reservedClaims = map[string]bool{
-		"iss": true, "aud": true, "exp": true, "nbf": true, "iat": true, "sub": true,
+	// nonIdentityClaims are raw claim names claim_mappings.subject may never
+	// point at. Each is either identical for every token the issuer mints (iss,
+	// aud) or carries no identity at all (exp, nbf, iat), so making one the
+	// canonical subject collapses every caller from that issuer into a single
+	// subject — any authenticated caller then satisfies any other's subject
+	// pattern. "sub" is deliberately absent: it is the natural, correct mapping
+	// for most non-GitHub IdPs and shadows nothing, since claim_mappings is a
+	// read-only projection over the already-verified claims.
+	nonIdentityClaims = map[string]bool{
+		"iss": true, "aud": true, "exp": true, "nbf": true, "iat": true,
 	}
 )
-
-// Condition defines claim predicates that must be met for a role to be
-// assumed. The named fields below are provider-neutral sugar over the same
-// generic mechanism: each compiles to an auto-anchored regex checked against
-// one raw verified claim (see compileCondition/satisfiesConditions). Extra
-// carries arbitrary claimName->regex entries not covered by a named field,
-// so `conditions: {my_claim: "regex"}` works without a nested key.
-type Condition struct {
-	Branch       string   `mapstructure:"branch"        json:"branch,omitempty"`        // Regex against the 'ref' claim (e.g., "main", "dev")
-	Ref          string   `mapstructure:"ref"           json:"ref,omitempty"`           // Regex against the 'ref' claim (e.g., "refs/heads/main", "refs/tags/v.*")
-	RefType      string   `mapstructure:"ref_type"      json:"ref_type,omitempty"`      // Regex against 'ref_type' (e.g., "branch", "tag")
-	EventName    string   `mapstructure:"event_name"    json:"event_name,omitempty"`    // Regex against 'event_name' (e.g., "push", "pull_request")
-	WorkflowRef  string   `mapstructure:"workflow_ref"  json:"workflow_ref,omitempty"`  // Regex against 'workflow_ref' (e.g., "owner/repo/.github/workflows/workflow.yml")
-	Environment  string   `mapstructure:"environment"   json:"environment,omitempty"`   // Regex against 'runner_environment' (e.g., "production")
-	ActorMatches []string `mapstructure:"actor_matches" json:"actor_matches,omitempty"` // Regexes against 'actor'; OR within the list
-
-	// Extra holds generic claimName->regex entries (raw verified claim names)
-	// not covered by a named field above. Populated via mapstructure's
-	// remain-fields so no nested key is required in config.
-	Extra map[string]string `mapstructure:",remain" json:"extra,omitempty"`
-
-	// Cached compiled patterns (not serialized)
-	compiled      []compiledCondition `mapstructure:"-" json:"-"` // AND'd claimName/pattern pairs (named single-value fields + Extra)
-	actorPatterns []*regexp.Regexp    `mapstructure:"-" json:"-"` // OR'd within this one dimension
-}
-
-// compiledCondition is one AND'd (claim name, anchored pattern) pair compiled
-// from either a named Condition field or an Extra entry.
-type compiledCondition struct {
-	claim   string
-	pattern *regexp.Regexp
-}
 
 // RoleMapping binds a subject (pattern) to a set of assumable roles, scoped
 // to a single issuer, optionally gated by conditions on the raw claims.
@@ -144,6 +117,12 @@ type IssuerConfig struct {
 
 	// SessionTags maps an STS session tag key to the raw verified claim name
 	// whose value populates it.
+	// Keys must be written lower-case. A key here is a CONFIG key, and the
+	// loader case-folds every key it reads, so `CostCenter: cost_center`
+	// reaches STS as `costcenter`. The case is gone before this struct is
+	// populated, so it cannot be recovered or rejected later — the
+	// constraint is the loader's, and lower-case in, lower-case out is the
+	// only form that round-trips.
 	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
 }
 
@@ -284,7 +263,15 @@ type Config struct {
 	// doesn't match exactly is rejected (S9); entries with no pinned value
 	// are unauthenticated beyond transport — their etag is then used only
 	// for reload change-detection (provider.go).
-	ConfigFragmentChecksums map[string]string `mapstructure:"config_fragment_checksums" json:"config_fragment_checksums,omitempty"`
+	//
+	// This is a LIST of {uri, checksum} pairs, not a map keyed by URI,
+	// because the URI cannot survive being a config key: viper lower-cases
+	// every key it reads and splits it on ".", so the map form turned
+	// "/etc/fragments/team.yaml" into a nested map under a truncated,
+	// lower-cased path and failed to decode at all — i.e. it could not pin
+	// any fragment whose path contains a dot, which is every *.yaml file.
+	// A URI written as a VALUE is passed through untouched.
+	ConfigFragmentChecksums []FragmentChecksum `mapstructure:"config_fragment_checksums" json:"config_fragment_checksums,omitempty"`
 
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
 	LogToS3   bool   `mapstructure:"log_to_s3"  json:"log_to_s3,omitempty"`  // LogToS3 is a flag to enable logging to S3
@@ -349,9 +336,10 @@ type Config struct {
 	// Rebuilt fresh by Validate() every time (from RoleMappings/RoleGroups/
 	// RoleSets), so Validate() stays idempotent and safe to call repeatedly
 	// (e.g. after a hot-reload clone).
-	estimatedRolesPerMapping int            `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
-	effective                []*RoleMapping `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
-	index                    authzIndex     `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
+	estimatedRolesPerMapping int                        `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
+	effective                []*RoleMapping             `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
+	index                    authzIndex                 `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
+	auditable                map[string]map[string]bool `mapstructure:"-" json:"-"` // per-issuer claim names the config references (see auditable.go)
 }
 
 // envKeyReplacer mirrors the SetEnvKeyReplacer configured on viper in
@@ -634,7 +622,7 @@ func (c *Config) LoadConfig() error {
 		}
 	}
 
-	if err := viper.Unmarshal(c); err != nil {
+	if err := viper.Unmarshal(c, decoderOptions()...); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
@@ -690,7 +678,7 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 		c.Issuers = nil
 	}
 
-	if err := v.Unmarshal(c); err != nil {
+	if err := v.Unmarshal(c, decoderOptions()...); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}
 
@@ -810,12 +798,21 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("issuers[%d] (%s): non-github issuers must define claim_mappings.subject", i, iss.Issuer)
 		}
 
-		// Reject claim_mappings that target a JWT-reserved claim name; doing
-		// so could shadow a verified claim used for security decisions.
-		for target := range iss.ClaimMappings {
-			if reservedClaims[target] {
-				return fmt.Errorf("issuers[%d] (%s): claim_mappings cannot target reserved claim %q", i, iss.Issuer, target)
-			}
+		// claim_mappings maps a canonical field name (the key) to a raw claim
+		// name (the value). Only the VALUE side is constrained, and only for
+		// `subject`. The key side deliberately is not: `subject` is the one
+		// field the validator reads (providerAdapter.subject), but every
+		// entry's value also joins this issuer's auditable-claim set
+		// (auditableClaimsFor), so a non-subject key is a supported way to say
+		// "also record this claim" rather than a no-op to reject.
+		// The comparison is against the value as literally written, and map
+		// values are not viper-folded, so `subject: ISS` is not caught by name.
+		// That is sufficient: reaching the identity collapse this guard prevents
+		// would need the IdP to mint a claim named `ISS` *as well as* the real
+		// `iss`, and absent that the mapping resolves no claim at all and
+		// stringClaim fails the token outright rather than yielding a subject.
+		if claimName := iss.ClaimMappings["subject"]; nonIdentityClaims[claimName] {
+			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}
 
 		for tagKey := range iss.SessionTags {
@@ -931,6 +928,15 @@ func (c *Config) Validate() error {
 	// re-expand from their source, never from a previously-expanded state.
 	c.effective = make([]*RoleMapping, 0, len(c.RoleMappings))
 
+	// Claim vocabulary per issuer, for the unknown-claim warning below. Built
+	// once here rather than per mapping.
+	knownClaims := make(map[string]map[string]bool, len(c.Issuers))
+	for i := range c.Issuers {
+		if known := knownClaimsFor(&c.Issuers[i]); known != nil {
+			knownClaims[c.Issuers[i].Issuer] = known
+		}
+	}
+
 	appendEffective := func(m RoleMapping, source string, i int) error {
 		if m.Subject == "" || len(m.Roles) == 0 {
 			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
@@ -975,6 +981,11 @@ func (c *Config) Validate() error {
 		if err := compileCondition(m.Conditions); err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
 		}
+
+		// Advisory only, and deliberately after compilation: a claim name the
+		// issuer never mints is a config smell, never an authorization failure.
+		// See condition_warnings.go.
+		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, m.Subject), knownClaims[m.Issuer])
 
 		m.order = len(c.effective)
 		c.effective = append(c.effective, &m)
@@ -1023,7 +1034,19 @@ func (c *Config) Validate() error {
 			slog.Int("issuerCount", len(c.Issuers)))
 	}
 
+	if err := c.validateFragmentChecksums(); err != nil {
+		return err
+	}
+
 	c.index = buildAuthzIndex(c.effective)
+
+	// Per-issuer set of claim names the config explicitly references, for the
+	// audit record's inclusion test on non-github providers (see auditable.go).
+	c.auditable = make(map[string]map[string]bool, len(c.Issuers))
+	for i := range c.Issuers {
+		iss := c.Issuers[i].Issuer
+		c.auditable[iss] = auditableClaimsFor(iss, &c.Issuers[i], c.effective)
+	}
 	warnUnscopedRoleGrants(c.effective)
 	warnTagAuthBypassesMappingScoping(c.TagAuth, c.effective)
 
@@ -1091,6 +1114,48 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// FragmentChecksum pins the expected integrity value of one config_fragments
+// entry. URI must match the config_fragments entry it pins, byte for byte.
+type FragmentChecksum struct {
+	URI      string `mapstructure:"uri"      json:"uri"`
+	Checksum string `mapstructure:"checksum" json:"checksum"`
+}
+
+// fragmentChecksum returns the pinned integrity value for uri, if one is
+// configured. The list is at most a handful of entries — one per fragment —
+// so a scan costs less than the map it replaced.
+func (c *Config) fragmentChecksum(uri string) (string, bool) {
+	for _, p := range c.ConfigFragmentChecksums {
+		if p.URI == uri {
+			return p.Checksum, true
+		}
+	}
+	return "", false
+}
+
+// validateFragmentChecksums rejects malformed or inert pins. A pin naming a
+// URI that no config_fragments entry lists is not a harmless typo: it looks
+// like the fragment is integrity-pinned while nothing is ever checked against
+// it, which is precisely the state the pin exists to prevent. Fail at boot
+// rather than serve traffic with an imaginary guarantee.
+func (c *Config) validateFragmentChecksums() error {
+	seen := make(map[string]bool, len(c.ConfigFragmentChecksums))
+	for i, p := range c.ConfigFragmentChecksums {
+		switch {
+		case p.URI == "":
+			return fmt.Errorf("config_fragment_checksums[%d]: uri is required", i)
+		case p.Checksum == "":
+			return fmt.Errorf("config_fragment_checksums[%d] (%s): checksum is required", i, p.URI)
+		case seen[p.URI]:
+			return fmt.Errorf("config_fragment_checksums[%d]: duplicate pin for %q", i, p.URI)
+		case !slices.Contains(c.ConfigFragments, p.URI):
+			return fmt.Errorf("config_fragment_checksums[%d]: %q is not listed in config_fragments, so nothing would ever be checked against it", i, p.URI)
+		}
+		seen[p.URI] = true
+	}
+	return nil
+}
+
 // resolveRoleSet expands any "@name" alias in roles to c.RoleSets[name],
 // leaving literal role ARNs untouched. Resolution happens once, at Validate()
 // time, before AuthorizeRoles' role∈roles security gate ever runs, so an
@@ -1104,7 +1169,17 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 			continue
 		}
 		name := strings.TrimPrefix(r, "@")
+		// Exact first, then case-folded. viper lower-cases every map KEY it
+		// reads, so a role_set declared as `ProdDeployers:` is stored as
+		// `proddeployers`, while this reference — a map VALUE — keeps the
+		// case the operator wrote. Without the folded retry the two halves of
+		// the operator's own config cannot see each other and every
+		// mixed-case role_set name is "not defined". Same resolution order as
+		// condition keys and AuditableClaims, for the same reason.
 		set, ok := c.RoleSets[name]
+		if !ok {
+			set, ok = c.RoleSets[strings.ToLower(name)]
+		}
 		if !ok {
 			return nil, fmt.Errorf("role_sets: %q is not defined", name)
 		}
@@ -1114,122 +1189,6 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 		out = append(out, set...)
 	}
 	return out, nil
-}
-
-// compileCondition compiles every pattern on a Condition (nil is valid: no
-// conditions means unconditional match) into the AND'd (claim, pattern) list
-// checked by satisfiesConditions. Every named field compiles through the same
-// anchored-regex mechanism as Extra, so "same mechanism" (D4) holds even for
-// fields that used to be plain string equality (ref_type/event_name/
-// environment) — an anchored regex over a literal string matches identically
-// to `==`, so this is a pure widening, not a behavior change for existing
-// literal configs.
-func compileCondition(cond *Condition) error {
-	if cond == nil {
-		return nil
-	}
-
-	cond.compiled = cond.compiled[:0]
-	add := func(claim, pattern string) error {
-		if pattern == "" {
-			return nil
-		}
-		re, err := compileAnchoredCondition(pattern)
-		if err != nil {
-			return fmt.Errorf("invalid pattern for %q: %w", claim, err)
-		}
-		cond.compiled = append(cond.compiled, compiledCondition{claim: claim, pattern: re})
-		return nil
-	}
-
-	// NOTE: Branch and Ref intentionally both check the raw "ref" claim; this
-	// mirrors pre-existing behavior.
-	if err := add("ref", cond.Branch); err != nil {
-		return err
-	}
-	if err := add("ref", cond.Ref); err != nil {
-		return err
-	}
-	if err := add("ref_type", cond.RefType); err != nil {
-		return err
-	}
-	if err := add("event_name", cond.EventName); err != nil {
-		return err
-	}
-	if err := add("workflow_ref", cond.WorkflowRef); err != nil {
-		return err
-	}
-	if err := add("runner_environment", cond.Environment); err != nil {
-		return err
-	}
-
-	for claim, pattern := range cond.Extra {
-		if err := add(claim, pattern); err != nil {
-			return err
-		}
-	}
-
-	if len(cond.ActorMatches) > 0 {
-		cond.actorPatterns = make([]*regexp.Regexp, len(cond.ActorMatches))
-		for i, pattern := range cond.ActorMatches {
-			re, err := compileAnchoredCondition(pattern)
-			if err != nil {
-				return fmt.Errorf("invalid actor_matches pattern %q: %w", pattern, err)
-			}
-			cond.actorPatterns[i] = re
-		}
-	}
-
-	return nil
-}
-
-// cloneCondition returns a deep copy of c with fresh, unshared compiled state.
-// The input slices/maps (ActorMatches, Extra) are copied so the clone shares no
-// backing storage with c, and the derived compiled/actorPatterns fields are
-// reset to nil so compileCondition rebuilds them into freshly allocated memory
-// rather than reslicing a backing array another snapshot may be reading.
-// Returns nil for a nil input (a mapping with no conditions).
-func cloneCondition(c *Condition) *Condition {
-	if c == nil {
-		return nil
-	}
-	nc := *c
-	nc.compiled = nil
-	nc.actorPatterns = nil
-	if c.ActorMatches != nil {
-		nc.ActorMatches = append([]string(nil), c.ActorMatches...)
-	}
-	if c.Extra != nil {
-		nc.Extra = make(map[string]string, len(c.Extra))
-		for k, v := range c.Extra {
-			nc.Extra[k] = v
-		}
-	}
-	return &nc
-}
-
-// bareWildcards are patterns that match every possible value. They must never
-// gate an authorization decision — as a condition OR as a subject — because
-// they reduce that gate to "always true".
-//
-// This is a literal check on the two shapes operators actually reach for, not
-// a general "does this regex match everything" analysis: that is not something
-// we can decide cheaply, and a determined operator can still write an
-// equivalent pattern (`(.*)`, `.*.*`, `[\s\S]*`). It closes the documented
-// footgun and makes the accident loud; it is not a proof of specificity.
-var bareWildcards = map[string]bool{".*": true, ".+": true}
-
-// compileAnchoredCondition compiles pattern as an auto-anchored regex,
-// rejecting empty patterns and bare wildcards that would match anything
-// (security conditions must be specific, never `.*`).
-func compileAnchoredCondition(pattern string) (*regexp.Regexp, error) {
-	if pattern == "" {
-		return nil, errors.New("pattern must not be empty")
-	}
-	if bareWildcards[pattern] {
-		return nil, fmt.Errorf("pattern %q is too permissive; use a specific pattern", pattern)
-	}
-	return regexp.Compile("^(?:" + pattern + ")$")
 }
 
 // compileAnchoredSubject compiles a role_mapping/role_group subject pattern as
@@ -1370,41 +1329,6 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 				slog.String("subject", m.Subject))
 		}
 	}
-}
-
-// satisfiesConditions reports whether claims satisfy every AND'd condition
-// (both the named-field conditions and any generic Extra entries), plus the
-// OR'd actor_matches dimension. A nil Condition always satisfies (no gate).
-func satisfiesConditions(cond *Condition, claims map[string]any) bool {
-	if cond == nil {
-		return true
-	}
-
-	for _, cc := range cond.compiled {
-		val, ok := claims[cc.claim].(string)
-		if !ok || !cc.pattern.MatchString(val) {
-			return false
-		}
-	}
-
-	if len(cond.actorPatterns) > 0 {
-		actor, ok := claims["actor"].(string)
-		if !ok {
-			return false
-		}
-		matched := false
-		for _, pattern := range cond.actorPatterns {
-			if pattern.MatchString(actor) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-
-	return true
 }
 
 // IssuerSessionTags returns the session_tags spec (STS tag key -> raw claim

@@ -12,7 +12,7 @@ AWS OIDC Warden can be configured using:
 
 See [example-config.yaml](../example-config.yaml) for a complete, annotated reference configuration.
 
-## The v2 issuer model
+## The issuer model
 
 > **Breaking change from v1**: the single top-level `issuer` / `audience` / `audiences` scalars are gone. Every trusted OIDC issuer — GitHub Actions, GitLab CI/CD, a custom IdP, or several of each — is declared as an entry in `issuers`. See [MIGRATION_V2.md](MIGRATION_V2.md) for the exact rename table and upgrade steps, and [MULTI_ISSUER.md](MULTI_ISSUER.md) for a walkthrough of onboarding a new provider.
 
@@ -48,13 +48,18 @@ issuers:
 | `provider`        | `"github"` (native `types.Claims` struct unmarshal) or `"generic"` (mapped-only via `claim_mappings`).                            | `"generic"`  |
 | `audiences`       | Accepted `aud` values for this issuer; ANY-match. At least one required.                                                          | (required)   |
 | `jwks_uri`        | Explicit JWKS URI; when set, skips OIDC discovery (`<issuer>/.well-known/openid-configuration`).                                  | (discovered) |
-| `claim_mappings`  | Canonical field name → raw verified claim name (e.g. `subject: project_path`). May never target a JWT-reserved claim (see below). | (empty)      |
+| `claim_mappings`  | Canonical field name → raw verified claim name (e.g. `subject: project_path`). `subject` is the only field read; see below.           | (empty)      |
 | `required_claims` | Raw verified claim names that must be present and non-empty for a token from this issuer.                                         | (empty)      |
 | `session_tags`    | STS session tag key → raw verified claim name, applied at `AssumeRole` time.                                                      | (empty)      |
 
-Reserved claim names that `claim_mappings` may **never** target (shadowing them could let a claim override a security-relevant field): `iss`, `aud`, `exp`, `nbf`, `iat`, `sub`.
+An entry's **key** is a canonical field name and its **value** is a raw claim name. `subject` is the only field the validator reads, and it is the only one `Validate()` constrains:
 
-`session_tags` keys must match the STS tag-key charset `^[A-Za-z0-9 _.:/=+@-]{1,128}$`; a key that doesn't is a config validation error.
+- `claim_mappings.subject` may **never** target `iss`, `aud`, `exp`, `nbf`, or `iat`. Each is identical across every token the issuer mints, or carries no identity at all, so making one the canonical subject collapses every caller from that issuer into a single subject — any authenticated caller would then satisfy any other caller's subject pattern.
+- `sub` **is** allowed and is the normal mapping for most non-GitHub IdPs. `claim_mappings` is a read-only projection over claims the validator has already verified; naming a claim there cannot shadow or override it.
+
+Keys other than `subject` are accepted rather than rejected: the validator ignores them, but every entry's **value** joins this issuer's auditable-claim set, so `pipeline: pipeline_id` is a supported way to say "also record this claim". The trade-off is that a misspelled `subject` key is not caught — on a `generic` issuer the missing `claim_mappings.subject` is still a load error, but a `github` issuer silently keeps its `repository` default.
+
+`session_tags` keys must match the STS tag-key charset `^[A-Za-z0-9 _.:/=+@-]{1,128}$`; a key that doesn't is a config validation error. **Write them lower-case.** The config loader lower-cases every key before the spec is unmarshalled, so `CostCenter: cost_center` reaches STS as `costcenter` — the case is gone before validation could object, and no error is raised. If an ABAC policy needs a mixed-case tag key, the warden cannot produce one.
 
 **Provider-specific behavior**: `provider: "github"` unmarshals the token into the native `types.Claims` struct (all of GitHub's OIDC claims — `repository`, `ref`, `actor`, `workflow_ref`, etc. — are available for `conditions` without any `claim_mappings`), and its canonical `subject` defaults to the `repository` claim (`owner/repo`) unless overridden. Every other `provider` value is `"generic"`: only the claims listed in `claim_mappings` are given canonical names, and `claim_mappings.subject` **must** be set — `Validate()` rejects a non-`github` issuer that omits it.
 
@@ -102,7 +107,7 @@ role_mappings:
     issuer: "https://token.actions.githubusercontent.com" # explicit; overrides default_issuer
     roles: ["@deployers"]
     conditions:
-      branch: "main"
+      ref: "refs/heads/main"
       event_name: "push"
 
   - subject: "group/project" # GitLab project_path
@@ -121,16 +126,124 @@ role_groups:
         event_name: "push"
 ```
 
-| Concept         | Replaces (v1)        | Notes                                                                                                                                                             |
-| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `role_mappings` | `repo_role_mappings` | `subject` replaces `repo`; each entry binds to one `issuer` (explicit, `default_issuer`, or the sole configured issuer).                                          |
-| `conditions`    | `constraints`        | Same fields (`branch`, `ref`, `ref_type`, `event_name`, `workflow_ref`, `environment`, `actor_matches`), plus an open-ended map of `claim_name: pattern` entries. |
-| `role_sets`     | (new)                | Named `[]string` ARN lists; reference as `"@name"` inside any `roles` list. Resolved once at `Validate()`, before the requested-role gate.                        |
-| `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.  |
+| Concept         | Replaces (v1)        | Notes                                                                                                                                                                                                 |
+| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role_mappings` | `repo_role_mappings` | `subject` replaces `repo`; each entry binds to one `issuer` (explicit, `default_issuer`, or the sole configured issuer).                                                                              |
+| `conditions`    | `constraints`        | Any raw claim name as the key (`ref`, `event_name`, `repository`, `project_path`, …), with one pattern or a list of patterns as the value, plus the `all_of`/`any_of`/`none_of` boolean groups below. |
+| `role_sets`     | (new)                | Named `[]string` ARN lists; reference as `"@name"` inside any `roles` list. Resolved once at `Validate()`, before the requested-role gate.                                                            |
+| `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.                                      |
 
 `subject` is matched with the same auto-anchored-regex semantics `repo` used (`^(?:pattern)$`) — keep patterns specific. A bare `.*`/`.+` is rejected by `Validate()` wherever it gates an authorization decision: both in `conditions` fields and as a `subject` (including `role_groups.subjects`), since a wildcard subject would grant its roles to every subject of the bound issuer. The check is literal, so an equivalent pattern written another way (`(.*)`, `[\s\S]*`) still compiles — it stops the accident, not a determined operator.
 
-`conditions.branch` and `conditions.ref` both check the raw `ref` claim (`refs/heads/main`, `refs/tags/v1.2.3`, ...) — this is intentional, not a bug; use whichever name reads better for your pattern.
+### Condition keys are claim names
+
+There is one condition mechanism, and it works the same for every issuer: **the key is the raw verified claim to check, and the value is one anchored regex or a list of them.**
+
+```yaml
+conditions:
+  repository: "octo-org/api" # a single pattern
+  actor: ["release-bot", "release-manager"] # a list: ANY may match
+  ref: 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+'
+  project_path: "mygroup/myproject" # non-GitHub claims need no special field
+  groups: ["platform-team", "sre"]
+```
+
+- **Patterns within one claim are OR-ed; separate claims are AND-ed.** So the block above reads: this repository, AND one of those two actors, AND a release tag, AND …
+- **Any claim the token carries can be used**, whether or not this project models it — nothing about the key list is GitHub-specific. Use the claim name your provider mints (`project_path`, `groups`, `sub`, `oid`, …).
+- Values are auto-anchored (`^(?:pattern)$`), so a literal string behaves like `==`.
+- A claim whose value is itself a list matches when any element matches (see "List-valued claims" below).
+
+Three keys that predated this were spelled differently from the claim they checked. **v3 removes them** — write the claim name instead:
+
+| Removed key (≤ v2) | Write instead        | Claim checked        |
+| ------------------ | -------------------- | -------------------- |
+| `branch`           | `ref`                | `ref`                |
+| `environment`      | `runner_environment` | `runner_environment` |
+| `actor_matches`    | `actor`              | `actor`              |
+
+`environment` is the one to look at twice: it is now a claim key like any other, and it checks GitHub's **deployment-environment** claim — the `environment:` a job declares — not the runner type. A v2 config carrying `environment: "github-hosted"` will not error; it will gate on a deployment environment named `github-hosted`, which no job declares, and deny. Rename it to `runner_environment` when upgrading. See [MIGRATION_V3.md](MIGRATION_V3.md).
+
+Four keys are **reserved** and are not read as claim names: `all_of`, `any_of`, `none_of`, and `claims`. A claim that happens to be named like one of them is still gateable — nest it under `claims:`, whose keys are always raw claim names:
+
+```yaml
+conditions:
+  ref: "refs/heads/main" # ordinary key
+  claims:
+    all_of: "a-claim-really-named-all_of"
+    environment: "production" # identical to writing it at the top level
+```
+
+Entries under `claims:` are AND-ed with everything else on the node — it is a spelling, not a separate evaluation mode.
+
+For an issuer configured with `provider: github`, `Validate()` warns when a condition names a claim GitHub does not issue (`reposiory`, `event-name`) — a misspelled claim can never match, so the mapping would silently stop authorizing. It is a warning, not an error: the issuer's own `claim_mappings` / `required_claims` / `session_tags` claims count as known, and generic issuers are never warned about, since their claim vocabulary is whatever their provider mints. The same typo inside a `none_of` is warned about in stronger terms — there it removes a veto rather than adding one; see [Semantics to know](#boolean-logic-in-conditions) below.
+
+### Boolean logic in conditions
+
+Entries at the same level are AND-ed — that has always been true and still is. Three group keys add the rest of boolean logic:
+
+| Key       | Holds when                                            |
+| --------- | ----------------------------------------------------- |
+| `all_of`  | every listed condition holds                          |
+| `any_of`  | at least one listed condition holds                   |
+| `none_of` | no listed condition holds (one entry = a plain "not") |
+
+Each group takes a **list of conditions**, and each entry is a full condition block — claim predicates and further groups. On one node, the claim predicates and all three groups are AND-ed together.
+
+```yaml
+role_mappings:
+  - subject: "octo-org/api"
+    roles: ["@deployers"]
+    conditions:
+      ref_type: "tag" # AND'd with both groups below
+      any_of:
+        - ref: 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+'
+        - all_of:
+            - ref: "refs/tags/hotfix-.+"
+            - actor: ["release-bot"]
+      none_of:
+        - runner_environment: "sandbox"
+```
+
+Reads as: a tag build, from either a release tag or a bot-driven hotfix tag, never on the sandbox runner.
+
+There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` / `none_of` with nesting is functionally complete — every boolean expression can be written as nested `any_of`-of-`all_of` — and a one-entry `none_of` already is `not`.
+
+**Rules `Validate()` enforces at load time** (never at request time — nothing here costs a request anything):
+
+- Nesting is capped at **5 levels** (the top-level `conditions:` block is level 1).
+- One mapping's condition tree is capped at **64 nodes** total.
+- An empty group (`any_of: []`) is rejected — it reduces the gate to a constant.
+- A group member that gates nothing (`- {}`) is rejected — an always-true member makes an `any_of` always pass and a `none_of` always fail. The whole block is checked the same way: `conditions: {}`, `conditions:` with nothing under it (an explicit `conditions: null` included — YAML cannot tell the two apart), or a block whose every key was written with no value, is rejected — each would authorize every request that reaches the mapping. Omit `conditions` entirely for an unconditional mapping.
+- The bare-wildcard rejection (`.*`, `.+`) applies at every nesting level, exactly as it does at the top.
+- A key that names no claim (`"": "pattern"`) is rejected — it reads as a gate but can never match any claim.
+- Errors name the offending node by path, e.g. `conditions.any_of[1].all_of[0]: invalid pattern for "ref"`. When a block has more than one bad entry, the reported one is stable across restarts (claim keys are compiled in sorted order).
+
+**Semantics to know:**
+
+- **`none_of` is exact negation.** A member naming a claim the token does not carry cannot match, so its negation holds and the `none_of` **passes**. If you need the claim to be present, add it as a flat predicate alongside the group, or list it in that issuer's `required_claims`.
+- **`none_of` is the one place a typo fails open.** Everywhere else a key that can never match makes the mapping stop authorizing; inside a `none_of` it makes a veto that can never fire, so the mapping authorizes what you wrote it to refuse. `Validate()` warns about this specifically for `provider: github` (with different wording from the ordinary typo warning), but a generic issuer has no vocabulary to check against — spell claim names in a `none_of` against the token you actually receive.
+- **A `none_of` member with two keys is a negated AND, not two vetoes.** `none_of: [{actor: mallory, event_name: pull_request}]` denies only a run that is both, so `mallory` on a `push` is still authorized. Write one member per thing you want to refuse:
+
+  ```yaml
+  none_of:
+    - actor: "mallory"
+    - event_name: "pull_request"
+  ```
+
+- **A claim is matched on its VALUE, not its JSON type.** Patterns are regexes and a regex needs text, so every scalar claim is rendered to its canonical text before matching — the same rendering the audit record and the session tag use. Strings pass through unchanged; a JSON bool reads as `true`/`false`; a JSON number reads as its integer form (`42`, not `4.2e+01`). So `email_verified: "true"` matches whether the issuer mints the string `"true"` or the bool `true`, and `run_id: "42"` matches the number `42`. This matters only for issuers that mint non-string claims — every GitHub Actions claim is a string. Before v3.0.0 a positive predicate on a bool or number could never match, so a mapping gated on one silently authorized nobody.
+- **A missing or unreadable claim never satisfies a positive predicate.** Absent, `null`, and object-valued claims have no text to compare, so a positive condition on one denies.
+- **Under `none_of`, an unreadable claim fires the veto.** Inside a `none_of`, "cannot be compared" must not become "the veto does not fire", or `none_of: [{profile: "gold"}]` on an object-valued `profile` would authorize the very caller it names. So under an odd number of `none_of` groups a member whose claim has no readable text counts as **satisfied**, firing the veto and denying. Readable values are judged on their merits in both directions: `none_of: [{email_verified: "false"}]` vetoes the JSON bool `false` and does **not** veto `true`. Absence is *not* this case and keeps its exact-negation meaning (bullet above).
+- **The two polarities are exact complements.** Both read the claim the same way, so for any readable claim a bare predicate authorizes exactly when the matching `none_of` denies. Polarity toggles per `none_of` rather than latching: a `none_of` nested inside a `none_of` is positive again and means what the bare predicate means. (Before v3.0.0 this identity did not hold for non-string claims — the negated path read values while the positive path read types.)
+- **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Each element is read through its canonical text just like a scalar, so a numeric element matches on its own value in both polarities. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra. Under `none_of`, a list carrying an unreadable element is undecidable and fires the veto. Note the two lists are independent: a list of _patterns_ is satisfied when any pattern matches, and a list-valued _claim_ is matched when any element matches.
+- **An empty pattern (`ref: ""`), an empty list (`ref: []`), or a key written with no value at all (`ref:`) is rejected at load time.** All three read as a predicate but gate nothing; before v3.0.0 an empty string was silently ignored and a valueless key was indistinguishable from an omitted one, which quietly widened the gate.
+- **A mixed-case claim name is gateable, and matching is collision-first.** The config loader folds every key to lower case before it is read, so `emailVerified:` reaches the matcher as `emailverified`. Claim lookup compensates, in this order: **collision, then exact, then case-folded**. Write the claim name in whatever case the issuer mints — `isContractor`, `emailVerified`, `groupIds` all work. The one case that denies is genuine ambiguity: if a token carries two claims that differ only in case (`Role` and `role`), the lookup refuses to guess. Two details of that deny are deliberate and worth knowing before you reason about a `none_of` veto:
+
+  - **An exact match does not settle a collision.** The key reaching the matcher has already been lower-cased, so `role` is equally consistent with an operator who wrote `Role`; an exact hit sitting beside a differently-cased twin is still two candidate claims for one key, with nothing to say which was meant. The collision check therefore runs first and is *not* skipped when the exact lookup would succeed.
+  - **Ambiguity denies the whole mapping, not just the predicate.** A leaf that merely fails to match is polarity-dependent: under `none_of`, a veto that cannot resolve its claim cannot fire, so the group passes and the mapping authorizes exactly the caller the veto was written to exclude. Evaluation therefore denies the entire mapping once the walk finishes, independently of where the collision sat in the tree or how many negations enclose it.
+
+  Absence and ambiguity are deliberately different: an absent claim genuinely gives a veto nothing to fire on, while an ambiguous one means the gate cannot determine the value it was told to gate on — and a gate that cannot know must deny. Before v3.0.0 a mixed-case key could never match at all, which was safe under a plain AND but not under `none_of`, for the same reason.
+- **Pattern values are coerced to strings.** A YAML scalar written unquoted (`ref: 123`, `ref: true`) is decoded as the pattern `123` / `1`, not rejected. Always quote patterns.
+- **`all_of`, `any_of`, `none_of`, and `claims` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it at the top level — it parses as a boolean group (or as the `claims:` block), and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nest it under `claims:` instead, whose keys are always claim names. Nothing else changes about generic claim predicates.
 
 Authorization is evaluated by `Config.AuthorizeRoles(issuer, subject, claims)`, which unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping. `Config.FindSessionPolicy(issuer, subject, role, claims)` then picks the session policy using the **same** match semantics, so a role's scoping policy always travels with the grant: the policy comes from a mapping that matches the subject, satisfies its conditions, **and** lists the role being assumed. Where several mappings qualify, the first-declared (config order) wins.
 
@@ -264,9 +377,12 @@ config_fragments:
   - "/etc/aws-oidc-warden/fragments/team-data.yaml"
 
 # Optional: pin an expected content hash per fragment. A fetched value that
-# doesn't match exactly is rejected.
+# doesn't match exactly is rejected. `uri` must match its config_fragments
+# entry exactly; a pin naming a URI that is not listed above is a boot error,
+# because it would look like a pinned fragment while checking nothing.
 config_fragment_checksums:
-  "/etc/aws-oidc-warden/fragments/team-platform.yaml": "sha256:a1b2c3d4e5f6..."
+  - uri: "/etc/aws-oidc-warden/fragments/team-platform.yaml"
+    checksum: "sha256:a1b2c3d4e5f6..."
 ```
 
 Rules enforced on every merge:

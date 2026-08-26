@@ -16,7 +16,7 @@ Deliberately scoped to `Validate` only. `FetchJWKS`/`GenKeyFunc` remain exported
 
 ## Multi-issuer registry
 
-Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec` (issuer, provider, JWKS URI override, audiences, claim mappings, required claims); the full set is keyed by exact issuer string into a `snapshot`. `TokenValidator` holds the current snapshot behind `atomic.Pointer[snapshot]`, plus a `builtFrom atomic.Pointer[config.Config]` cheap-identity check — a hot config reload (new/removed issuer, audience, mapping) is picked up on the next `Validate()` call via a lock-free rebuild-on-pointer-change, no restart required. `leeway`/`maxLifetime`/`maxAge`/`maxTokenBytes` are read live from the provider on every `Validate()` call, so a hot-reloaded change to `jwt_leeway`/`max_token_lifetime`/`max_token_age`/`max_token_bytes` takes effect without a restart. (`allowInsecureIssuers` is the exception — it configures the shared HTTP client built once at construction, so changing it still requires a restart.)
+Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec` (issuer, provider, JWKS URI override, audiences, claim mappings, required claims); the full set is keyed by exact issuer string into a `snapshot`. `TokenValidator` holds the current snapshot behind a single `atomic.Pointer[snapshot]`, and the snapshot carries the `builtFrom *config.Config` it was projected from — a hot config reload (new/removed issuer, audience, mapping) is picked up on the next `Validate()` call via a lock-free rebuild-on-pointer-change, no restart required. The identity check lives INSIDE the snapshot deliberately: registry and provenance are published by one atomic store, so a reader can never see one without the other. As two separate atomic pointers they could disagree — a goroutine preempted between `snap.Store` and `builtFrom.Store` lets another publish its pair in between, labelling config B's registry as built from config A, after which the fast path serves B's audiences and claim mappings to a caller holding A (in-flight requests do hold the old pointer across a reload). `rebuildSnapshot` also RETURNS the snapshot it built rather than re-loading the field, so a caller is served its own config's registry even when a concurrent rebuild wins the store. Guarded by `TestSnapshotForNeverServesAnotherConfigsRegistry`. `leeway`/`maxLifetime`/`maxAge`/`maxTokenBytes` are read live from the provider on every `Validate()` call, so a hot-reloaded change to `jwt_leeway`/`max_token_lifetime`/`max_token_age`/`max_token_bytes` takes effect without a restart. (`allowInsecureIssuers` is the exception — it configures the shared HTTP client built once at construction, so changing it still requires a restart.)
 
 ## Flow (`Validate()`)
 
@@ -29,11 +29,11 @@ Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec
 6. `required_claims` present and non-empty on the verified raw claims.
 7. `normalizeClaims` — see below.
 
-Steps 5-7 (key-pinning refinement, `sub`/`nbf` enforcement, lifetime/age caps, per-`(issuer,kid)` refetch rate limiting) are Group C's hardening layer, added in place around this flow.
+The hardening steps — key-pinning refinement (`kid` + `alg` + `use=sig` + key-type↔alg-family), `sub`/`nbf` enforcement, the optional lifetime/age caps, and per-`(issuer, kid)` refetch rate limiting — are not entries of their own in the list above. They layer onto the baseline the per-call parser and `GenKeyFunc` already provide, inside steps 3-7.
 
-## `normalizeClaims` and the `ProviderAdapter` seam
+## `normalizeClaims` and the `providerAdapter` seam
 
-`normalizeClaims(raw, provider, mappings)` converts verified raw claims into canonical `types.Claims`: populates the standard registered claims for every provider (`populateRegisteredClaims`), then dispatches to a `providerAdapter` (`providerAdapters["github"|"generic"]`) for provider-specific struct population, and **always** sets `claims.Subject` from `adapter.subject(raw, mappings)` — never from raw JSON directly (SHARED.md invariant #4: no self-asserted canonical identity).
+`normalizeClaims(raw, provider, mappings)` converts verified raw claims into canonical `types.Claims`: populates the standard registered claims for every provider (`populateRegisteredClaims`), then dispatches to a `providerAdapter` (`providerAdapters["github"|"generic"]`) for provider-specific struct population, and **always** sets `claims.Subject` from `adapter.subject(raw, mappings)` — never from raw JSON directly (the no-self-asserted-canonical-identity invariant: the authorization subject comes from config, never from a field the token chose for itself).
 
 ```go
 type providerAdapter interface {
@@ -61,7 +61,7 @@ Adding a new OIDC provider = implement `providerAdapter` and register it in `pro
 - `kid` must match a JWKS key; a miss forces one cache-bypassing refetch, not an automatic retry loop.
 - `ParseToken` and the old single-issuer `Unmarshal` method were dropped — nothing in the pipeline called them; use `Validate()`.
 
-Tests: `validator_test.go` (core `Validate()` table-driven cases, JWKS fetch/size/count limits, `GenKeyFunc`), `multi_audience_test.go` (ANY-match audience table), `rotation_audience_test.go` (key rotation, EC keys, insecure-issuer rejection, concurrent hot-swap `-race` test), `integration_test.go` (end-to-end mock JWKS server + generated JWT).
+Tests: `validator_test.go` (core `Validate()` cases, unknown-issuer denial, per-issuer audience isolation, required claims), `jwks_test.go` (key rotation, refetch limiter under flood, audience ANY-match, end-to-end mock JWKS server), `hardening_test.go` (`GenKeyFunc` alg confusion RS/ES, `use:enc` rejection, duplicate-kid selection, discovery issuer mismatch), `delegated_test.go` (self-vs-delegated parity single and multi-issuer, cross-issuer key confusion, `alg:none`, time bounds, and proof an unconfigured `iss` triggers zero network fetches), `extractor_test.go` (the three `ClaimsExtractorInterface` implementations), `internal_test.go` (SSRF guards: blocked IPs, secure-URL and redirect policy, refetch limiter), `alg_allowlist_test.go` (algorithms outside the allowlist).
 
 ## Extractors
 
@@ -77,6 +77,7 @@ Populate only the `ExtractionInput` fields relevant to the configured mode:
 
 | Field              | Used by        |
 | ------------------ | -------------- |
+| `Config`           | all three      |
 | `Token`            | SelfExtractor  |
 | `AuthorizerClaims` | APIGWExtractor |
 | `ALBOIDCData`      | ALBExtractor   |
@@ -87,5 +88,7 @@ Populate only the `ExtractionInput` fields relevant to the configured mode:
 - `SelfExtractor` — default; wraps `TokenValidatorInterface.Validate()`. Full JWKS signature + claims verification, multi-issuer aware.
 - `APIGWExtractor` — reads pre-validated `map[string]string` claims from API Gateway HTTP API v2 JWT Authorizer. Rejects if `AuthorizerClaims` is nil (bypass guard). No signature verification. Resolves the matching issuer spec per request by exact match against the authorizer-verified `iss` claim (`resolveIssuerSpec`); an issuer with no config entry fails closed with `ErrUnknownIssuer` rather than falling back to another issuer's spec.
 - `ALBExtractor` — fetches ALB EC public key via HTTPS, verifies ES256 JWT from `x-amzn-oidc-data`. Validates the `ALBExpectedSigner` ARN (required in `alb` mode by `config.Validate()`). Use `WithALBKeyEndpoint` to override in tests. Caches keys for 5 minutes to avoid per-request latency.
+
+`ExtractionInput.Config` pins the config generation for the request. `ProcessRequest` captures one `*Config` and puts it here, so extraction and the authorization that follows are decided by the SAME generation. Every extractor previously called `provider.Get()` itself — a second read of a pointer a concurrent hot reload can swap in between — which split one request across two generations: validated by N+1's issuers/audiences/claim mappings, authorized by N's role mappings. That is not the benign "in-flight request sees a stale config" case, where one consistent generation decides everything; a refresh that widens validation while narrowing authorization (rotating an audience while retiring a role mapping in the same push) authorizes a caller NEITHER generation allows alone. Nil means "read the provider", so hand-built inputs and tests are unchanged. `SelfExtractor` reaches the pinned path through the unexported `pinnedValidator` seam (`validateWith`), which only `*TokenValidator` can satisfy — an external mock of `TokenValidatorInterface` cannot accidentally implement it and simply takes the `Validate` path. Guarded by `TestSelfExtractorIsDecidedByThePinnedConfig` and `TestSelfExtractorFallsBackWhenNoConfigPinned`.
 
 The factory `newClaimsExtractor(provider, validator)` in `bootstrap.go` selects the implementation from `cfg.JWTValidation.Mode`. Only `alb` mode additionally requires exactly one configured issuer at cold start (`singleDelegatedIssuer`) — an ALB has exactly one OIDC IdP, so a multi-issuer config is genuinely ambiguous there. `apigw` mode has no such restriction: each route's JWT Authorizer pins its own issuer, so `APIGWExtractor` resolves the spec per request instead of at cold start.

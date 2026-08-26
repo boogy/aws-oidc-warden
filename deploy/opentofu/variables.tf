@@ -88,10 +88,18 @@ variable "role_session_name" {
 
 variable "role_mappings" {
   description = <<-EOT
-    Subject-to-role mappings (v2 schema, rendered verbatim into config.yaml).
+    Subject-to-role mappings (v3 schema, rendered verbatim into config.yaml).
     `subject` is an auto-anchored regex matched against the canonical subject
     (for GitHub: the `repository` claim, "owner/repo"). `conditions` are
     auto-anchored regexes against raw verified claims, AND-ed together.
+
+    Every `conditions` key is the raw claim name. The named fields below are
+    the common GitHub ones; `claims` reaches ANY other claim (or one named
+    like a reserved key) and takes a list of alternatives, OR-ed. Note
+    `environment` is the deployment environment a job declares — the runner
+    type is `runner_environment`. The boolean groups (`all_of`/`any_of`/
+    `none_of`) are not expressible here; put a mapping that needs one in a
+    `config_fragments` file (see deploy/README.md).
 
     `issuer` binds this mapping to one issuer's `issuer` URL (not its
     `var.issuers` map key) and is required once more than one issuer is
@@ -116,13 +124,14 @@ variable "role_mappings" {
     session_policy_file = optional(string)
     role_session_name   = optional(string)
     conditions = optional(object({
-      branch        = optional(string)
-      ref           = optional(string)
-      ref_type      = optional(string)
-      event_name    = optional(string)
-      workflow_ref  = optional(string)
-      environment   = optional(string)
-      actor_matches = optional(list(string))
+      ref                = optional(string)
+      ref_type           = optional(string)
+      event_name         = optional(string)
+      workflow_ref       = optional(string)
+      runner_environment = optional(string)
+      environment        = optional(string)
+      actor              = optional(list(string))
+      claims             = optional(map(list(string)))
     }))
   }))
   default = []
@@ -130,6 +139,55 @@ variable "role_mappings" {
   validation {
     condition     = alltrue([for m in var.role_mappings : m.roles != null && length(m.roles) > 0])
     error_message = "Each role_mappings entry needs at least one role — an empty roles list plans clean but the service refuses to boot (internal/config/config.go)."
+  }
+
+  # A `conditions` object that carries no usable field reads as a gated mapping
+  # and gates nothing. The template omits the key entirely in that case, so the
+  # rendered config authorizes every request matching `subject` — silently, and
+  # exactly opposite to what the object says. Caught here, at plan time, rather
+  # than by whoever reads the deployed config.yaml later. `length(...)` (not
+  # `!= null`) is what makes `claims = {}` and `actor = []` count as no field:
+  # both are non-null and both gate exactly nothing.
+  validation {
+    condition = alltrue([for m in var.role_mappings :
+      m.conditions == null || anytrue([
+        try(length(m.conditions.ref), 0) > 0,
+        try(length(m.conditions.ref_type), 0) > 0,
+        try(length(m.conditions.event_name), 0) > 0,
+        try(length(m.conditions.workflow_ref), 0) > 0,
+        try(length(m.conditions.runner_environment), 0) > 0,
+        try(length(m.conditions.environment), 0) > 0,
+        try(length(m.conditions.actor), 0) > 0,
+        try(length(m.conditions.claims), 0) > 0,
+      ])
+    ])
+    error_message = "A role_mappings entry sets `conditions` with no usable field (all null, or only empty values like `actor = []` / `claims = {}`); that gates nothing. Give it a condition or drop the `conditions` key."
+  }
+
+  # The check above passes as soon as ONE field is usable, so a mapping can
+  # still smuggle an empty field in beside a real one — `ref = "refs/heads/main"`
+  # next to `actor = []`. An empty pattern matches nothing, and rather than
+  # deny-by-default the service refuses to boot on it (internal/config), so the
+  # deploy succeeds and the Lambda crash-loops. Reject the shape at plan time.
+  validation {
+    condition = alltrue([for m in var.role_mappings :
+      m.conditions == null || alltrue(concat(
+        [for v in [
+          m.conditions.ref,
+          m.conditions.ref_type,
+          m.conditions.event_name,
+          m.conditions.workflow_ref,
+          m.conditions.runner_environment,
+          m.conditions.environment,
+        ] : v == null || v != ""],
+        [m.conditions.actor == null || try(length(m.conditions.actor), 0) > 0],
+        [m.conditions.claims == null || try(length(m.conditions.claims), 0) > 0],
+        [for pats in values(m.conditions.claims == null ? {} : m.conditions.claims) :
+          length(pats) > 0
+        ],
+      ))
+    ])
+    error_message = "A role_mappings entry sets a `conditions` field to an empty value (\"\", [], or {}). An empty pattern matches nothing and the service refuses to boot on it; give the field a pattern or drop the field."
   }
 }
 

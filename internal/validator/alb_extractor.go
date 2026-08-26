@@ -157,7 +157,7 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 		return nil, fmt.Errorf("ALB JWT kid contains invalid characters: %q", kid)
 	}
 
-	cfg := a.provider.Get()
+	cfg := input.configOr(a.provider)
 	spec, bounds, err := resolveDelegatedSpec(cfg)
 	if err != nil {
 		return nil, err

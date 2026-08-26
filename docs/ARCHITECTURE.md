@@ -47,11 +47,11 @@ graph TB
 
 ### Simple Flow Overview
 
-1. **GitHub Actions** sends an OIDC token and desired role ARN to the service
+1. **An OIDC client** (GitHub Actions, GitLab CI, or any configured issuer) sends an OIDC token and desired role ARN to the service
 2. **Entry Point** receives the HTTP request (via API Gateway, Lambda URL, or ALB)
 3. **Request Processor** orchestrates the validation and role assumption process
-4. **Token Validator** verifies the JWT signature against GitHub's JWKS (with caching)
-5. **Configuration** engine checks repository mappings and validates constraints
+4. **Token Validator** routes the token to its issuer and verifies the JWT signature against that issuer's JWKS (with caching)
+5. **Configuration** engine matches the canonical subject against the issuer's role mappings and checks their conditions
 6. **AWS Consumer** assumes the requested IAM role with session tags and policies
 7. **Response** contains temporary AWS credentials with tagged session
 
@@ -64,18 +64,30 @@ The AWS OIDC Warden supports multiple deployment patterns to accommodate differe
 #### API Gateway + Lambda
 
 ```bash
-GitHub Actions → API Gateway → AWS OIDC Warden (Lambda Function Proxy)
+OIDC Client → API Gateway → AWS OIDC Warden (Lambda Function Proxy)
 ```
 
 - **Use Case**: Traditional REST API with full API Gateway features
 - **Benefits**: Rate limiting, request transformation, API keys, usage plans
 - **Handler**: `internal/handler/apigateway.go`
 - **Entry Point**: `cmd/apigateway/main.go`
+- **Note**: REST API v1 never receives JWT-authorizer claims, so this handler is always self-validating.
+
+#### API Gateway HTTP API (v2) + Lambda
+
+```bash
+OIDC Client → API Gateway (HTTP API) → AWS OIDC Warden (Lambda)
+```
+
+- **Use Case**: HTTP APIs, and the only front-end that can delegate token validation to an API Gateway JWT Authorizer
+- **Benefits**: Lower cost than REST APIs; with `jwt_validation.mode: "apigw"` the gateway verifies the signature and this service reads the authorizer claims
+- **Handler**: `internal/handler/apigatewayv2.go`
+- **Entry Point**: `cmd/apigatewayv2/main.go`
 
 #### Lambda URLs
 
 ```
-GitHub Actions → AWS OIDC Warden (Lambda Function URL)
+OIDC Client → AWS OIDC Warden (Lambda Function URL)
 ```
 
 - **Use Case**: Simplified setup for direct Lambda invocation
@@ -86,7 +98,7 @@ GitHub Actions → AWS OIDC Warden (Lambda Function URL)
 #### Application Load Balancer
 
 ```
-GitHub Actions → ALB → AWS OIDC Warden (Lambda Function)
+OIDC Client → ALB → AWS OIDC Warden (Lambda Function)
 ```
 
 - **Use Case**: High-traffic scenarios with advanced routing
@@ -97,7 +109,7 @@ GitHub Actions → ALB → AWS OIDC Warden (Lambda Function)
 #### Local Development Server
 
 ```
-GitHub Actions → HTTP Server → AWS OIDC Warden
+OIDC Client → HTTP Server → AWS OIDC Warden
 ```
 
 - **Use Case**: Local development and testing
@@ -143,10 +155,8 @@ sequenceDiagram
     Validator->>Validator: normalize -> canonical subject + raw claims
     Validator-->>Processor: Return claims {issuer, subject, raw}
 
-    opt cross_account.enabled
-        Processor->>Consumer: IsTargetAccountAllowed(role)
-        Consumer-->>Processor: allowed / denied
-    end
+    Processor->>Consumer: IsTargetAccountAllowed(role)
+    Consumer-->>Processor: allowed / denied
 
     Processor->>Processor: AuthorizeRoles(issuer, subject, claims) via owner-bucketed index
 
@@ -182,7 +192,7 @@ Three modes controlled by `jwt_validation.mode`:
 
 > **Trust boundary warning — `apigw` mode has no cryptographic backstop.** In `apigw` mode the Lambda never sees or verifies the original OIDC token's signature; it fully trusts `event.requestContext.authorizer.jwt.claims` as handed to it. The invariant above only rejects an **empty** claims map — it does **not** detect a direct invoke that supplies **forged, non-empty** claims (an arbitrary `iss`/`aud`/`sub`/`exp`), which pass straight through with no signature to check them against. **`lambda:InvokeFunction` on this function is therefore equivalent to full identity impersonation in `apigw` mode** — anyone who can invoke it directly can obtain AWS credentials for any spoofed subject your `role_mappings`/`role_groups`/`tag_auth` would authorize. `alb` mode does not share this gap: the Lambda itself verifies the ALB's ES256 signature over `x-amzn-oidc-data`, so a forged direct invoke fails that check. **Mitigation:** the function's resource-based (invoke) policy must restrict `lambda:InvokeFunction` to the fronting API Gateway's execution/service principal only — never a broader principal. See [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode) for the full write-up.
 
-**API Gateway mode** requires an `aws_apigatewayv2_authorizer` JWT resource pointing at `https://token.actions.githubusercontent.com`. Restrict Lambda invocations to the API Gateway execution role via Lambda resource-based policies.
+**API Gateway mode** requires an `aws_apigatewayv2_authorizer` JWT resource per configured issuer, each pointing at that issuer's own URL (`https://token.actions.githubusercontent.com` for GitHub Actions, `https://gitlab.com` for GitLab, and so on) — the authorizer's verified `iss` must appear in `issuers[]` or the request is denied with `ErrUnknownIssuer`. Restrict Lambda invocations to the API Gateway execution role via Lambda resource-based policies.
 
 **ALB mode** verifies the ALB-signed ES256 JWT but does not re-verify the original OIDC signature. `alb_expected_signer` (the trusted ALB's ARN) is **required** in this mode — config validation fails without it — to prevent cross-ALB token injection.
 
@@ -195,9 +205,17 @@ Three modes controlled by `jwt_validation.mode`:
 The handler layer provides a unified interface across different deployment options:
 
 ```go
-type RequestProcessor interface {
-    ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error)
+type RequestProcessor struct {
+    provider  *config.Provider
+    consumer  aws.AwsConsumerInterface
+    extractor validator.ClaimsExtractorInterface
+    audit     AuditSink // nil is a safe no-op
+    frontend  string    // apigateway/apigatewayv2/alb/lambdaurl
 }
+
+func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink, frontend string) *RequestProcessor
+
+func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error)
 ```
 
 **Key Responsibilities:**
@@ -222,10 +240,10 @@ The validator component handles all OIDC token validation logic:
 ```go
 type TokenValidatorInterface interface {
     Validate(string) (*types.Claims, error)
-    FetchJWKS(issuer string) (*types.JWKS, error)
-    GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc
 }
 ```
+
+The interface is deliberately scoped to `Validate` alone. `FetchJWKS` and `GenKeyFunc` remain exported methods on the concrete `*TokenValidator` (used by tests and the cold-start JWKS warm prefetch), but they are an unscoped, audience-less path and neither is a standalone token-validation entry point. `Validate` is the only supported way to authenticate a token.
 
 **Validation Process (multi-issuer, `self` mode):**
 
@@ -319,7 +337,7 @@ The configuration system supports multiple formats and sources:
 
 ```go
 type Config struct {
-    Issuers               []IssuerConfig    `mapstructure:"issuers"`        // trusted OIDC issuers (v2)
+    Issuers               []IssuerConfig    `mapstructure:"issuers"`        // trusted OIDC issuers
     DefaultIssuer         string            `mapstructure:"default_issuer"`
     RoleMappings          []RoleMapping     `mapstructure:"role_mappings"`
     RoleGroups            []RoleGroup       `mapstructure:"role_groups"`
@@ -364,8 +382,8 @@ role_mappings:
     roles:
       - "arn:aws:iam::123456789012:role/github-actions-role"
     conditions:
-      branch: "refs/heads/main" # regex against the raw 'ref' claim
-      actor_matches: ["admin-.*"] # Actor constraints
+      ref: "refs/heads/main" # regex against the raw 'ref' claim
+      actor: ["admin-.*"] # Actor constraints
       event_name: "push" # Event type constraints
     session_policy: | # Inline session policy
       {
@@ -388,11 +406,9 @@ flowchart TD
     E -->|Invalid| F[Return 401/403 Error]
     E -->|Valid| G[Extract Claims]
 
-    G --> GA{cross_account enabled?}
-    GA -->|Yes| GB[IsTargetAccountAllowed]
+    G --> GB[IsTargetAccountAllowed]
     GB -->|Denied| GC[Return 403 Error]
     GB -->|Allowed| H[AuthorizeRoles issuer+subject]
-    GA -->|No| H
 
     H -->|Explicit match| N[Apply Session Policy]
     H -->|No match| HA{tag_auth enabled?}
@@ -408,27 +424,35 @@ flowchart TD
 
 ### 2. Condition Validation
 
-Every named field and every `Extra` (arbitrary-claim) entry compiles through the same anchored-regex mechanism, so a plain string is a widened `==`, not a special case:
+Every key under `conditions:` other than the three boolean groups names a raw verified claim, and every one of them compiles through the same anchored-regex mechanism, so a plain string is a widened `==`, not a special case. `Patterns` is a `[]string` that decodes from either a single scalar or a list, and the named fields are discoverability sugar over what the remain-map does generically:
 
 ```go
 type Condition struct {
-    Branch       string            `mapstructure:"branch"`        // checks the raw 'ref' claim
-    Ref          string            `mapstructure:"ref"`           // also checks 'ref' (alias of Branch)
-    RefType      string            `mapstructure:"ref_type"`      // branch, tag
-    EventName    string            `mapstructure:"event_name"`    // push, pull_request
-    WorkflowRef  string            `mapstructure:"workflow_ref"`  // .github/workflows/deploy.yml
-    Environment  string            `mapstructure:"environment"`   // checks the raw 'runner_environment' claim
-    ActorMatches []string          `mapstructure:"actor_matches"` // ["admin-.*", "specific-user"]
-    Extra        map[string]string `mapstructure:",remain"`       // any other raw claim, by name
+    Ref               Patterns `mapstructure:"ref"`                // "refs/heads/main" or a list of patterns
+    RefType           Patterns `mapstructure:"ref_type"`           // branch, tag
+    EventName         Patterns `mapstructure:"event_name"`         // push, pull_request
+    WorkflowRef       Patterns `mapstructure:"workflow_ref"`       // .github/workflows/deploy.yml
+    Actor             Patterns `mapstructure:"actor"`              // the triggering principal
+    RunnerEnvironment Patterns `mapstructure:"runner_environment"` // github-hosted, self-hosted
+    Environment       Patterns `mapstructure:"environment"`        // the deployment environment a job declares
+
+    AllOf  []*Condition `mapstructure:"all_of"`  // every member must be satisfied
+    AnyOf  []*Condition `mapstructure:"any_of"`  // at least one member must be satisfied
+    NoneOf []*Condition `mapstructure:"none_of"` // no member may be satisfied
+
+    ExplicitClaims map[string]Patterns `mapstructure:"claims"`   // escape hatch: keys are always claim names
+    Claims         map[string]Patterns `mapstructure:",remain"`  // any other raw claim, by name
 }
 ```
 
 **Validation Logic:**
 
-- All specified conditions must be satisfied (AND logic) — this includes a named field and an `Extra` entry that happen to target the same underlying claim; both apply and both must match.
+- Patterns listed for ONE claim are OR-ed; separate claims are AND-ed — including a named field and a `claims:` entry naming the same claim; both apply and both must match. `all_of` / `any_of` / `none_of` groups nest inside for richer logic, and on a single node the flat fields and all three groups are AND-ed together, so the top level of a `conditions:` block stays an implicit AND. Nesting is capped at 5 levels and one mapping's tree at 64 nodes, both rejected in `Validate()`.
 - Every pattern is auto-anchored (`^(?:pattern)$`) and regex-capable.
-- Claims are extracted from the validated JWT token; `Extra` claim values must be string-typed (a numeric claim like `run_id` never satisfies a condition).
-- Condition compilation happens once, in `Validate()`, never per request.
+- Claims are extracted from the validated JWT token and matched on their **value**, not their Go type. A scalar claim — string, bool, or number — is compared through its canonical text, the same rendering used for audit records and session tags, so `email_verified: "true"` matches whether the issuer mints `true` or `"true"` and `run_id: "42"` matches the JSON number `42`. A **list** claim matches when any element does, each element read the same way (GitLab/Okta/Entra group, scope, and role lists). Only a shape with no readable text denies outright: absent, `null`, and objects.
+- Leaf matching is polarity-aware, but both polarities decide on the same reading of the value. In positive polarity a leaf matches when the claim's text satisfies a pattern. Under an odd number of `none_of` groups the veto fires when it matches — and *also* when the claim has no readable text at all, since a non-answer would otherwise disarm the veto and authorize exactly the caller the operator wrote it to refuse. So `none_of: [{email_verified: "false"}]` vetoes the JSON bool `false` and does not veto `true`, while an object-valued claim vetoes because it cannot be judged. Absence keeps `none_of`'s exact-negation meaning and is not affected. Because the two polarities read the value identically, they are exact complements on any readable claim: `none_of` nested in a `none_of` is positive again, and means what the bare predicate means.
+- Condition compilation happens once, in `Validate()`, never per request. `Validate()` additionally emits an advisory warning, on a `provider: github` issuer, for a claim name GitHub does not issue — a typo that would otherwise deny silently.
+- An empty pattern or an empty pattern list is rejected: both read as a predicate but gate nothing.
 
 ### 3. Caching Strategy
 
@@ -479,16 +503,18 @@ flowchart TD
     B --> C{Find Matching Subject Pattern<br/>issuer-bound, owner-bucketed index}
     C -->|No Match| D[Access Denied]
     C -->|Match Found| E[Load Conditions]
-    E --> F{Validate Branch/Ref}
-    F -->|Failed| G[Access Denied]
-    F -->|Passed| H{Validate Actor}
-    H -->|Failed| I[Access Denied]
-    H -->|Passed| J{Validate Event}
-    J -->|Failed| K[Access Denied]
-    J -->|Passed| L{Validate Environment/Extra claims}
-    L -->|Failed| M[Access Denied]
-    L -->|Passed| N[Authorization Granted]
+    E --> F{Every claim key at this level<br/>matches? AND}
+    F -->|Any failed| G[Access Denied]
+    F -->|All passed| H{all_of groups<br/>every child satisfied?}
+    H -->|No| G
+    H -->|Yes| I{any_of groups<br/>at least one child satisfied?}
+    I -->|No| G
+    I -->|Yes| J{none_of groups<br/>no child satisfied?}
+    J -->|No| G
+    J -->|Yes| K[Authorization Granted]
 ```
+
+No claim is privileged or evaluated in a fixed order: every key under `conditions` is looked up by its own name and AND'd with the rest, and the group nodes recurse through the same walk (`satisfiesConditionsWith` in `internal/config/condition.go`). `ref`, `event_name`, `workflow_ref` and `ref_type` are named fields only for discoverability — they take the same generic path as `project_path` or any other issuer's claim.
 
 ### 3. AWS Integration Security
 
@@ -515,7 +541,7 @@ Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a
 1. The hub (warden's own AWS account) is the central trust anchor; every role assumption — same-account or cross-account — goes **directly** from the hub's own credentials to the target role, one hop.
 2. For each requested role ARN the account ID is parsed from the ARN. If it differs from the hub and `cross_account.enabled` is not true, the request fails closed.
 3. _(tag-auth only, and only when no explicit mapping already authorized the role)_ If the target account differs from the hub, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`, solely to call `iam:GetRole` on the target role and read its IAM tags. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account. The spoke is never used to assume the target role itself.
-4. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR).
+4. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR), including any issuer-agnostic `aow/claim.<name>` tag, which matches the raw verified claim `<name>` and can only narrow the decision.
 5. If authorized, `AssumeRole` is called directly on the target role using the hub's own credentials (never spoke credentials). When `Config.TransitiveSessionTags()` (the top-level `session_tags_transitive`, RECOMMENDED — the deprecated `tag_auth.transitive_session_tags` still works as a fallback) is true, every attached session tag (the issuer's `session_tags` spec) is marked transitive so it propagates immutably through subsequent role chaining; without it, the tags are dropped at this hop and any ABAC policy past it loses the caller's identity. Because the hub's credentials are always a role session on Lambda, this assume — same-account included — is clamped to 1 hour; only `local` mode with IAM user credentials avoids the clamp.
 
 **Account Allow-List (`IsTargetAccountAllowed`):** Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `cross_account.allowed_accounts`. With `cross_account` disabled, only the hub account is allowed. With it enabled, the hub account is always implicitly allowed, and an empty list permits any account (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
