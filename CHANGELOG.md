@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0] - 2026-08-25
+## [3.0.0] - 2026-08-26
 
 Conditions become claim-native. Every key under `conditions:` is now the name of the claim it checks — for any issuer, not just GitHub — each key takes one pattern or a list of alternatives, and `all_of`/`any_of`/`none_of` compose them into a readable expression. A condition on a list-valued claim, which could never match before, now does. The top level stays an implicit AND.
 
