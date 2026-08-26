@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -513,4 +514,55 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestSnapshotForNeverServesAnotherConfigsRegistry guards the atomicity of the
+// snapshot/config-identity pair.
+//
+// The registry and the identity of the config it was built from must be
+// published by ONE atomic store. When they were two — snap.Store(snap) then
+// builtFrom.Store(cfg) — a goroutine preempted between them let a second
+// goroutine publish its own pair in between, leaving the registry built from
+// config B labelled as built from config A. The fast path then handed B's
+// issuer specs to any caller holding A: the wrong audience set and the wrong
+// claim_mappings, so a token could be checked against an audience the operator
+// had just removed, or its canonical subject derived by the wrong mapping.
+// In-flight requests hold the previous config pointer across a hot reload, so
+// that state is reachable in production, not only in a stress test.
+//
+// Alternating two config pointers under concurrency is the cheapest way to
+// keep the publish path contended. Every caller must get back a registry built
+// from the exact config it passed.
+func TestSnapshotForNeverServesAnotherConfigsRegistry(t *testing.T) {
+	cfgA := &config.Config{Issuers: []config.IssuerConfig{{Issuer: "https://a.example"}}}
+	cfgB := &config.Config{Issuers: []config.IssuerConfig{{Issuer: "https://b.example"}}}
+	want := map[*config.Config]string{cfgA: "https://a.example", cfgB: "https://b.example"}
+
+	v := &TokenValidator{}
+	var mu sync.Mutex
+	var mismatched int
+
+	var wg sync.WaitGroup
+	for i := range 32 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for n := range 1000 {
+				cfg := cfgA
+				if (i+n)%2 == 0 {
+					cfg = cfgB
+				}
+				if _, ok := v.snapshotFor(cfg).registry[want[cfg]]; !ok {
+					mu.Lock()
+					mismatched++
+					mu.Unlock()
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if mismatched > 0 {
+		t.Errorf("%d callers were served a registry built from a different config", mismatched)
+	}
 }
