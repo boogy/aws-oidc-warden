@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-08-27
+
+### Security
+
+- **`apigw` mode: a `none_of` deny-list could never fire on a list- or object-valued claim, authorizing exactly the caller it was written to refuse.** The API Gateway HTTP API v2 JWT Authorizer hands its verified claims to the Lambda as a `map[string]string`, so every claim whose JSON value is not a scalar arrives already rendered through Go's `%v`: an array `["break-glass"]` becomes the string `"[break-glass]"`, an object becomes `"map[break-glass:true]"`. `mapClaimsFromStrings` special-cased only `aud`, so every other stringified claim reached the condition engine as an ordinary, perfectly readable string — decidable, and matching no pattern the operator had written against the real claim. Under a plain AND that denies, which is fail-closed and invisible. Under `none_of` the direction inverts: a leaf that decidably does not match is a veto that does not fire, so `none_of: [{groups: "break-glass"}]` **granted** the role to a caller carrying that very group. Self mode denied the same logical token — an array is matched element-wise, an object is undecidable and vetoes — so the two validation modes disagreed on the same token, and the safer-looking mode was the one that failed open. Only `jwt_validation.mode: apigw` is affected; `self` and `alb` parse real JSON and were never reachable. A claim whose original JSON type was destroyed by the upstream stringifier is now carried as `types.OpaqueClaim`: its text stays readable, so a positive condition still matches the verbatim string exactly as before and a scalar claim that merely looks bracketed is unaffected, but the value is explicitly undecidable under negation, so a `none_of` veto fires on it rather than being disarmed by it. Both polarities therefore deny — fail closed in the direction that matters. `iss` is exempt (issuer routing needs a plain string), `aud` keeps its existing dedicated decoder, and `exp`/`iat`/`nbf` stay numeric. `sub` is deliberately *not* exempt: a stringified `sub` is a shape no issuer should mint, and wrapping it makes the canonical subject fail closed downstream instead of authorizing on a rendered array. `TestApigwNoneOfDenyListOpaqueClaimParity` drives the same array- and object-shaped claim through both `self` (with a genuinely signed JWT) and `apigw`, asserts both DENY, and asserts the two modes agree; it fails, reporting the granted role, when either half of the fix is removed.
+
+### Fixed
+
+- **An integral claim above 2^53 rendered in scientific notation, so a condition written against its decimal spelling could not match.** JSON numbers decode to `float64`, and `utils.FormatClaimValue` took its exact-integer path only at or below `1<<53`; anything larger fell through to `%v`, which switches to exponent form. A numeric claim such as `uid: 9007199254740994` reached conditions, tag authorization, the audit record, and STS session tags as `"9.007199254740994e+15"`, so `none_of: [{uid: "9007199254740994"}]` never matched and the veto missed — the same fail-open direction as the `apigw` finding above, reachable from any issuer minting large numeric claims. Any finite integral `float64` below `1e21` is now rendered with `strconv.FormatFloat(f, 'f', -1, 64)`: output at or below 2^53 is byte-identical to before, and above it the exact decimal is used. The `1e21` cutoff is where `%v` itself switches to exponent form, and `±Inf` is excluded explicitly because it satisfies `f == math.Trunc(f)`. The underlying collision is inherent to `float64` and is **not** fixed: two distinct integers above 2^53 can decode to the same `float64` and therefore render identically, so a condition, tag, or session tag on such a claim cannot distinguish them. This is documented on `FormatClaimValue`; gate on a string-valued claim if exact large-integer identity matters.
+
+### Changed
+
+- Internal comment cleanup across the codebase — no behavior change. Long explanatory comment blocks were trimmed to short statements of non-obvious constraints; the rationale they carried lives in this changelog, the pull requests, and `docs/`.
+
 ## [3.0.0] - 2026-08-26
 
 Conditions become claim-native. Every key under `conditions:` is now the name of the claim it checks — for any issuer, not just GitHub — each key takes one pattern or a list of alternatives, and `all_of`/`any_of`/`none_of` compose them into a readable expression. A condition on a list-valued claim, which could never match before, now does. The top level stays an implicit AND.
@@ -609,6 +623,7 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[3.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.1...v3.0.0
 [2.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.3.0...v2.4.0

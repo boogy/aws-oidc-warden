@@ -8,25 +8,18 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
-// This file is the condition engine: the shape of a `conditions:` block, how it
-// is cloned and compiled at Validate() time, and how it is evaluated against a
-// request's raw verified claims. It is deliberately separate from config.go so
-// the authorization gate can be read in one sitting.
+// This file is the condition engine: shape, clone/compile at Validate() time,
+// and evaluation against a request's raw verified claims.
 
 // Condition defines claim predicates that must be met for a role to be
-// assumed. There is ONE mechanism: every key under `conditions:` other than
-// the three reserved boolean groups names a raw verified claim, and its value
-// is one regex pattern or a list of patterns OR'd together. Keys are spelled
-// exactly like the claim they check (`repository`, `actor`, `project_path`,
-// `groups`), which is what makes the same syntax work for GitHub and for any
-// other issuer without new struct fields.
-//
-// The named fields below exist only so the most common GitHub claims are
-// discoverable in code and docs; they compile to exactly what an entry in
-// Claims compiles to, and every one of them is spelled exactly like its claim.
+// assumed. Every key other than the three reserved boolean groups names a raw
+// verified claim; its value is one regex pattern or a list OR'd together. The
+// named fields below are discoverability sugar for common GitHub claims and
+// compile identically to an entry in Claims.
 type Condition struct {
 	Ref               Patterns `mapstructure:"ref"                json:"ref,omitempty"`                // Patterns against the 'ref' claim (e.g., "refs/heads/main", "refs/tags/v.*")
 	RefType           Patterns `mapstructure:"ref_type"           json:"ref_type,omitempty"`           // Patterns against 'ref_type' (e.g., "branch", "tag")
@@ -36,36 +29,21 @@ type Condition struct {
 	RunnerEnvironment Patterns `mapstructure:"runner_environment" json:"runner_environment,omitempty"` // Patterns against 'runner_environment' ("github-hosted", "self-hosted")
 	Environment       Patterns `mapstructure:"environment"        json:"environment,omitempty"`        // Patterns against 'environment' (the deployment environment a job declares)
 
-	// Boolean groups. Each holds nested conditions evaluated with its own
-	// operator; all three are AND'd with the flat fields above and with each
-	// other on the same node, so the top level stays an implicit AND and every
-	// pre-existing config keeps its exact meaning.
-	//
-	// These three keys are RESERVED under `conditions:`. Claims is a
-	// mapstructure remain-map, so it only ever collected keys no field claimed;
-	// a raw claim literally named "all_of"/"any_of"/"none_of" decodes as a
-	// group instead, and is reachable under `claims:`.
-	//
-	// all_of/any_of/none_of plus nesting is functionally complete (any boolean
-	// expression is expressible as nested any_of-of-all_of), which is why there
-	// is no `not` (a one-element none_of) and no `xor`.
+	// Boolean groups; AND'd with the flat fields above and each other on the
+	// same node, so the top level is an implicit AND. Reserved under
+	// `conditions:` — a claim literally named one of these is reachable under
+	// `claims:` instead. Nesting makes this functionally complete, hence no
+	// `not`/`xor`.
 	AllOf  []*Condition `mapstructure:"all_of"  json:"all_of,omitempty"`  // every member must be satisfied
 	AnyOf  []*Condition `mapstructure:"any_of"  json:"any_of,omitempty"`  // at least one member must be satisfied
 	NoneOf []*Condition `mapstructure:"none_of" json:"none_of,omitempty"` // no member may be satisfied
 
-	// ExplicitClaims holds the entries written under the reserved `claims:`
-	// key. They mean exactly what a top-level entry means — claim name to
-	// patterns — with one difference: no key is ever read as anything but a
-	// raw claim name. That is the escape hatch for a claim whose name collides
-	// with a key this schema reserves: `all_of`, `any_of`, `none_of`, and
-	// `claims` itself. Nothing else needs it, since every other key already IS
-	// its claim name.
+	// ExplicitClaims: entries under the reserved `claims:` key, for a claim
+	// whose name collides with a reserved key (all_of/any_of/none_of/claims).
 	ExplicitClaims map[string]Patterns `mapstructure:"claims" json:"explicit_claims,omitempty"`
 
 	// Claims holds every claimName->patterns entry not covered by a named
-	// field above, keyed by the RAW verified claim name. Populated via
-	// mapstructure's remain-fields, so `conditions: {project_path: "grp/prj"}`
-	// works with no nested key and no provider-specific schema.
+	// field above, keyed by the raw verified claim name (mapstructure remain).
 	Claims map[string]Patterns `mapstructure:",remain" json:"claims,omitempty"`
 
 	// Cached compiled patterns (not serialized): one entry per claim, AND'd.
@@ -80,43 +58,26 @@ type compiledCondition struct {
 }
 
 const (
-	// maxConditionDepth bounds how deeply boolean groups may nest. The
-	// top-level `conditions:` block is depth 1, each nested group adds one.
-	//
-	// The cap exists for readability first and cost second. A gate a reviewer
-	// cannot hold in their head is a gate nobody reviews, and five levels is
-	// already more structure than any real authorization rule needs. It also
-	// keeps satisfiesConditions' recursion depth a property of this constant
-	// rather than of a config file.
+	// maxConditionDepth bounds boolean-group nesting; top level is depth 1.
 	maxConditionDepth = 5
 
-	// maxConditionNodes bounds the total number of condition nodes in ONE
-	// mapping's tree. Depth alone does not bound the work: a single any_of can
-	// list arbitrarily many members, and every candidate mapping is evaluated
-	// on every request. This keeps the per-request cost of the authorization
-	// gate bounded by a constant the code owns.
+	// maxConditionNodes bounds total condition nodes in one mapping's tree.
 	maxConditionNodes = 64
 )
 
-// compileCondition compiles every pattern on a condition tree (nil is valid: no
-// conditions means unconditional match) into the pre-compiled form checked by
-// satisfiesConditions. Called once per effective mapping at Validate() time,
-// never per request.
+// compileCondition compiles a condition tree (nil = unconditional match) into
+// the pre-compiled form satisfiesConditions checks. Called once per effective
+// mapping at Validate() time, never per request.
 func compileCondition(cond *Condition) error {
 	budget := 0
 	return compileConditionAt(cond, "conditions", 1, &budget)
 }
 
-// compileConditionAt compiles one node of the condition tree and recurses into
-// its groups. path is the operator-facing location of this node (e.g.
-// "conditions.any_of[1].all_of[0]") and appears in every error, so a rejected
-// config names the exact entry to fix. depth is 1 for the top-level node.
-// budget counts nodes compiled so far across the whole tree.
-//
-// Every named field compiles through the same anchored-regex mechanism as a
-// generic claim entry, so an anchored regex over a literal string matches
-// identically to `==` — a pure widening, not a behavior change for literal
-// configs.
+// compileConditionAt compiles one node and recurses into its groups. path is
+// this node's location (e.g. "conditions.any_of[1].all_of[0]"), used in error
+// messages. depth is 1 for the top-level node; budget counts nodes compiled
+// so far across the whole tree. Every field compiles through the same
+// anchored-regex mechanism as a generic claim entry.
 func compileConditionAt(cond *Condition, path string, depth int, budget *int) error {
 	if cond == nil {
 		return nil
@@ -130,9 +91,7 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 	}
 
 	cond.compiled = cond.compiled[:0]
-	// key is the config key being compiled and claim the raw verified claim it
-	// checks; the two differ only under claims: (key "claims.x", claim "x"), and
-	// errors quote the key the operator actually wrote.
+	// key and claim differ only under claims: (key "claims.x", claim "x").
 	add := func(key, claim string, patterns Patterns) error {
 		if patterns == nil {
 			return nil
@@ -177,16 +136,9 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 		return err
 	}
 
-	// Both maps are walked in sorted key order. Map iteration order is random,
-	// and without this the compiled order — and, more importantly, WHICH bad
-	// entry a config with two of them reports — would differ run to run, so the
-	// same broken config could produce a different error on each restart.
-	//
-	// A key present in the map with a nil value is `repository:` written with
-	// nothing after it. add() treats nil as "not written" — correct for the
-	// named fields above, where absent and nil are indistinguishable — so the
-	// map keys are checked here, where presence IS observable. Left alone it
-	// would compile to no predicate at all and silently widen the gate.
+	// Sorted iteration: reproducible error reporting across runs. A map key
+	// with a nil value (`repository:` with nothing after it) is checked here,
+	// where presence is observable — add() treats nil as "not written".
 	for _, claim := range sortedKeys(cond.Claims) {
 		if cond.Claims[claim] == nil {
 			return errNoPatternForKey(path, claim)
@@ -214,30 +166,23 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 		return err
 	}
 
-	// A top-level node that gates nothing is rejected for the same reason a
-	// group member that gates nothing is: it authorizes unconditionally. The
-	// check has to be here, on the aggregate, because a named field written
-	// with no value (`environment:`) decodes to exactly the same zero value as
-	// a field that was never written, so the only place the mistake is visible
-	// is that the whole block compiled to no predicate. Writing `conditions: {}`
-	// deliberately is the same mistake typed on purpose: drop the key.
+	// A top-level node that gates nothing would authorize unconditionally;
+	// checked on the aggregate since a field written with no value decodes
+	// the same as one never written.
 	if depth == 1 && conditionIsEmpty(cond) {
 		return fmt.Errorf("%s: declares no predicate, so it would authorize every request that reaches it; remove the `conditions` key if the mapping is meant to be unconditional, or give the key you wrote a pattern", path)
 	}
 	return nil
 }
 
-// errNoPatternForKey reports a condition key written with no value at all.
-// Distinct from the empty-list error: `repository: []` says "match nothing"
-// and `repository:` says nothing at all, but both compile to no predicate,
-// which is the one thing a gate must never do by accident.
+// errNoPatternForKey reports a condition key written with no value: distinct
+// from `repository: []` ("match nothing"), but both compile to no predicate.
 func errNoPatternForKey(path, key string) error {
 	return fmt.Errorf("%s: %q has no value; a condition key with no pattern gates nothing — give it a pattern or remove the key", path, key)
 }
 
-// sortedKeys returns m's keys in lexical order. Compilation walks the claim
-// maps through it so error reporting is reproducible; it runs at Validate()
-// time only, never per request.
+// sortedKeys returns m's keys in lexical order, for reproducible error
+// reporting. Runs at Validate() time only.
 func sortedKeys(m map[string]Patterns) []string {
 	if len(m) == 0 {
 		return nil
@@ -564,7 +509,9 @@ func (r *claimResolver) buildFolded() {
 // []any, and anything else structural — has no canonical text and returns
 // false; those are handled by the caller.
 func claimText(v any) (string, bool) {
-	switch v.(type) {
+	switch t := v.(type) {
+	case types.OpaqueClaim:
+		return utils.FormatClaimValue(string(t)), true
 	case string, bool, float64, float32,
 		int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
@@ -598,6 +545,9 @@ func valueIsUndecidable(v any) bool {
 	switch t := v.(type) {
 	case nil:
 		return false
+	case types.OpaqueClaim:
+		// Must precede default, which defers to claimText and finds it readable.
+		return true
 	case []any:
 		for _, el := range t {
 			if _, ok := claimText(el); !ok {

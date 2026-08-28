@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -577,4 +578,195 @@ func TestTokenSizeCap(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "maximum allowed size") {
 		t.Errorf("wrong rejection reason: %v", err)
 	}
+}
+
+// durPtr returns a pointer to d, for config.Config.JWTLeeway's *time.Duration
+// field.
+func durPtr(d time.Duration) *time.Duration { return &d }
+
+// apigwOpaqueParityFixture builds the JWKS server, signing key and config
+// shared by TestApigwNoneOfDenyListOpaqueClaimParity and
+// TestApigwPositiveConditionMatchesOpaqueClaimVerbatim.
+func apigwOpaqueParityFixture(t *testing.T) (cfg *config.Config, privateKey *rsa.PrivateKey, keyID string, issuer string) {
+	t.Helper()
+	pk, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	pub := &pk.PublicKey
+	const kid = "opaque-claim-key"
+
+	jwks := &types.JWKS{Keys: []types.JSONWebKey{{
+		KeyID: kid, KeyType: "RSA", Algorithm: "RS256", Use: "sig",
+		N: base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+		E: base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+	}}}
+
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(struct {
+				Issuer  string `json:"issuer"`
+				JwksURI string `json:"jwks_uri"`
+			}{Issuer: serverURL, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(jwks)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	serverURL = server.URL
+
+	c := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:         serverURL,
+			Provider:       "generic",
+			Audiences:      []string{"sts.amazonaws.com"},
+			ClaimMappings:  map[string]string{"subject": "project_path"},
+			RequiredClaims: []string{"project_path"},
+		}},
+		RoleMappings: []config.RoleMapping{{
+			Subject: "grp/prj",
+			Roles:   []string{"arn:aws:iam::123456789012:role/deploy"},
+			Conditions: &config.Condition{NoneOf: []*config.Condition{
+				{Claims: map[string]config.Patterns{"groups": {"break-glass"}}},
+			}},
+		}},
+		RoleSessionName:      "aws-oidc-warden",
+		JWTLeeway:            durPtr(30 * time.Second),
+		Cache:                &config.Cache{TTL: 10 * time.Minute},
+		AllowInsecureIssuers: true,
+	}
+	require.NoError(t, c.Validate())
+	return c, pk, kid, serverURL
+}
+
+// signOpaqueParityToken signs a jwt.MapClaims token over the fixture's key.
+func signOpaqueParityToken(t *testing.T, pk *rsa.PrivateKey, kid, issuer string, groups any) string {
+	t.Helper()
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"iss":          issuer,
+		"sub":          "grp/prj",
+		"aud":          "sts.amazonaws.com",
+		"project_path": "grp/prj",
+		"iat":          now.Add(-1 * time.Minute).Unix(),
+		"exp":          now.Add(30 * time.Minute).Unix(),
+		"groups":       groups,
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = kid
+	signed, err := tok.SignedString(pk)
+	require.NoError(t, err)
+	return signed
+}
+
+func TestApigwNoneOfDenyListOpaqueClaimParity(t *testing.T) {
+	cfg, pk, kid, issuer := apigwOpaqueParityFixture(t)
+
+	cases := []struct {
+		name              string
+		groups            any
+		authorizerRawText string
+	}{
+		{"array claim", []string{"break-glass"}, "[break-glass]"},
+		{"object claim", map[string]bool{"break-glass": true}, "map[break-glass:true]"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			signed := signOpaqueParityToken(t, pk, kid, issuer, tc.groups)
+			v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
+			selfClaims, err := v.Validate(signed)
+			require.NoError(t, err, "self mode must accept the token itself (the deny-list is an authorization concern, not a validation one)")
+			selfAuthorized, selfRoles := cfg.AuthorizeRoles(selfClaims.Issuer, selfClaims.Subject, selfClaims.Raw)
+			assert.False(t, selfAuthorized, "self mode: none_of on a real %s must veto and deny", tc.name)
+			assert.Empty(t, selfRoles)
+
+			delegatedClaims, err := validator.NewAPIGWExtractor(config.NewStaticProvider(cfg)).
+				Extract(t.Context(), validator.ExtractionInput{AuthorizerClaims: map[string]string{
+					"iss":          issuer,
+					"sub":          "grp/prj",
+					"aud":          "sts.amazonaws.com",
+					"project_path": "grp/prj",
+					"iat":          strconv.FormatInt(time.Now().Add(-1*time.Minute).Unix(), 10),
+					"exp":          strconv.FormatInt(time.Now().Add(30*time.Minute).Unix(), 10),
+					"groups":       tc.authorizerRawText,
+				}})
+			require.NoError(t, err)
+			delegatedAuthorized, delegatedRoles := cfg.AuthorizeRoles(delegatedClaims.Issuer, delegatedClaims.Subject, delegatedClaims.Raw)
+
+			assert.False(t, delegatedAuthorized, "F-1 REGRESSION: apigw mode granted a role to a caller carrying the vetoed %s, via the stringified rendering %q", tc.name, tc.authorizerRawText)
+			assert.Empty(t, delegatedRoles)
+
+			assert.Equal(t, selfAuthorized, delegatedAuthorized, "self mode and apigw mode must reach the same authorization decision for the same logical token")
+		})
+	}
+}
+
+func TestApigwPositiveConditionMatchesOpaqueClaimVerbatim(t *testing.T) {
+	pk, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	pub := &pk.PublicKey
+	const kid = "opaque-positive-key"
+
+	jwks := &types.JWKS{Keys: []types.JSONWebKey{{
+		KeyID: kid, KeyType: "RSA", Algorithm: "RS256", Use: "sig",
+		N: base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+		E: base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+	}}}
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(struct {
+				Issuer  string `json:"issuer"`
+				JwksURI string `json:"jwks_uri"`
+			}{Issuer: serverURL, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+		case "/jwks":
+			_ = json.NewEncoder(w).Encode(jwks)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	serverURL = server.URL
+	issuer := serverURL
+
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:         issuer,
+			Provider:       "generic",
+			Audiences:      []string{"sts.amazonaws.com"},
+			ClaimMappings:  map[string]string{"subject": "project_path"},
+			RequiredClaims: []string{"project_path"},
+		}},
+		RoleMappings: []config.RoleMapping{{
+			Subject: "grp/prj",
+			Roles:   []string{"arn:aws:iam::123456789012:role/deploy"},
+			Conditions: &config.Condition{
+				Claims: map[string]config.Patterns{"groups": {regexp.QuoteMeta("[break-glass]")}},
+			},
+		}},
+		RoleSessionName: "aws-oidc-warden",
+		JWTLeeway:       durPtr(30 * time.Second),
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
+	}
+	require.NoError(t, cfg.Validate())
+
+	delegatedClaims, err := validator.NewAPIGWExtractor(config.NewStaticProvider(cfg)).
+		Extract(t.Context(), validator.ExtractionInput{AuthorizerClaims: map[string]string{
+			"iss":          issuer,
+			"sub":          "grp/prj",
+			"aud":          "sts.amazonaws.com",
+			"project_path": "grp/prj",
+			"iat":          strconv.FormatInt(time.Now().Add(-1*time.Minute).Unix(), 10),
+			"exp":          strconv.FormatInt(time.Now().Add(30*time.Minute).Unix(), 10),
+			"groups":       "[break-glass]",
+		}})
+	require.NoError(t, err)
+
+	authorized, roles := cfg.AuthorizeRoles(delegatedClaims.Issuer, delegatedClaims.Subject, delegatedClaims.Raw)
+	assert.True(t, authorized, "a positive condition matching an OpaqueClaim's verbatim literal text must still authorize")
+	assert.Equal(t, []string{"arn:aws:iam::123456789012:role/deploy"}, roles)
 }
