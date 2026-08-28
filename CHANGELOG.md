@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **A remote config overlay merged `role_mappings` by slice index, so an entry that omitted `roles` inherited the roles of the mapping it displaced.** `MergeBytes` decodes the fetched payload onto the live `*Config` with mapstructure, which decodes element `i` of a slice onto whatever struct already sits at index `i` rather than replacing it. `issuers` was already guarded against exactly this; `role_mappings` and `role_groups` were not. An overlay listing only subjects, or only a `session_policy`, or only `conditions` — the natural shape for "narrow what production may assume" — therefore grafted index 0's roles onto a different subject: base `role_mappings[0]` granting `AdminRole` to `myorg/admin-repo`, overlaid with `[{"subject": "myorg/lowpriv-repo"}]`, produced a single mapping authorizing `myorg/lowpriv-repo` for `AdminRole`. The result is well-formed, so `Validate()` accepted it and the hot-reload path published it with no restart and nothing in the logs to say the roles were not written by the operator. The same index merge let an overlay entry silently keep the displaced entry's `conditions`. Every declared slice of structs — `issuers`, `role_mappings`, `role_groups`, `config_fragment_checksums` — is now cleared before decoding, so an overlay that declares one replaces it wholesale, and an entry with no `roles` is rejected by `Validate()` instead of inheriting some. Config fragments were never affected: `mergeFragment` appends. Operationally, an overlay that relied on the index merge to omit a field now fails validation instead of inheriting one: at startup that is a hard failure, and on hot reload the error is logged and the last-known-good config keeps serving. `TestMergeBytesDeclaredSlicesReplaceRatherThanIndexMerge` covers all four slices plus the merge semantics the fix must not change — struct keys still merging field-wise (`cross_account` keeps its `allowed_accounts`), an undeclared slice left alone, and an explicit `role_mappings: null` clearing the grants — and fails on six of its nine cases when the guard is removed. The overlay's per-key merge rules are now documented in [docs/CONFIGURATION.md](docs/CONFIGURATION.md#overlay-merge-semantics).
+
 ## [3.0.1] - 2026-08-28
 
 ### Security
@@ -625,6 +631,7 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.1...HEAD
 [3.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.1...v3.0.0
 [2.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.0...v2.4.1

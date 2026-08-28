@@ -613,16 +613,22 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 		return fmt.Errorf("failed to parse %s configuration: %w", format, err)
 	}
 
-	// A payload declaring issuers must fully replace c.Issuers before
-	// decoding, not merge onto it: mapstructure decodes issuers[i] onto
-	// whatever IssuerConfig already sits at that index (e.g. the zero-config
-	// GitHub seed), so an omitted/null required_claims or session_tags would
-	// silently inherit the seed's values. v.InConfig can't distinguish
-	// "absent" from "explicitly null", so AllKeys() (which reports both) is
-	// used instead — an explicit "issuers: null" then hits Validate()'s
-	// empty-issuers check rather than booting open on the seed.
-	if slices.Contains(v.AllKeys(), "issuers") {
+	// A declared slice of structs must be cleared before decoding: mapstructure
+	// decodes element i onto the struct already at index i, so an omitted field
+	// inherits the displaced entry's value. AllKeys(), not InConfig: an explicit
+	// null must count as declared.
+	keys := v.AllKeys()
+	if slices.Contains(keys, "issuers") {
 		c.Issuers = nil
+	}
+	if slices.Contains(keys, "role_mappings") {
+		c.RoleMappings = nil
+	}
+	if slices.Contains(keys, "role_groups") {
+		c.RoleGroups = nil
+	}
+	if slices.Contains(keys, "config_fragment_checksums") {
+		c.ConfigFragmentChecksums = nil
 	}
 
 	if err := v.Unmarshal(c, decoderOptions()...); err != nil {

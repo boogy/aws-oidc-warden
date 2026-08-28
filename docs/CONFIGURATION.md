@@ -398,6 +398,15 @@ Rules enforced on every merge:
 
 When `s3_config_bucket`/`s3_config_path` are set, the process fetches and overlays that object at startup (failing fast if it's unreachable or invalid). If `config_reload_interval` is also > 0, the running service re-fetches the object at most once per that interval — checked lazily, once per request, via `Provider.MaybeRefresh` — and atomically swaps in a re-validated config; an invalid or unreachable reload is logged and the previous config is kept. `config_fragments` are re-resolved on the same cadence. Everything read per-request off the live `*config.Config` (issuers, `role_mappings`/`role_groups`/`role_sets`, `tag_auth`, session tags, ...) picks up a reload immediately with no restart; the `jwt_validation.mode`-selected extractor is fixed at cold start (see above).
 
+### Overlay merge semantics
+
+The S3 object is an **overlay**, not a replacement: a key it does not mention keeps its base value, and a key it does mention wins (an `AOW_` env var still outranks both). Two rules matter for authorization:
+
+- **Scalars and struct keys merge field-wise.** `cross_account: {enabled: true}` keeps the base's `allowed_accounts`, `cache: {type: s3}` keeps the base's `ttl`. Restate a field in the overlay to change it.
+- **A declared list of objects replaces that list wholesale.** `issuers`, `role_mappings`, `role_groups`, and `config_fragment_checksums` are replaced entirely when the overlay declares them — entries are never merged element-by-element onto the base's, so an overlay entry never inherits a field (roles, conditions, session policy) from the base entry it displaces. Each replacement entry must therefore be complete: a `role_mappings` entry with no `roles` is a validation error, not an inherited grant. An explicit `null` counts as declared, so `role_mappings: null` clears the base's mappings (deny-all) and `issuers: null` is rejected by the zero-issuers check.
+
+An overlay that fails validation is never served: startup fails fast, and a hot reload logs the error and keeps the last-known-good config.
+
 ## Configuration File Format
 
 AWS OIDC Warden supports YAML, JSON, and TOML configuration files (format auto-detected from the file extension via `FormatFromPath`; anything other than `.yaml`/`.yml`/`.toml` is treated as JSON). See [example-config.yaml](../example-config.yaml) for a complete annotated example covering a two-issuer (GitHub + GitLab) setup, `role_sets`/`role_groups`/`default_issuer`, `tag_auth`, `jwt_validation`, and hardening/logging knobs.
