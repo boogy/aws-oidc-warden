@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.0.2] - 2026-08-28
 
 ### Security
 
@@ -631,7 +631,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.2...HEAD
+[3.0.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.1...v3.0.0
 [2.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v2.4.0...v2.4.1
