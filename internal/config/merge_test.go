@@ -273,3 +273,93 @@ func TestMergeBytesExplicitNullIssuersRejectsSeed(t *testing.T) {
 // name travels with the grant, exactly as the session policy does. A broad
 // mapping declared first must not shadow the narrow mapping that granted the
 // role — that is the bug FindSessionPolicy's doc comment describes.
+
+func TestMergeBytesDeclaredSlicesReplaceRatherThanIndexMerge(t *testing.T) {
+	base := func(t *testing.T) *Config {
+		t.Helper()
+		c := &Config{}
+		require.NoError(t, c.MergeBytes([]byte(`
+role_session_name: "aow"
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+role_mappings:
+  - subject: "myorg/admin-repo"
+    roles: ["arn:aws:iam::111111111111:role/AdminRole"]
+    conditions:
+      ref: "refs/heads/main"
+  - subject: "myorg/other-repo"
+    roles: ["arn:aws:iam::111111111111:role/OtherRole"]
+role_groups:
+  - subjects: ["myorg/grouped-repo"]
+    defaults:
+      roles: ["arn:aws:iam::111111111111:role/GroupRole"]
+`), "yaml"))
+		return c
+	}
+
+	const (
+		issuer    = "https://token.actions.githubusercontent.com"
+		adminRole = "arn:aws:iam::111111111111:role/AdminRole"
+		groupRole = "arn:aws:iam::111111111111:role/GroupRole"
+	)
+
+	t.Run("role_mappings entry without roles inherits nothing", func(t *testing.T) {
+		c := base(t)
+		err := c.MergeBytes([]byte(`{"role_mappings":[{"subject":"myorg/lowpriv-repo","roles":["arn:aws:iam::111111111111:role/LowPrivRole"]}]}`), "json")
+		require.NoError(t, err)
+		require.Len(t, c.RoleMappings, 1)
+
+		matched, roles := c.AuthorizeRoles(issuer, "myorg/lowpriv-repo", map[string]any{})
+		require.True(t, matched)
+		assert.NotContains(t, roles, adminRole)
+		assert.Equal(t, []string{"arn:aws:iam::111111111111:role/LowPrivRole"}, roles)
+
+		matched, _ = c.AuthorizeRoles(issuer, "myorg/admin-repo", map[string]any{})
+		assert.False(t, matched, "the replaced mapping must be gone")
+	})
+
+	t.Run("role_mappings entry without conditions inherits none", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte(`{"role_mappings":[{"subject":"myorg/admin-repo","roles":["`+adminRole+`"]}]}`), "json"))
+		require.Len(t, c.RoleMappings, 1)
+		assert.Nil(t, c.RoleMappings[0].Conditions)
+	})
+
+	t.Run("role_mappings entry omitting roles is rejected, not inherited", func(t *testing.T) {
+		c := base(t)
+		err := c.MergeBytes([]byte(`{"role_mappings":[{"subject":"myorg/lowpriv-repo"}]}`), "json")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "subject and roles are required")
+	})
+
+	t.Run("role_groups entry omitting roles is rejected, not inherited", func(t *testing.T) {
+		c := base(t)
+		err := c.MergeBytes([]byte(`{"role_groups":[{"subjects":["myorg/new-repo"]}]}`), "json")
+		require.Error(t, err)
+		assert.NotContains(t, err.Error(), groupRole)
+	})
+
+	t.Run("role_groups entry replaces the base group", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte(`{"role_groups":[{"subjects":["myorg/new-repo"],"defaults":{"roles":["arn:aws:iam::111111111111:role/NewRole"]}}]}`), "json"))
+		require.Len(t, c.RoleGroups, 1)
+
+		matched, roles := c.AuthorizeRoles(issuer, "myorg/new-repo", map[string]any{})
+		require.True(t, matched)
+		assert.NotContains(t, roles, groupRole)
+
+		matched, _ = c.AuthorizeRoles(issuer, "myorg/grouped-repo", map[string]any{})
+		assert.False(t, matched, "the replaced group must be gone")
+	})
+
+	t.Run("an undeclared slice is left alone", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte(`{"log_bucket":"other-bucket"}`), "json"))
+		require.Len(t, c.RoleMappings, 2)
+		matched, roles := c.AuthorizeRoles(issuer, "myorg/admin-repo", map[string]any{"ref": "refs/heads/main"})
+		require.True(t, matched)
+		assert.Contains(t, roles, adminRole)
+	})
+}
