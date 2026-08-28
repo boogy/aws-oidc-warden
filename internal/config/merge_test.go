@@ -354,6 +354,47 @@ role_groups:
 		assert.False(t, matched, "the replaced group must be gone")
 	})
 
+	t.Run("explicit null role_mappings clears the base grants", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte("role_mappings: null\n"), "yaml"))
+		assert.Empty(t, c.RoleMappings)
+
+		matched, _ := c.AuthorizeRoles(issuer, "myorg/admin-repo", map[string]any{"ref": "refs/heads/main"})
+		assert.False(t, matched)
+	})
+
+	t.Run("config_fragment_checksums entry omitting checksum is rejected, not inherited", func(t *testing.T) {
+		c := &Config{}
+		require.NoError(t, c.MergeBytes([]byte(`
+role_session_name: "aow"
+issuers:
+  - issuer: "`+issuer+`"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+config_fragments: ["s3://cfg/a.yaml", "s3://cfg/b.yaml"]
+config_fragment_checksums:
+  - uri: "s3://cfg/a.yaml"
+    checksum: "sha256:aaaa"
+`), "yaml"))
+
+		err := c.MergeBytes([]byte(`{"config_fragment_checksums":[{"uri":"s3://cfg/b.yaml"}]}`), "json")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "checksum is required")
+	})
+
+	t.Run("a struct key still merges field-wise", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte(`
+cross_account:
+  enabled: true
+  allowed_accounts: ["111111111111"]
+`), "yaml"))
+		require.NoError(t, c.MergeBytes([]byte(`{"cross_account":{"spoke_role_name":"aow-spoke"}}`), "json"))
+		require.NotNil(t, c.CrossAccount)
+		assert.True(t, c.CrossAccount.Enabled)
+		assert.Equal(t, []string{"111111111111"}, c.CrossAccount.AllowedAccounts)
+	})
+
 	t.Run("an undeclared slice is left alone", func(t *testing.T) {
 		c := base(t)
 		require.NoError(t, c.MergeBytes([]byte(`{"log_bucket":"other-bucket"}`), "json"))
