@@ -5,13 +5,11 @@ import (
 	"strings"
 )
 
-// issuerIndex buckets one issuer's effective RoleMappings by how specific
-// their subject pattern is, so AuthorizeRoles/FindSessionPolicy can skip
-// scanning mappings that provably cannot match a given subject. Bucketing can
-// only affect performance, never correctness: every candidate returned by
-// candidatesFor is re-verified against its own compiledPattern before being
-// treated as a match (see AuthorizeRoles/FindSessionPolicy in config.go),
-// which is what makes the index provably equivalent to a full linear scan.
+// issuerIndex buckets one issuer's effective RoleMappings by subject-pattern
+// specificity so AuthorizeRoles/FindSessionPolicy can skip mappings that
+// provably cannot match. Every candidatesFor result is still re-verified
+// against its own compiledPattern (config.go); soundness of the bucket
+// assignment itself is classifySubject's job — see there.
 type issuerIndex struct {
 	exact   map[string][]*RoleMapping // subject pattern is a literal, whole string
 	byOwner map[string][]*RoleMapping // subject pattern's first "owner/" segment is literal
@@ -22,9 +20,8 @@ type issuerIndex struct {
 type authzIndex map[string]*issuerIndex
 
 // buildAuthzIndex classifies every mapping's Subject pattern and buckets it
-// under its resolved Issuer. Order within each bucket follows mappings'
-// original relative order (declaration order is preserved via
-// RoleMapping.order for callers that need first-match-wins semantics).
+// under its resolved Issuer. Order within each bucket is declaration order
+// (RoleMapping.order), for first-match-wins callers.
 func buildAuthzIndex(mappings []*RoleMapping) authzIndex {
 	idx := make(authzIndex)
 
@@ -61,27 +58,16 @@ const (
 	subjectOwner
 )
 
-// classifySubject inspects a subject pattern (a regex, auto-anchored at
-// compile time — compiled is its RoleMapping.compiledPattern) and decides
-// which index bucket it belongs in:
-//   - a pattern that is a literal string (no regex metacharacters) can only
-//     ever match that exact string, so it goes in the exact bucket keyed by
-//     itself;
-//   - a pattern where EVERY match provably starts with a literal "owner/"
-//     segment goes in the byOwner bucket keyed by that owner, since it can only
-//     match subjects under that owner;
-//   - anything else is fully generic and must always be scanned.
+// classifySubject buckets a subject pattern (auto-anchored regex; compiled is
+// RoleMapping.compiledPattern): a literal string goes in exact; a pattern
+// whose compiled regexp.LiteralPrefix() provably starts with "owner/" goes in
+// byOwner[owner]; anything else is fully generic ("any", always scanned).
 //
-// The byOwner decision is made from the compiled program's guaranteed literal
-// prefix (regexp.LiteralPrefix), NOT from string surgery on the raw pattern.
-// byOwner[owner] is only correct if every subject the pattern can match starts
-// with "owner/" — otherwise candidatesFor, which keys on ownerOf(subject),
-// would miss matches. LiteralPrefix returns the literal string every match must
-// begin with, so bucketing by the text before its first '/' is sound. This
-// correctly demotes shapes that a naive "text before the first '/'" scan got
-// wrong: a quantified first slash ("myorg/?prod-.*" → prefix "myorg", which can
-// match "myorgprod-x" with no slash) and top-level alternation ("a/b|c/d" →
-// prefix ""), both of which fall through to the conservative "any" bucket.
+// byOwner MUST use the compiled LiteralPrefix, not string surgery on the raw
+// pattern text before its first '/' — that naive scan is unsound for a
+// quantified first slash ("myorg/?prod-.*" can match "myorgprod-x", no
+// slash) or top-level alternation ("a/b|c/d"), both of which must fall
+// through to "any" instead of missing matches in candidatesFor.
 func classifySubject(pattern string, compiled *regexp.Regexp) (owner string, class subjectClass) {
 	if isLiteral(pattern) {
 		return "", subjectExact
@@ -112,13 +98,9 @@ func ownerOf(subject string) string {
 	return subject
 }
 
-// candidatesFor gathers every mapping that could possibly match subject:
-// exact-literal matches on subject itself, owner-bucketed matches on
-// subject's owner segment, and every fully-generic mapping. It always
-// allocates a fresh slice — idx.exact/idx.byOwner/idx.any are shared,
-// concurrently-read state (behind Config's atomic snapshot), so appending
-// onto a slice retrieved from one of those maps in place would risk a data
-// race / corrupting other readers' view of that bucket.
+// candidatesFor gathers every mapping that could possibly match subject.
+// Always allocates a fresh slice: idx's buckets are shared, concurrently-read
+// state, so appending onto one in place would race.
 func candidatesFor(idx *issuerIndex, subject string) []*RoleMapping {
 	owner := ownerOf(subject)
 	exact := idx.exact[subject]

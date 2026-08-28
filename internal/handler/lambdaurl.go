@@ -32,7 +32,6 @@ func NewAwsLambdaUrl(provider *config.Provider, consumer aws.AwsConsumerInterfac
 
 // Handler is the Lambda function interface for Lambda URLs
 func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
-	// Create a request context with tracking information and timeout
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
@@ -40,7 +39,6 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
 	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
-	// Add request ID and additional data to all logs for this request
 	log := slog.With(
 		slog.String("requestId", requestID),
 		slog.String("path", event.RawPath),
@@ -49,31 +47,25 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 		slog.String("requestTime", event.RequestContext.Time),
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
-	// AWS always populates these, so this is defence-in-depth rather than a
-	// live gap — kept consistent with the other adapters regardless.
 	if frontendRequestID != "" {
 		log = log.With(slog.String("frontendRequestId", frontendRequestID))
 	}
 	if sourceIP != "" {
 		log = log.With(slog.String("sourceIp", sourceIP))
 	}
-	// The attested case is the norm here; only surface provenance when it's
-	// not the platform-attested value, so an anomaly is visible without a
-	// constant "sourceIpFrom=frontend" on every line.
+	// Only surfaced when not the platform-attested value, so an anomaly is
+	// visible without a constant "sourceIpFrom=frontend" on every line.
 	if sourceIPFrom != "" && sourceIPFrom != ipSourceFrontend {
 		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
 	}
 
-	// Parse request data
 	requestData, err := h.unmarshalRequestData(event)
 	if err != nil {
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
-	// Build extraction input from the parsed request token.
 	input := validator.ExtractionInput{Token: requestData.Token}
 
-	// Process the request using the request processor
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
 		return h.respondError(ctx, err, http.StatusInternalServerError)

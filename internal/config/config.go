@@ -45,14 +45,10 @@ var (
 	// session name, which is the most likely thing an operator will try.
 	sessionNameCharset = regexp.MustCompile(`^[\w+=,.@-]+$`)
 
-	// nonIdentityClaims are raw claim names claim_mappings.subject may never
-	// point at. Each is either identical for every token the issuer mints (iss,
-	// aud) or carries no identity at all (exp, nbf, iat), so making one the
-	// canonical subject collapses every caller from that issuer into a single
-	// subject — any authenticated caller then satisfies any other's subject
-	// pattern. "sub" is deliberately absent: it is the natural, correct mapping
-	// for most non-GitHub IdPs and shadows nothing, since claim_mappings is a
-	// read-only projection over the already-verified claims.
+	// nonIdentityClaims are claims claim_mappings.subject may never target:
+	// each is either identical for every token (iss, aud) or carries no
+	// identity (exp, nbf, iat), so using one collapses every caller to one
+	// subject. "sub" is deliberately not listed — it's the normal mapping.
 	nonIdentityClaims = map[string]bool{
 		"iss": true, "aud": true, "exp": true, "nbf": true, "iat": true,
 	}
@@ -115,14 +111,8 @@ type IssuerConfig struct {
 	// non-empty for a token from this issuer to be accepted.
 	RequiredClaims []string `mapstructure:"required_claims" json:"required_claims,omitempty"`
 
-	// SessionTags maps an STS session tag key to the raw verified claim name
-	// whose value populates it.
-	// Keys must be written lower-case. A key here is a CONFIG key, and the
-	// loader case-folds every key it reads, so `CostCenter: cost_center`
-	// reaches STS as `costcenter`. The case is gone before this struct is
-	// populated, so it cannot be recovered or rejected later — the
-	// constraint is the loader's, and lower-case in, lower-case out is the
-	// only form that round-trips.
+	// SessionTags maps an STS tag key to the raw claim populating it. Keys
+	// must be lower-case: viper case-folds config keys before this decodes.
 	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
 }
 
@@ -164,10 +154,8 @@ type TagAuth struct {
 	TagPrefix  string `mapstructure:"tag_prefix" json:"tag_prefix,omitempty"`   // default "aow/"
 	DefaultOrg string `mapstructure:"default_org" json:"default_org,omitempty"` // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
 
-	// TransitiveSessionTags is deprecated: use the top-level
-	// Config.SessionTagsTransitive instead — this field has nothing to do
-	// with tag-based authorization and predates that key. Kept only as a
-	// fallback so existing configs keep working; see
+	// Deprecated: use the top-level Config.SessionTagsTransitive instead.
+	// Kept only as a fallback for existing configs; see
 	// Config.TransitiveSessionTags().
 	TransitiveSessionTags bool `mapstructure:"transitive_session_tags" json:"transitive_session_tags,omitempty"`
 
@@ -178,17 +166,12 @@ type TagAuth struct {
 }
 
 // CrossAccount is a policy gate for member-account role assumption: Enabled
-// false (the default, or this struct nil) hard-blocks every cross-account
-// operation — both AssumeRole and, for tag_auth, the IAM tag read — failing
-// closed rather than falling back to any other behavior. Role assumption is
-// always direct: one hop, hub account to target account, using the warden's
-// own credentials. SpokeRoleName/ExternalID/SpokeSessionDuration configure a
-// separate hop — a convention-named role assumed only so tag_auth can read a
-// target role's IAM tags cross-account (iam:GetRole); the spoke is never used
-// to assume the target role itself, and ExternalID is never sent on that
-// assume. Independent of tag_auth — explicit role_mappings can target
-// member-account ARNs with tag_auth disabled. The account ID is parsed from
-// the requested role ARN.
+// false (or nil) hard-blocks every cross-account operation (AssumeRole and,
+// for tag_auth, the IAM tag read) — fail closed. Assumption is always direct
+// hub->target, one hop, using the warden's own credentials. SpokeRoleName/
+// ExternalID/SpokeSessionDuration configure a separate hub->spoke hop used
+// only so tag_auth can read a target role's IAM tags cross-account — never to
+// assume the target role itself. Independent of tag_auth.
 type CrossAccount struct {
 	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
 	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
@@ -257,20 +240,13 @@ type Config struct {
 	ConfigFragments []string `mapstructure:"config_fragments" json:"config_fragments,omitempty"`
 
 	// ConfigFragmentChecksums optionally pins an expected integrity value
-	// (whatever a fragment's fetch reports as its etag — an S3 ETag, or the
-	// sha256 content hash computed for local-path fragments) per
-	// config_fragments entry. When set for an entry, a fetched value that
-	// doesn't match exactly is rejected (S9); entries with no pinned value
-	// are unauthenticated beyond transport — their etag is then used only
-	// for reload change-detection (provider.go).
+	// (etag, or sha256 content hash for local paths) per config_fragments
+	// entry; a mismatch on fetch is rejected. Unpinned entries use their etag
+	// only for reload change-detection.
 	//
-	// This is a LIST of {uri, checksum} pairs, not a map keyed by URI,
-	// because the URI cannot survive being a config key: viper lower-cases
-	// every key it reads and splits it on ".", so the map form turned
-	// "/etc/fragments/team.yaml" into a nested map under a truncated,
-	// lower-cased path and failed to decode at all — i.e. it could not pin
-	// any fragment whose path contains a dot, which is every *.yaml file.
-	// A URI written as a VALUE is passed through untouched.
+	// A LIST, not a map keyed by URI: viper lower-cases and dot-splits config
+	// keys, so a URI containing "." (any *.yaml path) would corrupt as a map
+	// key. As a VALUE it passes through untouched.
 	ConfigFragmentChecksums []FragmentChecksum `mapstructure:"config_fragment_checksums" json:"config_fragment_checksums,omitempty"`
 
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
@@ -298,19 +274,13 @@ type Config struct {
 	// audit sink capable of persisting anything.
 	AuditRequired bool `mapstructure:"audit_required" json:"audit_required,omitempty"`
 
-	// SessionTagsTransitive marks every session tag attached to AssumeRole
-	// transitive, so the identity survives further role chaining by the
-	// target role and cannot be altered downstream. Top-level because it
-	// governs session tagging, which happens on every request — it was
-	// originally nested under tag_auth, where operators running with
-	// tag_auth.enabled=false reasonably assumed it was inert.
-	//
-	// Defaults to false so upgrading changes nothing: transitive tags are
-	// immutable downstream, so a target role that re-tags with the same keys
-	// while chaining would start failing. Turning it on is nonetheless the
-	// recommended posture — without it, an identity tag is dropped at the
-	// first role hop and every ABAC policy past that hop stops seeing who the
-	// caller was. example-config.yaml and docs/ say so prominently.
+	// SessionTagsTransitive marks every AssumeRole session tag transitive, so
+	// identity survives further role chaining. Top-level (not under
+	// tag_auth) because it applies on every request regardless of tag-auth.
+	// Defaults to false for upgrade safety — transitive tags are immutable
+	// downstream, so a target role that re-tags with the same keys would
+	// start failing. Recommended to enable: without it, ABAC policies past
+	// the first hop can't see the caller's identity.
 	SessionTagsTransitive bool `mapstructure:"session_tags_transitive" json:"session_tags_transitive,omitempty"`
 
 	// TagAuth enables tag-based authorization (IAM role tags authorize claims).
@@ -353,24 +323,11 @@ func envVarName(key string) string {
 	return "AOW_" + strings.ToUpper(envKeyReplacer.Replace(key))
 }
 
-// envBool parses a boolean AOW_ env value and assigns it via set, leaving the
-// current value untouched (with a warning) when the value is unparseable.
-//
-// strconv.ParseBool is deliberate: it is the same parser viper's cast.ToBool
-// uses when LoadConfig unmarshals env vars at boot. The previous hand-rolled
-// truthy check accepted only "true"/"1"/"True"/"TRUE", so the two paths
-// disagreed on every other value ParseBool accepts — AOW_AUDIT_REQUIRED=t was
-// true at boot and silently became FALSE on the first remote-config refresh,
-// downgrading the fail-closed audit contract to best-effort with nothing in
-// the logs. Sharing one parser is what makes envBindings' "the two paths
-// cannot drift" claim true of values, not just of the key list.
-//
-// Unparseable values ("yes", "on", a typo) warn and keep the current value
-// rather than silently assigning false: these knobs now default to true, and a
-// typo must not quietly disable a security control. viper's cast.ToBool
-// swallows the same error into false at boot, so the resulting value still
-// matches in the common case (the reload clones the boot config); the
-// difference is that a reload also says so in the log.
+// envBool parses a boolean AOW_ env value via strconv.ParseBool — the same
+// parser viper's cast.ToBool uses at boot, so the two paths can't disagree on
+// a value. On a parse error it warns and leaves the current value untouched
+// rather than defaulting false: these knobs default to true, and a typo must
+// not silently disable a security control.
 func envBool(key, v string, set func(bool)) {
 	b, err := strconv.ParseBool(strings.TrimSpace(v))
 	if err != nil {
@@ -656,24 +613,14 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 		return fmt.Errorf("failed to parse %s configuration: %w", format, err)
 	}
 
-	// A payload that declares issuers must fully replace c.Issuers before
+	// A payload declaring issuers must fully replace c.Issuers before
 	// decoding, not merge onto it: mapstructure decodes issuers[i] onto
-	// whatever IssuerConfig already occupies that index (e.g. the zero-config
-	// GitHub seed — see defaultGitHubIssuer), and a null/omitted
-	// required_claims or session_tags in the payload is then "kept" (slice)
-	// or additively merged (map) rather than treated as unset — silently
-	// inheriting the seed's GitHub required_claims/session_tags onto whatever
-	// issuer lands at that index. A payload that omits issuers entirely still
-	// leaves the existing set untouched, matching the "only keys present in
-	// data are overwritten" contract documented above.
-	//
-	// v.InConfig("issuers") is not enough: it returns false for an explicitly
-	// null value (viper's lookup can't tell "absent" from "present but nil"
-	// apart), so "issuers: null" would fall through to the additive merge
-	// above and silently keep trusting the GitHub seed. AllKeys() flattens
-	// from the raw parsed map instead of doing a nil-checked lookup, so it
-	// still reports "issuers" as declared — Validate() then rejects the
-	// resulting empty set instead of booting open.
+	// whatever IssuerConfig already sits at that index (e.g. the zero-config
+	// GitHub seed), so an omitted/null required_claims or session_tags would
+	// silently inherit the seed's values. v.InConfig can't distinguish
+	// "absent" from "explicitly null", so AllKeys() (which reports both) is
+	// used instead — an explicit "issuers: null" then hits Validate()'s
+	// empty-issuers check rather than booting open on the seed.
 	if slices.Contains(v.AllKeys(), "issuers") {
 		c.Issuers = nil
 	}
@@ -728,25 +675,18 @@ func (c *Config) LeewayOrDefault() time.Duration {
 }
 
 // AuditEnforced reports whether the durable, fail-closed audit contract is
-// actually in force: the operator asked for it AND there is a destination to
-// write to. Derived per call rather than resolved once into AuditRequired,
-// because a hot reload can supply log_to_s3/log_bucket after boot and the
-// guarantee must engage at that point without the operator restating
-// audit_required. Callers gating credential issuance must use this, never
-// AuditRequired (which carries only the declared intent).
+// actually in force (audit_required AND a write destination configured).
+// Derived per call, not cached, so a hot reload that later supplies
+// log_to_s3/log_bucket re-engages it without restating audit_required.
+// Callers gating credential issuance must use this, never AuditRequired.
 func (c *Config) AuditEnforced() bool {
 	return c.AuditRequired && c.LogToS3 && c.LogBucket != ""
 }
 
-// TransitiveSessionTags reports whether session tags should be marked
-// transitive. Either source turning it on wins: the top-level
-// session_tags_transitive or the deprecated tag_auth.transitive_session_tags,
-// so existing configs keep working. Both default to false.
-//
-// The OR is deliberate rather than strict precedence. An operator who sets the
-// top-level key to false while leaving the deprecated key true has written a
-// self-contradicting config; resolving that toward transitive keeps the
-// stronger guarantee, and the Validate() warning below tells them to pick one.
+// TransitiveSessionTags reports whether session tags should be transitive:
+// either the top-level session_tags_transitive or the deprecated
+// tag_auth.transitive_session_tags being true wins (OR, not precedence) — a
+// config setting both inconsistently resolves toward the stronger guarantee.
 func (c *Config) TransitiveSessionTags() bool {
 	if c.SessionTagsTransitive {
 		return true
@@ -798,19 +738,12 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("issuers[%d] (%s): non-github issuers must define claim_mappings.subject", i, iss.Issuer)
 		}
 
-		// claim_mappings maps a canonical field name (the key) to a raw claim
-		// name (the value). Only the VALUE side is constrained, and only for
-		// `subject`. The key side deliberately is not: `subject` is the one
-		// field the validator reads (providerAdapter.subject), but every
-		// entry's value also joins this issuer's auditable-claim set
-		// (auditableClaimsFor), so a non-subject key is a supported way to say
-		// "also record this claim" rather than a no-op to reject.
-		// The comparison is against the value as literally written, and map
-		// values are not viper-folded, so `subject: ISS` is not caught by name.
-		// That is sufficient: reaching the identity collapse this guard prevents
-		// would need the IdP to mint a claim named `ISS` *as well as* the real
-		// `iss`, and absent that the mapping resolves no claim at all and
-		// stringClaim fails the token outright rather than yielding a subject.
+		// Only claim_mappings.subject's VALUE is constrained here; other keys
+		// are a supported way to add a claim to the auditable set, not rejected.
+		// Comparison is case-sensitive (map values aren't viper-folded) — safe
+		// because an IdP would need to mint a claim literally named e.g. "ISS"
+		// for the check to miss, and absent that the mapping fails to resolve
+		// a subject at all rather than yielding one.
 		if claimName := iss.ClaimMappings["subject"]; nonIdentityClaims[claimName] {
 			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}
@@ -881,10 +814,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("log_level must be one of debug/info/warn/error, got %q", c.LogLevel)
 	}
 	if c.AuditRequired && (!c.LogToS3 || c.LogBucket == "") {
-		// Warn, but never write back: Provider.refresh clones the pristine
-		// base, so a mutation here is permanent and a later reload that
-		// supplies log_to_s3+log_bucket could never re-engage enforcement
-		// (fail-open). AuditEnforced() re-derives per snapshot instead.
+		// Never write back: Provider clones the pristine base each reload, so a
+		// mutation here would be permanent and block a later reload from
+		// re-engaging enforcement. AuditEnforced() re-derives per snapshot.
 		slog.Warn("audit_required is set but log_to_s3/log_bucket are not configured; " +
 			"the durable audit trail is inactive until both are set (decisions still log to CloudWatch)")
 	}
@@ -966,17 +898,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, m.Subject, err)
 		}
 
-		// Clone the condition into effective-private memory BEFORE compiling.
-		// compileCondition mutates *Condition in place (it reslices
-		// cond.compiled to [:0] and re-appends), and a single *Condition can be
-		// shared across snapshots — a config_fragment reuses its parsed
-		// FragmentConfig across hot reloads (provider.applyFragments), and a
-		// role_group shares one Defaults.Conditions across every expanded
-		// subject. Compiling a shared struct in place would race a concurrent
-		// request reading the currently-served snapshot's compiled slice and
-		// could momentarily blank it, silently passing all conditions. Cloning
-		// here guarantees compileCondition only ever writes to a struct owned by
-		// this effective mapping.
+		// Clone into effective-private memory BEFORE compiling: compileCondition
+		// mutates *Condition in place, and one *Condition can be shared across
+		// snapshots (fragment reuse, role_group defaults) — compiling it live
+		// would race a concurrent reader and could transiently pass all conditions.
 		m.Conditions = cloneCondition(m.Conditions)
 		if err := compileCondition(m.Conditions); err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
@@ -1019,13 +944,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// A mapping that declares no issuer binds to default_issuer. With a single
-	// configured issuer that is unambiguous, but once a second issuer exists
-	// the same mappings silently move into whichever namespace default_issuer
-	// names — so an overlay that adds an issuer AND sets default_issuer in one
-	// merge re-homes every previously-implicit grant, with no redeploy. Fragments
-	// are guarded against this (mergeFragment requires a base-defined,
-	// non-conflicting default_issuer); the primary overlay is not, so surface it.
+	// A mapping with no explicit issuer binds to default_issuer, which is
+	// unambiguous with one issuer but re-homes every such grant if an overlay
+	// later adds a second issuer and default_issuer in the same merge.
+	// Fragments guard against this (mergeFragment); the primary overlay does
+	// not, so just warn.
 	if implicitlyBound > 0 {
 		slog.Warn("mappings are bound to default_issuer while multiple issuers are configured; "+
 			"set an explicit issuer on each mapping to pin it",
@@ -1133,11 +1056,9 @@ func (c *Config) fragmentChecksum(uri string) (string, bool) {
 	return "", false
 }
 
-// validateFragmentChecksums rejects malformed or inert pins. A pin naming a
-// URI that no config_fragments entry lists is not a harmless typo: it looks
-// like the fragment is integrity-pinned while nothing is ever checked against
-// it, which is precisely the state the pin exists to prevent. Fail at boot
-// rather than serve traffic with an imaginary guarantee.
+// validateFragmentChecksums rejects malformed or inert pins: a pin naming a
+// URI absent from config_fragments would look integrity-checked while
+// nothing is ever verified against it — fail at boot instead.
 func (c *Config) validateFragmentChecksums() error {
 	seen := make(map[string]bool, len(c.ConfigFragmentChecksums))
 	for i, p := range c.ConfigFragmentChecksums {
@@ -1169,13 +1090,9 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 			continue
 		}
 		name := strings.TrimPrefix(r, "@")
-		// Exact first, then case-folded. viper lower-cases every map KEY it
-		// reads, so a role_set declared as `ProdDeployers:` is stored as
-		// `proddeployers`, while this reference — a map VALUE — keeps the
-		// case the operator wrote. Without the folded retry the two halves of
-		// the operator's own config cannot see each other and every
-		// mixed-case role_set name is "not defined". Same resolution order as
-		// condition keys and AuditableClaims, for the same reason.
+		// Exact first, then case-folded: viper lower-cases the role_set's map
+		// KEY but not this reference (a map VALUE), so a mixed-case name needs
+		// the folded retry to resolve at all. Same order as condition keys.
 		set, ok := c.RoleSets[name]
 		if !ok {
 			set, ok = c.RoleSets[strings.ToLower(name)]
@@ -1191,14 +1108,10 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 	return out, nil
 }
 
-// compileAnchoredSubject compiles a role_mapping/role_group subject pattern as
-// an auto-anchored regex. It applies the same bare-wildcard rejection as
-// compileAnchoredCondition: a subject is the primary identity gate, so
-// `subject: ".*"` would grant its roles to every subject of the bound issuer —
-// every repository in every org that can mint a token that issuer signs.
-//
-// The documentation has always said "keep patterns specific, never `.*`";
-// until now nothing enforced it for subjects, only for conditions.
+// compileAnchoredSubject compiles a subject pattern as an auto-anchored
+// regex, rejecting bare wildcards (bareWildcards) like compileAnchoredCondition:
+// a subject is the primary identity gate, so ".*" would grant every subject
+// of the bound issuer.
 func compileAnchoredSubject(pattern string) (*regexp.Regexp, error) {
 	if bareWildcards[pattern] {
 		return nil, fmt.Errorf("subject pattern %q is too permissive; it matches every subject for this issuer — use a specific pattern", pattern)
@@ -1206,16 +1119,11 @@ func compileAnchoredSubject(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile("^(?:" + pattern + ")$")
 }
 
-// validateRoleSessionName rejects a session name STS would refuse or that the
-// runtime sanitizer would have to reshape.
-//
-// Rejecting beats sanitizing here for the same reason BuildSessionTags skips an
-// illegal tag rather than coercing it (internal/aws/consumer.go:309): this
-// value becomes an identity. It appears in the assumed-role ARN, in
-// aws:userid, in CloudTrail, and is conditionable via sts:RoleSessionName, so a
-// silently-mangled name means IAM conditions and audit queries are written
-// against a string the operator never chose. Failing at boot is a config error
-// the operator sees once; a mangled name is a mystery they debug in CloudTrail.
+// validateRoleSessionName rejects a session name STS would refuse or the
+// runtime sanitizer would reshape. Rejects rather than sanitizes: this value
+// becomes an identity (assumed-role ARN, aws:userid, CloudTrail, IAM
+// conditions on sts:RoleSessionName), so a silently-mangled name is a mystery
+// to debug later instead of a config error caught at boot.
 func validateRoleSessionName(name string) error {
 	if len(name) < 2 || len(name) > 64 {
 		return fmt.Errorf("must be 2-64 characters, got %d", len(name))
@@ -1226,25 +1134,15 @@ func validateRoleSessionName(name string) error {
 	return nil
 }
 
-// warnUnscopedRoleGrants logs a warning for every (issuer, role) that is
-// granted by more than one effective mapping where the LOWEST-order grant
-// carries no session policy but some higher-order grant does.
-//
-// FindSessionPolicy is lowest-order-wins among the mappings that grant a role,
-// so in that shape the deliberately-scoped mapping's policy is silently
-// dropped and the role is assumed unscoped. Within role_mappings the operator
-// can fix this by reordering, but across the role_mappings/role_groups
-// boundary they CANNOT: appendEffective assigns order by append sequence and
-// every role_mapping is appended before every role_group, so a role_group's
-// session policy can never outrank a policy-less role_mapping for the same
-// role no matter how the file is written.
-//
-// The selection rule itself is deliberate and pinned by
-// TestOrderWinsAmongMappingsGrantingTheSameRole, so this makes the footgun
-// loud at config-load time rather than changing authorization semantics.
-// Subject overlap is not computed (regex intersection is not decidable
-// cheaply); sharing a role is a deliberate over-approximation, since a role
-// granted twice with inconsistent scoping is worth surfacing regardless.
+// warnUnscopedRoleGrants warns when a role granted by multiple effective
+// mappings has its LOWEST-order grant carrying no session_policy while a
+// higher-order grant does — FindSessionPolicy picks lowest-order-wins, so the
+// scoped mapping's policy is silently dropped and the role assumed unscoped.
+// Reordering role_mappings can fix this, but role_mappings are always
+// appended before role_groups, so that boundary can't be fixed by reordering
+// alone. Subject overlap isn't computed (regex intersection isn't cheap);
+// sharing a role is treated as enough to warn on.
+// (TestOrderWinsAmongMappingsGrantingTheSameRole pins the selection rule.)
 func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	type grant struct{ lowest, scoped *RoleMapping }
 	grants := make(map[string]*grant)
@@ -1281,24 +1179,15 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	}
 }
 
-// warnTagAuthBypassesMappingScoping logs a warning for every role that a
-// role_mapping scopes with a session_policy or a role_session_name while
-// tag_auth is enabled.
-//
-// The two authorization paths do not carry the same scoping. When
-// AuthorizeRoles finds no matching mapping, the tag-auth fallback can still
-// grant the role off the role's own IAM tags — and then findAuthorizingMapping
-// returns nil, so FindSessionPolicy and FindRoleSessionName both return the
-// empty result: the role is assumed with no session policy and under the
-// global role_session_name. An operator who scoped a role down in
-// role_mappings and separately tagged it for tag-auth therefore has a
-// second, unscoped way into the same role.
-//
-// This is by design (tag-auth's grant lives on the role, not in the config)
-// and is not an authorization bypass — the identity gate still applies — but
-// the scoping asymmetry is invisible in the config file, so it is made loud at
-// load time. Like warnUnscopedRoleGrants this over-approximates: whether the
-// role actually carries the tag-auth tags is an IAM fact this code cannot see.
+// warnTagAuthBypassesMappingScoping warns when a role_mapping scopes a role
+// with session_policy or role_session_name while tag_auth is enabled: if
+// AuthorizeRoles finds no matching mapping, tag-auth can still grant the same
+// role off its IAM tags, and then FindSessionPolicy/FindRoleSessionName
+// return empty — the role assumes unscoped, under the global session name.
+// Not a bypass (the identity gate still applies), but the asymmetry is
+// invisible in the config, so surface it. Over-approximates like
+// warnUnscopedRoleGrants: whether the role actually carries the tags is an
+// IAM fact this code can't see.
 func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
 	if tagAuth == nil || !tagAuth.Enabled {
 		return
@@ -1343,23 +1232,14 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 	return nil
 }
 
-// FindSessionPolicy returns the session policy that scopes the assumption of
-// role by (issuer, subject) under claims. The policy is taken from the specific
-// mapping that AUTHORIZED this role — one that matches the subject, satisfies
-// its conditions, AND grants role — never from an unrelated broader mapping
-// that merely shares the subject. This mirrors AuthorizeRoles' match semantics
-// exactly, so a role's scoping policy always travels with the grant.
-//
-// Selecting by subject alone (the pre-fix behavior) dropped the policy of a
-// narrow, deliberately-scoped mapping whenever an earlier-declared broad
-// mapping also matched the subject, causing a privileged role to be assumed
-// unscoped. Among several qualifying mappings the first-declared (lowest order)
-// wins, preserving first-match-wins semantics within the correct candidate set.
-//
-// Returns (nil, nil) when no mapping grants role — e.g. a role authorized via
-// tag-auth, which carries no config-declared session policy. Bucketing into the
-// index is purely a performance detail: every candidate is re-verified against
-// its compiled pattern (index↔linear-scan parity).
+// FindSessionPolicy returns the session policy scoping role's assumption by
+// (issuer, subject) under claims — taken from the specific mapping that
+// AUTHORIZED this role (matches subject, satisfies conditions, AND grants
+// role), never a broader mapping that merely shares the subject. Selecting by
+// subject alone (pre-fix) dropped a narrow mapping's policy whenever a
+// broader one matched first, assuming a privileged role unscoped. Among
+// qualifying mappings, first-declared (lowest order) wins.
+// Returns (nil, nil) when no mapping grants role (e.g. tag-auth).
 func (c *Config) FindSessionPolicy(issuer, subject, role string, claims map[string]any) (*string, *string) {
 	best := c.findAuthorizingMapping(issuer, subject, role, claims)
 	if best == nil {
@@ -1375,18 +1255,11 @@ func (c *Config) FindSessionPolicy(issuer, subject, role string, claims map[stri
 }
 
 // findAuthorizingMapping returns the mapping that authorized role for
-// (issuer, subject) under claims: one that matches the subject pattern,
-// satisfies its conditions, AND grants role. Among several qualifying mappings
-// the first-declared (lowest order) wins.
-//
-// Extracted so FindSessionPolicy and FindRoleSessionName cannot diverge. They
-// must resolve to the SAME mapping — a session policy from one mapping paired
-// with a session name from another would mean CloudTrail attributes the
-// session to an identity that is not the one whose policy scoped it.
-//
-// Returns nil when no mapping grants role (e.g. a tag-auth grant, which has no
-// config-declared mapping). Bucketing into the index is purely a performance
-// detail: every candidate is re-verified against its compiled pattern.
+// (issuer, subject) under claims (matches subject, satisfies conditions, AND
+// grants role; first-declared/lowest-order wins). Extracted so
+// FindSessionPolicy and FindRoleSessionName can't diverge and attribute a
+// session to a mapping that didn't actually authorize it. Returns nil when no
+// mapping grants role (e.g. tag-auth).
 func (c *Config) findAuthorizingMapping(issuer, subject, role string, claims map[string]any) *RoleMapping {
 	idx, ok := c.index[issuer]
 	if !ok {
@@ -1411,14 +1284,10 @@ func (c *Config) findAuthorizingMapping(issuer, subject, role string, claims map
 	return best
 }
 
-// FindRoleSessionName returns the STS session name override declared by the
-// mapping that authorized role for (issuer, subject) under claims, or "" if
-// there is no such mapping or it declares no override. "" means the caller
-// should use the global Config.RoleSessionName.
-//
-// Resolution is identical to FindSessionPolicy by construction (both go through
-// findAuthorizingMapping), so the name and the policy always come from the same
-// grant. The returned value was validated at Validate() time.
+// FindRoleSessionName returns the STS session name override from the mapping
+// that authorized role for (issuer, subject), or "" (use the global
+// RoleSessionName). Resolves via findAuthorizingMapping like FindSessionPolicy
+// so the two can never come from different mappings.
 func (c *Config) FindRoleSessionName(issuer, subject, role string, claims map[string]any) string {
 	if best := c.findAuthorizingMapping(issuer, subject, role, claims); best != nil {
 		return best.RoleSessionName

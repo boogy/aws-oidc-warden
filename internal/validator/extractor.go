@@ -10,24 +10,10 @@ import (
 // ExtractionInput carries raw per-request data for claims extraction.
 // Only populate the fields relevant to the configured mode.
 type ExtractionInput struct {
-	// Config pins the config generation for this request. The processor
-	// captures one *Config for the whole request and puts it here, so claim
-	// extraction and the authorization that follows it are decided by the SAME
-	// generation.
-	//
-	// Without it every extractor called provider.Get() again, which is a
-	// SECOND read of a pointer a concurrent hot reload can have swapped in
-	// between. One request could then be token-validated against generation
-	// N+1 — its issuers, audiences, claim mappings and time bounds — and
-	// authorized against generation N. That is not the benign "in-flight
-	// request sees a stale config" case, where one consistent generation
-	// decides everything: a refresh that widens validation while narrowing
-	// authorization (rotating an audience while retiring a role mapping in the
-	// same push) would authorize a caller NEITHER generation allows on its
-	// own.
-	//
-	// Nil is allowed and means "read the provider", which keeps direct callers
-	// and tests that construct an input by hand working unchanged.
+	// Config pins the config generation for this request, so claim extraction
+	// and the authorization that follows are decided by the SAME generation
+	// rather than two provider.Get() reads a concurrent hot reload could
+	// split across. Nil means "read the provider".
 	Config *config.Config
 
 	// Token is the raw JWT string; used only in "self" mode.

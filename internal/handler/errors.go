@@ -12,13 +12,8 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 	errCode = "internal_error"
 	errMsg = "An internal error occurred"
 	switch {
-	// ErrAuditWriteFailed is checked first: finalizeDeny folds it into the
-	// original deny error via fmt.Errorf("%w: %w", origErr, ErrAuditWriteFailed),
-	// so errors.Is matches BOTH the original sentinel (e.g. ErrRoleNotPermitted)
-	// and this one. It's only ever produced when audit_required=true AND the
-	// durable write failed, so it must always win over the original deny
-	// reason — otherwise a broken audit pipeline is misreported as an ordinary
-	// permission_denied/token_invalid and never alerts.
+	// Checked first: finalizeDeny folds this into the original deny error, so
+	// it must win over the original sentinel or a broken audit pipeline never alerts.
 	case errors.Is(err, ErrAuditWriteFailed):
 		errCode = "audit_write_failed"
 		errMsg = "Request denied: durable audit logging is required and unavailable"

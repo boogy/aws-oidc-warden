@@ -9,17 +9,13 @@ import (
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 )
 
-// fallbackErrorBody is the static body every adapter returns if marshaling the
-// Response itself fails (practically unreachable). A constant — never
-// fmt.Sprintf with err.Error() — so an internal error string can neither leak
-// to the caller nor break the JSON structure via unescaped characters.
+// fallbackErrorBody is returned if marshaling the Response itself fails.
+// A constant, never fmt.Sprintf with err.Error(), so an internal error
+// string can't leak to the caller or break the JSON via unescaped chars.
 const fallbackErrorBody = `{"success":false,"statusCode":500,"errorCode":"internal_error","message":"An internal error occurred"}`
 
-// requestMeta extracts the request ID and elapsed processing time from ctx,
-// as set by each adapter's createRequestContext via resolveRequestID. No
-// fallback here: every adapter sets RequestIDContextKey unconditionally, so
-// minting a second UUID on empty would let a response report an ID that
-// appears in no log line.
+// requestMeta extracts the request ID and elapsed time from ctx. No fallback
+// on empty: minting a second UUID would report an ID absent from any log line.
 func requestMeta(ctx context.Context) (requestID string, processingMS int64) {
 	requestID, _ = ctx.Value(RequestIDContextKey).(string)
 	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {
@@ -28,12 +24,9 @@ func requestMeta(ctx context.Context) (requestID string, processingMS int64) {
 	return requestID, processingMS
 }
 
-// buildErrorResponse classifies err into the shared Response shape (sentinel
-// error → error code/message/status via classifyError), logs it, and returns
-// the response along with the final status code (classifyError may override
-// the statusCode passed in). Shared by every adapter's respondError to avoid
-// duplicating this block per frontend; each adapter still wraps the result in
-// its own Lambda event response type.
+// buildErrorResponse classifies err into the shared Response shape via
+// classifyError (which may override statusCode), logs it, and returns the
+// response and final status. Shared by every adapter's respondError.
 func buildErrorResponse(ctx context.Context, err error, statusCode int) (Response, int) {
 	requestID, processingMS := requestMeta(ctx)
 	errCode, errMsg := classifyError(err, &statusCode)
@@ -45,11 +38,8 @@ func buildErrorResponse(ctx context.Context, err error, statusCode int) (Respons
 		slog.Int("status", statusCode),
 		slog.Int64("processingMs", processingMS))
 
-	// The raw err.Error() is logged above but deliberately NOT included in the
-	// response body: internal detail (JWT parse internals, JWKS/discovery/S3
-	// failures, config mismatches) must not reach unauthenticated callers.
-	// Clients get the classified errorCode/message plus the requestId to
-	// correlate with server-side logs.
+	// err.Error() is logged above but never in the response body: internal
+	// detail must not reach unauthenticated callers.
 	return Response{
 		Success:      false,
 		StatusCode:   statusCode,

@@ -30,18 +30,9 @@ type jwksWarmer interface {
 }
 
 // warmJWKSCache prefetches every configured issuer's JWKS during cold start
-// (Lambda INIT) so the first real request doesn't pay a discovery + JWKS fetch
-// inline. It runs the same fetch path Validate() uses — same cache, same TTL,
-// same key parsing and validation — so it changes only *when* a key is fetched,
-// never whether it is trusted.
-//
-// Skipped in delegated modes (apigw/alb), which verify upstream and never
-// consult JWKS; prefetching there would be pure wasted INIT latency.
-//
-// Best-effort by contract: WarmPrefetch logs and swallows its own errors, and
-// the timeout bounds a slow or unreachable issuer so it cannot stall INIT — on
-// timeout the first request simply pays the fetch as it did before.
-// Reports whether a prefetch was attempted.
+// (self mode only; delegated modes never consult JWKS). Best-effort: errors
+// are logged and swallowed, bounded by jwksWarmPrefetchTimeout. Reports
+// whether a prefetch was attempted.
 func warmJWKSCache(mode string, v jwksWarmer) bool {
 	if mode != "self" || v == nil {
 		return false
@@ -67,16 +58,13 @@ type Bootstrap struct {
 
 // NewBootstrap initializes all common components needed by Lambda handlers
 func NewBootstrap() (*Bootstrap, error) {
-	// Get version information
 	versionInfo := version.Get()
 
-	// Initialize logger first
 	logBuffer, logger, err := initializeLogger()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize logger: %w", err)
 	}
 
-	// Log startup information
 	logger.Info(
 		fmt.Sprintf("Starting %s", versionInfo.BinName),
 		slog.String("version", versionInfo.Version),
@@ -84,54 +72,37 @@ func NewBootstrap() (*Bootstrap, error) {
 		slog.String("date", versionInfo.Date),
 	)
 
-	// Load configuration
 	cfg, err := config.NewConfig()
 	if err != nil {
 		logger.Error("Failed to load configuration", slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// Initialize cache
 	jwksCache, err := cache.NewCache(cfg)
 	if err != nil {
 		logger.Error("Failed to initialize cache", slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
-	// Initialize AWS consumer (needed by buildConfigProvider)
 	consumer := aws.NewAwsConsumer(cfg)
 
-	// Build the configuration provider. When an S3 config source is set, the
-	// provider fetches+overlays it (optionally hot-reloading on an interval);
-	// otherwise it statically serves the local config.
 	provider, err := buildConfigProvider(cfg, consumer)
 	if err != nil {
 		logger.Error("Failed to load remote configuration", slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to load remote configuration: %w", err)
 	}
 
-	// Wire the live config into the consumer so hot-reloaded changes (allowed
-	// accounts, tag-auth enable/disable, spoke role/external ID) take effect on
-	// its enforcement and credential-routing paths, not just the processor's.
+	// Wired so hot-reloaded changes (allowed accounts, tag-auth, spoke role)
+	// take effect here too, not just on the processor's config reads.
 	consumer.SetConfigSource(provider.Get)
 
-	// Initialize S3Logger from the resolved config so log_bucket/log_prefix
-	// overrides in the S3 config are honored.
 	s3log := s3logger.NewS3Logger(provider.Get())
-	// Durable audit writes resolve log_bucket from the live config, so rotating
-	// it via hot reload takes effect instead of silently writing to the bucket
-	// captured at cold start (same pattern as consumer.SetConfigSource above).
-	s3log.SetConfigSource(provider.Get)
+	s3log.SetConfigSource(provider.Get) // rotated log_bucket takes effect on hot reload
 
-	// Initialize token validator from the provider so hot-reloaded issuer/audience
-	// changes take effect immediately without a Lambda restart.
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 
-	// The extractor's mode is fixed at cold start. Changing jwt_validation.mode
-	// at runtime requires a Lambda redeployment. Delegated extractors still
-	// read the live config from provider on every Extract() call, so
-	// hot-reloaded audiences/claim_mappings/required_claims/jwt_leeway/
-	// alb_expected_signer take effect immediately, like self mode.
+	// jwt_validation.mode itself is fixed at cold start (requires redeploy to
+	// change); delegated extractors still read live config per Extract() call.
 	extractor, err := newClaimsExtractor(provider, tokenValidator)
 	if err != nil {
 		logger.Error("Failed to create claims extractor", slog.String("error", err.Error()))
@@ -156,19 +127,12 @@ func NewBootstrap() (*Bootstrap, error) {
 	}, nil
 }
 
-// newClaimsExtractor creates the appropriate ClaimsExtractorInterface based on
-// the configured mode. Delegated modes ("apigw"/"alb") trust an upstream that
-// has already verified the token's signature, and use the matched issuer's
-// full spec (audiences, claim_mappings, required_claims) plus the same
-// jwt_leeway/max_token_lifetime/max_token_age bounds self mode enforces for
-// defense-in-depth re-validation of the pre-validated claims.
-//
-// The two delegated modes differ in issuer cardinality. "apigw" supports many:
-// an HTTP API can carry one JWT Authorizer per route, each pinned to its own
-// issuer, so the extractor resolves the spec per request from the verified
-// iss. "alb" trusts a single OIDC IdP, so a multi-issuer config is ambiguous
-// there and is rejected as a fail-fast. Both extractors read provider live on
-// every Extract() call, so a later hot-reload is not frozen at startup.
+// newClaimsExtractor creates the ClaimsExtractorInterface for the configured
+// mode. Delegated modes ("apigw"/"alb") trust an upstream that already
+// verified the signature and re-validate against the matched issuer's spec
+// for defense-in-depth. "apigw" supports multiple issuers (one JWT
+// Authorizer per route); "alb" trusts a single OIDC IdP, so multi-issuer
+// config is rejected fail-fast there.
 func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
 	cfg := provider.Get()
 	mode := cfg.JWTValidation.Mode
@@ -176,9 +140,6 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 	case "self", "":
 		return validator.NewSelfExtractor(v), nil
 	case "apigw":
-		// No single-issuer check: each route's JWT Authorizer pins its own
-		// issuer and forwards the verified iss, so the extractor resolves the
-		// matching spec per request.
 		return validator.NewAPIGWExtractor(provider), nil
 	case "alb":
 		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
@@ -190,12 +151,8 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 	}
 }
 
-// singleDelegatedIssuer returns the sole configured issuer for a delegated
-// jwt_validation.mode. Used by alb mode only: an ALB has exactly one OIDC
-// IdP, so a multi-issuer config is ambiguous there and rejected fail-closed.
-// apigw mode resolves per request via resolveIssuerSpec instead, because
-// each route's JWT Authorizer pins its own issuer and forwards the verified
-// iss.
+// singleDelegatedIssuer returns the sole configured issuer for alb mode
+// (fails if more than one is configured; apigw resolves per request instead).
 func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfig, error) {
 	if len(cfg.Issuers) != 1 {
 		return nil, fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
@@ -203,20 +160,13 @@ func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfi
 	return &cfg.Issuers[0], nil
 }
 
-// buildConfigProvider wires the config provider. With an S3 config source it
-// performs an initial fetch+overlay (failing fast on error) and enables
-// per-request lazy hot-reload when ConfigReloadInterval > 0. Without a source
-// it returns a static provider serving the local config — unless
-// config_fragments are listed, in which case a reloadable provider (with no
-// primary fetch) merges them at startup and re-resolves them per
-// ConfigReloadInterval when > 0.
+// buildConfigProvider wires the config provider: with an S3 config source it
+// fetches+overlays it (failing fast) and enables hot-reload when
+// ConfigReloadInterval > 0; without one, a static provider serves the local
+// config unless config_fragments are set, which need a reloadable provider
+// (nil fetch) to get merged at all.
 func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
 	if cfg.S3ConfigBucket == "" || cfg.S3ConfigPath == "" {
-		// No primary S3 overlay. config_fragments must still be merged: a
-		// static provider never refreshes, so it would silently serve the base
-		// config with every fragment ignored. A reloadable provider with a nil
-		// fetch merges fragments on Refresh (and keeps re-resolving them per
-		// ConfigReloadInterval when > 0).
 		if len(cfg.ConfigFragments) == 0 {
 			return config.NewStaticProvider(cfg), nil
 		}
@@ -243,7 +193,6 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 
 	provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, config.FormatFromPath(key), fetch)
 
-	// Initial load: fail fast if the S3 config can't be fetched/parsed.
 	if err := provider.Refresh(context.Background()); err != nil {
 		return nil, err
 	}
@@ -261,14 +210,12 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 // maxRemoteConfigSize bounds the bytes read from the S3 config object.
 const maxRemoteConfigSize = 1024 * 1024 // 1MB
 
-// Cleanup handles cleanup operations for the bootstrap components
+// Cleanup flushes the S3 logger and writes buffered logs to S3.
 func (b *Bootstrap) Cleanup() {
-	// Flush S3 logger
 	if err := b.S3Logger.Flush(); err != nil {
 		b.Logger.Error("Failed to flush logs to S3", slog.String("error", err.Error()))
 	}
 
-	// Write logs to S3
 	if err := b.S3Logger.WriteLogToS3(*b.LogBuffer); err != nil {
 		b.Logger.Error("Failed to write logs to S3", slog.String("error", err.Error()))
 	}
@@ -276,7 +223,7 @@ func (b *Bootstrap) Cleanup() {
 
 // initializeLogger sets up the global logger with proper configuration
 func initializeLogger() (*bytes.Buffer, *slog.Logger, error) {
-	var programLevel = new(slog.LevelVar) // Default to Info
+	var programLevel = new(slog.LevelVar)
 	programLevel.Set(slog.LevelInfo)
 
 	logLevel := os.Getenv("LOG_LEVEL")
@@ -288,10 +235,8 @@ func initializeLogger() (*bytes.Buffer, *slog.Logger, error) {
 		}
 	}
 
-	// Create log buffer for S3 logging
 	logBuffer := &bytes.Buffer{}
 
-	// Create a handler that writes to both stdout and our buffer
 	logHandler := slog.NewJSONHandler(io.MultiWriter(os.Stdout, logBuffer), &slog.HandlerOptions{
 		Level: programLevel,
 	})

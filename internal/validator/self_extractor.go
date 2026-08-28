@@ -19,20 +19,17 @@ func NewSelfExtractor(v TokenValidatorInterface) *SelfExtractor {
 	return &SelfExtractor{v: v}
 }
 
-// pinnedValidator is the optional seam a validator implements to be decided by
-// a caller-supplied config generation. The method is unexported, so only
-// *TokenValidator in this package satisfies it; any external mock of
-// TokenValidatorInterface simply takes the Validate path below unchanged.
+// pinnedValidator is the optional seam a validator implements to be decided
+// by a caller-supplied config generation. Unexported, so only *TokenValidator
+// satisfies it; an external mock of TokenValidatorInterface takes the
+// Validate path below unchanged.
 type pinnedValidator interface {
 	validateWith(cfg *config.Config, tokenString string) (*types.Claims, error)
 }
 
 // Extract validates the JWT in input.Token and returns the verified claims.
-//
-// When the caller pinned a config for this request, the token is validated
-// against that same generation rather than a fresh provider read, so one
-// request cannot be validated by one config generation and authorized by
-// another — see ExtractionInput.Config.
+// When the caller pinned a config (ExtractionInput.Config), the token is
+// validated against that same generation rather than a fresh provider read.
 func (s *SelfExtractor) Extract(_ context.Context, input ExtractionInput) (*types.Claims, error) {
 	if input.Token == "" {
 		return nil, fmt.Errorf("token is required in self-validation mode")

@@ -10,9 +10,9 @@ import (
 )
 
 // claimBounds carries the time-bound knobs Validate applies in self mode
-// (jwt_leeway/max_token_lifetime/max_token_age, read live from config) so
-// checkAndNormalizeClaims can apply the identical bounds to claims that
-// arrive by a different trust path (apigw/alb).
+// (jwt_leeway/max_token_lifetime/max_token_age) so checkAndNormalizeClaims
+// can apply the identical bounds to claims arriving via a different trust
+// path (apigw/alb).
 type claimBounds struct {
 	leeway      time.Duration
 	maxLifetime time.Duration
@@ -20,28 +20,24 @@ type claimBounds struct {
 }
 
 // checkAndNormalizeClaims is the single claim-check-and-normalize path shared
-// by self mode (via Validate) and both delegated extractors (apigw/alb): it
-// performs exactly self-mode Validate()'s steps 6-10 against already-trusted
-// raw claims — sub non-empty, iat required and not in the future beyond
-// leeway, exp required and not expired beyond leeway, nbf (if present) not in
-// the future beyond leeway, the optional lifetime/age caps, audience
-// ANY-match, required_claims, then normalizeClaims. Delegated modes differ
-// from self mode only in how raw got here (trusting an upstream signature
-// verifier instead of verifying one locally) — everything after that point
-// runs through this one function, so it cannot silently drift weaker.
+// by self mode (via Validate) and both delegated extractors (apigw/alb):
+// self-mode Validate()'s steps 6-10 against already-trusted raw claims — sub
+// non-empty, iat/exp/nbf within leeway, the optional lifetime/age caps,
+// audience ANY-match, required_claims, then normalizeClaims. Delegated modes
+// differ from self mode only in how raw got here (trusting an upstream
+// signature verifier instead of verifying one locally); everything after that
+// point runs through this one function so it cannot silently drift weaker.
 //
 // now is passed in (rather than read from time.Now) so callers — including
 // tests — control the clock explicitly.
 func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds, now time.Time) (*types.Claims, error) {
-	// sub non-empty.
 	sub, err := raw.GetSubject()
 	if err != nil || sub == "" {
 		return nil, fmt.Errorf("%w: sub", ErrMissingRequiredClaim)
 	}
 
-	// iat required (mirrors self mode: WithIssuedAt() alone does not make it
-	// mandatory, so it is enforced explicitly), and not in the future beyond
-	// leeway (mirrors the jwt/v5 parser's own verifyIssuedAt check).
+	// iat required (WithIssuedAt() alone does not make it mandatory) and not
+	// in the future beyond leeway.
 	iat, err := raw.GetIssuedAt()
 	if err != nil || iat == nil {
 		return nil, fmt.Errorf("%w: iat", ErrMissingRequiredClaim)
@@ -50,7 +46,6 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 		return nil, fmt.Errorf("token used before issued: iat=%s now=%s", iat, now)
 	}
 
-	// exp required (mirrors WithExpirationRequired()), not expired beyond leeway.
 	exp, err := raw.GetExpirationTime()
 	if err != nil || exp == nil {
 		return nil, fmt.Errorf("%w: exp", ErrMissingRequiredClaim)
@@ -59,8 +54,6 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 		return nil, fmt.Errorf("token has expired: exp=%s now=%s", exp, now)
 	}
 
-	// nbf, if present, enforced with leeway (mirrors the parser's unconditional
-	// verifyNotBefore check in self mode).
 	nbf, err := raw.GetNotBefore()
 	if err != nil {
 		return nil, fmt.Errorf("invalid nbf claim: %w", err)
@@ -69,7 +62,7 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 		return nil, fmt.Errorf("token is not valid yet: nbf=%s now=%s", nbf, now)
 	}
 
-	// Lifetime/age caps (both opt-in; zero value disables the check).
+	// Lifetime/age caps: both opt-in, zero value disables the check.
 	if b.maxLifetime > 0 && exp.Sub(iat.Time) > b.maxLifetime {
 		return nil, fmt.Errorf("%w: %s > %s", ErrTokenLifetimeExceeded, exp.Sub(iat.Time), b.maxLifetime)
 	}
@@ -77,7 +70,6 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 		return nil, fmt.Errorf("%w: %s > %s", ErrTokenTooOld, now.Sub(iat.Time), b.maxAge)
 	}
 
-	// Audience ANY-match against this issuer's configured audiences.
 	tokenAudience, err := raw.GetAudience()
 	if err != nil {
 		return nil, fmt.Errorf("invalid aud claim: %w", err)
@@ -86,8 +78,7 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 		return nil, fmt.Errorf("%w: got %v, want one of %v", ErrInvalidAudience, tokenAudience, spec.Audiences)
 	}
 
-	// required_claims present and non-empty, checked on the raw claims. A JSON
-	// null (nil value) is treated as absent — presence alone must not satisfy a
+	// A JSON null is treated as absent — presence alone must not satisfy a
 	// required claim.
 	for _, name := range spec.RequiredClaims {
 		v, present := raw[name]
@@ -99,18 +90,16 @@ func checkAndNormalizeClaims(raw jwt.MapClaims, spec *issuerSpec, b claimBounds,
 		}
 	}
 
-	// Normalize to canonical subject + raw claims map.
 	return normalizeClaims(raw, spec.Provider, spec.ClaimMappings)
 }
 
-// resolveDelegatedSpec returns the sole configured issuer's spec plus the live
-// time bounds for a delegated mode, from the current config. Fails closed if
-// the config is not exactly one issuer (matches the bootstrap fail-fast).
+// resolveDelegatedSpec returns the sole configured issuer's spec plus the
+// live time bounds for a delegated mode. Fails closed if the config is not
+// exactly one issuer.
 //
 // Used by alb mode only: an ALB has exactly one OIDC IdP, so a multi-issuer
 // config is genuinely ambiguous there. apigw mode resolves per request via
-// resolveIssuerSpec instead, because each route's JWT authorizer pins its own
-// issuer and forwards the verified iss.
+// resolveIssuerSpec instead, since each route's JWT authorizer pins its own issuer.
 func resolveDelegatedSpec(cfg *config.Config) (*issuerSpec, claimBounds, error) {
 	if len(cfg.Issuers) != 1 {
 		return nil, claimBounds{}, fmt.Errorf("delegated jwt_validation mode requires exactly one configured issuer, got %d", len(cfg.Issuers))
@@ -119,14 +108,12 @@ func resolveDelegatedSpec(cfg *config.Config) (*issuerSpec, claimBounds, error) 
 }
 
 // resolveIssuerSpec returns the spec for the exact issuer iss, plus the live
-// time bounds. Exact match only — no normalization, mirroring buildSnapshot's
-// registry keying and config.Validate's duplicate-issuer check. An issuer with
-// no config entry is denied with ErrUnknownIssuer rather than falling back to
-// any other issuer's spec.
+// time bounds. Exact match only, mirroring buildSnapshot's registry keying.
+// An issuer with no config entry is denied with ErrUnknownIssuer rather than
+// falling back to any other issuer's spec.
 //
-// A linear scan is deliberate: issuer counts are in the single digits (API
-// Gateway allows at most 10 authorizers per HTTP API), so a map built per
-// request would cost more than it saves.
+// A linear scan is deliberate: issuer counts are single digits (API Gateway
+// allows at most 10 authorizers per HTTP API), cheaper than building a map per request.
 func resolveIssuerSpec(cfg *config.Config, iss string) (*issuerSpec, claimBounds, error) {
 	for i := range cfg.Issuers {
 		if cfg.Issuers[i].Issuer == iss {

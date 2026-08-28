@@ -32,7 +32,6 @@ func NewAwsApiGateway(provider *config.Provider, consumer aws.AwsConsumerInterfa
 
 // Handler is the Lambda function interface for API Gateway
 func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// Create a request context with tracking information and timeout
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
@@ -40,7 +39,6 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
 	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
-	// Add request ID and additional data to all logs for this request
 	log := slog.With(
 		slog.String("requestId", requestID),
 		slog.String("path", event.Path),
@@ -49,31 +47,25 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 		slog.String("requestTime", event.RequestContext.RequestTime),
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
-	// AWS always populates these, so this is defence-in-depth rather than a
-	// live gap — kept consistent with the other adapters regardless.
 	if frontendRequestID != "" {
 		log = log.With(slog.String("frontendRequestId", frontendRequestID))
 	}
 	if sourceIP != "" {
 		log = log.With(slog.String("sourceIp", sourceIP))
 	}
-	// The attested case is the norm here; only surface provenance when it's
-	// not the platform-attested value, so an anomaly is visible without a
-	// constant "sourceIpFrom=frontend" on every line.
+	// Only surfaced when not the platform-attested value, so an anomaly is
+	// visible without a constant "sourceIpFrom=frontend" on every line.
 	if sourceIPFrom != "" && sourceIPFrom != ipSourceFrontend {
 		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
 	}
 
-	// Parse request data
 	requestData, err := h.unmarshalRequestData(event)
 	if err != nil {
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
-	// Build extraction input from the parsed request token.
 	input := validator.ExtractionInput{Token: requestData.Token}
 
-	// Process the request using the request processor
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
 		return h.respondError(ctx, err, http.StatusInternalServerError)
@@ -87,10 +79,8 @@ func (h *AwsApiGateway) createRequestContext(ctx context.Context, event events.A
 	requestID, frontendRequestID := resolveRequestID(ctx, event.RequestContext.RequestID)
 	sourceIP, sourceIPFrom := clientIP(event.RequestContext.Identity.SourceIP, event.Headers)
 
-	// Start request timer
 	startTime := time.Now()
 
-	// Add request tracking information using context keys
 	ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
 	ctx = context.WithValue(ctx, FrontendRequestIDContextKey, frontendRequestID)
 	ctx = context.WithValue(ctx, StartTimeContextKey, startTime)
@@ -98,23 +88,20 @@ func (h *AwsApiGateway) createRequestContext(ctx context.Context, event events.A
 	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
 	ctx = context.WithValue(ctx, UserAgentContextKey, event.RequestContext.Identity.UserAgent)
 
-	// Create a context with timeout. The caller must invoke the returned cancel
-	// (via defer) to release the timer when the request completes.
+	// Caller must invoke the returned cancel (via defer).
 	return context.WithTimeout(ctx, DefaultTimeout)
 }
 
-// unmarshalRequestData parses and validates the request data from an API Gateway event
 func (h *AwsApiGateway) unmarshalRequestData(event events.APIGatewayProxyRequest) (*RequestData, error) {
 	return ParseRequestBody(event.Body)
 }
 
-// respondError formats a response with an error message
+// respondError formats a response with an error message.
 func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode int) (events.APIGatewayProxyResponse, error) {
 	response, statusCode := buildErrorResponse(ctx, err, statusCode)
 
 	jsonResponse, jsonErr := json.Marshal(response)
 	if jsonErr != nil {
-		// Fallback to simple error response if JSON marshalling fails
 		return events.APIGatewayProxyResponse{
 			StatusCode: http.StatusInternalServerError,
 			Headers:    ResponseHeaders,

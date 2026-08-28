@@ -113,7 +113,6 @@ func TestS3CacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 		t.Fatalf("local expiration = %v, want %v", entry.expiration, wantExpiration)
 	}
 
-	// Second Get is served locally
 	if _, found := c.Get("key1"); !found {
 		t.Fatal("expected local hit on second Get")
 	}
@@ -195,7 +194,6 @@ func TestS3CacheSetIsSynchronous(t *testing.T) {
 
 	c.Set("key1", testJWKS("kid1"), time.Minute)
 
-	// No sleep: the write must have completed before Set returned
 	if mock.putCalls != 1 {
 		t.Fatalf("PutObject called %d times before Set returned, want 1", mock.putCalls)
 	}
@@ -203,7 +201,6 @@ func TestS3CacheSetIsSynchronous(t *testing.T) {
 		t.Fatalf("PutObject key = %q, want jwks/key1", mock.lastPutKey)
 	}
 
-	// Local tier is populated too
 	if _, found := c.Get("key1"); !found {
 		t.Fatal("expected local hit after Set")
 	}
@@ -213,9 +210,8 @@ func TestS3CacheSetIsSynchronous(t *testing.T) {
 }
 
 func TestS3CacheWriteReadSizeLimitsAgree(t *testing.T) {
-	// An item the write path accepts must be readable back; an item over the
-	// shared limit must be rejected on write so it can never become
-	// unreadable-but-stored
+	// Write/read size limits must agree, or an item could be accepted on
+	// write and become unreadable-but-stored.
 	mock := &mockS3{}
 	c := newTestS3Cache(mock)
 

@@ -15,19 +15,13 @@ import (
 type FetchFunc func(context.Context) ([]byte, error)
 
 // FragmentFetchFunc retrieves one config_fragments entry's current content.
-// prevETag is the etag last successfully applied for uri (empty on first
-// fetch). Implementations that can cheaply detect "no change" (e.g. an S3
-// HeadObject compared against a stored ETag) may return (nil, prevETag, nil)
-// to skip the full body fetch — Provider then reuses its cached parse of
-// that fragment instead of re-parsing (E2's "unchanged ⇒ skip entirely").
-// Required for any "scheme://"-style config_fragments entry (e.g. "s3://…");
-// local filesystem paths are read directly by Provider and never call this.
+// prevETag is the etag last successfully applied (empty on first fetch); may
+// return (nil, prevETag, nil) to signal "unchanged" and skip the body fetch.
+// Required for "scheme://" entries; local paths are read directly.
 //
-// Implementations that cannot cheaply detect changes must still return a
-// stable, content-derived etag (e.g. a hash) rather than a constant/empty
-// string — Provider treats etag == prevETag as "unchanged" regardless of
-// whether data is nil, so a fetcher that never varies its etag would cause
-// real content changes to be silently skipped.
+// etag must be stable and content-derived: Provider treats etag == prevETag
+// as unchanged regardless of data, so a constant/empty etag would silently
+// hide real content changes.
 type FragmentFetchFunc func(ctx context.Context, uri, prevETag string) (data []byte, etag string, err error)
 
 // cachedFragment is the last-successfully-applied parse of one fragment
@@ -37,32 +31,23 @@ type cachedFragment struct {
 	parsed *FragmentConfig
 }
 
-// fragmentMappingSoftCap is a soft limit on the total role_mappings (base +
-// every fragment, role_groups expanded by subject count) merged into one
-// config. Exceeding it only logs a warning (S6) — it never blocks a reload;
-// the owner-bucketed index (index.go) is designed to scale past it.
+// fragmentMappingSoftCap: exceeding it only logs a warning, never blocks a reload.
 const fragmentMappingSoftCap = 5000
 
 // ProviderOption configures optional Provider behavior at construction.
 type ProviderOption func(*Provider)
 
-// WithFragmentFetcher installs the fetch function used for any
-// "scheme://"-style config_fragments entry (local filesystem paths are
-// always read directly and never need one). Without a fetcher configured, a
-// refresh that encounters a remote fragment entry fails — and, per
-// Refresh/MaybeRefresh's existing contract, retains the last-good config —
-// rather than silently skipping it.
+// WithFragmentFetcher installs the fetch function for "scheme://" fragment
+// entries. Without one, a refresh hitting a remote entry fails (and retains
+// the last-good config) rather than silently skipping it.
 func WithFragmentFetcher(fetch FragmentFetchFunc) ProviderOption {
 	return func(p *Provider) { p.fragmentFetch = fetch }
 }
 
 // Provider holds the active configuration behind an atomic pointer and can
-// lazily refresh it from a remote source without redeploying.
-//
-// Refresh semantics: each refresh starts from a clone of the pristine base
-// config (env/file/defaults), overlays the freshly fetched bytes, merges any
-// config_fragments, re-validates (recompiling regex patterns, rebuilding the
-// authz index), then atomically swaps the result in.
+// lazily refresh it from a remote source without redeploying. Each refresh
+// clones the pristine base, overlays fetched bytes, merges config_fragments,
+// re-validates, then atomically swaps in the result.
 type Provider struct {
 	current       atomic.Pointer[Config]
 	base          *Config      // pristine env/file/defaults config, cloned on each refresh
@@ -86,14 +71,10 @@ func NewStaticProvider(cfg *Config, opts ...ProviderOption) *Provider {
 	return p
 }
 
-// NewProvider returns a reloadable Provider. base is the pristine config;
-// fetch supplies the primary remote/S3 config overlay's bytes (nil if base
-// carries config_fragments but has no such primary overlay — fragments are
-// still fetched/merged on refresh in that case); interval is the minimum
-// time between reloads (<= 0 disables reloading); format is the viper config
-// type of the fetched bytes ("json"/"yaml"/"toml", empty defaults to
-// "json"). The initial served config is base until the first successful
-// Refresh.
+// NewProvider returns a reloadable Provider. fetch may be nil if base only
+// carries config_fragments; interval <= 0 disables reloading; format is the
+// viper config type of fetched bytes (empty defaults to "json"). The served
+// config is base until the first successful Refresh.
 func NewProvider(base *Config, interval time.Duration, format string, fetch FetchFunc, opts ...ProviderOption) *Provider {
 	p := &Provider{base: base, format: format, fetch: fetch, now: time.Now, fragments: make(map[string]*cachedFragment)}
 	for _, opt := range opts {
@@ -112,10 +93,9 @@ func (p *Provider) Get() *Config {
 // IntervalForTest exposes the current effective interval for testing only.
 func (p *Provider) IntervalForTest() int64 { return p.interval.Load() }
 
-// MaybeRefresh reloads the configuration if reloading is enabled and the
-// interval has elapsed since the last successful refresh. Uses double-checked
-// locking to ensure at most one S3 fetch occurs per interval boundary under
-// concurrent load. Errors are logged and the previous configuration is retained.
+// MaybeRefresh reloads if reloading is enabled and the interval has elapsed.
+// Double-checked locking ensures at most one fetch per interval boundary
+// under concurrent load. Errors are logged; the previous config is retained.
 func (p *Provider) MaybeRefresh(ctx context.Context) {
 	if p.fetch == nil && len(p.base.ConfigFragments) == 0 {
 		return
@@ -131,9 +111,7 @@ func (p *Provider) MaybeRefresh(ctx context.Context) {
 		return
 	}
 
-	// Slow path: acquire lock and re-check before fetching.
-	// This prevents N concurrent goroutines at an interval boundary from each
-	// triggering a full S3 fetch; only the first one through does the work.
+	// Slow path: re-check under lock so only the first goroutine through fetches.
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -159,9 +137,7 @@ func (p *Provider) Refresh(ctx context.Context) error {
 }
 
 // refreshLocked performs the actual fetch+merge+swap. Must be called with
-// p.mu held. On any error cfg is discarded without being swapped in and
-// p.fragments is left untouched — the previously-served configuration (and
-// fragment cache) is retained unchanged (reload fails safe).
+// p.mu held. On any error cfg and p.fragments are discarded — reload fails safe.
 func (p *Provider) refreshLocked(ctx context.Context) error {
 	cfg, err := cloneConfig(p.base)
 	if err != nil {
@@ -177,9 +153,8 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
 	} else if err := cfg.Validate(); err != nil {
-		// No primary remote overlay: still rebuild the transient state
-		// cloneConfig doesn't copy (compiled regex/effective/index) before
-		// any fragments are merged on top.
+		// No primary overlay: still rebuild transient state cloneConfig
+		// doesn't copy, before fragments merge on top.
 		return fmt.Errorf("invalid base configuration: %w", err)
 	}
 
@@ -197,8 +172,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	p.fragments = nextFragments
 	p.lastRefresh.Store(p.now().UnixNano())
 
-	// Propagate a changed reload interval so operators can adjust polling
-	// frequency via S3 config without a cold start.
+	// Propagate a changed interval so operators can adjust polling without a cold start.
 	if cfg.ConfigReloadInterval > 0 {
 		p.interval.Store(int64(cfg.ConfigReloadInterval))
 	}
@@ -209,12 +183,10 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	return nil
 }
 
-// applyFragments fetches, verifies, and merges every entry in
-// cfg.ConfigFragments (in list order — deterministic merge) onto cfg. It
-// mutates cfg in place but returns the fragment cache to install; the caller
-// only commits that cache (and swaps cfg into p.current) after this returns
-// nil, so a failed/invalid fragment can never partially apply into the
-// served configuration.
+// applyFragments fetches, verifies, and merges every cfg.ConfigFragments
+// entry (list order) onto cfg. Mutates cfg in place but returns the fragment
+// cache separately; caller only commits it after a nil error, so a
+// failed/invalid fragment can't partially apply into the served config.
 func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]*cachedFragment, error) {
 	if len(cfg.ConfigFragments) == 0 {
 		return nil, nil
@@ -246,12 +218,8 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 			return nil, fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, maxFragmentBytes)
 		}
 
-		// Integrity pin is checked on EVERY cycle, before the cache-hit branch.
-		// Checking it only on the "changed" path meant a cache hit (etag ==
-		// prevETag) skipped it entirely, so a pin newly added or rotated to
-		// quarantine already-applied fragment content was silently inert — the
-		// content stayed live precisely in the incident-response case the pin
-		// exists for.
+		// Checked on EVERY cycle, before the cache-hit branch: a pin added/rotated
+		// to quarantine already-applied content must take effect immediately.
 		if expected, pinned := cfg.fragmentChecksum(uri); pinned && expected != etag {
 			return nil, fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
 		}
@@ -297,10 +265,8 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 	return next, nil
 }
 
-// fetchFragment retrieves one fragment's bytes+etag: local filesystem paths
-// (no "scheme://" prefix) are read directly — no fetcher needed; any remote
-// URI is delegated to the injected FragmentFetchFunc (nil is a hard error —
-// a remote fragment can never be silently skipped).
+// fetchFragment reads local paths directly; remote URIs go through the
+// injected FragmentFetchFunc (nil is a hard error, never silently skipped).
 func (p *Provider) fetchFragment(ctx context.Context, uri, prevETag string) ([]byte, string, error) {
 	if !isRemoteFragment(uri) {
 		return readLocalFragment(uri)
@@ -312,8 +278,7 @@ func (p *Provider) fetchFragment(ctx context.Context, uri, prevETag string) ([]b
 }
 
 // cloneConfig deep-copies a Config via a JSON round-trip. Unexported caches
-// (compiled regex patterns, estimatedRolesPerRepo) are not copied; they are
-// rebuilt by the subsequent Validate().
+// (compiled regex, estimatedRolesPerRepo) aren't copied; Validate() rebuilds them.
 func cloneConfig(c *Config) (*Config, error) {
 	data, err := json.Marshal(c)
 	if err != nil {

@@ -8,14 +8,12 @@ import "github.com/golang-jwt/jwt/v5"
 // for any other provider only the embedded RegisteredClaims, Subject, and Raw
 // are populated.
 //
-// Subject is the canonical authorization identity (repository, project path,
-// etc.) and is the field authz/session-tag code must read. It is deliberately
-// NOT populated by JSON unmarshal: the embedded jwt.RegisteredClaims.Subject
-// field (json:"sub") is shadowed for JSON purposes by the depth-0 Sub field
-// below, which retains the raw "sub" JWT claim. Claims.Subject is instead set
-// exclusively by normalizeClaims (internal/validator) from the issuer's
-// configured claim_mappings.subject — never directly from token JSON — so a
-// token can never self-assert its own canonical identity. Do not read Subject
+// Subject is the canonical authorization identity and the field authz/
+// session-tag code must read. It is set exclusively by normalizeClaims
+// (internal/validator) from the issuer's claim_mappings.subject — never from
+// token JSON directly, so a token can never self-assert its own identity; the
+// depth-0 Sub field below shadows the embedded RegisteredClaims.Subject for
+// JSON purposes and retains the raw "sub" claim instead. Do not read Subject
 // on a value that hasn't gone through Validate()/normalizeClaims.
 type Claims struct {
 	jwt.RegisteredClaims

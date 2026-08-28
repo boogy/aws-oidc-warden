@@ -110,7 +110,6 @@ func TestMemoryCacheNoEvictionOnOverwrite(t *testing.T) {
 	c.Set("a", testJWKS("a1"), time.Minute)
 	c.Set("b", testJWKS("b"), time.Minute)
 
-	// Overwrite at capacity must not evict the other key
 	c.Set("a", testJWKS("a2"), time.Minute)
 
 	if _, found := c.Get("b"); !found {

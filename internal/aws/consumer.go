@@ -21,8 +21,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
-// maxConfigSize bounds how many bytes are read from a remote configuration
-// object (S3) to guard against an oversized or malicious payload.
+// maxConfigSize bounds how many bytes are read from a remote (S3) config object.
 const maxConfigSize = 1024 * 1024 // 1MB
 
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
@@ -59,10 +58,8 @@ type AwsConsumer struct {
 	roleTagCache map[string]cachedTags  // keyed by role ARN
 }
 
-// cfg returns the live configuration. When a config source is wired (the
-// hot-reload provider's Get), it is read per-call so reloaded changes take
-// effect on the consumer's enforcement paths; otherwise the construction-time
-// Config is used (static and test setups).
+// cfg returns the live config if a source is wired (hot-reload), else the
+// construction-time Config.
 func (a *AwsConsumer) cfg() *gtvcfg.Config {
 	if a.configSource != nil {
 		if c := a.configSource(); c != nil {
@@ -92,29 +89,15 @@ func NewAwsConsumer(cfg *gtvcfg.Config) *AwsConsumer {
 // on every SessionName call.
 var invalidSessionNameChars = regexp.MustCompile(`[^[:word:]+=,.@-]`)
 
-// SessionName cleans the session name to be valid for STS: 64 chars max from
-// [\w+=,.@-].
-//
-// Disallowed characters are REPLACED, not deleted. Deleting them collapses
-// distinct identities onto one name ("acme/api" and "ac/meapi" both become
-// "acmeapi"), and this string is an identity: it appears in the assumed-role
-// ARN, in aws:userid and CloudTrail, and is conditionable via
-// sts:RoleSessionName. A collision there is an audit-attribution failure and a
-// potential IAM-condition mismatch.
-//
-// Config-declared names are already validated and rejected at boot
-// (config.validateRoleSessionName), so in practice this only reshapes the
-// global default. It stays as defense in depth: STS rejects the whole
-// AssumeRole call on an invalid name, which would turn a cosmetic config
-// mistake into a total outage.
+// SessionName cleans name to be valid for STS (64 chars max, [\w+=,.@-]),
+// substituting disallowed characters rather than deleting them, since
+// deletion can collapse two distinct identities onto one session name.
 func (a *AwsConsumer) SessionName(name string) string {
 	original := name
 	name = invalidSessionNameChars.ReplaceAllLiteralString(name, "-")
 
 	if len(name) > 64 {
-		// Keep the tail: for "owner-repo"-shaped names the distinguishing part
-		// is at the end. Two names sharing a 64-char suffix still collide, so
-		// make it audible rather than silent.
+		// Keep the tail: two names sharing a 64-char suffix still collide, so warn.
 		slog.Warn("session name exceeds STS's 64-character limit and was truncated; "+
 			"CloudTrail will show the truncated name",
 			slog.String("original", original),
@@ -124,11 +107,11 @@ func (a *AwsConsumer) SessionName(name string) string {
 	return name
 }
 
-// spokeCredsFor resolves credentials for operating in the given account. It
-// returns (nil, nil) when cross-account transport is disabled or the account
-// is the warden's own (hub) account — callers then use the default hub
-// clients. For a different account it assumes the convention-named spoke role
-// and caches the result until shortly before expiry.
+// spokeCredsFor resolves credentials for operating in the given account,
+// returning (nil, nil) when cross-account transport is disabled or the
+// account is the hub's own (callers then use the default hub clients).
+// Otherwise it assumes the convention-named spoke role and caches the result
+// until shortly before expiry.
 func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, error) {
 	cfg := a.cfg()
 	if cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
@@ -158,10 +141,8 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 	if dur < 900 {
 		dur = 900
 	}
-	// The hub->spoke assume is role chaining whenever the warden's own creds
-	// are a role session (always on Lambda), and STS fails chained sessions
-	// over 1h rather than clamping. Spoke sessions are short-lived tag-read
-	// plumbing, so cap unconditionally instead of branching on credential type.
+	// Role chaining caps chained sessions at 1h and STS fails rather than
+	// clamps, so cap unconditionally (spoke sessions are short-lived anyway).
 	if dur > 3600 {
 		slog.Warn("spoke_session_duration exceeds the 1h role-chaining cap; clamping",
 			"requestedSeconds", dur)
@@ -189,14 +170,8 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 		expires = cr.Expiration.Add(-5 * time.Minute) // refresh margin
 	}
 
-	// This is the only signal for a successful hub->spoke assumption: unlike
-	// the primary AssumeRole path, spokeCredsFor has no request context to
-	// correlate with a requestId, and the result is cached for up to ~1h, so
-	// without this line a privileged cross-account credential mint would
-	// otherwise leave no trace. No credential material or ca.ExternalID here,
-	// only the identifiers needed to attribute the assumption. This write
-	// happens under a.mu (held since :148); deliberately so, not an
-	// accident — it fires at most once per account per cache TTL.
+	// Only audit signal for a hub->spoke assumption (cached ~1h, no request
+	// context to correlate); logs identifiers only, never credential material.
 	slog.Info("Assumed spoke role for cross-account operation",
 		"spokeArn", spokeArn,
 		"sessionName", sessionName,
@@ -221,9 +196,9 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 
 	cleanSessionName := a.SessionName(sessionName)
 
-	var durationSeconds int32 = 3600 // Default to 1 hour
+	var durationSeconds int32 = 3600
 	if duration != nil && *duration > 0 {
-		// AWS has a minimum of 900 seconds (15 minutes) and maximum of 12 hours
+		// STS bounds: 900s (15min) minimum, 43200s (12h) maximum.
 		if *duration < 900 {
 			slog.Warn("Duration is less than minimum allowed value (900 seconds), using 900 seconds",
 				"requestedDuration", *duration)
@@ -242,7 +217,6 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 	assumeRoleInput.RoleSessionName = &cleanSessionName
 	assumeRoleInput.DurationSeconds = &durationSeconds
 
-	// Allow for a session policy to be passed in optionally to restrict the permissions of the assumed role
 	if sessionPolicy != nil && *sessionPolicy != "" {
 		assumeRoleInput.Policy = sessionPolicy
 		slog.Debug("Using provided session policy for role assumption",
@@ -250,8 +224,6 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 			"sessionName", cleanSessionName)
 	}
 
-	// Add session tags per the issuer's configured session_tags spec, sourced
-	// from the token's verified raw claims.
 	if claims != nil && claims.Raw != nil {
 		tags := BuildSessionTags(claims.Raw, sessionTags)
 		if len(tags) > 0 {
@@ -271,9 +243,8 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		}
 	}
 
-	// AssumeRole always goes direct hub -> target (1 hop) with hub creds; the
-	// spoke role is only used for cross-account GetRoleTags reads. Fail closed
-	// on an unparseable ARN or on cross-account transport being disabled.
+	// Always goes direct hub -> target (1 hop); the spoke role is only used
+	// for cross-account GetRoleTags reads.
 	account, _, err := ParseRoleARN(roleArn)
 	if err != nil {
 		return nil, err
@@ -294,10 +265,8 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		}
 	}
 
-	// AWS role chaining caps chained sessions at 1h and STS fails (does not
-	// clamp) DurationSeconds > 3600. Chaining is a property of the source
-	// creds (the warden's own identity is a role session), not the target
-	// account, so this applies regardless of whether account == hub.
+	// Role chaining caps sessions at 1h regardless of account == hub: it's a
+	// property of the source creds, and STS fails rather than clamps.
 	if isRoleSession && durationSeconds > 3600 {
 		slog.Warn("source credentials are a role session; role chaining caps sessions at 1h; clamping duration",
 			"requestedDuration", durationSeconds)
@@ -317,11 +286,9 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 	return result.Credentials, nil
 }
 
-// selectTransitiveKeys returns the keys of every session tag attached to the
-// assumption. Session-tag key names are operator-configured per issuer
-// (config.IssuerConfig.SessionTags), so when session_tags_transitive is
-// enabled all of them are marked transitive — a hardcoded key list would
-// silently drop custom-named identity tags and break ABAC across role chains.
+// selectTransitiveKeys returns the keys of every attached session tag, since
+// tag names are operator-configured per issuer and a hardcoded list would
+// silently drop custom-named identity tags.
 func selectTransitiveKeys(tags []types.Tag) []string {
 	keys := make([]string, 0, len(tags))
 	for _, t := range tags {
@@ -342,19 +309,11 @@ const (
 
 var sessionTagCharsetPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]*$`)
 
-// BuildSessionTags builds STS session tags from tagSpec, a mapping of STS tag
-// key -> raw claim name (config.IssuerConfig.SessionTags), reading values out
-// of rawClaims (the token's verified claims, types.Claims.Raw).
-//
-// An invalid key or value (wrong charset, over the STS length limit) is
-// SKIPPED and logged — never coerced, sanitized, or truncated. An ABAC policy
-// may trust a session tag's exact value; silently mangling it before it
-// reaches STS would be a security bug, not a convenience. Non-string claim
-// values are stringified with utils.FormatClaimValue, which — unlike
-// fmt.Sprintf("%v") — renders an integral float as an integer rather than
-// scientific notation; nil/empty values are skipped. tagSpec keys are
-// iterated in sorted order so, once the AWS-imposed cap of 50 session tags is
-// hit, which tags are dropped is deterministic.
+// BuildSessionTags builds STS session tags from tagSpec (STS tag key -> raw
+// claim name) using rawClaims, the token's verified claims. An invalid key or
+// value (wrong charset, over the STS length limit) is skipped and logged,
+// never sanitized or truncated. Keys are processed in sorted order so
+// truncation at the 50-tag STS cap is deterministic.
 func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag {
 	if len(rawClaims) == 0 || len(tagSpec) == 0 {
 		return nil
@@ -491,22 +450,8 @@ const roleTagCacheTTL = 60 * time.Second
 // key→value map. When the role lives in a different account than the warden,
 // the read is performed with spoke credentials assumed in that account.
 func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
-	// Authorize the target account against the LIVE config before consulting
-	// the cache. A cached entry must never outlive the policy that permitted
-	// it: reading the cache first meant that for up to roleTagCacheTTL after an
-	// operator revoked an account, a warm entry kept handing back that
-	// account's tags for tag-based authorization to act on.
-	//
-	// spokeCredsFor already validates before ITS cache, so checking first makes
-	// the two caches in this file follow one rule. It also removes this layer's
-	// dependence on ProcessRequest happening to call IsTargetAccountAllowed
-	// earlier in the pipeline — a cross-package ordering nothing enforces, and
-	// the only reason the stale window was previously unreachable.
-	//
-	// IsTargetAccountAllowed encodes the same policy the checks below the cache
-	// enforce (cross-account disabled ⇒ hub only; otherwise the allow-list), so
-	// this tightens *when* the decision is made, not what it decides. Cost is a
-	// string parse plus an in-process-cached GetCallerAccount.
+	// Deliberately checked against the LIVE config BEFORE the cache: a cached
+	// entry must never outlive a revoked account's authorization.
 	allowed, err := a.IsTargetAccountAllowed(roleARN)
 	if err != nil {
 		return nil, err
@@ -518,10 +463,7 @@ func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 	a.mu.Lock()
 	if c, ok := a.roleTagCache[roleARN]; ok && a.now().Before(c.expires) {
 		// Copy before releasing the lock: handing out the cached map itself
-		// lets any caller that mutates it poison every later authorization
-		// decision for this role. The sole caller (TagAuth.Authorize) only
-		// reads, so this is defensive — but nothing enforces that, and the
-		// failure mode is silent and cross-request.
+		// would let a mutating caller poison every later authorization decision.
 		tags := maps.Clone(c.tags)
 		a.mu.Unlock()
 		return tags, nil
@@ -571,11 +513,8 @@ func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 	a.roleTagCache[roleARN] = cachedTags{tags: tags, expires: a.now().Add(roleTagCacheTTL)}
 	a.mu.Unlock()
 
-	// Return a copy here too, not just on the cache-hit path above: `tags` is
-	// the map now living in the cache, so handing it to the caller that happened
-	// to MISS would leave that one caller able to corrupt the entry every later
-	// request reads. Both paths must be non-aliasing or the guarantee is only
-	// half there.
+	// Copy here too: `tags` now lives in the cache, so the caller must not
+	// get a mutable alias to it.
 	return maps.Clone(tags), nil
 }
 
@@ -608,7 +547,6 @@ func (a *AwsConsumer) RoleHasTag(role string, tagKey, tagValue string) (bool, er
 		}
 	}
 
-	// Tag not found
 	slog.Debug("Tag not found on role",
 		"role", role,
 		"tagKey", tagKey,

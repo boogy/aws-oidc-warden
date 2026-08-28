@@ -45,17 +45,14 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 		slog.String("method", event.RequestContext.HTTP.Method),
 		slog.String("userAgent", event.RequestContext.HTTP.UserAgent),
 	)
-	// AWS always populates these, so this is defence-in-depth rather than a
-	// live gap — kept consistent with the other adapters regardless.
 	if frontendRequestID != "" {
 		log = log.With(slog.String("frontendRequestId", frontendRequestID))
 	}
 	if sourceIP != "" {
 		log = log.With(slog.String("sourceIp", sourceIP))
 	}
-	// The attested case is the norm here; only surface provenance when it's
-	// not the platform-attested value, so an anomaly is visible without a
-	// constant "sourceIpFrom=frontend" on every line.
+	// Only surfaced when not the platform-attested value, so an anomaly is
+	// visible without a constant "sourceIpFrom=frontend" on every line.
 	if sourceIPFrom != "" && sourceIPFrom != ipSourceFrontend {
 		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
 	}

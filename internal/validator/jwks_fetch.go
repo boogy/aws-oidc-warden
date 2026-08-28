@@ -15,8 +15,8 @@ import (
 
 // FetchJWKS fetches the JWKS for the given issuer, using the cache when
 // available. Exposed standalone (no jwks_uri override) for testing and
-// warm-prefetch of issuers outside the registry; Validate uses the issuer's
-// registered spec instead, which may carry a jwks_uri override.
+// warm-prefetch; Validate uses the issuer's registered spec instead, which
+// may carry a jwks_uri override.
 func (t *TokenValidator) FetchJWKS(issuer string) (*types.JWKS, error) {
 	return t.fetchJWKS(&issuerSpec{Issuer: issuer}, false)
 }
@@ -24,10 +24,8 @@ func (t *TokenValidator) FetchJWKS(issuer string) (*types.JWKS, error) {
 // fetchJWKS fetches (or serves from cache) the JWKS for spec.Issuer. When
 // spec.JWKSURI is set, OIDC discovery is skipped and that URL is fetched
 // directly (still required to be a secure URL). When force is true the cache
-// is bypassed and the freshly fetched JWKS replaces any cached entry -- used
-// to recover from signing-key rotation. Concurrent cold fetches for the same
-// issuer are deduplicated via a per-issuer singleflight, so a thundering herd
-// of requests during cold-start or rotation makes exactly one upstream call.
+// is bypassed — used to recover from signing-key rotation. Concurrent cold
+// fetches for the same issuer are deduplicated via a per-issuer singleflight.
 func (t *TokenValidator) fetchJWKS(spec *issuerSpec, force bool) (*types.JWKS, error) {
 	if !force {
 		if cachedJWKS, found := t.cache.Get(spec.Issuer); found && cachedJWKS != nil {
@@ -47,8 +45,7 @@ func (t *TokenValidator) fetchJWKS(spec *issuerSpec, force bool) (*types.JWKS, e
 // fetchAndCacheJWKS does the actual network work for fetchJWKS: resolve the
 // JWKS URI (explicit override, memoized discovery, or a fresh discovery
 // call), fetch + validate the JWKS, and cache it. Runs inside the
-// singleflight group, so it executes at most once per issuer per in-flight
-// fetch.
+// singleflight group, so it executes at most once per issuer per in-flight fetch.
 func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error) {
 	jwksURI := spec.JWKSURI
 	// Only a discovery-resolved URI (no per-issuer override) is eligible for
@@ -72,8 +69,8 @@ func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error
 
 	jwks, status, err := t.getJWKS(jwksURI)
 	if discoveryDriven && status == http.StatusNotFound {
-		// The memoized/discovered jwks_uri may be stale (issuer rotated its
-		// discovery doc); re-discover once and retry before giving up.
+		// The memoized/discovered jwks_uri may be stale; re-discover once and
+		// retry before giving up.
 		t.jwksURICache.Delete(spec.Issuer)
 		if newURI, derr := t.discoverJWKSURI(spec); derr == nil {
 			if serr := requireSecureURL(newURI, t.allowInsecureIssuers); serr == nil {
@@ -96,9 +93,9 @@ func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error
 
 // discoverJWKSURI fetches spec.Issuer's OIDC discovery document
 // (issuer + /.well-known/openid-configuration), validates that the
-// document's own "issuer" matches spec.Issuer (RFC 8414 -- S8, so a
-// compromised or misconfigured discovery endpoint can't redirect trust to a
-// different issuer), and returns its jwks_uri.
+// document's own "issuer" matches spec.Issuer (RFC 8414 S8, so a compromised
+// or misconfigured discovery endpoint can't redirect trust to a different
+// issuer), and returns its jwks_uri.
 func (t *TokenValidator) discoverJWKSURI(spec *issuerSpec) (string, error) {
 	if err := requireSecureURL(spec.Issuer, t.allowInsecureIssuers); err != nil {
 		return "", fmt.Errorf("invalid issuer URL: %w", err)
@@ -142,9 +139,8 @@ func (t *TokenValidator) discoverJWKSURI(spec *issuerSpec) (string, error) {
 
 // getJWKS fetches and decodes the JWKS document at jwksURI. The returned
 // status code lets callers distinguish a 404 (candidate for one
-// re-discovery retry, see fetchAndCacheJWKS) from other failures. A zero-key
-// or oversized JWKS is rejected and, since the caller only caches on a nil
-// error, is never cached.
+// re-discovery retry) from other failures. A zero-key or oversized JWKS is
+// rejected and, since the caller only caches on a nil error, is never cached.
 func (t *TokenValidator) getJWKS(jwksURI string) (*types.JWKS, int, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, jwksURI, nil)
 	if err != nil {

@@ -32,6 +32,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 ## Conventions
 
 - Follow effective-Go idioms; structured logging with `log/slog` (never `fmt.Print`).
+- Comments are short and rare: one line, only for a constraint the code cannot state itself. No paragraphs, no narration of what the code does, no rationale essays — that belongs in `CHANGELOG.md`, the PR, or `docs/`. Trim over-long comments in any file you touch.
 - Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
 - Sentinel errors in `internal/handler/types.go`, mapped to HTTP status in the frontend adapters.
 - Config precedence: env vars > YAML > defaults.
