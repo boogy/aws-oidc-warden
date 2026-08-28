@@ -41,9 +41,8 @@ type AwsServiceWrapper struct {
 	stsClient *sts.Client
 	iamClient *iam.Client
 
-	// Security settings
-	maxS3ObjectSize int64         // Maximum allowed size for S3 objects
-	defaultTimeout  time.Duration // Default timeout for AWS operations
+	maxS3ObjectSize int64
+	defaultTimeout  time.Duration
 
 	// Cached hub identity (from STS GetCallerIdentity)
 	callerMu      sync.Mutex
@@ -65,14 +64,13 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 			panic(err)
 		}
 
-		// Initialize all service clients once
 		wrapper = &AwsServiceWrapper{
 			cfg:             cfg,
 			s3Client:        s3.NewFromConfig(cfg),
 			stsClient:       sts.NewFromConfig(cfg),
 			iamClient:       iam.NewFromConfig(cfg),
-			maxS3ObjectSize: 5 * 1024 * 1024,  // 5MB max size for config files
-			defaultTimeout:  30 * time.Second, // 30 second default timeout
+			maxS3ObjectSize: 5 * 1024 * 1024,
+			defaultTimeout:  30 * time.Second,
 		}
 	})
 
@@ -82,7 +80,7 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 // RefreshClients recreates AWS service clients, useful for long-running Lambda environments
 // where clients might need refreshing periodically
 func (s *AwsServiceWrapper) RefreshClients() {
-	slog.Info("Refreshing AWS clients") // Refresh the config to pick up any environment changes
+	slog.Info("Refreshing AWS clients")
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRetryMaxAttempts(3),
 	)
@@ -91,7 +89,6 @@ func (s *AwsServiceWrapper) RefreshClients() {
 		return
 	}
 
-	// Recreate all clients with new configuration
 	s.cfg = cfg
 	s.s3Client = s3.NewFromConfig(cfg)
 	s.stsClient = sts.NewFromConfig(cfg)
@@ -126,7 +123,6 @@ func (s *AwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, erro
 		return nil, err
 	}
 
-	// Check if content size is too large
 	if result.ContentLength != nil && *result.ContentLength > s.maxS3ObjectSize {
 		slog.Warn("S3 object exceeds maximum allowed size",
 			slog.Int64("size", *result.ContentLength),
@@ -134,7 +130,7 @@ func (s *AwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, erro
 			slog.String("bucket", bucket),
 			slog.String("key", key),
 		)
-		// Return the object anyway, but it will be truncated due to the Range header
+		// Returned anyway; the Range header above already truncated it.
 	}
 
 	return result.Body, nil
@@ -144,21 +140,16 @@ func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeR
 	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
 	defer cancel()
 
-	// No slog.Info here: the request-scoped processor.go logs "Assuming role"
-	// with requestId correlation before calling this method. A package-level
-	// slog call here would duplicate that line without the correlation.
+	// No slog.Info here: processor.go already logs "Assuming role" with
+	// requestId correlation before calling this method.
 
-	// Ensure we have a reasonable duration set
 	if input.DurationSeconds == nil || *input.DurationSeconds == 0 {
-		defaultDuration := int32(3600) // 1 hour default
+		defaultDuration := int32(3600)
 		input.DurationSeconds = &defaultDuration
 	}
 
-	// Security: Validate external ID if provided
 	if input.ExternalId != nil && len(*input.ExternalId) < 2 {
-		// Log the length, never the value: ExternalId is a shared secret. The
-		// value is worthless at this length, but printing a configured secret
-		// is a pattern that must not be copied to a path where it isn't.
+		// Log the length, never the value: ExternalId is a shared secret.
 		slog.Warn("Suspicious short external ID provided",
 			slog.Int("externalIdLength", len(*input.ExternalId)),
 			slog.String("roleArn", *input.RoleArn))
@@ -174,25 +165,14 @@ func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeR
 		return nil, err
 	}
 
-	// No slog.Info here: processor.go already logs "Successfully assumed
-	// role" with requestId correlation and full context (role, access key ID,
-	// expiration, timing) once this call returns successfully.
+	// No slog.Info here: processor.go already logs the success with full context.
 	return output, nil
 }
 
-// validateRoleNameLength enforces IAM's 64-character cap on a role NAME.
-//
-// The cap applies to the name only — a role identifier may carry a path
-// (`/team/sub/Name`, up to 512 chars), and the name is the final segment. So
-// the length is measured after the last '/', exactly as ParseRoleARN derives
-// the name; measuring the whole string would reject a perfectly valid role
-// with a deep path and a short name.
-//
-// The previous behavior TRUNCATED an over-long value to 64 characters and
-// looked that up instead, reading the tags of a DIFFERENT role than the caller
-// named — the wrong reflex on a security-relevant lookup, since tag-based
-// authorization reads these tags. Reject rather than coerce, mirroring the rule
-// BuildSessionTags already follows.
+// validateRoleNameLength enforces IAM's 64-character cap on a role NAME,
+// measured after the last '/' since the cap excludes any path prefix
+// (`/team/sub/Name`, up to 512 chars) — matching ParseRoleARN. Rejects rather
+// than truncating, since truncating would silently look up a different role.
 func validateRoleNameLength(roleName string) error {
 	name := roleName
 	if i := strings.LastIndexByte(name, '/'); i >= 0 {
@@ -228,8 +208,8 @@ func (s *AwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput
 }
 
 // GetCallerIdentityInfo returns the account ID and role-session status of the
-// warden's own (hub) identity, fetched via STS GetCallerIdentity and cached.
-// A failed lookup is not cached, so a later call retries instead of failing forever.
+// warden's own (hub) identity, fetched via STS GetCallerIdentity and cached
+// (a failed lookup is not cached, so a later call retries).
 func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSession bool, err error) {
 	s.callerMu.Lock()
 	defer s.callerMu.Unlock()
@@ -270,11 +250,8 @@ func (s *AwsServiceWrapper) GetCallerAccount() (string, error) {
 
 // GetRoleAs performs iam:GetRole using the supplied credentials provider.
 func (s *AwsServiceWrapper) GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
-	// A nil provider would leave the hub credentials in place and silently read
-	// a same-named role in the HUB account while the caller believes it read a
-	// member account's — the confused deputy GetRoleTags guards against. Its one
-	// caller only reaches here with non-nil creds, so this is unreachable today;
-	// it is enforced here so the guarantee does not depend on that caller.
+	// A nil provider would silently fall back to hub credentials and read a
+	// same-named role in the wrong (hub) account — a confused-deputy risk.
 	if creds == nil {
 		return nil, errors.New("GetRoleAs requires explicit credentials; refusing to fall back to hub credentials")
 	}

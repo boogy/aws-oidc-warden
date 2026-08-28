@@ -23,12 +23,11 @@ import (
 const defaultALBKeyEndpoint = "https://public-keys.auth.elb.%s.amazonaws.com/%s"
 
 // albRegionRe constrains AWS_REGION before it is interpolated into the key
-// endpoint URL. AWS_REGION is operator-set (trusted), so this is an explicit,
+// endpoint URL. AWS_REGION is operator-set (trusted); this is an explicit,
 // testable guard rather than a fix for an exploit.
 var albRegionRe = regexp.MustCompile(`^[a-z]{2}-[a-z]+-\d+$`)
 
 // albKeyCache is a short-lived in-memory cache for ALB EC public keys, keyed by kid.
-// Avoids a per-request HTTPS round-trip to the AWS key endpoint.
 type albKeyCache struct {
 	mu      sync.RWMutex
 	entries map[string]albKeyCacheEntry
@@ -42,11 +41,8 @@ type albKeyCacheEntry struct {
 const albKeyCacheTTL = 5 * time.Minute
 
 // maxALBKeyCacheEntries bounds the in-process ALB public-key cache so churn
-// of distinct kids (e.g. a flood of forged/rotating kid values from a
-// malicious or misconfigured direct-invoke caller) can't grow it
-// unboundedly. Hitting the cap just clears the cache; the next lookups
-// re-fetch from the ALB key endpoint -- never a security regression, only a
-// perf one (mirrors the keyMemo overflow-clear pattern in keymemo.go).
+// of distinct kids can't grow it unboundedly. Hitting the cap just clears the
+// cache; the next lookups re-fetch (perf cost only, mirrors keymemo.go).
 const maxALBKeyCacheEntries = 128
 
 func (c *albKeyCache) get(kid string) (*ecdsa.PublicKey, bool) {
@@ -75,10 +71,9 @@ func (c *albKeyCache) set(kid string, key *ecdsa.PublicKey) {
 // ALBExtractor verifies the ALB-signed x-amzn-oidc-data JWT (ES256) and
 // extracts GitHub OIDC claims. If expectedSigner is non-empty, the JWT
 // header's "signer" field must match exactly (prevents cross-ALB injection).
-// Defense-in-depth: re-validates issuer and every other claim self mode
-// checks (sub, iat, nbf, audience, lifetime/age caps, required_claims)
-// through the same checkAndNormalizeClaims path Validate() uses — ALB signs
-// the token itself, so only signature *trust* differs from self mode.
+// Re-validates issuer and every other claim self mode checks through the same
+// checkAndNormalizeClaims path Validate() uses — ALB signs the token itself,
+// so only signature trust differs from self mode.
 type ALBExtractor struct {
 	provider       *config.Provider
 	keyEndpointFmt string // format string for the public key URL
@@ -97,20 +92,17 @@ func WithALBKeyEndpoint(fmtURL string) ALBOption {
 }
 
 // WithALBHTTPClient overrides the http.Client used to fetch the ALB public
-// key (for testing). Production always gets the SSRF-hardened default
-// (newSecureHTTPClient(false, ...)), which blocks loopback; tests dialing an
-// httptest server on 127.0.0.1 must inject a client that allows it (e.g.
-// newSecureHTTPClient(true, ...)).
+// key (for testing). Production always gets the SSRF-hardened default, which
+// blocks loopback; tests dialing an httptest server on 127.0.0.1 must inject
+// a client that allows it (e.g. newSecureHTTPClient(true, ...)).
 func WithALBHTTPClient(c *http.Client) ALBOption {
 	return func(a *ALBExtractor) { a.httpClient = c }
 }
 
 // NewALBExtractor creates an ALBExtractor for the delegated "alb" mode's
-// single configured issuer. provider is read on every Extract() call (via
-// resolveDelegatedSpec, plus a live read of JWTValidation.ALBExpectedSigner),
-// so a hot-reloaded audiences/claim_mappings/required_claims/jwt_leeway/
-// alb_expected_signer change takes effect without a restart, matching self
-// mode.
+// single configured issuer. provider is read on every Extract() call, so a
+// hot-reloaded audiences/claim_mappings/required_claims/jwt_leeway/
+// alb_expected_signer change takes effect without a restart, matching self mode.
 func NewALBExtractor(provider *config.Provider, opts ...ALBOption) *ALBExtractor {
 	a := &ALBExtractor{
 		provider:       provider,
@@ -144,15 +136,14 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 		return nil, fmt.Errorf("x-amzn-oidc-data header is absent: request may have bypassed ALB OIDC")
 	}
 
-	// Parse without verification to extract kid and signer from header.
 	unverified, _, err := jwt.NewParser().ParseUnverified(input.ALBOIDCData, jwt.MapClaims{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse ALB OIDC JWT: %w", err)
 	}
 
 	kid, _ := unverified.Header["kid"].(string)
-	// Validate kid before using it in a URL — prevents SSRF via path traversal or
-	// URL injection in the key endpoint format string.
+	// Validate kid before using it in a URL — prevents SSRF via path
+	// traversal or URL injection in the key endpoint format string.
 	if !isValidALBKid(kid) {
 		return nil, fmt.Errorf("ALB JWT kid contains invalid characters: %q", kid)
 	}
@@ -169,14 +160,11 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 		return nil, fmt.Errorf("ALB JWT signer mismatch: got %q, want %q", signer, expectedSigner)
 	}
 
-	// Fetch ALB public key.
 	ecKey, err := a.fetchPublicKey(ctx, input.AWSRegion, kid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch ALB public key: %w", err)
 	}
 
-	// Verify JWT with the EC key; ES256 enforced via WithValidMethods.
-	// Match self-mode strictness: require exp and validate iat at the library level.
 	token, err := jwt.ParseWithClaims(
 		input.ALBOIDCData,
 		jwt.MapClaims{},
@@ -194,8 +182,6 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 		return nil, fmt.Errorf("unexpected ALB JWT claims type")
 	}
 
-	// Re-validate issuer — guards against a reused or misconfigured ALB OIDC
-	// setup, and against a token from a different, unconfigured issuer.
 	verifiedIssuer, err := mc.GetIssuer()
 	if err != nil || verifiedIssuer != spec.Issuer {
 		return nil, fmt.Errorf("iss mismatch: got %q, want %q", verifiedIssuer, spec.Issuer)
@@ -260,7 +246,7 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	if !ok {
 		return nil, fmt.Errorf("ALB public key is not an EC key")
 	}
-	// Enforce P-256 — ES256 requires P-256; other curves cause unexpected behaviour.
+	// ES256 requires P-256; other curves cause unexpected behaviour.
 	if ecKey.Curve != elliptic.P256() {
 		return nil, fmt.Errorf("ALB public key uses unexpected curve %s, expected P-256", ecKey.Curve.Params().Name)
 	}

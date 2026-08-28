@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -181,38 +182,38 @@ func TestRedactToken_NegativeCountsDoNotPanic(t *testing.T) {
 	}
 }
 
-// TestFormatClaimValue covers the reason this helper exists: JWT claims are
-// decoded into map[string]any, so every JSON number is a float64, and fmt's
-// default float verb renders a 10-digit epoch second in scientific notation.
 func TestFormatClaimValue(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		raw  any
 		want string
 	}{
-		// The defect this helper fixes: %v on float64(1755590400) is
-		// "1.7555904e+09", which no auditor reads as a timestamp and no SIEM
-		// parses as a number.
 		{"epoch second", float64(1755590400), "1755590400"},
 		{"small integral number", float64(42), "42"},
 		{"zero", float64(0), "0"},
 		{"negative integral", float64(-7), "-7"},
-		// Non-integral values keep their fractional part; there is nothing to
-		// gain by reshaping them.
 		{"fractional stays fractional", 1.5, "1.5"},
-		// Strings are the common case and must pass through untouched.
+		{"negative fractional", -0.25, "-0.25"},
 		{"string", "org/repo", "org/repo"},
 		{"empty string", "", ""},
 		{"bool", true, "true"},
-		// Past float64's exact-integer range an int64 conversion would print a
-		// value the token never carried, so fall back to %v.
-		{"beyond exact integer range", float64(1 << 60), "1.152921504606847e+18"},
-		// 2^53 is the last exactly-representable integer, so it converts
-		// losslessly and must be printed as an integer; 2^53+2 is the next
-		// representable one above the bound and must not be.
 		{"at exact integer bound", float64(1 << 53), "9007199254740992"},
 		{"negative exact integer bound", float64(-(1 << 53)), "-9007199254740992"},
-		{"just past exact integer bound", float64(1<<53) + 2, "9.007199254740994e+15"},
+		{"just past old exact-integer bound", float64(1<<53) + 2, "9007199254740994"},
+		// Digits aren't the exact binary value of 1<<60: past 2^53, FormatFloat's
+		// shortest round-trip decimal need not match the truncated integer.
+		{"beyond exact integer range", float64(1 << 60), "1152921504606847000"},
+		{"just below 1e21 boundary", math.Nextafter(1e21, 0), "999999999999999900000"},
+		{"1e21 stays decimal rather than exponent form", 1e21, "1000000000000000000000"},
+		{"negative 1e21 stays decimal", -1e21, "-1000000000000000000000"},
+		{"1e30 stays decimal", 1e30, "1000000000000000000000000000000"},
+		{"positive infinity", math.Inf(1), "+Inf"},
+		{"negative infinity", math.Inf(-1), "-Inf"},
+		{"NaN", math.NaN(), "NaN"},
+		{"int", 42, "42"},
+		{"int64", int64(42), "42"},
+		{"nil", nil, "<nil>"},
+		{"slice", []string{"a", "b"}, "[a b]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, utils.FormatClaimValue(tc.raw))
@@ -220,9 +221,29 @@ func TestFormatClaimValue(t *testing.T) {
 	}
 }
 
-// TestFormatClaimValue_RoundTripsRealClaimDecode pins the behavior against an
-// actual JSON decode rather than hand-built float64s, since the whole point is
-// what encoding/json hands back for a numeric claim.
+func TestFormatClaimValue_ExactIntegerRangeUnchanged(t *testing.T) {
+	for _, f := range []float64{
+		0, 1, -1, 42, -42, 1 << 53, -(1 << 53),
+		12345, -12345, 1 << 20, -(1 << 20), 9007199254740991, -9007199254740991,
+	} {
+		want := strconv.FormatInt(int64(f), 10)
+		t.Run(want, func(t *testing.T) {
+			assert.Equal(t, want, utils.FormatClaimValue(f))
+		})
+	}
+}
+
+// A none_of written in decimal must be able to match a huge integral claim:
+// exponent form would render a text no operator writes and disarm the veto.
+func TestFormatClaimValue_NoExponentFormForIntegralFloats(t *testing.T) {
+	for _, f := range []float64{1e21, -1e21, 1e30, 1e100, math.MaxFloat64} {
+		got := utils.FormatClaimValue(f)
+		if strings.ContainsAny(got, "eE") {
+			t.Errorf("FormatClaimValue(%v) = %q, want full decimal with no exponent", f, got)
+		}
+	}
+}
+
 func TestFormatClaimValue_RoundTripsRealClaimDecode(t *testing.T) {
 	var claims map[string]any
 	require.NoError(t, json.Unmarshal(

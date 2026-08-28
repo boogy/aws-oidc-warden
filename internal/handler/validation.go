@@ -60,27 +60,23 @@ func ParseRoleOnlyRequestBody(body string) (*RequestData, error) {
 
 // ParseRequestBody parses and validates JSON request body into RequestData
 func ParseRequestBody(body string) (*RequestData, error) {
-	// Validate request body is not empty
 	if strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("request body is empty: %w", ErrInvalidJSON)
 	}
 
-	// Check if body exceeds maximum allowed size (sanity check)
 	if len(body) > maxBodyBytes { // 1MB limit
 		return nil, fmt.Errorf("request body too large: %w", ErrInvalidJSON)
 	}
 
 	var requestData RequestData
 	if err := json.Unmarshal([]byte(body), &requestData); err != nil {
-		// No body preview in the log: a malformed body can still contain a
-		// (partial) bearer token, which must never reach the log stream.
+		// No body preview: a malformed body may still contain a (partial) bearer token.
 		slog.Error("Failed to unmarshal request body",
 			slog.String("error", err.Error()),
 			slog.Int("bodyBytes", len(body)))
 		return nil, fmt.Errorf("invalid JSON format: %w", ErrInvalidJSON)
 	}
 
-	// Validate the parsed data
 	if err := ValidateRequestData(requestData.Token, requestData.Role); err != nil {
 		return nil, err
 	}

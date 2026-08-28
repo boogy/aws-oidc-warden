@@ -9,19 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// resolveRequestID returns the canonical request ID plus the frontend's own ID.
-//
-// The canonical ID is the Lambda invocation UUID: it exists in every frontend
-// mode and is always a UUID, whereas the per-frontend IDs are not
-// interchangeable — API Gateway v2 issues opaque tokens like
-// "CPyipjveDoEEPIA=", REST v1 and Lambda URLs issue UUIDs, and ALB issues
-// nothing at all. Searching logs across frontends needs one shape.
-//
-// frontendID is returned rather than discarded because it is the only join key
-// back to API Gateway / ALB access logs; both are logged, under distinct names.
-// Outside Lambda (cmd/local, unit tests) there is no invocation ID, so a fresh
-// UUID is minted — never the frontend ID, which would reintroduce the mixed
-// shapes this function exists to eliminate.
+// resolveRequestID returns the canonical (always-UUID) request ID plus the
+// frontend's own, non-interchangeable ID, for cross-frontend log correlation.
 func resolveRequestID(ctx context.Context, frontendID string) (requestID, frontendRequestID string) {
 	if lc, ok := lambdacontext.FromContext(ctx); ok && lc.AwsRequestID != "" {
 		return lc.AwsRequestID, frontendID
@@ -32,47 +21,20 @@ func resolveRequestID(ctx context.Context, frontendID string) (requestID, fronte
 // ipSource records where a logged IP came from, so a reader of the audit trail
 // can tell an attested value from a client-supplied one.
 const (
-	ipSourceFrontend     = "frontend"        // platform-attested: the frontend's own observation
-	ipSourceForwardedFor = "x-forwarded-for" // client-supplied: spoofable, see clientIP
+	ipSourceFrontend     = "frontend"        // platform-attested
+	ipSourceForwardedFor = "x-forwarded-for" // client-supplied, spoofable
 )
 
 // clientIP resolves the requesting client's IP and reports its provenance.
 //
-// directIP is the frontend's own source-IP field when it has one (API Gateway
-// v1/v2, Lambda URLs). That value is observed by AWS, not sent by the caller,
-// so it is always preferred and reported as ipSourceFrontend.
-//
-// ALB events carry no such field, so X-Forwarded-For is the only option. The
-// RIGHTMOST hop is taken, not the leftmost: ALB *appends* the TCP peer it
-// actually observed to whatever XFF the client already sent. For
-// "1.2.3.4, 203.0.113.7" the client supplied "1.2.3.4" and the load balancer
-// appended "203.0.113.7", so every entry left of the last one is
-// attacker-controlled. Taking the leftmost hop would log precisely the value an
-// attacker chose.
-//
-// Caveat for the operator: if a trusted proxy (CloudFront, a second ALB) sits
-// in front, the rightmost hop is that proxy, not the end client. Rightmost is
-// still the correct default — it is the only entry with an attester — but such
-// a topology needs a trusted-hop count, which this function deliberately does
-// not guess at. See docs/LOGGING.md's "Source IP trust model" section.
-//
-// Only the last comma-separated field is ever inspected — there is no
-// fallback to an earlier one. If that field is missing, empty, or does not
-// parse as an IP, clientIP reports no IP at all rather than an earlier,
-// caller-controlled hop: a well-behaved ALB always appends the peer it
-// observed as the final field, so a trailing entry that fails to parse proves
-// the header was not produced by such an append, and falling back would
-// return exactly the attacker-chosen value the rightmost rule exists to
-// reject.
-//
-// XFF-derived values are reported as ipSourceForwardedFor. Authorization never
-// consults this IP; it is audit metadata. But a holder of a valid token could
-// otherwise forge their apparent origin in the trail undetectably, so the
-// provenance travels with the value rather than being inferred by the reader.
-//
-// Every candidate is parsed with net.ParseIP and dropped if it is not an
-// address. That is what keeps a non-IP value from ever being logged as one:
-// alb.go used to log the ELB target-group ARN in this field.
+// Prefers the frontend's own source-IP field (API Gateway, Lambda URLs); ALB
+// has none, so falls back to X-Forwarded-For. Takes the RIGHTMOST XFF hop —
+// ALB appends the TCP peer it observed to the end, so every earlier entry is
+// attacker-controlled. No fallback to an earlier hop if the last one fails to
+// parse: that would return the attacker-chosen value rightmost exists to
+// reject. A trusted proxy in front of ALB needs a trusted-hop count this
+// function doesn't have; see docs/LOGGING.md "Source IP trust model".
+// IP is audit metadata only, never consulted for authorization.
 func clientIP(directIP string, headers map[string]string) (ip, source string) {
 	if parsed := net.ParseIP(strings.TrimSpace(directIP)); parsed != nil {
 		return parsed.String(), ipSourceFrontend
@@ -81,8 +43,6 @@ func clientIP(directIP string, headers map[string]string) (ip, source string) {
 	if value == "" {
 		return "", ""
 	}
-	// Only the final field is examined, never an earlier one: see the
-	// no-fallback rationale in the doc comment above.
 	hops := strings.Split(value, ",")
 	if parsed := net.ParseIP(strings.TrimSpace(hops[len(hops)-1])); parsed != nil {
 		return parsed.String(), ipSourceForwardedFor
@@ -90,16 +50,12 @@ func clientIP(directIP string, headers map[string]string) (ip, source string) {
 	return "", ""
 }
 
-// headerValue looks up a header case-insensitively, deterministically.
+// headerValue looks up a header case-insensitively and deterministically.
 //
-// Lambda event header maps are plain Go maps, so a range over them visits keys
-// in a random order. A caller that sent both "X-Forwarded-For" and
-// "x-forwarded-for" could therefore have either value picked, varying per
-// invocation — for the audit trail's source IP that means two invocations of
-// the same request can be recorded with different origins, and a caller can
-// make the recorded value unpredictable on purpose. The exact (already
-// canonical, lowercase) key wins; otherwise the lexicographically smallest
-// case variant is chosen, so the same event always yields the same answer.
+// Map iteration order is random, so ties between case variants (e.g. a caller
+// sending both "X-Forwarded-For" and "x-forwarded-for") are broken by picking
+// the lexicographically smallest key — otherwise the same event could log a
+// different origin on different invocations.
 func headerValue(headers map[string]string, name string) string {
 	if v, ok := headers[name]; ok {
 		return v

@@ -1,8 +1,7 @@
 package cache
 
-// The Cache interface and NewCache backend selection, plus the isolation
-// property every backend must hold: one issuer's JWKS can never be served
-// for another.
+// Covers the Cache interface, NewCache backend selection, and the
+// cross-issuer isolation property every backend must hold.
 import (
 	"sync"
 	"testing"
@@ -87,11 +86,7 @@ func TestNewCacheMemoryHonorsConfig(t *testing.T) {
 	}
 }
 
-// ---------- isolation ----------
-
-// TestMemoryCacheConcurrentAccessRace stresses Get/Set/eviction from many
-// goroutines at once. Run with -race. Proves the shared map is correctly
-// mutex-guarded (no torn reads/writes of a JWKS entry).
+// Run with -race: proves the shared map is correctly mutex-guarded.
 func TestMemoryCacheConcurrentAccessRace(t *testing.T) {
 	c := NewMemoryCache(WithMemoryMaxSize(5), WithMemoryDefaultTTL(50*time.Millisecond))
 
@@ -112,8 +107,7 @@ func TestMemoryCacheConcurrentAccessRace(t *testing.T) {
 	wg.Wait()
 }
 
-// TestDynamoDBCacheConcurrentLocalTierRace stresses the local memory tier
-// (memCache/memCacheMu) concurrently. Run with -race.
+// Run with -race; stresses memCache/memCacheMu concurrently.
 func TestDynamoDBCacheConcurrentLocalTierRace(t *testing.T) {
 	mock := &mockDynamoDB{}
 	c := newTestDynamoDBCache(mock)
@@ -136,8 +130,7 @@ func TestDynamoDBCacheConcurrentLocalTierRace(t *testing.T) {
 	wg.Wait()
 }
 
-// TestS3CacheConcurrentLocalTierRace stresses the local memory tier
-// concurrently. Run with -race.
+// Run with -race.
 func TestS3CacheConcurrentLocalTierRace(t *testing.T) {
 	mock := &mockS3{}
 	c := newTestS3Cache(mock)
@@ -160,11 +153,7 @@ func TestS3CacheConcurrentLocalTierRace(t *testing.T) {
 	wg.Wait()
 }
 
-// TestCacheKeyIsolationAcrossIssuers proves the #1 risk area (cache key
-// construction) is safe: the cache key is the exact issuer string, and two
-// distinct issuer strings can never collide onto the same entry, even when
-// one is a prefix of the other or they differ only by a trailing separator.
-// If this test ever fails, issuer A's cached keys could be looked up under
+// A failure here means issuer A's cached keys could be looked up under
 // issuer B's identity -- a signature-forgery-class bug.
 func TestCacheKeyIsolationAcrossIssuers(t *testing.T) {
 	backends := map[string]Cache{
@@ -184,9 +173,6 @@ func TestCacheKeyIsolationAcrossIssuers(t *testing.T) {
 			jwksA := testJWKS("kid-A")
 			c.Set(issuerA, jwksA, time.Minute)
 
-			// A different issuer string (even one that shares a long prefix,
-			// or differs only by a trailing slash) must be a clean miss --
-			// never resolve to issuer A's key material.
 			if got, found := c.Get(issuerB); found {
 				t.Fatalf("issuer with trailing slash resolved to another issuer's cached JWKS: %+v", got)
 			}
@@ -194,7 +180,6 @@ func TestCacheKeyIsolationAcrossIssuers(t *testing.T) {
 				t.Fatalf("unrelated issuer resolved to another issuer's cached JWKS: %+v", got)
 			}
 
-			// The real issuer must still resolve to its own keys.
 			got, found := c.Get(issuerA)
 			if !found || got.Keys[0].KeyID != "kid-A" {
 				t.Fatalf("expected issuer A to hit its own entry, got found=%v val=%+v", found, got)
@@ -203,11 +188,8 @@ func TestCacheKeyIsolationAcrossIssuers(t *testing.T) {
 	}
 }
 
-// TestS3CacheFormatKeyNoTraversalEscape documents that S3 object keys are
-// opaque strings (S3 has no filesystem-style path resolution), so a
-// crafted issuer containing ".." cannot make formatKey produce a key
-// outside the configured prefix via traversal -- it only ever influences
-// the literal suffix appended after "<prefix>/".
+// S3 keys are opaque strings with no path resolution, so a crafted issuer
+// containing ".." can't make formatKey escape the configured prefix.
 func TestS3CacheFormatKeyNoTraversalEscape(t *testing.T) {
 	c := &s3Cache{prefix: "jwks"}
 
@@ -216,7 +198,6 @@ func TestS3CacheFormatKeyNoTraversalEscape(t *testing.T) {
 	if got != want {
 		t.Fatalf("formatKey = %q, want %q", got, want)
 	}
-	// The literal string still begins with the configured prefix segment;
-	// S3 does not collapse "..", so IAM policies scoped by ARN prefix
-	// (e.g. arn:aws:s3:::bucket/jwks/*) are not bypassed by this key.
+	// S3 doesn't collapse "..", so IAM policies scoped by ARN prefix
+	// (e.g. arn:aws:s3:::bucket/jwks/*) aren't bypassed by this key.
 }

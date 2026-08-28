@@ -9,46 +9,33 @@ import (
 	"strings"
 )
 
-// FormatClaimValue renders a verified JWT claim value as the string recorded
-// in an audit record or attached as an STS session tag.
-//
-// It exists because claims are decoded into map[string]any, so every JSON
-// number arrives as a float64 — and fmt's default float verb (%g) renders a
-// 10-digit epoch second as "1.7555904e+09". Scientific notation is not
-// something a human reads as a timestamp or a SIEM parses as a number, so an
-// integral float64 is rendered as an integer instead. Everything else falls
-// through to %v unchanged, so string claims (the common case) are untouched.
-//
-// Both call sites — handler.auditClaims and aws.BuildSessionTags — must go
-// through this. The audit trail documents that a claim reported in `claims`
-// and the same claim attached as a session tag can never disagree, and two
-// different number formatters would break exactly that.
+// FormatClaimValue renders a verified JWT claim value as the string used in
+// audit records, STS session tags, and condition/tag comparisons. Every finite
+// integral float is rendered in full decimal, at any magnitude: exponent form
+// is a spelling no operator writes a pattern against, and a none_of written in
+// decimal would not match it. Integral floats above 2^53 lose precision at
+// JSON-decode time (float64), so two distinct claim values can render
+// identically; this function can't recover that.
 func FormatClaimValue(raw any) string {
-	// The 1<<53 bound is float64's exact-integer range; past it the int64
-	// conversion would print a value the token never carried. 2^53 itself is
-	// exactly representable, so the bound is inclusive — an exclusive test
-	// pushed that one value into %g and printed "9.007199254740992e+15".
-	if f, ok := raw.(float64); ok && f == math.Trunc(f) && math.Abs(f) <= 1<<53 {
-		return strconv.FormatInt(int64(f), 10)
+	// IsInf guard: +Inf/-Inf satisfy f == Trunc(f).
+	if f, ok := raw.(float64); ok && !math.IsInf(f, 0) && !math.IsNaN(f) &&
+		f == math.Trunc(f) {
+		return strconv.FormatFloat(f, 'f', -1, 64)
 	}
 	return fmt.Sprintf("%v", raw)
 }
 
-// ExtractBranchFromRef reduces a Git ref to its short branch name,
-// e.g. "refs/heads/main" -> "main". Any ref that is not a branch ref — a tag
-// ref, or an issuer whose `ref` claim carries something else entirely — is
-// returned unchanged, so callers that compare against both forms (tag-auth's
-// `branch` dimension) still work for a non-GitHub issuer.
+// ExtractBranchFromRef reduces a branch ref to its short name
+// ("refs/heads/main" -> "main"). Anything else is returned unchanged.
 func ExtractBranchFromRef(ref string) string {
-	if strings.HasPrefix(ref, "refs/heads/") {
-		return strings.TrimPrefix(ref, "refs/heads/")
+	if b, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		return b
 	}
 	return ref
 }
 
-// GetEnv returns the value of the environment variable key, or fallback when
-// the variable is unset. An explicitly empty variable is a set variable and
-// wins over fallback.
+// GetEnv returns the environment variable key, or fallback when it is unset.
+// An explicitly empty variable is set, and wins over fallback.
 func GetEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
@@ -57,8 +44,7 @@ func GetEnv(key, fallback string) string {
 }
 
 // ParseLogLevel converts a level name to an slog.Level, case-insensitively.
-// "warn" and "warning" are both accepted; anything else is an error rather
-// than a silent fallback to info.
+// An unknown name is an error, not a silent fallback to info.
 func ParseLogLevel(level string) (slog.Level, error) {
 	switch strings.ToLower(level) {
 	case "debug":
@@ -74,21 +60,9 @@ func ParseLogLevel(level string) (slog.Level, error) {
 	}
 }
 
-// RedactToken redacts a token string for safe logging, preserving only the
-// first firstN and last lastN bytes. A token too short to survive that split is
-// masked entirely, so the function never reveals more of a short token than of
-// a long one. The counts are byte offsets, not runes: a multi-byte token can be
-// cut mid-rune, which is acceptable for an opaque credential that is never
-// rendered as text.
-//
-// Every count is clamped — negatives to zero, oversized ones to the token
-// length. Neither can arise from a current caller, since the pipeline keeps
-// token material out of logs entirely rather than logging it redacted and this
-// has no callers by design. Both are still clamped because either one would
-// otherwise panic inside a log call, which is the one place a redaction helper
-// must not fail: a negative slices out of range directly, and an oversized pair
-// overflows int when summed, wrapping negative so the too-short guard below is
-// skipped and the slice panics anyway.
+// RedactToken keeps the first firstN and last lastN bytes of a token and masks
+// the rest; a token too short to survive the split is masked entirely.
+// Has no callers by design — the pipeline keeps tokens out of logs entirely.
 func RedactToken(token string, firstN, lastN int) string {
 	if token == "" {
 		return ""
@@ -102,9 +76,7 @@ func RedactToken(token string, firstN, lastN int) string {
 
 	tokenLen := len(token)
 
-	// Clamp each count to the token length *before* summing them: firstN+lastN
-	// overflows for adversarially large counts and the comparison below would
-	// then be against a negative number.
+	// Clamp before summing: firstN+lastN overflows for large counts.
 	if firstN > tokenLen {
 		firstN = tokenLen
 	}
@@ -112,11 +84,9 @@ func RedactToken(token string, firstN, lastN int) string {
 		lastN = tokenLen
 	}
 
-	// If token is shorter than firstN + lastN, just mask it all
 	if tokenLen <= firstN+lastN {
 		return strings.Repeat("*", tokenLen)
 	}
 
-	// Otherwise, keep firstN and lastN characters visible
 	return token[:firstN] + "..." + token[tokenLen-lastN:]
 }

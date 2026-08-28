@@ -9,17 +9,12 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
 
-// This file holds the one advisory check Validate() runs over a condition
-// tree: a condition key that names a claim the issuer never issues. Such a key
-// can never match, so the mapping simply stops authorizing — fail-closed
-// already, but silently, which is precisely the typo worth surfacing. It is
-// WARN-only and fires on nothing else: every condition key is spelled exactly
-// like its claim, so a correct config is never warned about.
+// This file holds Validate()'s one advisory check: a condition key naming a
+// claim the issuer never issues (WARN-only, typo detection).
 
-// githubClaimNames is the claim vocabulary of a GitHub Actions OIDC token: every
-// json tag on types.Claims (which is what the github provider unmarshals into,
-// so it cannot drift from the validator) plus the registered JWT claims it
-// embeds and the handful of GitHub claims that have no struct field.
+// githubClaimNames is the claim vocabulary of a GitHub Actions OIDC token:
+// every json tag on types.Claims (what the github provider unmarshals into)
+// plus GitHub claims with no struct field.
 var githubClaimNames = buildGitHubClaimNames()
 
 func buildGitHubClaimNames() map[string]bool {
@@ -47,13 +42,9 @@ func buildGitHubClaimNames() map[string]bool {
 	return names
 }
 
-// knownClaimsFor returns the claim names a condition on this issuer may
-// reasonably reference, or nil when no vocabulary is known — in which case the
-// unknown-claim check is skipped entirely.
-//
-// Only `provider: github` has a fixed vocabulary. A generic issuer's claims are
-// whatever its provider mints, so warning there would fire on every legitimate
-// condition; its own declared claim names are not a complete set either.
+// knownClaimsFor returns the claim vocabulary for the unknown-claim check, or
+// nil to skip it. Only `provider: github` has a fixed vocabulary; a generic
+// issuer's claims are whatever its provider mints.
 func knownClaimsFor(iss *IssuerConfig) map[string]bool {
 	if iss == nil || iss.Provider != "github" {
 		return nil
@@ -62,8 +53,6 @@ func knownClaimsFor(iss *IssuerConfig) map[string]bool {
 	for name := range githubClaimNames {
 		known[name] = true
 	}
-	// A github issuer may still project or require extra claims (e.g. an
-	// enterprise-specific one); those are declared, so they are not typos.
 	for _, claim := range iss.ClaimMappings {
 		known[claim] = true
 	}
@@ -76,20 +65,14 @@ func knownClaimsFor(iss *IssuerConfig) map[string]bool {
 	return known
 }
 
-// warnConditionKeys walks a whole condition tree — nested groups included —
-// warning once per unknown claim name. where identifies the mapping (e.g.
-// `role_mappings[2] (acme/app)`) and path the node within it, so an operator
-// can go straight to the line. known may be nil to skip the unknown-claim
-// check.
+// warnConditionKeys walks a whole condition tree warning once per unknown
+// claim name. where identifies the mapping, path the node within it.
 func warnConditionKeys(cond *Condition, path, where string, known map[string]bool) {
 	warnConditionKeysAt(cond, path, where, known, false)
 }
 
-// warnConditionKeysAt carries one extra fact down the tree: whether this node
-// sits under a none_of, where a typo flips direction. Elsewhere a claim that
-// can never match stops the mapping authorizing; under none_of it is a veto
-// that can never fire, so the mapping authorizes what the file refuses. Same
-// typo, opposite blast radius — hence its own message.
+// warnConditionKeysAt tracks underNoneOf: a typo there is a veto that can
+// never fire (fail-open), vs. never-matches (fail-closed) elsewhere.
 func warnConditionKeysAt(cond *Condition, path, where string, known map[string]bool, underNoneOf bool) {
 	if cond == nil {
 		return
@@ -105,8 +88,7 @@ func warnConditionKeysAt(cond *Condition, path, where string, known map[string]b
 	warnConditionGroup(cond.NoneOf, path, "none_of", where, known, true)
 }
 
-// warnUnknownClaims flags a claim name the issuer does not issue — a typo that
-// denies silently. prefix is the operator-facing path of the map's own node.
+// warnUnknownClaims flags a claim name the issuer does not issue.
 func warnUnknownClaims(claims map[string]Patterns, prefix, where string, known map[string]bool, underNoneOf bool) {
 	msg := "condition references a claim this issuer does not issue; it can never match — check the spelling"
 	if underNoneOf {

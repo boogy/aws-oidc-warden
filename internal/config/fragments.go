@@ -13,19 +13,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-// maxFragmentBytes bounds the size of a single fetched/read fragment,
-// mirroring the 1 MiB cap applied elsewhere to remote/S3-sourced documents
-// (internal/handler's maxRemoteConfigSize for the primary config, and S3
-// session policy reads).
+// maxFragmentBytes mirrors the 1 MiB cap applied elsewhere to remote/S3-sourced
+// documents (internal/handler's maxRemoteConfigSize, S3 session policy reads).
 const maxFragmentBytes = 1024 * 1024
 
-// fragmentAllowedKeys is the config_fragments merge allowlist: a fragment may
-// only ever contribute to the provider-neutral
-// authorization surface. Everything else — issuers, hardening knobs,
-// allow_insecure_issuers, tag_auth, config_fragments itself, etc. — is
-// base-only and rejected by rejectDisallowedFragmentKeys regardless of how
-// deeply it's nested (checked against every key viper discovers, not just
-// FragmentConfig's own fields).
+// fragmentAllowedKeys is the config_fragments merge allowlist. Everything
+// else (issuers, hardening knobs, tag_auth, ...) is base-only and rejected by
+// rejectDisallowedFragmentKeys, checked against every key viper discovers
+// (not just FragmentConfig's own fields), regardless of nesting depth.
 var fragmentAllowedKeys = map[string]bool{
 	"default_issuer": true,
 	"role_sets":      true,
@@ -42,12 +37,9 @@ type FragmentConfig struct {
 	RoleGroups    []RoleGroup         `mapstructure:"role_groups"`
 }
 
-// parseFragment parses one fragment's raw bytes, rejecting any top-level (or
-// nested) key outside fragmentAllowedKeys before unmarshalling — so a
-// fragment can never smuggle in `issuers`, `tag_auth`,
-// `allow_insecure_issuers`, or any other base-only setting.
-// format is the viper config type, normally derived from the fragment's URI
-// via FormatFromPath.
+// parseFragment parses one fragment's raw bytes, rejecting any top-level or
+// nested key outside fragmentAllowedKeys before unmarshalling. format is the
+// viper config type, normally derived from the fragment's URI via FormatFromPath.
 func parseFragment(data []byte, format, source string) (*FragmentConfig, error) {
 	if format == "" {
 		format = "json"
@@ -70,9 +62,9 @@ func parseFragment(data []byte, format, source string) (*FragmentConfig, error) 
 	return &frag, nil
 }
 
-// rejectDisallowedFragmentKeys errors on the first key (from viper's dotted,
-// fully-flattened key set — e.g. "tag_auth.enabled") whose top-level segment
-// is not in fragmentAllowedKeys.
+// rejectDisallowedFragmentKeys errors on the first key (viper's dotted,
+// fully-flattened set, e.g. "tag_auth.enabled") whose top-level segment is
+// not in fragmentAllowedKeys.
 func rejectDisallowedFragmentKeys(keys []string) error {
 	for _, key := range keys {
 		top := key
@@ -90,19 +82,12 @@ func rejectDisallowedFragmentKeys(keys []string) error {
 }
 
 // mergeFragment applies frag's allowed fields onto cfg:
-//   - default_issuer must reference a base-defined issuer (S5) and, if
-//     already set (by the base config or an earlier-merged fragment) to a
-//     different value, is rejected as an ambiguous/conflicting override —
-//     the resolved default must never depend on fragment fetch order.
+//   - default_issuer must be base-defined; a conflicting value from an
+//     earlier fragment/base is rejected (result must not depend on fetch order).
 //   - role_sets are merged by name; a name colliding with an existing
-//     base/earlier-fragment role_set is rejected — a fragment silently
-//     redefining e.g. "@prod" would repoint every mapping that already
-//     references it, a security-relevant change fragments must not make
-//     unilaterally.
-//   - role_mappings/role_groups are appended in fragment (then declaration)
-//     order; issuer resolution, role_set expansion, pattern compilation and
-//     indexing all happen later in the single, shared Validate() pass
-//     (config.go) — mergeFragment itself does no resolving/compiling.
+//     role_set is rejected, so a fragment can't silently repoint "@prod".
+//   - role_mappings/role_groups are appended; resolution/compilation/indexing
+//     happen later in Validate() (config.go), not here.
 func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers map[string]bool) error {
 	if frag.DefaultIssuer != "" {
 		if !baseIssuers[frag.DefaultIssuer] {
@@ -115,8 +100,7 @@ func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers
 	}
 
 	if len(frag.RoleSets) > 0 {
-		// Sorted iteration keeps a multi-collision error message deterministic;
-		// the collision check itself is order-independent.
+		// Sorted for a deterministic error on multiple collisions.
 		names := make([]string, 0, len(frag.RoleSets))
 		for name := range frag.RoleSets {
 			names = append(names, name)
@@ -140,18 +124,14 @@ func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers
 }
 
 // isRemoteFragment reports whether uri names a remote source (delegated to
-// the injected FragmentFetchFunc, e.g. "s3://...") rather than a local
-// filesystem path.
+// the injected FragmentFetchFunc, e.g. "s3://...") vs. a local path.
 func isRemoteFragment(uri string) bool {
 	return strings.Contains(uri, "://")
 }
 
-// readLocalFragment reads a fragment from the local filesystem (a
-// config_fragments entry with no "scheme://" prefix — e.g. a bind-mounted
-// file in local/dev use), bounding the read at maxFragmentBytes and
-// computing a sha256 content hash as its etag (local files have no native
-// ETag; this also lets an unchanged local fragment be recognized and skip
-// re-parsing, same as a remote one — see Provider.applyFragments).
+// readLocalFragment reads a fragment from the local filesystem, bounded at
+// maxFragmentBytes, with a sha256 content hash as its etag (local files have
+// no native ETag; lets Provider.applyFragments skip re-parsing when unchanged).
 func readLocalFragment(path string) ([]byte, string, error) {
 	f, err := os.Open(path)
 	if err != nil {

@@ -24,20 +24,15 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// defaultMaxTokenBytes is used only if a TokenValidator is built from a
-// config.Config that never went through Validate() (e.g. a hand-built config
-// in a test). Normal bootstrap always calls Validate(), which applies this
-// same default (internal/config.defaultMaxTokenBytes).
+// defaultMaxTokenBytes applies only when a TokenValidator is built from a
+// config that never went through config.Validate() (internal/config.defaultMaxTokenBytes).
 const defaultMaxTokenBytes = 8192
 
 var (
-	// ErrKeyNotFound is returned by the key function when no JWKS key matches
-	// the token's "kid". It is a sentinel so callers can detect a key miss
-	// (e.g. after signing-key rotation) and force a cache-bypassing JWKS
-	// refetch.
+	// ErrKeyNotFound is returned when no JWKS key matches the token's kid.
 	ErrKeyNotFound = errors.New("key not found")
-	// ErrUnknownIssuer is returned when a token's issuer has no entry in the
-	// registry. No JWKS fetch is attempted for an unknown issuer.
+	// ErrUnknownIssuer is returned when a token's issuer has no registry
+	// entry; no JWKS fetch is attempted for an unknown issuer.
 	ErrUnknownIssuer = errors.New("unknown issuer")
 	// ErrTokenTooLarge is returned when a token exceeds the configured
 	// maximum size, before any parsing is attempted.
@@ -45,36 +40,28 @@ var (
 	// ErrInvalidAudience is returned when none of the token's audiences match
 	// any of the issuer's configured audiences.
 	ErrInvalidAudience = errors.New("token audience not accepted for this issuer")
-	// ErrMissingRequiredClaim is returned when one of the issuer's
-	// required_claims is absent or empty in the verified token.
+	// ErrMissingRequiredClaim is returned when a required claim is absent or
+	// empty in the verified token.
 	ErrMissingRequiredClaim = errors.New("required claim missing or empty")
-	// ErrTokenLifetimeExceeded is returned when exp-iat exceeds the configured
-	// MaxTokenLifetime.
+	// ErrTokenLifetimeExceeded is returned when exp-iat exceeds MaxTokenLifetime.
 	ErrTokenLifetimeExceeded = errors.New("token lifetime exceeds maximum allowed")
-	// ErrTokenTooOld is returned when now-iat exceeds the configured MaxTokenAge.
+	// ErrTokenTooOld is returned when now-iat exceeds MaxTokenAge.
 	ErrTokenTooOld = errors.New("token age exceeds maximum allowed")
 )
 
-// TokenValidatorInterface is the contract for validating an OIDC token end to
-// end: signature, issuer, audience, expiration, and required claims, then
-// normalizing to a canonical subject + raw claims map.
+// TokenValidatorInterface validates an OIDC token end to end — signature,
+// issuer, audience, expiration, required claims — and normalizes the result
+// to a canonical subject + raw claims map.
 //
-// Deliberately scoped to Validate only: FetchJWKS and GenKeyFunc (still
-// exported on the concrete *TokenValidator for tests and WarmPrefetch) are an
-// unscoped, audience-less path — neither is a standalone token-validation
-// entry point, and neither is used by production code through this
-// interface. Validate is the only supported way to authenticate a token.
+// Deliberately scoped to Validate only: FetchJWKS and GenKeyFunc remain
+// exported on the concrete *TokenValidator for tests and WarmPrefetch, but
+// are an unscoped, audience-less path, not a standalone validation entry point.
 type TokenValidatorInterface interface {
-	// Validate verifies a token against the issuer it claims, using that
-	// issuer's registered spec (audiences/claim mappings/required claims),
-	// and returns the normalized claims. Always use Validate for end-to-end
-	// token authentication.
 	Validate(string) (*types.Claims, error)
 }
 
 // issuerSpec is the immutable, per-issuer view of config.IssuerConfig used on
-// the request path. Rebuilt (never mutated) whenever the backing config
-// changes.
+// the request path. Rebuilt, never mutated, whenever the backing config changes.
 type issuerSpec struct {
 	Issuer, Provider, JWKSURI string
 	Audiences                 []string
@@ -82,22 +69,15 @@ type issuerSpec struct {
 	RequiredClaims            []string
 }
 
-// snapshot is an immutable view of the current set of trusted issuers, keyed
-// by exact issuer string (no normalization — matches config.Validate's
-// duplicate-issuer check).
+// snapshot is an immutable view of the current trusted issuers, keyed by
+// exact issuer string (matches config.Validate's duplicate-issuer check).
 type snapshot struct {
 	registry map[string]*issuerSpec
 
-	// builtFrom is the config pointer this registry was projected from. It
-	// lives INSIDE the snapshot on purpose: the snapshot and the identity of
-	// the config it came from are published together by a single atomic
-	// store, so a reader can never observe one without the other. Two
-	// separate atomic pointers could not give that — a goroutine preempted
-	// between the two stores lets a second goroutine publish its own pair in
-	// between, leaving the registry from config B labelled as built from
-	// config A, and the fast path then serves B's issuers to a caller holding
-	// A. In-flight requests DO hold the previous pointer across a reload, so
-	// that is a reachable state, not a theoretical one.
+	// builtFrom is the config this registry was projected from, kept inside
+	// the snapshot so both publish atomically in one store: two separate
+	// atomic pointers could let a reader observe a registry from config B
+	// labelled as built from config A.
 	builtFrom *config.Config
 }
 
@@ -113,8 +93,7 @@ func buildSnapshot(cfg *config.Config) *snapshot {
 
 // newIssuerSpec projects one config.IssuerConfig into the immutable
 // issuerSpec used on the request path. Shared by the self-mode registry
-// (buildSnapshot) and the delegated (apigw/alb) extractor constructors, so
-// every mode builds an identical spec from the same config fields.
+// (buildSnapshot) and the delegated (apigw/alb) extractor constructors.
 func newIssuerSpec(ic *config.IssuerConfig) *issuerSpec {
 	return &issuerSpec{
 		Issuer:         ic.Issuer,
@@ -139,24 +118,20 @@ type TokenValidator struct {
 	httpc    *http.Client // built once at init, SSRF/TLS-hardened (ssrf.go)
 
 	// allowInsecureIssuers configures the http client built once at
-	// construction (newSecureHTTPClient). leeway/maxLifetime/maxAge/
-	// maxTokenBytes are read LIVE from the provider on every Validate() call
-	// instead (see currentConfig), so a hot config reload takes effect
-	// immediately, like the registry.
+	// construction. leeway/maxLifetime/maxAge/maxTokenBytes are instead read
+	// live from the provider on every Validate() call (see currentConfig), so
+	// a hot config reload takes effect immediately, like the registry.
 	allowInsecureIssuers bool
 
-	// timeNow is the clock used for lifetime/age checks and the refetch
-	// limiter's cooldown windows. Defaults to time.Now; overridable via
-	// WithTimeNow for deterministic tests.
+	// timeNow is the clock for lifetime/age checks and the refetch limiter's
+	// cooldowns. Defaults to time.Now; overridable via WithTimeNow for tests.
 	timeNow func() time.Time
 
 	// refetch rate-limits forced (cache-bypassing) JWKS refetches per
-	// (issuer, kid), with a per-issuer backstop. keyMemo caches parsed,
-	// re-validated public keys per (issuer, kid, key material) so repeated
-	// requests for the same key skip re-parsing. jwksURICache memoizes a
-	// discovery-resolved jwks_uri per issuer so steady-state requests skip
-	// re-discovery. sfGroup collapses concurrent cold JWKS fetches for the
-	// same issuer into a single upstream call.
+	// (issuer, kid). keyMemo caches parsed, re-validated public keys per
+	// (issuer, kid, key material). jwksURICache memoizes a discovery-resolved
+	// jwks_uri per issuer. sfGroup collapses concurrent cold JWKS fetches for
+	// the same issuer into a single upstream call.
 	refetch      *refetchLimiter
 	keyMemo      *keyMemo
 	jwksURICache sync.Map
@@ -167,8 +142,7 @@ type TokenValidator struct {
 type TokenValidatorOption func(*TokenValidator)
 
 // WithTimeNow overrides the clock TokenValidator uses for lifetime/age checks
-// and the refetch limiter's cooldown windows. For tests only; production
-// callers should rely on the time.Now default.
+// and the refetch limiter's cooldowns. For tests only.
 func WithTimeNow(now func() time.Time) TokenValidatorOption {
 	return func(t *TokenValidator) {
 		t.timeNow = now
@@ -176,11 +150,8 @@ func WithTimeNow(now func() time.Time) TokenValidatorOption {
 }
 
 // NewTokenValidator creates a TokenValidator that reads its issuer registry
-// from provider on every Validate call, so a hot-reloaded config change
-// (new/removed issuer, audience, mapping) takes effect without a restart.
-// All expensive setup (the shared http.Client, the initial registry
-// snapshot) happens once here — call this once during bootstrap, never per
-// request.
+// from provider on every Validate call, so a hot-reloaded config change takes
+// effect without a restart. Call once during bootstrap, never per request.
 func NewTokenValidator(provider *config.Provider, jwksCache cache.Cache, opts ...TokenValidatorOption) *TokenValidator {
 	cfg := provider.Get()
 
@@ -208,26 +179,15 @@ func (t *TokenValidator) currentConfig() *config.Config {
 }
 
 // currentSnapshot returns the registry snapshot for the provider's current
-// config, rebuilding and atomically publishing it if the config pointer
-// changed since the last build.
+// config, rebuilding and publishing it if the config pointer changed.
 func (t *TokenValidator) currentSnapshot() *snapshot {
 	return t.snapshotFor(t.currentConfig())
 }
 
 // snapshotFor returns the registry snapshot for cfg, rebuilding and
 // atomically publishing it if the config pointer changed since the last
-// build. Concurrent callers racing a rebuild for the same new pointer redo
-// the (idempotent) work harmlessly — atomic.Pointer loads/stores are
-// torn-read-free, so this stays race-free without a lock. Accepting cfg
-// (rather than re-reading the provider) lets Validate() do a single
-// provider.Get() and reuse it for both the snapshot and the live time
-// bounds.
-//
-// The identity check reads snap.builtFrom rather than a second atomic, so
-// the cache hit is decided against the very snapshot it returns. A racing
-// publisher can still make this call rebuild unnecessarily, which costs one
-// map build; it can never make it hand back a registry belonging to a
-// different config.
+// build. A concurrent rebuild for the same new pointer redoes the (idempotent)
+// work harmlessly; it can never hand back a registry for a different config.
 func (t *TokenValidator) snapshotFor(cfg *config.Config) *snapshot {
 	if snap := t.snap.Load(); snap != nil && snap.builtFrom == cfg {
 		return snap
@@ -235,11 +195,10 @@ func (t *TokenValidator) snapshotFor(cfg *config.Config) *snapshot {
 	return t.rebuildSnapshot(cfg)
 }
 
-// rebuildSnapshot builds a fresh registry from cfg and publishes it.
-//
-// It RETURNS the snapshot it built rather than re-loading t.snap, so the
-// caller is served the registry for the cfg it asked about even when a
-// concurrent rebuild for a different config wins the store.
+// rebuildSnapshot builds a fresh registry from cfg and publishes it. It
+// returns the snapshot it built rather than re-loading t.snap, so the caller
+// is served the registry for the cfg it asked about even when a concurrent
+// rebuild for a different config wins the store.
 func (t *TokenValidator) rebuildSnapshot(cfg *config.Config) *snapshot {
 	snap := buildSnapshot(cfg)
 	t.snap.Store(snap)
@@ -247,10 +206,8 @@ func (t *TokenValidator) rebuildSnapshot(cfg *config.Config) *snapshot {
 }
 
 // WarmPrefetch fetches and caches the JWKS for every configured issuer.
-// Intended to run once during cold-start (e.g. Lambda INIT) so the first
-// real request doesn't pay a cold JWKS fetch. Failures are logged and
-// otherwise ignored: a prefetch miss just means the next Validate() for that
-// issuer pays the fetch cost — it must never fail bootstrap.
+// Intended for cold-start; a fetch failure is logged and otherwise ignored —
+// it must never fail bootstrap.
 func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
 	for _, spec := range t.currentSnapshot().registry {
 		select {
@@ -265,26 +222,16 @@ func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
 	}
 }
 
-// Validate implements the self-mode verification flow. The hardening steps
-// (key-pinning refinement, sub/nbf enforcement, lifetime/age caps, refetch
-// rate limiting) layer on top of the non-hardening baseline the
-// parser/GenKeyFunc below already provide (algorithm allowlist,
-// WithLeeway/WithIssuedAt/WithExpirationRequired, kid match).
+// Validate implements the self-mode verification flow.
 func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
-	// Read config once; time bounds and the length guard are derived live
-	// from it (not frozen at construction) so a hot config reload takes
-	// effect immediately, like the registry.
 	return t.validateWith(t.currentConfig(), tokenString)
 }
 
-// validateWith is Validate against an explicit config generation.
-//
-// It exists so a caller that already captured a *Config for this request can
-// have the token decided by that same generation instead of re-reading the
-// provider, which a concurrent hot reload can have swapped in between. The
-// method is unexported on purpose: it is an internal seam for SelfExtractor,
-// not a second public validation entry point, and keeping it off
-// TokenValidatorInterface leaves every existing mock of that interface valid.
+// validateWith is Validate against an explicit config generation, so a caller
+// that already captured a *Config for this request has the token decided by
+// that same generation rather than a second, possibly-reloaded provider read.
+// Unexported: an internal seam for SelfExtractor, not a second public entry
+// point, so every existing mock of TokenValidatorInterface stays valid.
 func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*types.Claims, error) {
 	maxTokenBytes := cfg.MaxTokenBytes
 	if maxTokenBytes <= 0 {
@@ -296,8 +243,7 @@ func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*
 		return nil, fmt.Errorf("%w: %d bytes (max %d)", ErrTokenTooLarge, len(tokenString), maxTokenBytes)
 	}
 
-	// Step 1: unverified iss peek — routing only, never used for identity or
-	// authorization decisions.
+	// Step 1: unverified iss peek — routing only, never identity/authorization.
 	unverified := jwt.MapClaims{}
 	if _, _, err := jwt.NewParser().ParseUnverified(tokenString, unverified); err != nil {
 		return nil, fmt.Errorf("failed to parse token: %w", err)
@@ -307,8 +253,7 @@ func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*
 		return nil, fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
 	}
 
-	// Step 2: registry lookup by exact issuer match. An unknown issuer denies
-	// before any JWKS fetch is attempted.
+	// Step 2: registry lookup by exact issuer match; denies before any JWKS fetch.
 	spec, ok := t.snapshotFor(cfg).registry[unverifiedIssuer]
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownIssuer, unverifiedIssuer)
@@ -341,11 +286,9 @@ func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*
 	raw := jwt.MapClaims{}
 	token, err := parser.ParseWithClaims(tokenString, raw, t.genKeyFuncForIssuer(spec.Issuer, jwks))
 
-	// If the signing key was not found, the issuer may have rotated its keys.
-	// Force a single cache-bypassing JWKS refetch and retry once, subject to
-	// the per-(issuer,kid) refetch limiter (a genuinely new kid always passes
-	// on its first miss; repeated misses for the same bogus kid, or a flood
-	// of distinct bogus kids for one issuer, are throttled).
+	// A key-not-found miss may mean the issuer rotated keys: force one
+	// cache-bypassing refetch and retry, subject to the per-(issuer,kid)
+	// refetch limiter.
 	if err != nil && errors.Is(err, ErrKeyNotFound) {
 		kid, _ := token.Header["kid"].(string)
 		if t.refetch.allow(spec.Issuer, kid) {
@@ -369,22 +312,17 @@ func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*
 		return nil, errors.New("token is invalid")
 	}
 
-	// Step 4b: re-assert the now-verified issuer against this call's spec.
-	// Guards the gap between the registry lookup (step 2) and here, in case a
-	// concurrent hot reload swapped the registry mid-call.
+	// Step 4b: re-assert the now-verified issuer, closing the gap between the
+	// registry lookup (step 2) and here in case a hot reload swapped mid-call.
 	verifiedIssuer, err := raw.GetIssuer()
 	if err != nil || verifiedIssuer != spec.Issuer {
 		return nil, fmt.Errorf("%w: verified issuer changed during validation", ErrUnknownIssuer)
 	}
 
-	// Steps 6-10: sub/iat/exp/nbf enforcement, lifetime/age caps, audience
-	// ANY-match, required_claims, and normalization all run through the same
-	// helper the delegated (apigw/alb) extractors use, so self mode and
-	// delegated modes can never silently drift apart. Redundant with the
-	// parser options above (WithExpirationRequired,
-	// WithIssuedAt, WithLeeway already ran during ParseWithClaims) but
-	// harmless — delegated modes have no such parser, so this is the only
-	// place those checks run for them.
+	// Steps 6-10: sub/iat/exp/nbf, lifetime/age caps, audience ANY-match,
+	// required_claims, and normalization — shared with the delegated
+	// (apigw/alb) extractors via checkAndNormalizeClaims so no mode can
+	// silently drift weaker.
 	bounds := claimBounds{leeway: leeway, maxLifetime: cfg.MaxTokenLifetime, maxAge: cfg.MaxTokenAge}
 	return checkAndNormalizeClaims(raw, spec, bounds, t.timeNow())
 }
@@ -407,17 +345,15 @@ func audienceMatches(tokenAudiences jwt.ClaimStrings, expected []string) bool {
 }
 
 // providerAdapter derives canonical claims from an issuer's verified raw
-// claims for one provider. Adding a new provider = implement this interface
-// and register it in providerAdapters; no core Validate()/normalizeClaims
-// edits required (open/closed).
+// claims for one provider. Adding a provider = implement this interface and
+// register it in providerAdapters; no core Validate()/normalizeClaims edits.
 type providerAdapter interface {
 	// subject returns the canonical subject for raw, given the issuer's
 	// configured claim_mappings (may be nil).
 	subject(raw jwt.MapClaims, mappings map[string]string) (string, error)
-	// populate does provider-specific native struct population on top of the
-	// registered claims already set by populateRegisteredClaims. Must never
-	// set claims.Subject — that is set once, afterward, by normalizeClaims
-	// from subject() (no self-asserted identity).
+	// populate does provider-specific population on top of the registered
+	// claims already set by populateRegisteredClaims. Must never set
+	// claims.Subject — that is set once, afterward, by normalizeClaims.
 	populate(raw jwt.MapClaims, claims *types.Claims) error
 }
 
@@ -434,9 +370,8 @@ func (githubAdapter) subject(raw jwt.MapClaims, mappings map[string]string) (str
 }
 
 func (githubAdapter) populate(raw jwt.MapClaims, claims *types.Claims) error {
-	// Native unmarshal: round-trip the verified raw claims through JSON into
-	// the GitHub-specific struct fields. Safe only for provider: github — the
-	// canonical Subject is set separately, never by this unmarshal.
+	// Round-trips raw through JSON into the GitHub-specific fields; safe only
+	// for provider: github. Subject is set separately, never by this unmarshal.
 	data, err := json.Marshal(map[string]any(raw))
 	if err != nil {
 		return fmt.Errorf("failed to marshal raw claims: %w", err)
@@ -449,8 +384,7 @@ func (githubAdapter) populate(raw jwt.MapClaims, claims *types.Claims) error {
 
 // genericAdapter is the mapped-only provider for any non-GitHub issuer: no
 // native struct unmarshal, so the canonical subject must come from an
-// explicit claim_mappings.subject entry (enforced already at config.Validate,
-// re-checked here as defense in depth).
+// explicit claim_mappings.subject entry (also enforced at config.Validate).
 type genericAdapter struct{}
 
 func (genericAdapter) subject(raw jwt.MapClaims, mappings map[string]string) (string, error) {
@@ -483,8 +417,7 @@ func stringClaim(raw jwt.MapClaims, name string) (string, error) {
 }
 
 // populateRegisteredClaims copies the standard registered claims (iss, aud,
-// exp, iat, nbf, jti) from the verified raw claims into claims.RegisteredClaims.
-// Runs for every provider, before the provider-specific adapter. Deliberately
+// exp, iat, nbf, jti) from raw into claims.RegisteredClaims. Deliberately
 // does NOT set claims.Subject — see the types.Claims doc.
 func populateRegisteredClaims(raw jwt.MapClaims, claims *types.Claims) error {
 	iss, err := raw.GetIssuer()
@@ -524,9 +457,7 @@ func populateRegisteredClaims(raw jwt.MapClaims, claims *types.Claims) error {
 }
 
 // normalizeClaims converts verified raw claims into the canonical
-// types.Claims for the given provider: populates the standard registered
-// claims for every provider, does a native struct unmarshal only for
-// provider "github", and always sets the canonical Subject from the
+// types.Claims for the given provider, always setting Subject from the
 // provider's subject() — never from raw JSON directly. Fails closed on any
 // error, missing required claim, or type mismatch.
 func normalizeClaims(raw jwt.MapClaims, provider string, mappings map[string]string) (*types.Claims, error) {
@@ -544,9 +475,8 @@ func normalizeClaims(raw jwt.MapClaims, provider string, mappings map[string]str
 		return nil, err
 	}
 
-	// Sub retains the raw "sub" claim for every provider, so the audit record's
-	// pre-canonicalization jwtSub is populated for generic issuers too (github's
-	// adapter already sets it via native unmarshal).
+	// Retains the raw "sub" claim for every provider, so the audit record's
+	// pre-canonicalization jwtSub is populated for generic issuers too.
 	if sub, ok := raw["sub"].(string); ok {
 		claims.Sub = sub
 	}
@@ -560,18 +490,15 @@ func normalizeClaims(raw jwt.MapClaims, provider string, mappings map[string]str
 	return claims, nil
 }
 
-// genKeyFuncForIssuer generates a jwt.Keyfunc scoped to issuer that validates
-// JWT tokens using jwks keys. Supports RSA (RS256/384/512) and ECDSA
-// (ES256/384/512) key types. Beyond a kid match, a candidate key must also
-// satisfy: use is "sig" or unset; alg, if the JWKS entry sets one, matches
-// the token's alg; and the key's type matches the token alg's family (RSA
-// keys only for RS*, EC keys only for ES*). This blocks an alg-confusion or
-// duplicate-kid-different-type attack from having a mismatched key selected
-// for a kid it doesn't actually belong to. Scanning continues past a kid
-// match that fails these checks (rather than stopping), so a duplicate kid
-// with one matching and one non-matching key still resolves to the correct
-// key. issuer scopes the key memo (keymemo.go) so the same kid string from
-// different issuers is never conflated.
+// genKeyFuncForIssuer returns a jwt.Keyfunc scoped to issuer that resolves a
+// token's kid to a JWKS key. Beyond a kid match, a candidate must also have
+// use "sig" or unset, alg matching the token's alg (if set), and a key type
+// matching the token alg's family (RSA for RS*, EC for ES*) — this blocks an
+// alg-confusion or duplicate-kid-different-type attack. Scanning continues
+// past a kid match that fails these checks, so a duplicate kid with one
+// matching and one non-matching key still resolves correctly. issuer scopes
+// the key memo (keymemo.go) so the same kid from different issuers is never
+// conflated.
 func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jwt.Keyfunc {
 	return func(token *jwt.Token) (any, error) {
 		kid, ok := token.Header["kid"].(string)
@@ -598,8 +525,6 @@ func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jw
 			case key.KeyType == "EC" && strings.HasPrefix(tokenAlg, "ES"):
 				return t.resolveKey(issuer, key)
 			}
-			// Key-type/alg-family mismatch (or unsupported kty) — keep
-			// scanning in case another key shares this kid.
 		}
 		if kidPresent {
 			return nil, fmt.Errorf("kid %q present but no key matches required use/alg/key-type", kid)
@@ -609,9 +534,8 @@ func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jw
 }
 
 // GenKeyFunc generates a jwt.Keyfunc using JWKS keys, with no issuer scoping
-// for the key memo. Kept for the TokenValidatorInterface/test call sites that
-// predate multi-issuer key memoization; Validate itself calls
-// genKeyFuncForIssuer with the matched issuer.
+// for the key memo. Kept for interface/test call sites that predate
+// multi-issuer key memoization; Validate itself calls genKeyFuncForIssuer.
 func (t *TokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc {
 	return t.genKeyFuncForIssuer("", jwks)
 }
@@ -628,11 +552,8 @@ func parseRSAKey(key types.JSONWebKey) (*rsa.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode RSA exponent: %w", err)
 	}
-	// Defense-in-depth: a real RSA public exponent is tiny (65537 is 3
-	// bytes); bound eBytes before converting so an oversized value can't
-	// silently truncate/overflow through big.Int.Int64()->int (e.g. a 9-byte
-	// exponent yields a negative int). Also reject non-sane values (E < 3 or
-	// even) even when the length check passes.
+	// Bound eBytes before converting so an oversized value can't silently
+	// truncate/overflow through big.Int.Int64()->int.
 	if len(eBytes) > 4 {
 		return nil, fmt.Errorf("RSA key public exponent too large: %d bytes", len(eBytes))
 	}
@@ -644,8 +565,7 @@ func parseRSAKey(key types.JSONWebKey) (*rsa.PublicKey, error) {
 		N: new(big.Int).SetBytes(nBytes),
 		E: e,
 	}
-	// Defense-in-depth: reject undersized keys that could be served by a
-	// compromised JWKS source to enable offline signature forgery.
+	// Reject undersized keys that could enable offline signature forgery.
 	if pub.N.BitLen() < 2048 {
 		return nil, fmt.Errorf("RSA key too short: %d bits (minimum 2048)", pub.N.BitLen())
 	}
@@ -673,9 +593,8 @@ func parseECKey(key types.JSONWebKey) (*ecdsa.PublicKey, error) {
 		X:     new(big.Int).SetBytes(xBytes),
 		Y:     new(big.Int).SetBytes(yBytes),
 	}
-	// Validate the point lies on the declared curve (and is not the identity).
-	// ECDH() round-trips through crypto/ecdh, which rejects off-curve points —
-	// a non-deprecated alternative to elliptic.Curve.IsOnCurve.
+	// ECDH() rejects off-curve points; a non-deprecated alternative to
+	// elliptic.Curve.IsOnCurve.
 	if _, err := pub.ECDH(); err != nil {
 		return nil, fmt.Errorf("EC key point is not valid for curve %s: %w", key.Crv, err)
 	}

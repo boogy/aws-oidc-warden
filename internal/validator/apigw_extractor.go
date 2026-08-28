@@ -13,24 +13,15 @@ import (
 )
 
 // APIGWExtractor reads pre-validated claims from the API Gateway HTTP API v2
-// JWT Authorizer context (event.requestContext.authorizer.jwt.claims).
-// It does NOT verify signatures — that responsibility belongs to API Gateway.
-// If AuthorizerClaims is nil or empty, it rejects the request to prevent
-// direct Lambda invocations that bypass the authorizer.
-// Defense-in-depth: re-validates issuer, audience, expiry, and every other
-// claim self mode checks (sub, iat, nbf, lifetime/age caps, required_claims)
-// through the same checkAndNormalizeClaims path Validate() uses — delegated
-// trust in the upstream signature verification is the only difference from
-// self mode.
+// JWT Authorizer context. Signature trust is delegated upstream; every other
+// check self mode runs still applies. Empty AuthorizerClaims is rejected:
+// a direct Lambda invoke must not bypass the authorizer.
 type APIGWExtractor struct {
 	provider *config.Provider
 }
 
 // NewAPIGWExtractor creates an APIGWExtractor over the configured issuers.
-// provider is read on every Extract() call (and the spec is resolved per
-// request from the verified iss), so a hot-reloaded issuer set, audiences,
-// claim_mappings, required_claims or jwt_leeway change takes effect without a
-// restart, matching self mode.
+// The provider is read per Extract call, so hot reloads apply without restart.
 func NewAPIGWExtractor(provider *config.Provider) *APIGWExtractor {
 	return &APIGWExtractor{provider: provider}
 }
@@ -49,13 +40,8 @@ func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*typ
 
 	cfg := input.configOr(a.provider)
 
-	// Resolve the spec from the issuer the upstream verified. API Gateway
-	// forwards authorizer claims only after checking the signature AND an
-	// exact issuer match against that route's authorizer, so iss here is
-	// upstream-verified rather than self-asserted — the same property self
-	// mode gets from verifying the signature locally. An iss with no config
-	// entry is denied outright, never resolved to another issuer's spec, so a
-	// reused or misconfigured authorizer fails closed.
+	// iss is upstream-verified, not self-asserted. An unconfigured iss denies
+	// outright and is never resolved to another issuer's spec.
 	iss, err := raw.GetIssuer()
 	if err != nil || iss == "" {
 		return nil, fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
@@ -68,15 +54,27 @@ func (a *APIGWExtractor) Extract(_ context.Context, input ExtractionInput) (*typ
 	return checkAndNormalizeClaims(raw, spec, bounds, time.Now())
 }
 
-// numericClaimKeys are converted from string to float64 before being placed
-// into a jwt.MapClaims: MapClaims.GetExpirationTime/GetIssuedAt/GetNotBefore
-// only parse a float64 or json.Number, never a raw string (see
-// jwt.MapClaims.parseNumericDate). Every other claim stays a string.
+// numericClaimKeys need float64: MapClaims.GetExpirationTime and friends
+// never parse a raw string.
 var numericClaimKeys = map[string]bool{"exp": true, "iat": true, "nbf": true}
 
-// mapClaimsFromStrings converts the API Gateway authorizer's
-// map[string]string claims into a jwt.MapClaims suitable for
-// checkAndNormalizeClaims and normalizeClaims.
+// opaqueExemptClaimKeys are never wrapped in types.OpaqueClaim: aud is decoded
+// by parseAuthorizerAudience, exp/iat/nbf are numeric, and iss must stay a
+// plain string for GetIssuer-based routing.
+var opaqueExemptClaimKeys = map[string]bool{"aud": true, "exp": true, "iat": true, "nbf": true, "iss": true}
+
+// looksStringified reports whether v is Go's %v rendering of an array or object.
+func looksStringified(v string) bool {
+	if strings.HasPrefix(v, "map[") && strings.HasSuffix(v, "]") {
+		return true
+	}
+	return strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]")
+}
+
+// mapClaimsFromStrings converts the authorizer's map[string]string claims into
+// a jwt.MapClaims. A value rendered from an array or object is wrapped in
+// types.OpaqueClaim so a none_of veto fires on it instead of failing open;
+// sub is eligible too, and a wrapped sub then fails closed in stringClaim.
 func mapClaimsFromStrings(raw map[string]string) (jwt.MapClaims, error) {
 	mc := make(jwt.MapClaims, len(raw))
 	for k, v := range raw {
@@ -85,6 +83,10 @@ func mapClaimsFromStrings(raw map[string]string) (jwt.MapClaims, error) {
 			continue
 		}
 		if !numericClaimKeys[k] {
+			if !opaqueExemptClaimKeys[k] && looksStringified(v) {
+				mc[k] = types.OpaqueClaim(v)
+				continue
+			}
 			mc[k] = v
 			continue
 		}
@@ -100,27 +102,12 @@ func mapClaimsFromStrings(raw map[string]string) (jwt.MapClaims, error) {
 	return mc, nil
 }
 
-// parseAuthorizerAudience decodes the authorizer's string form of the "aud"
-// claim. A token with a multi-value aud reaches the authorizer context as one
-// bracketed, space-separated string (e.g. "[aud1 aud2]" — the HTTP API JWT
-// Authorizer stringifies array claims), which would otherwise never match a
-// configured audience. A single-value aud (the common case) passes through
-// unchanged; jwt.MapClaims.GetAudience accepts both string and []string.
-//
-// The verbatim string is kept as a candidate alongside the split values, so a
-// single-value aud that legitimately looks bracketed (e.g. "[internal]")
-// still matches an identically-configured audience. Splitting assumes
-// audience values contain no spaces (they are URIs/identifiers in practice);
-// an audience value WITH spaces fragments, and a piece can then satisfy the
-// ANY-match in delegated_claims.go. The ambiguity is inherent and not fixable
-// here: the authorizer context is map[string]string, so ["a b"] and ["a","b"]
-// arrive as the identical string "[a b]" with the distinction already lost.
-// Keeping both readings is the permissive choice, and it is acceptable only
-// because of what has to be true to exploit it: API Gateway's own JWT
-// Authorizer must ALREADY have accepted that space-containing aud, meaning the
-// exact string "a b" is in the Authorizer's configured audience list, while
-// this issuer's `audiences` lists only the fragment "a". Keep the two audience
-// lists identical and the gap cannot open.
+// parseAuthorizerAudience decodes the authorizer's string form of "aud": a
+// multi-value aud arrives as one bracketed, space-separated string. The
+// verbatim string is kept as a candidate alongside the split values, so a
+// single-value aud that legitimately looks bracketed still matches.
+// Splitting assumes audience values contain no spaces; keep this issuer's
+// `audiences` identical to the Authorizer's list and the ambiguity cannot open.
 func parseAuthorizerAudience(v string) any {
 	if len(v) < 2 || v[0] != '[' || v[len(v)-1] != ']' {
 		return v

@@ -109,7 +109,6 @@ func TestDynamoDBCacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 		t.Fatalf("local expiration = %v, want %v", entry.expiration, wantExpiration)
 	}
 
-	// Second Get is served locally
 	if _, found := c.Get("key1"); !found {
 		t.Fatal("expected local hit on second Get")
 	}
@@ -194,7 +193,6 @@ func TestDynamoDBCacheSetIsSynchronous(t *testing.T) {
 
 	c.Set("key1", testJWKS("kid1"), time.Minute)
 
-	// No sleep: the write must have completed before Set returned
 	if mock.putCalls != 1 {
 		t.Fatalf("PutItem called %d times before Set returned, want 1", mock.putCalls)
 	}
@@ -202,7 +200,6 @@ func TestDynamoDBCacheSetIsSynchronous(t *testing.T) {
 		t.Fatalf("PutItem key = %q, want key1", got)
 	}
 
-	// Local tier is populated too
 	if _, found := c.Get("key1"); !found {
 		t.Fatal("expected local hit after Set")
 	}

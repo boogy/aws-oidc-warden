@@ -1,8 +1,6 @@
 package aws
 
-// AssumeRole: adversarial verification of the call it builds — the session
-// tags derived from verified claims, the role-name length rule, and the
-// confused-deputy protections (external ID, source identity).
+// AssumeRole: adversarial verification of session tags, role-name length, and confused-deputy protections.
 import (
 	"errors"
 	"io"
@@ -85,7 +83,6 @@ func TestCrossAccountDisabledFailsClosed(t *testing.T) {
 	if f.assumeCalls != 0 {
 		t.Errorf("STS was called %d times despite the guard denying", f.assumeCalls)
 	}
-	// Hub account still works.
 	if ok, err := c.IsTargetAccountAllowed("arn:aws:iam::" + hubAcct + ":role/Target"); err != nil || !ok {
 		t.Errorf("hub account should be allowed: ok=%v err=%v", ok, err)
 	}
@@ -115,8 +112,6 @@ func TestCrossAccountAllowListEnforced(t *testing.T) {
 	}
 }
 
-// TestMalformedARNFailsClosed proves the account guard cannot be
-// bypassed with an ARN that does not parse as an IAM role.
 func TestMalformedARNFailsClosed(t *testing.T) {
 	c, f := vconsumer(t, vbaseCfg())
 	for _, bad := range []string{
@@ -140,9 +135,6 @@ func TestMalformedARNFailsClosed(t *testing.T) {
 	}
 }
 
-// TestGetRoleTagsCrossAccountFailsClosed proves tag-auth cannot be
-// tricked into reading a SAME-NAMED HUB role's tags when the requested role
-// lives in another account and cross-account is off.
 func TestGetRoleTagsCrossAccountFailsClosed(t *testing.T) {
 	c, f := vconsumer(t, vbaseCfg())
 	f.roleTags = []iamtypes.Tag{{Key: aws.String("aow/subject"), Value: aws.String("myorg/repo")}}
@@ -168,8 +160,7 @@ func TestSessionPolicyReachesSTSVerbatim(t *testing.T) {
 		t.Fatalf("session policy mangled or dropped: %v", f.lastAssume.Policy)
 	}
 
-	// A nil policy must NOT become an empty-string policy (STS would reject)
-	// and must leave the field unset.
+	// A nil policy must not become an empty string (STS would reject empty).
 	if _, err := c.AssumeRole(role, "aow", nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +186,7 @@ func TestSessionTagsOnlyFromIssuerSpec(t *testing.T) {
 		"secret":     "should-never-be-tagged",
 		"aow/admin":  "true",
 	}}
-	spec := map[string]string{"repo": "repository"} // only one tag configured
+	spec := map[string]string{"repo": "repository"}
 
 	if _, err := c.AssumeRole("arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, claims, spec); err != nil {
 		t.Fatal(err)
@@ -206,7 +197,6 @@ func TestSessionTagsOnlyFromIssuerSpec(t *testing.T) {
 	if *f.lastAssume.Tags[0].Key != "repo" || *f.lastAssume.Tags[0].Value != "myorg/repo" {
 		t.Fatalf("wrong tag: %s=%s", *f.lastAssume.Tags[0].Key, *f.lastAssume.Tags[0].Value)
 	}
-	// No spec -> no tags at all.
 	if _, err := c.AssumeRole("arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, claims, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -215,9 +205,7 @@ func TestSessionTagsOnlyFromIssuerSpec(t *testing.T) {
 	}
 }
 
-// TestBadSessionTagValuesSkippedNotSanitized is the key ABAC property:
-// a value that violates the STS charset/length must be DROPPED, never
-// truncated or rewritten into a different value an ABAC policy might trust.
+// Bad tag values must be dropped, never truncated/rewritten, or ABAC could trust a mutated value.
 func TestBadSessionTagValuesSkipped(t *testing.T) {
 	long := strings.Repeat("a", 257)
 	raw := map[string]any{
@@ -248,11 +236,9 @@ func TestBadSessionTagValuesSkipped(t *testing.T) {
 			t.Errorf("SANITIZATION BUG: tag %q should have been skipped, got %q (len %d)", k, v, len(v))
 		}
 	}
-	// Invalid tag KEY is skipped too.
 	if tt := BuildSessionTags(map[string]any{"c": "v"}, map[string]string{"bad\nkey": "c"}); len(tt) != 0 {
 		t.Errorf("invalid tag key not skipped: %v", tt)
 	}
-	// 50-tag cap.
 	bigRaw := map[string]any{}
 	bigSpec := map[string]string{}
 	for i := 0; i < 60; i++ {
@@ -312,8 +298,6 @@ func TestDurationClampedForRoleSession(t *testing.T) {
 	}
 }
 
-// TestSessionNameSanitized proves the session name cannot carry
-// characters STS rejects, and is length-bounded.
 func TestSessionNameSanitized(t *testing.T) {
 	c, f := vconsumer(t, vbaseCfg())
 	role := "arn:aws:iam::" + hubAcct + ":role/T"
@@ -382,10 +366,7 @@ func TestGetRoleTags_CrossAccount_UsesSpokeCreds(t *testing.T) {
 
 // ---------- role name length ----------
 
-// IAM's 64-character cap applies to the role NAME, not to the whole identifier:
-// a role may carry a path (`/team/sub/Name`, up to 512 characters) and the name
-// is the final segment. Measuring the full string would reject valid roles with
-// deep paths — so these cases pin that the length is taken after the last '/'.
+// IAM's 64-char cap applies to the role NAME (after the last '/'), not the whole path.
 func TestValidateRoleNameLength_PathIsNotCountedTowardTheNameCap(t *testing.T) {
 	name64 := strings.Repeat("a", 64)
 	name65 := strings.Repeat("a", 65)
@@ -419,10 +400,6 @@ func TestValidateRoleNameLength_PathIsNotCountedTowardTheNameCap(t *testing.T) {
 	}
 }
 
-// The whole point of rejecting instead of truncating: the previous code silently
-// rewrote an over-long identifier to its first 64 characters and looked THAT up,
-// so tag-based authorization read a different role's tags than the caller named.
-// The error must therefore name the offending role rather than quietly succeed.
 func TestValidateRoleNameLength_RejectionNamesTheRole(t *testing.T) {
 	over := strings.Repeat("b", 70)
 	err := validateRoleNameLength("path/to/" + over)
@@ -439,18 +416,11 @@ func TestValidateRoleNameLength_RejectionNamesTheRole(t *testing.T) {
 
 // ---------- confused deputy ----------
 
-// GetRoleAs must refuse a nil credentials provider rather than silently falling
-// back to the hub credentials the client was built from. Doing so would read a
-// same-named role in the HUB account while the caller believes it read a member
-// account's — the confused deputy GetRoleTags explicitly guards against.
-//
-// Unreachable through its one caller today; the point is that the guarantee
-// should not depend on that caller staying correct.
+// GetRoleAs must refuse nil credentials rather than fall back to hub creds (confused deputy).
 func TestGetRoleAs_RejectsNilCredentials(t *testing.T) {
 	s := &AwsServiceWrapper{defaultTimeout: time.Second}
 
-	// A nil iamClient would panic if the guard let execution continue, so this
-	// also proves the guard returns BEFORE any client use.
+	// A nil iamClient would panic if reached, proving the guard returns before any client use.
 	out, err := s.GetRoleAs(&iam.GetRoleInput{RoleName: aws.String("deploy")}, nil)
 
 	require.Error(t, err, "nil credentials must be refused")
@@ -458,16 +428,11 @@ func TestGetRoleAs_RejectsNilCredentials(t *testing.T) {
 	assert.Contains(t, err.Error(), "refusing to fall back to hub credentials")
 }
 
-// GetRoleTags hands back a COPY of its cached tag map. Returning the cached map
-// itself lets any caller that mutates the result poison every later
-// authorization decision for that role — a silent, cross-request failure. The
-// sole caller (TagAuth.Authorize) only reads, so this pins the defensive
-// property rather than a live bug.
+// GetRoleTags must return a COPY; returning the cached map lets a caller's mutation poison later authorization decisions.
 func TestGetRoleTags_CachedMapIsNotAliased(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
 	m.On("GetCallerAccount").Return("111111111111", nil)
-	// .Once(): a second IAM read would mean we missed the cache and the test
-	// would be proving nothing about the cached map.
+	// .Once(): a second IAM read would mean the cache was missed.
 	m.On("GetRole", mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{{Key: aws.String("aow/subject"), Value: aws.String("acme/app")}},
 	}}, nil).Once()

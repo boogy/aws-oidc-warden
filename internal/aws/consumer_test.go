@@ -1,7 +1,6 @@
 package aws
 
-// The AWS consumer: construction and config source, the cross-account spoke
-// hop and its allowed-accounts gate, and the transitive session-tag knob.
+// The AWS consumer: construction, config source, cross-account spoke hop, transitive session tags.
 import (
 	"errors"
 	"fmt"
@@ -42,8 +41,8 @@ func TestAwsConsumer_SessionName(t *testing.T) {
 		},
 		{
 			name:        "Session name exceeding 64 characters",
-			inputName:   strings.Repeat("abcdefghij", 7),     // 70 characters
-			expectedOut: strings.Repeat("abcdefghij", 7)[6:], // Last 64 characters
+			inputName:   strings.Repeat("abcdefghij", 7),
+			expectedOut: strings.Repeat("abcdefghij", 7)[6:],
 		},
 	}
 
@@ -69,7 +68,6 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 
 	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
 
-	// Test case: Successful role assumption
 	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && *input.RoleSessionName == testSessionName
 	})).Return(&sts.AssumeRoleOutput{
@@ -86,7 +84,6 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST", *creds.AccessKeyId)
 
-	// Test case: Empty role ARN
 	creds, err = consumer.AssumeRole("", testSessionName, nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
@@ -300,7 +297,7 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 	assert.NotNil(t, creds)
 
 	// TransitiveSessionTags off: no transitive keys are set, even with tags present.
-	consumer.Config.TagAuth.TransitiveSessionTags = false
+	consumer.Config.TagAuth.TransitiveSessionTags = false //nolint:staticcheck // exercises the deprecated fallback
 	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && input.TransitiveTagKeys == nil && len(input.Tags) == 2
 	})).Return(&sts.AssumeRoleOutput{

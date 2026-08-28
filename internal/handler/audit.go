@@ -16,20 +16,12 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
 
-// AuditSink is the durability boundary for the structured audit trail:
-// one JSON record per allow/deny decision.
-// *s3logger.S3Logger satisfies this via its WriteRecord/BufferRecord methods —
-// duck-typed, so this package never imports s3logger and there's no import
-// cycle. A nil AuditSink is always safe: recordDecision no-ops the write and
-// only emits the standardized log line.
-//
-// Two write paths, chosen by cfg.AuditEnforced() (see recordDecision):
-//   - WriteRecord: synchronous, batch-bypassing. Used only when audit is
-//     enforced, so a failure can fail the request closed before credentials
-//     are returned.
-//   - BufferRecord: best-effort, appended to the amortized batch buffer
-//     (flushed by size/age/cleanup). Used when audit is not enforced, so an
-//     ordinary decision never blocks on a synchronous S3 PUT.
+// AuditSink is the durability boundary for the structured audit trail: one
+// JSON record per allow/deny decision. Duck-typed (satisfied by
+// *s3logger.S3Logger) to avoid an import cycle. A nil sink is safe:
+// recordDecision no-ops the write and still emits the log line.
+// WriteRecord is synchronous (used when cfg.AuditEnforced(), so a failure can
+// fail the request closed); BufferRecord is best-effort, batched.
 type AuditSink interface {
 	WriteRecord(ctx context.Context, record []byte) error
 	BufferRecord(record []byte) error
@@ -37,46 +29,24 @@ type AuditSink interface {
 
 // auditRecord is the structured record for one authorization decision, fed to
 // both the standardized slog line (auditLogAttrs) and the durable audit sink
-// (json.Marshal). Building it once and redacting it in place before either
-// consumer sees it guarantees the log line and the audit trail can never
-// disagree about what was suppressed.
-//
-// kid is deliberately absent: types.Claims carries no post-verification key
-// ID, and adding one would mean touching validator internals, which is out of
-// scope here.
+// (json.Marshal). Built once and redacted in place before either consumer
+// sees it, so the two can never disagree about what was suppressed.
 type auditRecord struct {
 	RequestID string `json:"requestId"`
-	// FrontendRequestID is the frontend's own request ID (API Gateway /
-	// ALB), kept alongside the UUID RequestID as the join key back to
-	// access logs. Not a claim value — always recorded.
+	// FrontendRequestID is the join key back to API Gateway/ALB access logs.
 	FrontendRequestID string `json:"frontendRequestId,omitempty"`
 	Frontend          string `json:"frontend"`
 	JWTMode           string `json:"jwtMode"`
 	Decision          string `json:"decision"`        // "allow" | "deny"
 	Stage             string `json:"stage,omitempty"` // failing stage; deny only
 
-	// SourceIP is the requesting client's IP; SourceIPFrom is its provenance
-	// ("frontend" = attested by AWS, "x-forwarded-for" = client-supplied and
-	// therefore spoofable). The provenance is stored rather than inferred: an
-	// auditor reading a record months later cannot otherwise tell whether the
-	// address was observed or asserted. Both are request metadata, not claim
-	// values, so redact() leaves them alone — but note an IP is personal data
-	// under GDPR, which is a retention concern for the bucket, not a reason to
-	// omit it from a security control's audit trail.
+	// SourceIPFrom: "frontend" (AWS-attested) or "x-forwarded-for" (spoofable).
 	SourceIP     string `json:"sourceIp,omitempty"`
 	SourceIPFrom string `json:"sourceIpFrom,omitempty"`
-	// Reason is the deny reason, named "reason" here to match the standardized
-	// slog attribute set in auditLogAttrs — one name for the same value in both
-	// the log line and the audit record. Deny only.
-	Reason string `json:"reason,omitempty"`
-	// reasonFromError marks a Reason built from an error string rather than a
-	// fixed phrase. Error strings routinely quote claim VALUES — an expired
-	// token names its subject, an STS denial quotes the role ARN and session
-	// name — so an error-derived reason is claim-bearing and must follow the
-	// same log_claim_values gate as Subject/Claims. It is unexported (and thus
-	// not serialized) because the record's shape must not change with the
-	// gate: `reason` is always present, carrying the stage summary rather than
-	// the raw error when values are suppressed. Set via setErrorReason.
+	Reason       string `json:"reason,omitempty"` // deny only
+	// reasonFromError: Reason came from err.Error(), which may quote claim
+	// values, so it must follow the log_claim_values gate. Unexported so the
+	// JSON shape is stable regardless of the gate. Set via setErrorReason.
 	reasonFromError bool
 
 	Issuer   string   `json:"issuer,omitempty"`
@@ -85,45 +55,26 @@ type auditRecord struct {
 	Subject  string   `json:"subject,omitempty"` // canonical identity (types.Claims.Subject)
 	Audience []string `json:"audience,omitempty"`
 
-	// MatchedVia records which authorization path allowed the request:
-	// "explicit" (role_mappings/role_groups) or "tag-auth" (IAM role tag
-	// fallback). Allow decisions only.
+	// MatchedVia: "explicit" (role_mappings/role_groups) or "tag-auth". Allow only.
 	MatchedVia    string `json:"matchedVia,omitempty"`
 	RequestedRole string `json:"requestedRole,omitempty"`
-	GrantedRole   string `json:"grantedRole,omitempty"` // == RequestedRole once granted; allow only
+	GrantedRole   string `json:"grantedRole,omitempty"` // allow only
 	AccountID     string `json:"accountId,omitempty"`
-	// SessionName is the STS session name actually used for this assumption
-	// (global role_session_name or a per-mapping override) — the whole point
-	// of the per-mapping feature is CloudTrail attribution, so the audit
-	// record must say which name was used. Allow only.
-	SessionName string `json:"sessionName,omitempty"`
+	SessionName   string `json:"sessionName,omitempty"` // actual STS session name used; allow only
 
-	// SessionTagKeys (tag names only) are always safe to log/audit. SessionTags
-	// (resolved values) are only populated when LogClaimValues is on, and only
-	// for allow decisions where a role was actually granted.
+	// SessionTagKeys (names) are always safe to record. SessionTags (values)
+	// only when LogClaimValues is on and a role was actually granted.
 	SessionTagKeys   []string          `json:"sessionTagKeys,omitempty"`
 	SessionTags      map[string]string `json:"sessionTags,omitempty"`
 	SessionPolicyRef string            `json:"sessionPolicyRef,omitempty"`
 
-	// Claims answers "who did this" in the audit trail: the full verified
-	// claim set for GitHub issuers (repository/repository_id aliased to
-	// repo/repo_id), the issuer's mapped claims otherwise. Claim VALUES, so
-	// populated only when LogClaimValues is on and cleared by redact()
-	// alongside subject/jwtSub.
+	// Claims: full verified claim set for GitHub issuers, mapped claims
+	// otherwise. Populated only when LogClaimValues is on.
 	Claims map[string]string `json:"claims,omitempty"`
 
 	Expiry *time.Time `json:"expiry,omitempty"`
 
-	// ProcessingMS is per-request wall-clock time (per-stage granularity is not
-	// available without threading a stage-timer through every branch of
-	// ProcessRequest). Emitted on both allow and deny.
-	//
-	// Deliberately not EMF: emitting ProcessingMS/decision/stage as CloudWatch
-	// Embedded Metric Format would give native dashboards and alarms without a
-	// Logs Insights query, but it needs an EMF dependency this service does not
-	// carry. Revisit only if the metric is wanted; the JSON record stays either
-	// way, since the audit trail is not a metrics format.
-	ProcessingMS int64 `json:"processingMs"`
+	ProcessingMS int64 `json:"processingMs"` // per-request wall-clock time
 }
 
 // redact zeroes claim VALUES (never names/decision/reason/IDs) when
@@ -138,26 +89,22 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.Audience = nil
 	rec.SessionTags = nil
 	rec.Claims = nil
-	// Reason is replaced, not cleared: an audit record must still say why a
-	// request was denied when claim values are suppressed.
-	rec.Reason = rec.effectiveReason(logClaimValues)
+	rec.Reason = rec.effectiveReason(logClaimValues) // replaced, not cleared
 	rec.reasonFromError = false
 }
 
-// setErrorReason records a deny reason taken from an error, marking it
-// claim-bearing so the log_claim_values gate applies to it. Every stage that
-// reports err.Error() as the reason must go through this rather than
-// assigning rec.Reason directly, or the error text escapes the gate.
+// setErrorReason records a deny reason from an error. Every stage reporting
+// err.Error() as the reason must use this, not assign rec.Reason directly,
+// or the error text escapes the log_claim_values gate.
 func (rec *auditRecord) setErrorReason(stage string, err error) {
 	rec.Stage = stage
 	rec.Reason = err.Error()
 	rec.reasonFromError = true
 }
 
-// effectiveReason is the reason as it may be emitted: the raw text when claim
-// values are permitted or the reason was a fixed phrase, otherwise the stage
-// summary. One resolver for both the log line and the durable record, so the
-// two can never disagree about what a denial said.
+// effectiveReason is the reason as it may be emitted: raw text unless it was
+// error-derived and claim values are suppressed, in which case the stage
+// summary. Shared by the log line and the durable record.
 func (rec *auditRecord) effectiveReason(logClaimValues bool) string {
 	if logClaimValues || !rec.reasonFromError {
 		return rec.Reason
@@ -198,26 +145,12 @@ func (rec *auditRecord) matchedRole() string {
 	return rec.RequestedRole
 }
 
-// auditLogAttrs returns the standardized slog attribute set for one
-// decision: frontend, jwtMode, decision, matchedRole, processingMs always;
-// issuer, provider, accountId, sessionName, stage, reason, and (when
-// logClaimValues) jwtSub, subject, audience, claims only when non-empty —
-// omitted rather than emitted empty, so a CloudWatch Insights query never has
-// to filter `field != ""`. requestId, frontendRequestId, sourceIp, and
-// sourceIpFrom are deliberately NOT in this set: every adapter already binds
-// them to the request-scoped logger via slog.With, so adding them here would
-// emit duplicate keys in the same JSON log line (the durable audit record
-// keeps its own fields for all four regardless). Callers append these to
-// their existing log.Error/log.Info call rather than replacing the
-// descriptive message, so the standardized contract is added without
-// renaming unrelated logs.
-//
-// logClaimValues gates the same claim VALUES that auditRecord.redact()
-// suppresses for the durable sink (jwtSub, subject, audience, claims) — so
-// when log_claim_values=false those values are absent from the emitted log
-// stream too, not just the audit record (suppress in BOTH the log stream and
-// the audit record). Claim NAMES, decision, reason, and non-claim metadata
-// (requestId/issuer/provider/role/account/stage) are always emitted.
+// auditLogAttrs returns the standardized slog attribute set for one decision.
+// requestId/frontendRequestId/sourceIp/sourceIpFrom are deliberately excluded:
+// adapters already bind them via slog.With, and duplicating here would emit
+// duplicate keys in the same log line (the durable record still has them).
+// logClaimValues gates jwtSub/subject/audience/claims identically to
+// auditRecord.redact(), so a suppressed value is absent from the log stream too.
 func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 	attrs := []any{
 		slog.String("frontend", rec.Frontend),
@@ -235,13 +168,8 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 	appendIf("provider", rec.Provider)
 	appendIf("accountId", rec.AccountID)
 	appendIf("sessionName", rec.SessionName)
-	// Deny-only: absent on an allow rather than emitted empty.
 	appendIf("stage", rec.Stage)
-	// recordDecision redacts before building these attrs, so rec.Reason is
-	// already the gated form; resolve again anyway so a future caller that
-	// builds attrs from an unredacted record cannot leak it.
 	appendIf("reason", rec.effectiveReason(logClaimValues))
-	// Claim values: omitted entirely when the gate is off, not blanked.
 	if logClaimValues {
 		appendIf("jwtSub", rec.JWTSub)
 		appendIf("subject", rec.Subject)
@@ -255,13 +183,10 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
 	return attrs
 }
 
-// subjectAttr returns the canonical subject as a log attribute, omitted
-// (rather than blanked) when cfg.LogClaimValues is false or subject is empty.
-// Every log site outside the audit record that wants to name the subject must
-// go through this, so the gate holds across the whole log stream and not just
-// the decision line (auditLogAttrs applies the identical omission to the
-// audit attrs). The zero slog.Attr{} is discarded by slog, so this never
-// emits an empty "subject" key.
+// subjectAttr returns the canonical subject as a log attribute, omitted when
+// cfg.LogClaimValues is false or subject is empty. Log sites outside the
+// audit record must use this rather than logging subject directly, so the
+// gate holds across the whole log stream.
 func subjectAttr(cfg *config.Config, subject string) slog.Attr {
 	if !cfg.LogClaimValues || subject == "" {
 		return slog.Attr{}
@@ -269,31 +194,18 @@ func subjectAttr(cfg *config.Config, subject string) slog.Attr {
 	return slog.String("subject", subject)
 }
 
-// recordDecision is the single terminal point for a decision: it redacts rec
-// per cfg.LogClaimValues, emits the ONE standardized decision log line
-// from the redacted record — so the log stream and the durable sink are keyed
-// off the identical, already-redacted record and can never disagree about the
-// decision or what was suppressed — then sends it to the audit sink as one
-// JSON record (never string concatenation — encoding/json escapes control
-// characters, so a claim value with embedded newlines/control chars cannot
-// break the record structure or inject a fake log line): synchronously via
-// WriteRecord when cfg.AuditEnforced(), otherwise best-effort via BufferRecord
-// (batched, see AuditSink).
+// recordDecision redacts rec per cfg.LogClaimValues, emits the standardized
+// decision log line from the redacted record, then sends it to the audit
+// sink as one JSON record: synchronously via WriteRecord when
+// cfg.AuditEnforced(), otherwise best-effort via BufferRecord.
 //
-// Callers must set rec.Decision before calling. A nil sink still emits the log
-// line; the durable write is skipped, which is only acceptable when
-// cfg.AuditEnforced() is false — with it true, an absent sink is an unmet
-// requirement, not an absent one, and is reported as ErrAuditWriteFailed the
-// same as a failed write. When cfg.AuditEnforced() is true, a missing sink or a
-// marshal or write failure is returned as an error wrapping
-// ErrAuditWriteFailed, and the caller must fail the request closed rather than
-// return credentials; when false, the failure is logged and swallowed so the
-// decision still proceeds (best-effort).
+// Callers must set rec.Decision before calling. When cfg.AuditEnforced() is
+// true, a missing sink, marshal failure, or write failure all return an
+// error wrapping ErrAuditWriteFailed and the caller must fail closed; when
+// false, failures are logged and swallowed so the decision still proceeds.
 func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.redact(cfg.LogClaimValues)
 
-	// Standardized decision line. Allow at Info; deny at Warn — a denial
-	// is a security-relevant signal but not an operational error.
 	attrs := auditLogAttrs(rec, cfg.LogClaimValues)
 	if rec.Decision == "allow" {
 		log.Info("authorization decision", attrs...)
@@ -302,11 +214,7 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	}
 
 	if r.audit == nil {
-		// audit_required promises credentials are never returned unless the
-		// decision was durably recorded. With no sink wired there is nothing to
-		// record to, so the promise cannot be kept — fail closed rather than
-		// silently degrade to log-only. config.Validate() cannot catch this: it
-		// sees log_to_s3/log_bucket, not whether the caller passed a sink.
+		// config.Validate() can't catch a missing sink; enforce here instead.
 		if cfg.AuditEnforced() {
 			return fmt.Errorf("%w: audit_required is set but no audit sink is configured", ErrAuditWriteFailed)
 		}
@@ -330,19 +238,14 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 		return nil
 	}
 
-	// Best-effort: buffer into the amortized batch; a failure is logged and
-	// swallowed so the decision still proceeds.
 	if werr := r.audit.BufferRecord(data); werr != nil {
 		log.Error("failed to buffer audit record", slog.String("error", werr.Error()))
 	}
 	return nil
 }
 
-// finalizeDeny records a deny decision (redaction + best-effort/durable audit
-// write per cfg.AuditEnforced()) and returns the error the caller should
-// propagate: origErr unchanged, unless a required audit write itself failed,
-// in which case ErrAuditWriteFailed is folded in alongside it so both are
-// visible via errors.Is.
+// finalizeDeny records a deny decision and returns origErr, folding in
+// ErrAuditWriteFailed (visible via errors.Is) if the audit write itself failed.
 func (r *RequestProcessor) finalizeDeny(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord, origErr error) error {
 	rec.Decision = "deny"
 	if auditErr := r.recordDecision(ctx, log, cfg, rec); auditErr != nil {
@@ -351,11 +254,9 @@ func (r *RequestProcessor) finalizeDeny(ctx context.Context, log *slog.Logger, c
 	return origErr
 }
 
-// finalizeAllow records an allow decision. The audit write happens
-// synchronously, before this returns, so cfg.AuditEnforced()'s durability
-// guarantee (write-before-credentials) is satisfied by ordinary control flow:
-// a required write failure returns (nil, error) — no credentials are ever
-// handed back to the caller.
+// finalizeAllow records an allow decision. The write happens synchronously
+// before this returns, so a required write failure yields (nil, error) —
+// credentials are never handed back without a durable record.
 func (r *RequestProcessor) finalizeAllow(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord, credentials *ststypes.Credentials) (*ststypes.Credentials, error) {
 	rec.Decision = "allow"
 	if auditErr := r.recordDecision(ctx, log, cfg, rec); auditErr != nil {
@@ -364,9 +265,7 @@ func (r *RequestProcessor) finalizeAllow(ctx context.Context, log *slog.Logger, 
 	return credentials, nil
 }
 
-// inputMode classifies which extraction path a request used, for the
-// standardized "jwtMode" field. Computed unconditionally (not just under
-// debug logging) so it's always available for the audit record.
+// inputMode classifies which extraction path a request used, for the "jwtMode" field.
 func inputMode(input validator.ExtractionInput) string {
 	switch {
 	case input.Token != "":
@@ -380,10 +279,7 @@ func inputMode(input validator.ExtractionInput) string {
 	}
 }
 
-// issuerProvider looks up the configured provider name ("github"/"generic")
-// for a verified issuer, for the audit record's Provider field. A linear scan
-// over cfg.Issuers is cheap at this N and avoids adding a new exported lookup
-// method to internal/config for a single call site.
+// issuerProvider looks up the configured provider name ("github"/"generic") for a verified issuer.
 func issuerProvider(cfg *config.Config, issuer string) string {
 	for i := range cfg.Issuers {
 		if cfg.Issuers[i].Issuer == issuer {
@@ -393,9 +289,7 @@ func issuerProvider(cfg *config.Config, issuer string) string {
 	return ""
 }
 
-// claimsAudience returns the verified token's audience claim as a plain
-// []string for the audit record (jwt.RegisteredClaims.Audience is a named
-// ClaimStrings type under the hood).
+// claimsAudience returns the audience claim as a plain []string for the audit record.
 func claimsAudience(claims *gtypes.Claims) []string {
 	if claims == nil || len(claims.Audience) == 0 {
 		return nil
@@ -403,9 +297,8 @@ func claimsAudience(claims *gtypes.Claims) []string {
 	return []string(claims.Audience)
 }
 
-// sessionTagKeyNames returns the sorted STS session tag key names an issuer's
-// session_tags spec would populate. Tag key NAMES (never resolved values) are
-// always safe to log/audit regardless of LogClaimValues.
+// sessionTagKeyNames returns the sorted tag key names an issuer's session_tags
+// spec would populate. Names are always safe to log regardless of LogClaimValues.
 func sessionTagKeyNames(tagSpec map[string]string) []string {
 	if len(tagSpec) == 0 {
 		return nil
@@ -418,47 +311,23 @@ func sessionTagKeyNames(tagSpec map[string]string) []string {
 	return keys
 }
 
-// claimAliases renames claims on their way into the audit record so the
-// audit vocabulary is stable and queryable: GitHub's repository/repository_id
-// are recorded as repo/repo_id. Applied to every provider — a claim named
-// "repository" means the same thing wherever it comes from.
-//
-// A rename is skipped when the token already carries a claim under the alias
-// target (see auditClaims): silently overwriting one verified claim with
-// another in an audit record — with which one survives decided by Go's
-// randomized map iteration order — would make the record both lossy and
-// non-reproducible.
+// claimAliases renames claims on their way into the audit record for a
+// stable vocabulary (GitHub's repository/repository_id -> repo/repo_id).
+// Skipped when the token already carries a claim under the alias target
+// (see auditClaims), to avoid one overwriting the other unpredictably.
 var claimAliases = map[string]string{
 	"repository":    "repo",
 	"repository_id": "repo_id",
 }
 
-// auditClaims resolves the claims recorded for a decision.
-//
-// For provider "github" this is the FULL verified claim set: every GitHub
-// Actions OIDC claim is non-secret workflow metadata, and a complete dump
-// beats a curated list that silently omits whatever the investigation
-// actually needs (and that has to be revised whenever GitHub adds a claim).
-//
-// Every other provider gets only the claims its own configuration
-// references: claim_mappings targets, required_claims, session_tags targets,
-// and every claim named by a condition on one of that issuer's role_mappings
-// (cfg.AuditableClaims). This is deliberate and not a symmetry oversight: an
-// arbitrary OIDC issuer can put email addresses, group memberships, or
-// entitlements in a token, and this service must not be what copies them into
-// an S3 object. Writing a claim into the config is the operator's statement
-// that it is both meaningful and safe to record; a claim the issuer happens
-// to mint that nothing references is never recorded.
-//
-// Conditions are part of that set because a record that omits the claim which
-// DECIDED the request cannot explain its own decision — the `groups` a none_of
-// vetoed on, or the entitlement an any_of required, is exactly what a reader
-// of the record needs to see.
-//
-// Values are formatted exactly as BuildSessionTags formats session tag
-// values, so a claim reported here and the same claim attached as a session
-// tag can never disagree. Callers must only populate the record when
-// cfg.LogClaimValues permits claim values.
+// auditClaims resolves the claims recorded for a decision: the full verified
+// claim set for provider "github" (non-secret workflow metadata), but for
+// every other provider only claims the issuer's own config references
+// (cfg.AuditableClaims) — an arbitrary OIDC issuer's tokens may carry emails
+// or group memberships this service must not copy into an audit object.
+// Conditions are included so the record can explain what decided it. Values
+// are formatted identically to BuildSessionTags. Callers must gate on
+// cfg.LogClaimValues before populating.
 func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) map[string]string {
 	if len(rawClaims) == 0 {
 		return nil
@@ -479,15 +348,8 @@ func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) ma
 			continue
 		}
 		key := name
-		// Only rename when the alias target is itself EMITTED for this token;
-		// otherwise both would land on one key and one would vanish. The test
-		// is "will it appear in this record", not "is the raw claim present":
-		// a claim the issuer's claim_mappings exclude, or one that is nil or
-		// formats empty, is dropped above and can collide with nothing. Asking
-		// only whether rawClaims held the key suppressed the rename for a
-		// claim that was never recorded, so a generic issuer carrying both
-		// repository and an unmapped repo silently lost the repo/repo_id audit
-		// vocabulary the alias exists to guarantee.
+		// Rename only if the alias target won't itself be emitted, else both
+		// claims collide on one key.
 		if alias, ok := claimAliases[name]; ok && !claimEmitted(rawClaims, alias, include) {
 			key = alias
 		}
@@ -500,10 +362,7 @@ func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) ma
 }
 
 // claimEmitted reports whether name would itself be recorded by auditClaims,
-// applying the same three drop rules as the loop above (absent/nil, excluded
-// by the issuer's claim_mappings, empty formatted value). It is the collision
-// test for claimAliases: only a claim that actually reaches the record can be
-// overwritten by a rename onto its key.
+// applying the same drop rules as the loop above. Collision test for claimAliases.
 func claimEmitted(rawClaims map[string]any, name string, include func(string) bool) bool {
 	raw, ok := rawClaims[name]
 	if !ok || raw == nil || !include(name) {
@@ -512,11 +371,9 @@ func claimEmitted(rawClaims map[string]any, name string, include func(string) bo
 	return utils.FormatClaimValue(raw) != ""
 }
 
-// resolvedSessionTags computes the actual STS session tag values that would
-// be attached to the assumed-role session, for the audit record's
-// SessionTags field. Only called when cfg.LogClaimValues is true, and reuses
-// aws.BuildSessionTags (the exact function AssumeRole uses) rather than
-// duplicating its claim-lookup/validation logic.
+// resolvedSessionTags computes the STS session tag values for the audit
+// record's SessionTags field, reusing aws.BuildSessionTags (the function
+// AssumeRole itself uses). Only called when cfg.LogClaimValues is true.
 func resolvedSessionTags(rawClaims map[string]any, tagSpec map[string]string) map[string]string {
 	tags := aws.BuildSessionTags(rawClaims, tagSpec)
 	if len(tags) == 0 {

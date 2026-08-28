@@ -5,19 +5,13 @@ import (
 	"time"
 )
 
-// Constants for handler configuration
 const (
-	// DefaultTimeout is the maximum time to process a request
 	DefaultTimeout = 10 * time.Second
-
-	// MaxTokenLength is the maximum allowed length for a JWT token
 	MaxTokenLength = 16384 // 16KB
-
-	// MaxRoleLength is the maximum allowed length for role ARN
-	MaxRoleLength = 2048 // 2KB
+	MaxRoleLength  = 2048  // 2KB
 )
 
-// Context key types to avoid string collision in context values
+// contextKey avoids string collisions among context values.
 type contextKey string
 
 const (
@@ -31,7 +25,6 @@ const (
 	SourceIPSourceContextKey contextKey = "sourceIpSource"
 )
 
-// Custom error types for more precise error reporting
 var (
 	ErrEmptyToken            = errors.New("token is empty")
 	ErrTokenTooLarge         = errors.New("token exceeds maximum allowed size")
@@ -48,31 +41,25 @@ var (
 )
 
 var (
-	// Basic validation that the role looks like an ARN
-	// Check if the role ARN has a valid AWS partition prefix
+	// ValidPrefixes: AWS partitions a role ARN may belong to.
 	ValidPrefixes = []string{
 		"arn:aws:iam::",        // Standard AWS
 		"arn:aws-us-gov:iam::", // AWS GovCloud
 		"arn:aws-cn:iam::",     // AWS China
 	}
 
-	// ResponseHeaders common headers to include in all API responses.
-	//
-	// A 200 here carries live AWS credentials, so it must never be stored by
-	// anything on the path. The handlers do not inspect the HTTP method — a GET
-	// is processed identically to a POST — so the usual "caches don't store POST
-	// responses by default" reasoning cannot be relied on: no-store states the
-	// requirement explicitly rather than inheriting it from the method.
+	// ResponseHeaders: no-store is explicit because a 200 here carries live
+	// AWS credentials and handlers don't vary caching by HTTP method.
 	ResponseHeaders = map[string]string{
 		"Content-Type":  "application/json",
 		"Cache-Control": "no-store",
 	}
 )
 
-// RequestData is the request format expected by the Lambda
+// RequestData is the request format expected by the Lambda.
 type RequestData struct {
-	Token string `json:"token"` // The JWT token to be validated
-	Role  string `json:"role"`  // The role to be assumed
+	Token string `json:"token"`
+	Role  string `json:"role"`
 }
 
 // Response represents a standardized API response
@@ -82,12 +69,9 @@ type Response struct {
 	RequestID    string `json:"requestId"`
 	ProcessingMS int64  `json:"processingMs,omitempty"`
 
-	// For successful responses
-	Message string `json:"message,omitempty"`
-	Data    any    `json:"data,omitempty"`
+	Message string `json:"message,omitempty"` // success
+	Data    any    `json:"data,omitempty"`    // success
 
-	// For error responses. Only the classified code (plus Message) is exposed;
-	// raw internal error detail stays in the server-side logs (see
-	// buildErrorResponse).
+	// ErrorCode: classified only; raw error detail stays server-side (buildErrorResponse).
 	ErrorCode string `json:"errorCode,omitempty"`
 }
