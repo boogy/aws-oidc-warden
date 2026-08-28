@@ -10,15 +10,16 @@ import (
 )
 
 // FormatClaimValue renders a verified JWT claim value as the string used in
-// audit records, STS session tags, and condition/tag comparisons. Integral
-// floats above 2^53 lose precision at JSON-decode time (float64), so two
-// distinct claim values can render identically; this function can't recover
-// that.
+// audit records, STS session tags, and condition/tag comparisons. Every finite
+// integral float is rendered in full decimal, at any magnitude: exponent form
+// is a spelling no operator writes a pattern against, and a none_of written in
+// decimal would not match it. Integral floats above 2^53 lose precision at
+// JSON-decode time (float64), so two distinct claim values can render
+// identically; this function can't recover that.
 func FormatClaimValue(raw any) string {
-	// IsInf guard: +Inf/-Inf satisfy f == Trunc(f). 1e21 cutoff matches where
-	// %v itself switches to exponent form.
+	// IsInf guard: +Inf/-Inf satisfy f == Trunc(f).
 	if f, ok := raw.(float64); ok && !math.IsInf(f, 0) && !math.IsNaN(f) &&
-		f == math.Trunc(f) && math.Abs(f) < 1e21 {
+		f == math.Trunc(f) {
 		return strconv.FormatFloat(f, 'f', -1, 64)
 	}
 	return fmt.Sprintf("%v", raw)

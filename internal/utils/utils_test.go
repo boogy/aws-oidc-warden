@@ -204,7 +204,9 @@ func TestFormatClaimValue(t *testing.T) {
 		// shortest round-trip decimal need not match the truncated integer.
 		{"beyond exact integer range", float64(1 << 60), "1152921504606847000"},
 		{"just below 1e21 boundary", math.Nextafter(1e21, 0), "999999999999999900000"},
-		{"at 1e21 boundary falls through to %v", 1e21, "1e+21"},
+		{"1e21 stays decimal rather than exponent form", 1e21, "1000000000000000000000"},
+		{"negative 1e21 stays decimal", -1e21, "-1000000000000000000000"},
+		{"1e30 stays decimal", 1e30, "1000000000000000000000000000000"},
 		{"positive infinity", math.Inf(1), "+Inf"},
 		{"negative infinity", math.Inf(-1), "-Inf"},
 		{"NaN", math.NaN(), "NaN"},
@@ -228,6 +230,17 @@ func TestFormatClaimValue_ExactIntegerRangeUnchanged(t *testing.T) {
 		t.Run(want, func(t *testing.T) {
 			assert.Equal(t, want, utils.FormatClaimValue(f))
 		})
+	}
+}
+
+// A none_of written in decimal must be able to match a huge integral claim:
+// exponent form would render a text no operator writes and disarm the veto.
+func TestFormatClaimValue_NoExponentFormForIntegralFloats(t *testing.T) {
+	for _, f := range []float64{1e21, -1e21, 1e30, 1e100, math.MaxFloat64} {
+		got := utils.FormatClaimValue(f)
+		if strings.ContainsAny(got, "eE") {
+			t.Errorf("FormatClaimValue(%v) = %q, want full decimal with no exponent", f, got)
+		}
 	}
 }
 
