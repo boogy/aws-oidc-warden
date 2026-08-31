@@ -2,11 +2,8 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
@@ -35,11 +32,8 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	frontendRequestID, _ := ctx.Value(FrontendRequestIDContextKey).(string)
-	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
-	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
-	log := slog.With(
+	log := requestLogger(ctx,
 		slog.String("requestId", requestID),
 		slog.String("path", event.RawPath),
 		slog.String("method", event.RequestContext.HTTP.Method),
@@ -47,17 +41,6 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 		slog.String("requestTime", event.RequestContext.Time),
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
-	if frontendRequestID != "" {
-		log = log.With(slog.String("frontendRequestId", frontendRequestID))
-	}
-	if sourceIP != "" {
-		log = log.With(slog.String("sourceIp", sourceIP))
-	}
-	// Only surfaced when not the platform-attested value, so an anomaly is
-	// visible without a constant "sourceIpFrom=frontend" on every line.
-	if sourceIPFrom != "" && sourceIPFrom != ipSourceFrontend {
-		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
-	}
 
 	requestData, err := h.unmarshalRequestData(event)
 	if err != nil {
@@ -76,23 +59,12 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 
 // createRequestContext creates an enhanced context with request tracking information
 func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.LambdaFunctionURLRequest) (context.Context, context.CancelFunc) {
-	requestID, frontendRequestID := resolveRequestID(ctx, event.RequestContext.RequestID)
-	sourceIP, sourceIPFrom := clientIP(event.RequestContext.HTTP.SourceIP, event.Headers)
-
-	// Start request timer
-	startTime := time.Now()
-
-	// Add request tracking information using context keys
-	ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
-	ctx = context.WithValue(ctx, FrontendRequestIDContextKey, frontendRequestID)
-	ctx = context.WithValue(ctx, StartTimeContextKey, startTime)
-	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
-	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
-	ctx = context.WithValue(ctx, UserAgentContextKey, event.RequestContext.HTTP.UserAgent)
-
-	// Create a context with timeout. The caller must invoke the returned cancel
-	// (via defer) to release the timer when the request completes.
-	return context.WithTimeout(ctx, DefaultTimeout)
+	return newRequestContext(ctx,
+		event.RequestContext.RequestID,
+		event.RequestContext.HTTP.SourceIP,
+		event.Headers,
+		event.RequestContext.HTTP.UserAgent,
+	)
 }
 
 // unmarshalRequestData parses and validates the request data from a Lambda URL event
@@ -100,39 +72,21 @@ func (h *AwsLambdaUrl) unmarshalRequestData(event events.LambdaFunctionURLReques
 	return ParseRequestBody(event.Body)
 }
 
-// respondError formats a response with an error message
-func (h *AwsLambdaUrl) respondError(ctx context.Context, err error, statusCode int) (events.LambdaFunctionURLResponse, error) {
-	response, statusCode := buildErrorResponse(ctx, err, statusCode)
-
-	jsonResponse, jsonErr := json.Marshal(response)
-	if jsonErr != nil {
-		// Fallback to simple error response if JSON marshalling fails
-		return events.LambdaFunctionURLResponse{
-			StatusCode: http.StatusInternalServerError,
-			Headers:    ResponseHeaders,
-			Body:       fallbackErrorBody,
-		}, nil
-	}
-
+// newResponse builds this frontend's response type from a status and body.
+func (h *AwsLambdaUrl) newResponse(statusCode int, body string) events.LambdaFunctionURLResponse {
 	return events.LambdaFunctionURLResponse{
 		StatusCode: statusCode,
 		Headers:    ResponseHeaders,
-		Body:       string(jsonResponse),
-	}, nil
+		Body:       body,
+	}
+}
+
+// respondError formats a response with an error message
+func (h *AwsLambdaUrl) respondError(ctx context.Context, err error, statusCode int) (events.LambdaFunctionURLResponse, error) {
+	return errorResponse(ctx, err, statusCode, h.newResponse), nil
 }
 
 // respondJSON formats a successful response with credentials
 func (h *AwsLambdaUrl) respondJSON(ctx context.Context, credentials *types.Credentials) (events.LambdaFunctionURLResponse, error) {
-	response := buildSuccessResponse(ctx, credentials)
-
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		return h.respondError(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError)
-	}
-
-	return events.LambdaFunctionURLResponse{
-		StatusCode: http.StatusOK,
-		Headers:    ResponseHeaders,
-		Body:       string(jsonResponse),
-	}, nil
+	return successResponse(ctx, credentials, h.newResponse), nil
 }
