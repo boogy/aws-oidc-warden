@@ -337,6 +337,27 @@ func envBool(key, v string, set func(bool)) {
 	set(b)
 }
 
+// envDuration parses a duration AOW_ env value. On a parse error it warns and
+// leaves the current value untouched.
+func envDuration(key, v string, set func(time.Duration)) {
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		warnInvalidEnv(envVarName(key), v, err)
+		return
+	}
+	set(d)
+}
+
+// envInt parses an integer AOW_ env value, warn-and-skip like envDuration.
+func envInt(key, v string, set func(int)) {
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		warnInvalidEnv(envVarName(key), v, err)
+		return
+	}
+	set(n)
+}
+
 // ensureTagAuth returns c.TagAuth, initializing it to a zero-value TagAuth
 // first if it is nil.
 func ensureTagAuth(c *Config) *TagAuth {
@@ -408,48 +429,24 @@ var envBindings = []envBinding{
 
 	// Durations (warn-and-skip on parse error).
 	{"config_reload_interval", func(c *Config, v string) {
-		if d, err := time.ParseDuration(v); err != nil {
-			warnInvalidEnv(envVarName("config_reload_interval"), v, err)
-		} else {
-			c.ConfigReloadInterval = d
-		}
+		envDuration("config_reload_interval", v, func(d time.Duration) { c.ConfigReloadInterval = d })
 	}},
 	{"max_token_lifetime", func(c *Config, v string) {
-		if d, err := time.ParseDuration(v); err != nil {
-			warnInvalidEnv(envVarName("max_token_lifetime"), v, err)
-		} else {
-			c.MaxTokenLifetime = d
-		}
+		envDuration("max_token_lifetime", v, func(d time.Duration) { c.MaxTokenLifetime = d })
 	}},
 	{"max_token_age", func(c *Config, v string) {
-		if d, err := time.ParseDuration(v); err != nil {
-			warnInvalidEnv(envVarName("max_token_age"), v, err)
-		} else {
-			c.MaxTokenAge = d
-		}
+		envDuration("max_token_age", v, func(d time.Duration) { c.MaxTokenAge = d })
 	}},
 	{"jwks_refetch_cooldown", func(c *Config, v string) {
-		if d, err := time.ParseDuration(v); err != nil {
-			warnInvalidEnv(envVarName("jwks_refetch_cooldown"), v, err)
-		} else {
-			c.JWKSRefetchCooldown = d
-		}
+		envDuration("jwks_refetch_cooldown", v, func(d time.Duration) { c.JWKSRefetchCooldown = d })
 	}},
 	{"jwt_leeway", func(c *Config, v string) {
-		if d, err := time.ParseDuration(v); err != nil {
-			warnInvalidEnv(envVarName("jwt_leeway"), v, err)
-		} else {
-			c.JWTLeeway = &d
-		}
+		envDuration("jwt_leeway", v, func(d time.Duration) { c.JWTLeeway = &d })
 	}},
 
 	// Int (warn-and-skip on parse error).
 	{"max_token_bytes", func(c *Config, v string) {
-		if n, err := strconv.Atoi(v); err != nil {
-			warnInvalidEnv(envVarName("max_token_bytes"), v, err)
-		} else {
-			c.MaxTokenBytes = n
-		}
+		envInt("max_token_bytes", v, func(n int) { c.MaxTokenBytes = n })
 	}},
 
 	// Comma-separated list.
@@ -461,18 +458,10 @@ var envBindings = []envBinding{
 	{"cache.s3_bucket", func(c *Config, v string) { c.Cache.S3Bucket = v }},
 	{"cache.s3_prefix", func(c *Config, v string) { c.Cache.S3Prefix = v }},
 	{"cache.ttl", func(c *Config, v string) {
-		if d, err := time.ParseDuration(v); err != nil {
-			warnInvalidEnv(envVarName("cache.ttl"), v, err)
-		} else {
-			c.Cache.TTL = d
-		}
+		envDuration("cache.ttl", v, func(d time.Duration) { c.Cache.TTL = d })
 	}},
 	{"cache.max_local_size", func(c *Config, v string) {
-		if n, err := strconv.Atoi(v); err != nil {
-			warnInvalidEnv(envVarName("cache.max_local_size"), v, err)
-		} else {
-			c.Cache.MaxLocalSize = n
-		}
+		envInt("cache.max_local_size", v, func(n int) { c.Cache.MaxLocalSize = n })
 	}},
 	{"cache.s3_cleanup", func(c *Config, v string) {
 		envBool("cache.s3_cleanup", v, func(b bool) { c.Cache.S3Cleanup = b })
@@ -506,11 +495,7 @@ var envBindings = []envBinding{
 	{"cross_account.external_id", func(c *Config, v string) { ensureCrossAccount(c).ExternalID = v }},
 	{"cross_account.allowed_accounts", func(c *Config, v string) { ensureCrossAccount(c).AllowedAccounts = splitCommaList(v) }},
 	{"cross_account.spoke_session_duration", func(c *Config, v string) {
-		if d, err := time.ParseDuration(v); err != nil {
-			warnInvalidEnv(envVarName("cross_account.spoke_session_duration"), v, err)
-		} else {
-			ensureCrossAccount(c).SpokeSessionDuration = d
-		}
+		envDuration("cross_account.spoke_session_duration", v, func(d time.Duration) { ensureCrossAccount(c).SpokeSessionDuration = d })
 	}},
 
 	// JWT validation settings (value struct, always present).
