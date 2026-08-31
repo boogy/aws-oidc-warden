@@ -255,7 +255,7 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 	consumer := &AwsConsumer{
 		AWS: mockAWS,
 		Config: &gtvcfg.Config{
-			TagAuth: &gtvcfg.TagAuth{TransitiveSessionTags: true},
+			SessionTagsTransitive: true,
 		},
 	}
 
@@ -297,7 +297,7 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 	assert.NotNil(t, creds)
 
 	// TransitiveSessionTags off: no transitive keys are set, even with tags present.
-	consumer.Config.TagAuth.TransitiveSessionTags = false //nolint:staticcheck // exercises the deprecated fallback
+	consumer.Config.SessionTagsTransitive = false
 	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && input.TransitiveTagKeys == nil && len(input.Tags) == 2
 	})).Return(&sts.AssumeRoleOutput{
@@ -334,7 +334,10 @@ func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
 	}{
 		{"top-level on, tag_auth absent", true, nil, true},
 		{"top-level off, tag_auth absent", false, nil, false},
+		// The deprecated key is the subject under test here, not an oversight.
+		//nolint:staticcheck // SA1019: asserts the tag_auth fallback still resolves.
 		{"deprecated tag_auth key still honored", false, &gtvcfg.TagAuth{TransitiveSessionTags: true}, true},
+		//nolint:staticcheck // SA1019: asserts the top-level key overrides the fallback.
 		{"top-level on wins over tag_auth off", true, &gtvcfg.TagAuth{TransitiveSessionTags: false}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1277,7 +1280,7 @@ func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"),
 	}}, nil).Once()
 
-	cfg := &gtvcfg.Config{TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/", TransitiveSessionTags: true}}
+	cfg := &gtvcfg.Config{SessionTagsTransitive: true, TagAuth: &gtvcfg.TagAuth{Enabled: true, TagPrefix: "aow/"}}
 	c := NewAwsConsumer(cfg)
 	c.AWS = m
 	claims := &gtypes.Claims{

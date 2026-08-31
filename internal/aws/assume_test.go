@@ -265,7 +265,7 @@ func TestTransitiveTagsOptIn(t *testing.T) {
 	}
 
 	cfg := vbaseCfg()
-	cfg.TagAuth = &gtvcfg.TagAuth{TransitiveSessionTags: true}
+	cfg.SessionTagsTransitive = true
 	c2, f2 := vconsumer(t, cfg)
 	if _, err := c2.AssumeRole(role, "aow", nil, nil, claims, spec); err != nil {
 		t.Fatal(err)
