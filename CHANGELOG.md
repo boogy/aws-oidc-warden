@@ -18,6 +18,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Go directive raised to 1.26.7. CI reads `go-version-file: go.mod`, so no workflow pins change.
 - The four slice-of-struct clears in `MergeBytes` are now driven by a `clearOnDeclare` table, and `TestClearOnDeclareCoversEverySliceOfStructField` reflects over `Config` and asserts the table covers every `[]struct` field with a `mapstructure` tag. The guard was four hardcoded key literals that nothing failed on when a fifth such field was added — the index-merge inheritance bug fixed in 3.0.2 would have silently returned for it. The test fails when any entry is dropped from the table.
 - A merge that drops a `config_fragment_checksums` pin for a fragment still listed in `config_fragments` is logged at `WARN`. Wholesale list replacement fails closed for grants but fails open for integrity pins: an overlay restating one pin to rotate it silently unpins the rest, and nothing rejects it, because a partially pinned `config_fragments` set is a valid configuration.
+- Behavior-preserving deduplication across `internal/handler`, `internal/cache`, `internal/config`, and `internal/aws`. The four frontend adapters now share one request-context builder, one conditional request-log binding, and one response marshal/fallback path (`reqcontext.go` / `response.go`); the two body-parse entry points share one bounded decode preamble. The three cache backends share one `localCache` LRU tier instead of three near-identical copies of the same map, eviction loop, and entry struct. `envBindings` gets `envDuration`/`envInt` alongside the existing `envBool`, replacing nine hand-rolled parse-warn-skip blocks. `compileConditionAt` and `collectConditionClaims` read the seven shorthand condition keys from one ordered table. `ProcessRequest`'s six deny sites share one epilogue closure, and `getSessionPolicy`'s three identical S3 error logs share one. `utils.SortedKeys` replaces three separate key-sorting loops. No log line, error string, config key, or exported signature changes, with three deliberate exceptions noted below.
+- The DynamoDB and S3 cache backends now emit the `Evicting LRU cache item` debug line on local-tier eviction, which was previously produced only by the memory backend. Debug level, so it is silent at the default log level.
+- The S3 cache's AWS-config load failure is now logged as `Failed to load AWS config for S3 cache`, matching the label the DynamoDB backend already carried.
+
+### Removed
+
+- `AwsConsumer.RoleHasTag` and its test. The method was never on `AwsConsumerInterface`, had no caller anywhere in the module, and lives under `internal/`, so nothing outside the module could reach it.
 
 ### Documentation
 
