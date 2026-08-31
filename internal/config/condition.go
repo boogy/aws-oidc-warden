@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
@@ -163,7 +162,7 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 	// Sorted iteration: reproducible error reporting across runs. A map key
 	// with a nil value (`repository:` with nothing after it) is checked here,
 	// where presence is observable — add() treats nil as "not written".
-	for _, claim := range sortedKeys(cond.Claims) {
+	for _, claim := range utils.SortedKeys(cond.Claims) {
 		if cond.Claims[claim] == nil {
 			return errNoPatternForKey(path, claim)
 		}
@@ -171,7 +170,7 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 			return err
 		}
 	}
-	for _, claim := range sortedKeys(cond.ExplicitClaims) {
+	for _, claim := range utils.SortedKeys(cond.ExplicitClaims) {
 		if cond.ExplicitClaims[claim] == nil {
 			return errNoPatternForKey(path, "claims."+claim)
 		}
@@ -203,20 +202,6 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 // from `repository: []` ("match nothing"), but both compile to no predicate.
 func errNoPatternForKey(path, key string) error {
 	return fmt.Errorf("%s: %q has no value; a condition key with no pattern gates nothing — give it a pattern or remove the key", path, key)
-}
-
-// sortedKeys returns m's keys in lexical order, for reproducible error
-// reporting. Runs at Validate() time only.
-func sortedKeys(m map[string]Patterns) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // compileGroup compiles one boolean group's members and rejects the two shapes

@@ -319,14 +319,8 @@ func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []typ
 		return nil
 	}
 
-	keys := make([]string, 0, len(tagSpec))
-	for k := range tagSpec {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-
 	var tags []types.Tag
-	for _, tagKey := range keys {
+	for _, tagKey := range utils.SortedKeys(tagSpec) {
 		claimName := tagSpec[tagKey]
 		raw, ok := rawClaims[claimName]
 		if !ok || raw == nil {
@@ -516,42 +510,6 @@ func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 	// Copy here too: `tags` now lives in the cache, so the caller must not
 	// get a mutable alias to it.
 	return maps.Clone(tags), nil
-}
-
-// RoleHasTag checks if an IAM role has a specific tag key and value
-func (a *AwsConsumer) RoleHasTag(role string, tagKey, tagValue string) (bool, error) {
-	if role == "" {
-		return false, errors.New("role name cannot be empty")
-	}
-
-	if tagKey == "" {
-		return false, errors.New("tag key cannot be empty")
-	}
-
-	roleOutput, err := a.GetRole(role)
-	if err != nil {
-		return false, fmt.Errorf("unable to get role: %w", err)
-	}
-
-	if roleOutput.Role == nil {
-		return false, errors.New("role information not available")
-	}
-
-	for _, tag := range roleOutput.Role.Tags {
-		if tag.Key == nil || tag.Value == nil {
-			continue
-		}
-
-		if *tag.Key == tagKey && *tag.Value == tagValue {
-			return true, nil
-		}
-	}
-
-	slog.Debug("Tag not found on role",
-		"role", role,
-		"tagKey", tagKey,
-		"tagValue", tagValue)
-	return false, nil
 }
 
 // GetS3Object retrieves an object from S3

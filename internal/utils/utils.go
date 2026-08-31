@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -89,4 +90,17 @@ func RedactToken(token string, firstN, lastN int) string {
 	}
 
 	return token[:firstN] + "..." + token[tokenLen-lastN:]
+}
+
+// SortedKeys returns m's keys in ascending order, nil for an empty map.
+func SortedKeys[V any](m map[string]V) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }

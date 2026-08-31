@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
@@ -300,15 +299,7 @@ func claimsAudience(claims *gtypes.Claims) []string {
 // sessionTagKeyNames returns the sorted tag key names an issuer's session_tags
 // spec would populate. Names are always safe to log regardless of LogClaimValues.
 func sessionTagKeyNames(tagSpec map[string]string) []string {
-	if len(tagSpec) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(tagSpec))
-	for k := range tagSpec {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return utils.SortedKeys(tagSpec)
 }
 
 // claimAliases renames claims on their way into the audit record for a
