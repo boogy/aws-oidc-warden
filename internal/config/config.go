@@ -908,6 +908,8 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	patterns := make(regexCache)
+
 	appendEffective := func(m RoleMapping, source string, i int) error {
 		if m.Subject == "" || len(m.Roles) == 0 {
 			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
@@ -932,7 +934,7 @@ func (c *Config) Validate() error {
 		}
 		m.Roles = roles
 
-		m.compiledPattern, err = compileAnchoredSubject(m.Subject)
+		m.compiledPattern, err = compileAnchoredSubject(m.Subject, patterns)
 		if err != nil {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, m.Subject, err)
 		}
@@ -942,7 +944,7 @@ func (c *Config) Validate() error {
 		// snapshots (fragment reuse, role_group defaults) — compiling it live
 		// would race a concurrent reader and could transiently pass all conditions.
 		m.Conditions = cloneCondition(m.Conditions)
-		if err := compileCondition(m.Conditions); err != nil {
+		if err := compileCondition(m.Conditions, patterns); err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
 		}
 
@@ -1151,11 +1153,11 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 // regex, rejecting bare wildcards (bareWildcards) like compileAnchoredCondition:
 // a subject is the primary identity gate, so ".*" would grant every subject
 // of the bound issuer.
-func compileAnchoredSubject(pattern string) (*regexp.Regexp, error) {
+func compileAnchoredSubject(pattern string, rc regexCache) (*regexp.Regexp, error) {
 	if bareWildcards[pattern] {
 		return nil, fmt.Errorf("subject pattern %q is too permissive; it matches every subject for this issuer — use a specific pattern", pattern)
 	}
-	return regexp.Compile("^(?:" + pattern + ")$")
+	return rc.anchor(pattern)
 }
 
 // validateRoleSessionName rejects a session name STS would refuse or the
@@ -1271,67 +1273,18 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 	return nil
 }
 
-// FindSessionPolicy returns the session policy scoping role's assumption by
-// (issuer, subject) under claims — taken from the specific mapping that
-// AUTHORIZED this role (matches subject, satisfies conditions, AND grants
-// role), never a broader mapping that merely shares the subject. Selecting by
-// subject alone (pre-fix) dropped a narrow mapping's policy whenever a
-// broader one matched first, assuming a privileged role unscoped. Among
-// qualifying mappings, first-declared (lowest order) wins.
-// Returns (nil, nil) when no mapping grants role (e.g. tag-auth).
+// FindSessionPolicy returns the session policy from the mapping that
+// authorized role for (issuer, subject), or (nil, nil) when none did.
+// See docs/CONFIGURATION.md for the selection rules.
 func (c *Config) FindSessionPolicy(issuer, subject, role string, claims map[string]any) (*string, *string) {
-	best := c.findAuthorizingMapping(issuer, subject, role, claims)
-	if best == nil {
-		return nil, nil
-	}
-	if best.SessionPolicyFile != "" {
-		return nil, &best.SessionPolicyFile
-	}
-	if best.SessionPolicy != "" {
-		return &best.SessionPolicy, nil
-	}
-	return nil, nil
-}
-
-// findAuthorizingMapping returns the mapping that authorized role for
-// (issuer, subject) under claims (matches subject, satisfies conditions, AND
-// grants role; first-declared/lowest-order wins). Extracted so
-// FindSessionPolicy and FindRoleSessionName can't diverge and attribute a
-// session to a mapping that didn't actually authorize it. Returns nil when no
-// mapping grants role (e.g. tag-auth).
-func (c *Config) findAuthorizingMapping(issuer, subject, role string, claims map[string]any) *RoleMapping {
-	idx, ok := c.index[issuer]
-	if !ok {
-		return nil
-	}
-
-	var best *RoleMapping
-	for _, mapping := range candidatesFor(idx, subject) {
-		if mapping.compiledPattern == nil || !mapping.compiledPattern.MatchString(subject) {
-			continue
-		}
-		if !satisfiesConditions(mapping.Conditions, claims) {
-			continue
-		}
-		if !slices.Contains(mapping.Roles, role) {
-			continue
-		}
-		if best == nil || mapping.order < best.order {
-			best = mapping
-		}
-	}
-	return best
+	return c.Authorize(issuer, subject, role, claims).SessionPolicy()
 }
 
 // FindRoleSessionName returns the STS session name override from the mapping
 // that authorized role for (issuer, subject), or "" (use the global
-// RoleSessionName). Resolves via findAuthorizingMapping like FindSessionPolicy
-// so the two can never come from different mappings.
+// RoleSessionName).
 func (c *Config) FindRoleSessionName(issuer, subject, role string, claims map[string]any) string {
-	if best := c.findAuthorizingMapping(issuer, subject, role, claims); best != nil {
-		return best.RoleSessionName
-	}
-	return ""
+	return c.Authorize(issuer, subject, role, claims).RoleSessionName()
 }
 
 // AuthorizeRoles evaluates every role_mapping/role_group entry bound to
@@ -1341,16 +1294,58 @@ func (c *Config) FindRoleSessionName(issuer, subject, role string, claims map[st
 // AND conditions); a subject that matches a pattern but fails that mapping's
 // conditions does not count unless another mapping fully matches.
 func (c *Config) AuthorizeRoles(issuer, subject string, claims map[string]any) (bool, []string) {
+	d := c.Authorize(issuer, subject, "", claims)
+	return d.Matched, d.Roles
+}
+
+// Decision is one authorization pass's result: whether any mapping matched,
+// the union of roles granted, and the mapping that authorized the requested
+// role.
+type Decision struct {
+	Matched bool     // some mapping matched subject AND its conditions
+	Roles   []string // union of roles granted by every matched mapping
+	// Lowest-order matched mapping granting the requested role; nil when no
+	// role was requested or none granted it.
+	authorizing *RoleMapping
+}
+
+// SessionPolicy returns the (inline, file) session policy from the mapping
+// that authorized the role; (nil, nil) when no mapping did.
+func (d Decision) SessionPolicy() (*string, *string) {
+	if d.authorizing == nil {
+		return nil, nil
+	}
+	if d.authorizing.SessionPolicyFile != "" {
+		return nil, &d.authorizing.SessionPolicyFile
+	}
+	if d.authorizing.SessionPolicy != "" {
+		return &d.authorizing.SessionPolicy, nil
+	}
+	return nil, nil
+}
+
+// RoleSessionName returns the authorizing mapping's session-name override, or
+// "" to use the global RoleSessionName.
+func (d Decision) RoleSessionName() string {
+	if d.authorizing == nil {
+		return ""
+	}
+	return d.authorizing.RoleSessionName
+}
+
+// Authorize evaluates every mapping bound to issuer whose subject pattern
+// matches subject and whose conditions are satisfied by claims, in one walk.
+// Pass "" for role when only the role union is wanted.
+func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) Decision {
 	capacity := c.estimatedRolesPerMapping
 	if capacity < 4 {
 		capacity = 4
 	}
-	roles := make([]string, 0, capacity)
-	matched := false
+	d := Decision{Roles: make([]string, 0, capacity)}
 
 	idx, ok := c.index[issuer]
 	if !ok {
-		return false, roles
+		return d
 	}
 
 	for _, mapping := range candidatesFor(idx, subject) {
@@ -1362,9 +1357,15 @@ func (c *Config) AuthorizeRoles(issuer, subject string, claims map[string]any) (
 			continue
 		}
 
-		matched = true
-		roles = append(roles, mapping.Roles...)
+		d.Matched = true
+		d.Roles = append(d.Roles, mapping.Roles...)
+
+		if role != "" && slices.Contains(mapping.Roles, role) {
+			if d.authorizing == nil || mapping.order < d.authorizing.order {
+				d.authorizing = mapping
+			}
+		}
 	}
 
-	return matched, roles
+	return d
 }

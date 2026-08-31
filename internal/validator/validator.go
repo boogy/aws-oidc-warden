@@ -580,25 +580,42 @@ func parseECKey(key types.JSONWebKey) (*ecdsa.PublicKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	xBytes, err := base64.RawURLEncoding.DecodeString(key.X)
+	size := (curve.Params().BitSize + 7) / 8
+	xBytes, err := ecCoordinate(key.X, size)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode EC x coordinate: %w", err)
 	}
-	yBytes, err := base64.RawURLEncoding.DecodeString(key.Y)
+	yBytes, err := ecCoordinate(key.Y, size)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode EC y coordinate: %w", err)
 	}
-	pub := &ecdsa.PublicKey{
-		Curve: curve,
-		X:     new(big.Int).SetBytes(xBytes),
-		Y:     new(big.Int).SetBytes(yBytes),
-	}
-	// ECDH() rejects off-curve points; a non-deprecated alternative to
-	// elliptic.Curve.IsOnCurve.
-	if _, err := pub.ECDH(); err != nil {
+
+	point := make([]byte, 0, 1+2*size)
+	point = append(point, 4) // SEC 1 uncompressed point marker
+	point = append(point, xBytes...)
+	point = append(point, yBytes...)
+
+	// Rejects off-curve points and the point at infinity.
+	pub, err := ecdsa.ParseUncompressedPublicKey(curve, point)
+	if err != nil {
 		return nil, fmt.Errorf("EC key point is not valid for curve %s: %w", key.Crv, err)
 	}
 	return pub, nil
+}
+
+// ecCoordinate decodes one base64url JWK coordinate to exactly size bytes.
+// Left-pads: RFC 7518 mandates full width, but issuers do strip leading zeros.
+func ecCoordinate(encoded string, size int) ([]byte, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > size {
+		return nil, fmt.Errorf("coordinate is %d bytes, want at most %d", len(raw), size)
+	}
+	out := make([]byte, size)
+	copy(out[size-len(raw):], raw)
+	return out, nil
 }
 
 func ecCurve(crv string) (elliptic.Curve, error) {

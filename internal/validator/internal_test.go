@@ -10,7 +10,6 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"fmt"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -199,7 +198,9 @@ func TestKeyMemo_StoreAndLoadRoundTrip(t *testing.T) {
 // re-fetches, never unbounded memory.
 func TestALBKeyCache_OverflowClearsMap(t *testing.T) {
 	var c albKeyCache
-	key := &ecdsa.PublicKey{Curve: elliptic.P256(), X: big.NewInt(1), Y: big.NewInt(2)}
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	key := &priv.PublicKey
 
 	for i := 0; i < maxALBKeyCacheEntries; i++ {
 		c.set(fmt.Sprintf("kid-%d", i), key)

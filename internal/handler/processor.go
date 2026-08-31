@@ -128,8 +128,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		log.Debug("Validated claims", slog.Any("claims", claims))
 	}
 
-	matched, roles := cfg.AuthorizeRoles(claims.Issuer, claims.Subject, claimsMap)
-	explicitlyAllowed := matched && slices.Contains(roles, requestedRole)
+	decision := cfg.Authorize(claims.Issuer, claims.Subject, requestedRole, claimsMap)
+	roles := decision.Roles
+	explicitlyAllowed := decision.Matched && slices.Contains(roles, requestedRole)
 
 	allowed := explicitlyAllowed
 	if explicitlyAllowed {
@@ -160,7 +161,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrRoleNotPermitted)
 	}
 
-	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, log, claims.Issuer, claims.Subject, requestedRole, claimsMap)
+	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, log, claims.Subject, decision)
 	if err != nil {
 		rec.setErrorReason("session_policy", err)
 		rec.ProcessingMS = elapsed()
@@ -171,7 +172,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	// Per-mapping override, resolved via the same mapping that authorized the
 	// role, so CloudTrail can name the requester rather than the service.
 	sessionName := cfg.RoleSessionName
-	if override := cfg.FindRoleSessionName(claims.Issuer, claims.Subject, requestedRole, claimsMap); override != "" {
+	if override := decision.RoleSessionName(); override != "" {
 		sessionName = override
 	}
 
@@ -225,7 +226,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 // getSessionPolicy retrieves the session policy for an (issuer, subject) pair
 // (config inline or S3 file), plus a policyRef label ("inline", the S3 key,
 // or "") for the audit record's SessionPolicyRef field.
-func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger, issuer, subject, role string, claims map[string]any) (sessionPolicyString *string, policyRef string, err error) {
+func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger, subject string, decision config.Decision) (sessionPolicyString *string, policyRef string, err error) {
 	opStart := time.Now()
 	defer func() {
 		log.Debug("getSessionPolicy operation completed",
@@ -233,7 +234,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger
 			slog.Int64("durationMs", time.Since(opStart).Milliseconds()))
 	}()
 
-	sessionPolicy, sessionPolicyFile := cfg.FindSessionPolicy(issuer, subject, role, claims)
+	sessionPolicy, sessionPolicyFile := decision.SessionPolicy()
 
 	if sessionPolicyFile != nil {
 		policyRef = *sessionPolicyFile

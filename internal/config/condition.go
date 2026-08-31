@@ -68,9 +68,29 @@ const (
 // compileCondition compiles a condition tree (nil = unconditional match) into
 // the pre-compiled form satisfiesConditions checks. Called once per effective
 // mapping at Validate() time, never per request.
-func compileCondition(cond *Condition) error {
+// rc may be nil, which disables pattern memoization.
+func compileCondition(cond *Condition, rc regexCache) error {
 	budget := 0
-	return compileConditionAt(cond, "conditions", 1, &budget)
+	return compileConditionAt(cond, "conditions", 1, &budget, rc)
+}
+
+// regexCache memoizes anchored-pattern compilation within one Validate() pass.
+type regexCache map[string]*regexp.Regexp
+
+// anchor compiles pattern as "^(?:pattern)$". Callers must run the empty and
+// bare-wildcard guards first; only accepted patterns are memoized.
+func (rc regexCache) anchor(pattern string) (*regexp.Regexp, error) {
+	if re, ok := rc[pattern]; ok {
+		return re, nil
+	}
+	re, err := regexp.Compile("^(?:" + pattern + ")$")
+	if err != nil {
+		return nil, err
+	}
+	if rc != nil {
+		rc[pattern] = re
+	}
+	return re, nil
 }
 
 // compileConditionAt compiles one node and recurses into its groups. path is
@@ -78,7 +98,7 @@ func compileCondition(cond *Condition) error {
 // messages. depth is 1 for the top-level node; budget counts nodes compiled
 // so far across the whole tree. Every field compiles through the same
 // anchored-regex mechanism as a generic claim entry.
-func compileConditionAt(cond *Condition, path string, depth int, budget *int) error {
+func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc regexCache) error {
 	if cond == nil {
 		return nil
 	}
@@ -104,7 +124,7 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 		}
 		compiled := make([]*regexp.Regexp, 0, len(patterns))
 		for _, pattern := range patterns {
-			re, err := compileAnchoredCondition(pattern)
+			re, err := compileAnchoredCondition(pattern, rc)
 			if err != nil {
 				return fmt.Errorf("%s: invalid pattern for %q: %w", path, key, err)
 			}
@@ -156,13 +176,13 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int) er
 		}
 	}
 
-	if err := compileGroup("all_of", cond.AllOf, path, depth, budget); err != nil {
+	if err := compileGroup("all_of", cond.AllOf, path, depth, budget, rc); err != nil {
 		return err
 	}
-	if err := compileGroup("any_of", cond.AnyOf, path, depth, budget); err != nil {
+	if err := compileGroup("any_of", cond.AnyOf, path, depth, budget, rc); err != nil {
 		return err
 	}
-	if err := compileGroup("none_of", cond.NoneOf, path, depth, budget); err != nil {
+	if err := compileGroup("none_of", cond.NoneOf, path, depth, budget, rc); err != nil {
 		return err
 	}
 
@@ -206,7 +226,7 @@ func sortedKeys(m map[string]Patterns) []string {
 //
 // compileConditionAt applies the same no-predicate check to the top-level node
 // once its groups are compiled, so `conditions: {}` is rejected too.
-func compileGroup(name string, nodes []*Condition, path string, depth int, budget *int) error {
+func compileGroup(name string, nodes []*Condition, path string, depth int, budget *int, rc regexCache) error {
 	if nodes == nil {
 		return nil
 	}
@@ -218,7 +238,7 @@ func compileGroup(name string, nodes []*Condition, path string, depth int, budge
 		if child == nil {
 			return fmt.Errorf("%s: declares no predicate; an empty condition is always true and would defeat the %s it is in", childPath, name)
 		}
-		if err := compileConditionAt(child, childPath, depth+1, budget); err != nil {
+		if err := compileConditionAt(child, childPath, depth+1, budget, rc); err != nil {
 			return err
 		}
 		if conditionIsEmpty(child) {
@@ -328,14 +348,14 @@ var bareWildcards = map[string]bool{".*": true, ".+": true}
 // compileAnchoredCondition compiles pattern as an auto-anchored regex,
 // rejecting empty patterns and bare wildcards that would match anything
 // (security conditions must be specific, never `.*`).
-func compileAnchoredCondition(pattern string) (*regexp.Regexp, error) {
+func compileAnchoredCondition(pattern string, rc regexCache) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, errors.New("pattern must not be empty")
 	}
 	if bareWildcards[pattern] {
 		return nil, fmt.Errorf("pattern %q is too permissive; use a specific pattern", pattern)
 	}
-	return regexp.Compile("^(?:" + pattern + ")$")
+	return rc.anchor(pattern)
 }
 
 // valueMatches reports whether one raw verified claim VALUE satisfies pattern

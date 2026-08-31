@@ -931,7 +931,7 @@ func TestEmptyConditionKeyIsRejected(t *testing.T) {
 		"claims":    "      claims:\n        \"\": \"release-bot\"",
 	} {
 		t.Run(name, func(t *testing.T) {
-			err := compileCondition(decodeConditions(t, conditions+"\n"))
+			err := compileCondition(decodeConditions(t, conditions+"\n"), nil)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "must name a claim")
 		})
@@ -949,7 +949,7 @@ func TestConditionCompileErrorsAreDeterministic(t *testing.T) {
       zzz_claim: "*also_invalid("
 `
 	for i := 0; i < 50; i++ {
-		err := compileCondition(decodeConditions(t, conditions))
+		err := compileCondition(decodeConditions(t, conditions), nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "aaa_claim", "the lexically first bad key must always be the one reported")
 	}
@@ -974,12 +974,12 @@ func TestValidate_RejectsKeysWrittenWithNoPattern(t *testing.T) {
 		"none_of member with no pattern": "      none_of:\n        - actor:\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			require.Error(t, compileCondition(decodeConditions(t, conditions)))
+			require.Error(t, compileCondition(decodeConditions(t, conditions), nil))
 		})
 	}
 
 	t.Run("empty block", func(t *testing.T) {
-		require.ErrorContains(t, compileCondition(decodeConditions(t, "      {}\n")), "declares no predicate")
+		require.ErrorContains(t, compileCondition(decodeConditions(t, "      {}\n"), nil), "declares no predicate")
 	})
 
 	// `conditions:` itself written with nothing under it. The field is a
@@ -990,7 +990,7 @@ func TestValidate_RejectsKeysWrittenWithNoPattern(t *testing.T) {
 	t.Run("conditions key with nothing under it", func(t *testing.T) {
 		cond := decodeConditions(t, "")
 		require.NotNil(t, cond, "a valueless `conditions:` must not decode as an absent gate")
-		require.ErrorContains(t, compileCondition(cond), "declares no predicate")
+		require.ErrorContains(t, compileCondition(cond, nil), "declares no predicate")
 	})
 
 	// A claim map built in code, not decoded: the decode hook never ran, so
@@ -1001,11 +1001,11 @@ func TestValidate_RejectsKeysWrittenWithNoPattern(t *testing.T) {
 		require.ErrorContains(t, compileCondition(&Condition{
 			Ref:    Patterns{"refs/heads/main"},
 			Claims: map[string]Patterns{"repository": nil},
-		}), "has no value")
+		}, nil), "has no value")
 		require.ErrorContains(t, compileCondition(&Condition{
 			Ref:            Patterns{"refs/heads/main"},
 			ExplicitClaims: map[string]Patterns{"any_of": nil},
-		}), "has no value")
+		}, nil), "has no value")
 	})
 }
 
@@ -1136,7 +1136,7 @@ func TestConditionKeyResolvesClaimCaseInsensitively(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := compileCondition(tt.cond); err != nil {
+			if err := compileCondition(tt.cond, nil); err != nil {
 				t.Fatalf("compile: %v", err)
 			}
 			if got := satisfiesConditions(tt.cond, tt.claims); got != tt.want {
