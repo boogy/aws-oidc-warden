@@ -6,6 +6,8 @@ package config
 
 import (
 	"os"
+	"reflect"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -295,6 +297,8 @@ role_groups:
   - subjects: ["myorg/grouped-repo"]
     defaults:
       roles: ["arn:aws:iam::111111111111:role/GroupRole"]
+      conditions:
+        ref: "refs/heads/main"
 `), "yaml"))
 		return c
 	}
@@ -305,7 +309,7 @@ role_groups:
 		groupRole = "arn:aws:iam::111111111111:role/GroupRole"
 	)
 
-	t.Run("role_mappings entry without roles inherits nothing", func(t *testing.T) {
+	t.Run("a replacement entry inherits neither roles nor conditions from the entry it displaces", func(t *testing.T) {
 		c := base(t)
 		err := c.MergeBytes([]byte(`{"role_mappings":[{"subject":"myorg/lowpriv-repo","roles":["arn:aws:iam::111111111111:role/LowPrivRole"]}]}`), "json")
 		require.NoError(t, err)
@@ -338,13 +342,14 @@ role_groups:
 		c := base(t)
 		err := c.MergeBytes([]byte(`{"role_groups":[{"subjects":["myorg/new-repo"]}]}`), "json")
 		require.Error(t, err)
-		assert.NotContains(t, err.Error(), groupRole)
+		assert.Contains(t, err.Error(), "subject and roles are required")
 	})
 
 	t.Run("role_groups entry replaces the base group", func(t *testing.T) {
 		c := base(t)
 		require.NoError(t, c.MergeBytes([]byte(`{"role_groups":[{"subjects":["myorg/new-repo"],"defaults":{"roles":["arn:aws:iam::111111111111:role/NewRole"]}}]}`), "json"))
 		require.Len(t, c.RoleGroups, 1)
+		assert.Nil(t, c.RoleGroups[0].Defaults.Conditions, "the replacement group must not inherit the base group's conditions")
 
 		matched, roles := c.AuthorizeRoles(issuer, "myorg/new-repo", map[string]any{})
 		require.True(t, matched)
@@ -354,12 +359,26 @@ role_groups:
 		assert.False(t, matched, "the replaced group must be gone")
 	})
 
-	t.Run("explicit null role_mappings clears the base grants", func(t *testing.T) {
+	t.Run("explicit null role_mappings clears the literal mappings only", func(t *testing.T) {
 		c := base(t)
 		require.NoError(t, c.MergeBytes([]byte("role_mappings: null\n"), "yaml"))
 		assert.Empty(t, c.RoleMappings)
 
 		matched, _ := c.AuthorizeRoles(issuer, "myorg/admin-repo", map[string]any{"ref": "refs/heads/main"})
+		assert.False(t, matched)
+
+		matched, roles := c.AuthorizeRoles(issuer, "myorg/grouped-repo", map[string]any{"ref": "refs/heads/main"})
+		require.True(t, matched, "role_groups grants survive role_mappings: null; it is not deny-all")
+		assert.Equal(t, []string{groupRole}, roles)
+	})
+
+	t.Run("explicit null on both mapping keys is deny-all", func(t *testing.T) {
+		c := base(t)
+		require.NoError(t, c.MergeBytes([]byte("role_mappings: null\nrole_groups: null\n"), "yaml"))
+
+		matched, _ := c.AuthorizeRoles(issuer, "myorg/admin-repo", map[string]any{"ref": "refs/heads/main"})
+		assert.False(t, matched)
+		matched, _ = c.AuthorizeRoles(issuer, "myorg/grouped-repo", map[string]any{"ref": "refs/heads/main"})
 		assert.False(t, matched)
 	})
 
@@ -391,6 +410,7 @@ cross_account:
 `), "yaml"))
 		require.NoError(t, c.MergeBytes([]byte(`{"cross_account":{"spoke_role_name":"aow-spoke"}}`), "json"))
 		require.NotNil(t, c.CrossAccount)
+		assert.Equal(t, "aow-spoke", c.CrossAccount.SpokeRoleName, "the overlay's field must apply")
 		assert.True(t, c.CrossAccount.Enabled)
 		assert.Equal(t, []string{"111111111111"}, c.CrossAccount.AllowedAccounts)
 	})
@@ -403,4 +423,153 @@ cross_account:
 		require.True(t, matched)
 		assert.Contains(t, roles, adminRole)
 	})
+}
+
+func TestClearOnDeclareCoversEverySliceOfStructField(t *testing.T) {
+	var want []string
+	rt := reflect.TypeOf(Config{})
+	for i := range rt.NumField() {
+		f := rt.Field(i)
+		key := f.Tag.Get("mapstructure")
+		if key == "" || key == "-" {
+			continue
+		}
+		ft := f.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		if ft.Kind() != reflect.Slice {
+			continue
+		}
+		et := ft.Elem()
+		if et.Kind() == reflect.Pointer {
+			et = et.Elem()
+		}
+		if et.Kind() == reflect.Struct {
+			want = append(want, key)
+		}
+	}
+
+	got := make([]string, 0, len(clearOnDeclare))
+	for key := range clearOnDeclare {
+		got = append(got, key)
+	}
+	sort.Strings(want)
+	sort.Strings(got)
+
+	assert.Equal(t, want, got,
+		"every slice-of-struct field must be cleared before decoding, or an overlay entry inherits the displaced entry's fields")
+}
+
+func TestMergeBytesLeavesConfigUntouchedWhenValidationFails(t *testing.T) {
+	const (
+		issuer    = "https://token.actions.githubusercontent.com"
+		adminRole = "arn:aws:iam::111111111111:role/AdminRole"
+	)
+	c := &Config{}
+	require.NoError(t, c.MergeBytes([]byte(`
+role_session_name: "aow"
+issuers:
+  - issuer: "`+issuer+`"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+role_mappings:
+  - subject: "myorg/admin-repo"
+    roles: ["`+adminRole+`"]
+    conditions:
+      ref: "refs/heads/main"
+`), "yaml"))
+
+	err := c.MergeBytes([]byte(`{"role_mappings":[{"subject":"myorg/attacker-repo"}]}`), "json")
+	require.Error(t, err)
+
+	require.Len(t, c.RoleMappings, 1)
+	assert.Equal(t, "myorg/admin-repo", c.RoleMappings[0].Subject, "a rejected overlay must not land in the served config")
+
+	matched, roles := c.AuthorizeRoles(issuer, "myorg/admin-repo", map[string]any{"ref": "refs/heads/main"})
+	require.True(t, matched, "the last-known-good grants must keep serving")
+	assert.Equal(t, []string{adminRole}, roles)
+
+	matched, _ = c.AuthorizeRoles(issuer, "myorg/attacker-repo", map[string]any{})
+	assert.False(t, matched)
+}
+
+func TestMergeBytesFragmentChecksumsReplaceWholesale(t *testing.T) {
+	const issuer = "https://token.actions.githubusercontent.com"
+	c := &Config{}
+	require.NoError(t, c.MergeBytes([]byte(`
+role_session_name: "aow"
+issuers:
+  - issuer: "`+issuer+`"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+config_fragments: ["s3://cfg/a.yaml", "s3://cfg/b.yaml"]
+config_fragment_checksums:
+  - uri: "s3://cfg/a.yaml"
+    checksum: "sha256:aaaa"
+  - uri: "s3://cfg/b.yaml"
+    checksum: "sha256:bbbb"
+`), "yaml"))
+
+	require.NoError(t, c.MergeBytes([]byte(`{"config_fragment_checksums":[{"uri":"s3://cfg/b.yaml","checksum":"sha256:cccc"}]}`), "json"))
+
+	_, pinned := c.fragmentChecksum("s3://cfg/a.yaml")
+	assert.False(t, pinned, "an overlay that restates one pin drops the others; docs must say so")
+	sum, pinned := c.fragmentChecksum("s3://cfg/b.yaml")
+	require.True(t, pinned)
+	assert.Equal(t, "sha256:cccc", sum)
+}
+
+func TestLostFragmentPins(t *testing.T) {
+	prev := &Config{
+		ConfigFragments:         []string{"s3://cfg/a.yaml", "s3://cfg/b.yaml"},
+		ConfigFragmentChecksums: []FragmentChecksum{{URI: "s3://cfg/a.yaml", Checksum: "sha256:aaaa"}, {URI: "s3://cfg/b.yaml", Checksum: "sha256:bbbb"}},
+	}
+
+	t.Run("a dropped pin on a still-listed fragment", func(t *testing.T) {
+		next := &Config{
+			ConfigFragments:         prev.ConfigFragments,
+			ConfigFragmentChecksums: []FragmentChecksum{{URI: "s3://cfg/b.yaml", Checksum: "sha256:bbbb"}},
+		}
+		assert.Equal(t, []string{"s3://cfg/a.yaml"}, lostFragmentPins(prev, next))
+	})
+
+	t.Run("a dropped pin on a dropped fragment is not a loss", func(t *testing.T) {
+		next := &Config{
+			ConfigFragments:         []string{"s3://cfg/b.yaml"},
+			ConfigFragmentChecksums: []FragmentChecksum{{URI: "s3://cfg/b.yaml", Checksum: "sha256:bbbb"}},
+		}
+		assert.Empty(t, lostFragmentPins(prev, next))
+	})
+
+	t.Run("a rotated pin is not a loss", func(t *testing.T) {
+		next := &Config{
+			ConfigFragments:         prev.ConfigFragments,
+			ConfigFragmentChecksums: []FragmentChecksum{{URI: "s3://cfg/a.yaml", Checksum: "sha256:new"}, {URI: "s3://cfg/b.yaml", Checksum: "sha256:bbbb"}},
+		}
+		assert.Empty(t, lostFragmentPins(prev, next))
+	})
+}
+
+func TestMergeBytesRoleSetsMergeByKey(t *testing.T) {
+	const issuer = "https://token.actions.githubusercontent.com"
+	c := &Config{}
+	require.NoError(t, c.MergeBytes([]byte(`
+role_session_name: "aow"
+issuers:
+  - issuer: "`+issuer+`"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+role_sets:
+  admins: ["arn:aws:iam::111111111111:role/AdminRole"]
+  dev: ["arn:aws:iam::111111111111:role/DevRole"]
+`), "yaml"))
+
+	require.NoError(t, c.MergeBytes([]byte(`{"role_sets":{"admins":["arn:aws:iam::111111111111:role/NarrowRole"]}}`), "json"))
+	assert.Equal(t, []string{"arn:aws:iam::111111111111:role/NarrowRole"}, c.RoleSets["admins"])
+	assert.Equal(t, []string{"arn:aws:iam::111111111111:role/DevRole"}, c.RoleSets["dev"],
+		"role_sets is a map: it merges by key, so an unlisted alias survives and an overlay cannot narrow the set")
+
+	require.NoError(t, c.MergeBytes([]byte("role_sets: null\n"), "yaml"))
+	assert.Len(t, c.RoleSets, 2, "role_sets: null does not clear the map either")
 }

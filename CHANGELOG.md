@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A remote config overlay that failed validation left the previous authorization index serving, with `role_mappings` already replaced by the rejected payload.** `MergeBytes` cleared the declared slices and decoded onto the live `*Config`, but `Validate()` rebuilds `effective` and the `index` only at its final lines, so an early return — `role_mappings[0]: subject and roles are required`, say — left the config half-merged: `RoleMappings` held the rejected overlay's entries, `effective` was empty, and `AuthorizeRoles` kept granting from the pre-merge index. The 3.0.2 fix widened the blast radius from one field to four. `MergeBytes` now merges into a copy and swaps it in only after `Validate()` succeeds, so a rejected overlay leaves the running config byte-for-byte as it was. `config.Provider` was already insulated (it merges into a `cloneConfig` clone); `AwsConsumer.ReadS3Configuration`, which merges onto the live config, was not. `TestMergeBytesLeavesConfigUntouchedWhenValidationFails` asserts the base grant still serves and the rejected subject does not; it fails, with `myorg/attacker-repo` in the served mappings, when the merge goes back to being in place.
+
+### Changed
+
+- The four slice-of-struct clears in `MergeBytes` are now driven by a `clearOnDeclare` table, and `TestClearOnDeclareCoversEverySliceOfStructField` reflects over `Config` and asserts the table covers every `[]struct` field with a `mapstructure` tag. The guard was four hardcoded key literals that nothing failed on when a fifth such field was added — the index-merge inheritance bug fixed in 3.0.2 would have silently returned for it. The test fails when any entry is dropped from the table.
+- A merge that drops a `config_fragment_checksums` pin for a fragment still listed in `config_fragments` is logged at `WARN`. Wholesale list replacement fails closed for grants but fails open for integrity pins: an overlay restating one pin to rotate it silently unpins the rest, and nothing rejects it, because a partially pinned `config_fragments` set is a valid configuration.
+
+### Documentation
+
+- **`docs/CONFIGURATION.md` claimed `role_mappings: null` in an overlay is deny-all. It is not** — it clears the literal mappings only, and every `role_groups` grant stays live, because the two keys are cleared independently. An operator following that sentence to revoke all grants during an incident would have believed they had shipped deny-all. Revoking all grants in an overlay requires **both** `role_mappings: null` and `role_groups: null`; the corrected text says so, and `TestMergeBytesDeclaredSlicesReplaceRatherThanIndexMerge` now covers both cases.
+- Documented the third overlay merge shape: `role_sets` is a map, so it merges by name, an alias the overlay does not mention survives untouched, and an overlay can neither narrow nor delete a `role_set` (`role_sets: null` does not clear it). The section previously described only field-wise struct merging and wholesale list replacement, which read as exhaustive.
+- Documented that restating `config_fragment_checksums` unpins every fragment it omits, and that a rejected overlay is never partially applied.
+
+### Tests
+
+- Four cases in `TestMergeBytesDeclaredSlicesReplaceRatherThanIndexMerge` were named for behavior they did not test. `role_groups entry replaces the base group` passed with the `role_groups` clear removed — its overlay group restated every field the base group set, so the index-merged result was identical; the base group now carries `conditions` the replacement omits, and the case fails without the clear. `role_groups entry omitting roles is rejected` asserted `NotContains(err, groupRole)` against an error message that never interpolates a role ARN, an assertion that could not fail; it now asserts the message positively. `a struct key still merges field-wise` never asserted `spoke_role_name`, the only field its overlay set. `role_mappings entry without roles inherits nothing` used an overlay that does specify roles, and is renamed for the replacement property it actually exercises.
+- Added `TestMergeBytesFragmentChecksumsReplaceWholesale`, `TestLostFragmentPins`, and `TestMergeBytesRoleSetsMergeByKey`, pinning the three merge behaviors the documentation corrections describe.
+
 ## [3.0.2] - 2026-08-28
 
 ### Security

@@ -613,31 +613,64 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 		return fmt.Errorf("failed to parse %s configuration: %w", format, err)
 	}
 
-	// A declared slice of structs must be cleared before decoding: mapstructure
-	// decodes element i onto the struct already at index i, so an omitted field
-	// inherits the displaced entry's value. AllKeys(), not InConfig: an explicit
-	// null must count as declared.
-	keys := v.AllKeys()
-	if slices.Contains(keys, "issuers") {
-		c.Issuers = nil
-	}
-	if slices.Contains(keys, "role_mappings") {
-		c.RoleMappings = nil
-	}
-	if slices.Contains(keys, "role_groups") {
-		c.RoleGroups = nil
-	}
-	if slices.Contains(keys, "config_fragment_checksums") {
-		c.ConfigFragmentChecksums = nil
+	// Merge into a copy: a decode or Validate failure must leave c — and the
+	// authz index still serving traffic — exactly as it was.
+	next, err := cloneConfig(c)
+	if err != nil {
+		return fmt.Errorf("failed to copy configuration: %w", err)
 	}
 
-	if err := v.Unmarshal(c, decoderOptions()...); err != nil {
+	// AllKeys(), not InConfig: an explicit null must count as declared.
+	keys := v.AllKeys()
+	for key, zero := range clearOnDeclare {
+		if slices.Contains(keys, key) {
+			zero(next)
+		}
+	}
+
+	if err := v.Unmarshal(next, decoderOptions()...); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}
 
-	reapplyEnvOverrides(c)
+	reapplyEnvOverrides(next)
 
-	return c.Validate()
+	if err := next.Validate(); err != nil {
+		return err
+	}
+
+	if dropped := lostFragmentPins(c, next); len(dropped) > 0 {
+		slog.Warn("overlay replaced config_fragment_checksums and dropped pins; those fragments are no longer integrity-checked",
+			slog.Any("fragments", dropped))
+	}
+
+	*c = *next
+	return nil
+}
+
+// clearOnDeclare zeroes a declared slice of structs before decoding, because
+// mapstructure decodes element i onto the struct already at index i and an
+// omitted field would inherit the displaced entry's value.
+var clearOnDeclare = map[string]func(*Config){
+	"issuers":                   func(c *Config) { c.Issuers = nil },
+	"role_mappings":             func(c *Config) { c.RoleMappings = nil },
+	"role_groups":               func(c *Config) { c.RoleGroups = nil },
+	"config_fragment_checksums": func(c *Config) { c.ConfigFragmentChecksums = nil },
+}
+
+// lostFragmentPins returns fragments still listed after a merge that were
+// pinned before it and are not pinned now — dropping a grant fails closed,
+// dropping an integrity pin does not.
+func lostFragmentPins(prev, next *Config) []string {
+	var dropped []string
+	for _, p := range prev.ConfigFragmentChecksums {
+		if _, pinned := next.fragmentChecksum(p.URI); pinned {
+			continue
+		}
+		if slices.Contains(next.ConfigFragments, p.URI) {
+			dropped = append(dropped, p.URI)
+		}
+	}
+	return dropped
 }
 
 // reapplyEnvOverrides re-applies AOW_* environment variables onto c after a
