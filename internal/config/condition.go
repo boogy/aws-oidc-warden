@@ -93,6 +93,26 @@ func (rc regexCache) anchor(pattern string) (*regexp.Regexp, error) {
 	return re, nil
 }
 
+// namedPatterns pairs a shorthand condition key with its patterns.
+type namedPatterns struct {
+	claim    string
+	patterns Patterns
+}
+
+// namedClaimPatterns returns the shorthand condition keys in compile order.
+// The order is fixed so error reporting is reproducible across runs.
+func (c *Condition) namedClaimPatterns() []namedPatterns {
+	return []namedPatterns{
+		{"ref", c.Ref},
+		{"ref_type", c.RefType},
+		{"event_name", c.EventName},
+		{"workflow_ref", c.WorkflowRef},
+		{"actor", c.Actor},
+		{"runner_environment", c.RunnerEnvironment},
+		{"environment", c.Environment},
+	}
+}
+
 // compileConditionAt compiles one node and recurses into its groups. path is
 // this node's location (e.g. "conditions.any_of[1].all_of[0]"), used in error
 // messages. depth is 1 for the top-level node; budget counts nodes compiled
@@ -134,26 +154,10 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 		return nil
 	}
 
-	if err := add("ref", "ref", cond.Ref); err != nil {
-		return err
-	}
-	if err := add("ref_type", "ref_type", cond.RefType); err != nil {
-		return err
-	}
-	if err := add("event_name", "event_name", cond.EventName); err != nil {
-		return err
-	}
-	if err := add("workflow_ref", "workflow_ref", cond.WorkflowRef); err != nil {
-		return err
-	}
-	if err := add("actor", "actor", cond.Actor); err != nil {
-		return err
-	}
-	if err := add("runner_environment", "runner_environment", cond.RunnerEnvironment); err != nil {
-		return err
-	}
-	if err := add("environment", "environment", cond.Environment); err != nil {
-		return err
+	for _, np := range cond.namedClaimPatterns() {
+		if err := add(np.claim, np.claim, np.patterns); err != nil {
+			return err
+		}
 	}
 
 	// Sorted iteration: reproducible error reporting across runs. A map key
