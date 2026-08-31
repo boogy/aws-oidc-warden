@@ -70,12 +70,18 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return time.Since(startTime).Milliseconds()
 	}
 
+	// deny finishes a rejected request. rec.Stage and rec.Reason must already
+	// be set; log is read at call time, so it picks up the enriched logger.
+	deny := func(msg string, ret error, attrs ...any) error {
+		rec.ProcessingMS = elapsed()
+		log.Error(msg, append([]any{slog.String("stage", rec.Stage)}, attrs...)...)
+		return r.finalizeDeny(ctx, log, cfg, rec, ret)
+	}
+
 	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
 		rec.setErrorReason("extract", err)
-		rec.ProcessingMS = elapsed()
-		log.Error("Claims extraction failed", slog.String("stage", rec.Stage), rec.reasonAttr(cfg.LogClaimValues))
-		return nil, r.finalizeDeny(ctx, log, cfg, rec, fmt.Errorf("%w: %w", ErrTokenValidationFailed, err))
+		return nil, deny("Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
 	requestedRole := requestData.Role
@@ -102,16 +108,12 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	ok, aerr := r.consumer.IsTargetAccountAllowed(requestedRole)
 	if aerr != nil {
 		rec.setErrorReason("account_check", aerr)
-		rec.ProcessingMS = elapsed()
-		log.Error("Account allow-list check failed", slog.String("stage", rec.Stage), rec.reasonAttr(cfg.LogClaimValues))
-		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrAssumeRoleFailed)
+		return nil, deny("Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
 	}
 	if !ok {
 		rec.Stage = "account_check"
 		rec.Reason = "target account not allowed"
-		rec.ProcessingMS = elapsed()
-		log.Error("Target account not allowed", slog.String("stage", rec.Stage))
-		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrAccountNotAllowed)
+		return nil, deny("Target account not allowed", ErrAccountNotAllowed)
 	}
 
 	// claims.Raw, not the typed struct: generic issuers' claims have no
@@ -151,22 +153,17 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if !allowed {
 		rec.Stage = "authorize"
 		rec.Reason = "role not allowed for this subject or its conditions are not met"
-		rec.ProcessingMS = elapsed()
-		denyAttrs := []any{slog.String("stage", rec.Stage), slog.Any("allowedRoles", roles)}
+		denyAttrs := []any{slog.Any("allowedRoles", roles)}
 		if cfg.LogClaimValues {
 			denyAttrs = append(denyAttrs, identityAttrs(claims)...)
 		}
-		log.Error("Role not allowed for this subject or its conditions are not met", denyAttrs...)
-
-		return nil, r.finalizeDeny(ctx, log, cfg, rec, ErrRoleNotPermitted)
+		return nil, deny("Role not allowed for this subject or its conditions are not met", ErrRoleNotPermitted, denyAttrs...)
 	}
 
 	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, log, claims.Subject, decision)
 	if err != nil {
 		rec.setErrorReason("session_policy", err)
-		rec.ProcessingMS = elapsed()
-		log.Error("Failed to read session policy", slog.String("stage", rec.Stage), rec.reasonAttr(cfg.LogClaimValues))
-		return nil, r.finalizeDeny(ctx, log, cfg, rec, err)
+		return nil, deny("Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
 	}
 
 	// Per-mapping override, resolved via the same mapping that authorized the
@@ -185,10 +182,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	credentials, err := r.consumer.AssumeRole(requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
-		rec.ProcessingMS = elapsed()
-		log.Error("Failed to assume role",
-			slog.String("stage", rec.Stage), rec.reasonAttr(cfg.LogClaimValues))
-		return nil, r.finalizeDeny(ctx, log, cfg, rec, fmt.Errorf("failed to assume role: %w", ErrAssumeRoleFailed))
+		return nil, deny("Failed to assume role", fmt.Errorf("failed to assume role: %w", ErrAssumeRoleFailed), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
 	// Guard the derefs so a pathological STS response can't panic the handler.
@@ -239,12 +233,16 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger
 	if sessionPolicyFile != nil {
 		policyRef = *sessionPolicyFile
 
-		sessionPolicyData, err := r.consumer.GetS3Object(cfg.S3SessionPolicyBucket, *sessionPolicyFile)
-		if err != nil {
-			log.Error("Failed to read session policy file",
+		logPolicyErr := func(msg string, err error) {
+			log.Error(msg,
 				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
+		}
+
+		sessionPolicyData, err := r.consumer.GetS3Object(cfg.S3SessionPolicyBucket, *sessionPolicyFile)
+		if err != nil {
+			logPolicyErr("Failed to read session policy file", err)
 			return nil, "", fmt.Errorf("failed to read session policy file: %w", ErrSessionPolicyAccess)
 		}
 
@@ -256,19 +254,13 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger
 
 		policyBytes, err := io.ReadAll(io.LimitReader(sessionPolicyData, 1024*1024)) // 1MB limit
 		if err != nil {
-			log.Error("Failed to read session policy data",
-				slog.String("bucket", cfg.S3SessionPolicyBucket),
-				slog.String("key", *sessionPolicyFile),
-				slog.String("error", err.Error()))
+			logPolicyErr("Failed to read session policy data", err)
 			return nil, "", fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
 		}
 
 		var jsonCheck any
 		if err := json.Unmarshal(policyBytes, &jsonCheck); err != nil {
-			log.Error("Invalid JSON in session policy file",
-				slog.String("bucket", cfg.S3SessionPolicyBucket),
-				slog.String("key", *sessionPolicyFile),
-				slog.String("error", err.Error()))
+			logPolicyErr("Invalid JSON in session policy file", err)
 			return nil, "", fmt.Errorf("invalid JSON in session policy file: %w", ErrSessionPolicyAccess)
 		}
 

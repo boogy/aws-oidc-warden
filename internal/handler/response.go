@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -67,4 +69,29 @@ func buildSuccessResponse(ctx context.Context, credentials *ststypes.Credentials
 		ProcessingMS: processingMS,
 		Data:         credentials,
 	}
+}
+
+// errorResponse renders the shared error Response into a frontend's own
+// response type via newResp(status, body). Shared by every adapter's
+// respondError.
+func errorResponse[T any](ctx context.Context, err error, statusCode int, newResp func(int, string) T) T {
+	response, statusCode := buildErrorResponse(ctx, err, statusCode)
+
+	body, jsonErr := json.Marshal(response)
+	if jsonErr != nil {
+		return newResp(http.StatusInternalServerError, fallbackErrorBody)
+	}
+	return newResp(statusCode, string(body))
+}
+
+// successResponse renders the shared success Response the same way, falling
+// back to errorResponse when the credentials themselves fail to marshal.
+func successResponse[T any](ctx context.Context, credentials *ststypes.Credentials, newResp func(int, string) T) T {
+	response := buildSuccessResponse(ctx, credentials)
+
+	body, err := json.Marshal(response)
+	if err != nil {
+		return errorResponse(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError, newResp)
+	}
+	return newResp(http.StatusOK, string(body))
 }

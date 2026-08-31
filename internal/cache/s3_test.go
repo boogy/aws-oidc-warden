@@ -55,12 +55,10 @@ func (m *mockS3) DeleteObject(_ context.Context, params *s3.DeleteObjectInput, _
 
 func newTestS3Cache(mock *mockS3) *s3Cache {
 	return &s3Cache{
-		client:       mock,
-		bucketName:   "test-bucket",
-		prefix:       "jwks",
-		memCache:     make(map[string]*s3CacheEntry),
-		maxLocalSize: 10,
-		defaultTTL:   time.Minute,
+		client:     mock,
+		bucketName: "test-bucket",
+		prefix:     "jwks",
+		local:      newLocalCache(10, time.Minute),
 	}
 }
 
@@ -102,9 +100,9 @@ func TestS3CacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 	}
 
 	// Local tier must carry the item's real expiration, not the default TTL
-	c.memCacheMu.Lock()
-	entry := c.memCache["key1"]
-	c.memCacheMu.Unlock()
+	c.local.mu.Lock()
+	entry := c.local.entries["key1"]
+	c.local.mu.Unlock()
 	if entry == nil {
 		t.Fatal("expected item in local cache after S3 hit")
 		return // unreachable: t.Fatal exits the goroutine. Keeps staticcheck SA5011 quiet.

@@ -2,14 +2,12 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
@@ -37,28 +35,18 @@ func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsCo
 
 // Handler is the Lambda function interface for Application Load Balancer
 func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.ALBTargetGroupRequest) (events.ALBTargetGroupResponse, error) {
-	ctx, cancel := h.createRequestContext(ctx, event)
-	defer cancel()
 	headers := albRequestHeaders(event)
+	ctx, cancel := h.createRequestContext(ctx, headers)
+	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
-	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
-	// slog.With, not a struct field: no adapter has a logger field; all four
-	// build from the default, which bootstrap points at the JSON handler.
-	log := slog.With(
+	log := requestLogger(ctx,
 		slog.String("requestId", requestID),
 		slog.String("path", event.Path),
 		slog.String("method", event.HTTPMethod),
 		slog.String("targetGroupArn", event.RequestContext.ELB.TargetGroupArn),
 		slog.String("userAgent", headerValue(headers, "user-agent")),
 	)
-	if sourceIP != "" {
-		log = log.With(slog.String("sourceIp", sourceIP))
-	}
-	if sourceIPFrom != "" {
-		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
-	}
 
 	oidcData := headerValue(headers, "x-amzn-oidc-data")
 	region := h.region
@@ -110,24 +98,10 @@ func albRequestHeaders(event events.ALBTargetGroupRequest) map[string]string {
 }
 
 // createRequestContext creates an enhanced context with request tracking information
-func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, event events.ALBTargetGroupRequest) (context.Context, context.CancelFunc) {
+func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, headers map[string]string) (context.Context, context.CancelFunc) {
 	// ALB has neither a request ID nor a source-IP field, so both fall back
 	// to their non-frontend paths (fresh UUID, rightmost XFF hop).
-	requestID, frontendRequestID := resolveRequestID(ctx, "")
-	headers := albRequestHeaders(event)
-	sourceIP, sourceIPFrom := clientIP("", headers)
-
-	startTime := time.Now()
-
-	ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
-	ctx = context.WithValue(ctx, FrontendRequestIDContextKey, frontendRequestID)
-	ctx = context.WithValue(ctx, StartTimeContextKey, startTime)
-	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
-	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
-	ctx = context.WithValue(ctx, UserAgentContextKey, headerValue(headers, "user-agent"))
-
-	// Caller must invoke the returned cancel (via defer).
-	return context.WithTimeout(ctx, DefaultTimeout)
+	return newRequestContext(ctx, "", "", headers, headerValue(headers, "user-agent"))
 }
 
 // unmarshalRequestData parses the ALB request body: role-only when
@@ -139,38 +113,21 @@ func (h *AwsApplicationLoadBalancer) unmarshalRequestData(body, oidcData string)
 	return ParseRequestBody(body)
 }
 
-// respondError formats a response with an error message
-func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error, statusCode int) (events.ALBTargetGroupResponse, error) {
-	response, statusCode := buildErrorResponse(ctx, err, statusCode)
-
-	jsonResponse, jsonErr := json.Marshal(response)
-	if jsonErr != nil {
-		return events.ALBTargetGroupResponse{
-			StatusCode: http.StatusInternalServerError,
-			Headers:    ResponseHeaders,
-			Body:       fallbackErrorBody,
-		}, nil
-	}
-
+// newResponse builds this frontend's response type from a status and body.
+func (h *AwsApplicationLoadBalancer) newResponse(statusCode int, body string) events.ALBTargetGroupResponse {
 	return events.ALBTargetGroupResponse{
 		StatusCode: statusCode,
 		Headers:    ResponseHeaders,
-		Body:       string(jsonResponse),
-	}, nil
+		Body:       body,
+	}
+}
+
+// respondError formats a response with an error message
+func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error, statusCode int) (events.ALBTargetGroupResponse, error) {
+	return errorResponse(ctx, err, statusCode, h.newResponse), nil
 }
 
 // respondJSON formats a successful response with credentials
 func (h *AwsApplicationLoadBalancer) respondJSON(ctx context.Context, credentials *types.Credentials) (events.ALBTargetGroupResponse, error) {
-	response := buildSuccessResponse(ctx, credentials)
-
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		return h.respondError(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError)
-	}
-
-	return events.ALBTargetGroupResponse{
-		StatusCode: http.StatusOK,
-		Headers:    ResponseHeaders,
-		Body:       string(jsonResponse),
-	}, nil
+	return successResponse(ctx, credentials, h.newResponse), nil
 }

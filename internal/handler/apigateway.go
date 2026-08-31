@@ -2,11 +2,8 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
@@ -35,11 +32,8 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	frontendRequestID, _ := ctx.Value(FrontendRequestIDContextKey).(string)
-	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
-	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
-	log := slog.With(
+	log := requestLogger(ctx,
 		slog.String("requestId", requestID),
 		slog.String("path", event.Path),
 		slog.String("method", event.HTTPMethod),
@@ -47,17 +41,6 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 		slog.String("requestTime", event.RequestContext.RequestTime),
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
-	if frontendRequestID != "" {
-		log = log.With(slog.String("frontendRequestId", frontendRequestID))
-	}
-	if sourceIP != "" {
-		log = log.With(slog.String("sourceIp", sourceIP))
-	}
-	// Only surfaced when not the platform-attested value, so an anomaly is
-	// visible without a constant "sourceIpFrom=frontend" on every line.
-	if sourceIPFrom != "" && sourceIPFrom != ipSourceFrontend {
-		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
-	}
 
 	requestData, err := h.unmarshalRequestData(event)
 	if err != nil {
@@ -76,60 +59,34 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 
 // createRequestContext creates an enhanced context with request tracking information
 func (h *AwsApiGateway) createRequestContext(ctx context.Context, event events.APIGatewayProxyRequest) (context.Context, context.CancelFunc) {
-	requestID, frontendRequestID := resolveRequestID(ctx, event.RequestContext.RequestID)
-	sourceIP, sourceIPFrom := clientIP(event.RequestContext.Identity.SourceIP, event.Headers)
-
-	startTime := time.Now()
-
-	ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
-	ctx = context.WithValue(ctx, FrontendRequestIDContextKey, frontendRequestID)
-	ctx = context.WithValue(ctx, StartTimeContextKey, startTime)
-	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
-	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
-	ctx = context.WithValue(ctx, UserAgentContextKey, event.RequestContext.Identity.UserAgent)
-
-	// Caller must invoke the returned cancel (via defer).
-	return context.WithTimeout(ctx, DefaultTimeout)
+	return newRequestContext(ctx,
+		event.RequestContext.RequestID,
+		event.RequestContext.Identity.SourceIP,
+		event.Headers,
+		event.RequestContext.Identity.UserAgent,
+	)
 }
 
 func (h *AwsApiGateway) unmarshalRequestData(event events.APIGatewayProxyRequest) (*RequestData, error) {
 	return ParseRequestBody(event.Body)
 }
 
-// respondError formats a response with an error message.
-func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode int) (events.APIGatewayProxyResponse, error) {
-	response, statusCode := buildErrorResponse(ctx, err, statusCode)
-
-	jsonResponse, jsonErr := json.Marshal(response)
-	if jsonErr != nil {
-		return events.APIGatewayProxyResponse{
-			StatusCode: http.StatusInternalServerError,
-			Headers:    ResponseHeaders,
-			Body:       fallbackErrorBody,
-		}, nil
-	}
-
+// newResponse builds this frontend's response type from a status and body.
+func (h *AwsApiGateway) newResponse(statusCode int, body string) events.APIGatewayProxyResponse {
 	return events.APIGatewayProxyResponse{
 		StatusCode:      statusCode,
 		Headers:         ResponseHeaders,
-		Body:            string(jsonResponse),
+		Body:            body,
 		IsBase64Encoded: false,
-	}, nil
+	}
+}
+
+// respondError formats a response with an error message.
+func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode int) (events.APIGatewayProxyResponse, error) {
+	return errorResponse(ctx, err, statusCode, h.newResponse), nil
 }
 
 // respondJSON formats a successful response with credentials
 func (h *AwsApiGateway) respondJSON(ctx context.Context, credentials *types.Credentials) (events.APIGatewayProxyResponse, error) {
-	response := buildSuccessResponse(ctx, credentials)
-
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		return h.respondError(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError)
-	}
-
-	return events.APIGatewayProxyResponse{
-		StatusCode:      http.StatusOK,
-		Headers:         ResponseHeaders,
-		Body:            string(jsonResponse),
-		IsBase64Encoded: false,
-	}, nil
+	return successResponse(ctx, credentials, h.newResponse), nil
 }

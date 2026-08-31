@@ -43,11 +43,9 @@ func (m *mockDynamoDB) PutItem(_ context.Context, params *dynamodb.PutItemInput,
 
 func newTestDynamoDBCache(mock *mockDynamoDB) *dynamoDBCache {
 	return &dynamoDBCache{
-		client:       mock,
-		tableName:    "test-table",
-		memCache:     make(map[string]*cacheEntry),
-		maxLocalSize: 10,
-		defaultTTL:   time.Minute,
+		client:    mock,
+		tableName: "test-table",
+		local:     newLocalCache(10, time.Minute),
 	}
 }
 
@@ -98,9 +96,9 @@ func TestDynamoDBCacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 	}
 
 	// Local tier must carry the item's real expiration, not the default TTL
-	c.memCacheMu.Lock()
-	entry := c.memCache["key1"]
-	c.memCacheMu.Unlock()
+	c.local.mu.Lock()
+	entry := c.local.entries["key1"]
+	c.local.mu.Unlock()
 	if entry == nil {
 		t.Fatal("expected item in local cache after DynamoDB hit")
 		return // unreachable: t.Fatal exits the goroutine. Keeps staticcheck SA5011 quiet.

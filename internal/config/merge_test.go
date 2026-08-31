@@ -573,3 +573,22 @@ role_sets:
 	require.NoError(t, c.MergeBytes([]byte("role_sets: null\n"), "yaml"))
 	assert.Len(t, c.RoleSets, 2, "role_sets: null does not clear the map either")
 }
+
+func TestMergeBytes_InvalidEnvValuesLeaveConfigUntouched(t *testing.T) {
+	t.Setenv("AOW_CACHE_TTL", "not-a-duration")
+	t.Setenv("AOW_CACHE_MAX_LOCAL_SIZE", "not-an-int")
+	t.Setenv("AOW_MAX_TOKEN_AGE", "10 minutes")
+
+	c := &Config{
+		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
+		RoleSessionName: "base-session",
+		MaxTokenAge:     7 * time.Minute,
+		Cache:           &Cache{Type: "memory", TTL: 5 * time.Minute, MaxLocalSize: 42},
+	}
+	require.NoError(t, c.Validate())
+	require.NoError(t, c.MergeBytes([]byte("cache:\n  ttl: 6m\n"), "yaml"))
+
+	assert.Equal(t, 6*time.Minute, c.Cache.TTL, "invalid env is skipped, so the merged value stands")
+	assert.Equal(t, 42, c.Cache.MaxLocalSize)
+	assert.Equal(t, 7*time.Minute, c.MaxTokenAge)
+}

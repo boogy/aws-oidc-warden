@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
@@ -93,6 +92,26 @@ func (rc regexCache) anchor(pattern string) (*regexp.Regexp, error) {
 	return re, nil
 }
 
+// namedPatterns pairs a shorthand condition key with its patterns.
+type namedPatterns struct {
+	claim    string
+	patterns Patterns
+}
+
+// namedClaimPatterns returns the shorthand condition keys in compile order.
+// The order is fixed so error reporting is reproducible across runs.
+func (c *Condition) namedClaimPatterns() []namedPatterns {
+	return []namedPatterns{
+		{"ref", c.Ref},
+		{"ref_type", c.RefType},
+		{"event_name", c.EventName},
+		{"workflow_ref", c.WorkflowRef},
+		{"actor", c.Actor},
+		{"runner_environment", c.RunnerEnvironment},
+		{"environment", c.Environment},
+	}
+}
+
 // compileConditionAt compiles one node and recurses into its groups. path is
 // this node's location (e.g. "conditions.any_of[1].all_of[0]"), used in error
 // messages. depth is 1 for the top-level node; budget counts nodes compiled
@@ -134,32 +153,16 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 		return nil
 	}
 
-	if err := add("ref", "ref", cond.Ref); err != nil {
-		return err
-	}
-	if err := add("ref_type", "ref_type", cond.RefType); err != nil {
-		return err
-	}
-	if err := add("event_name", "event_name", cond.EventName); err != nil {
-		return err
-	}
-	if err := add("workflow_ref", "workflow_ref", cond.WorkflowRef); err != nil {
-		return err
-	}
-	if err := add("actor", "actor", cond.Actor); err != nil {
-		return err
-	}
-	if err := add("runner_environment", "runner_environment", cond.RunnerEnvironment); err != nil {
-		return err
-	}
-	if err := add("environment", "environment", cond.Environment); err != nil {
-		return err
+	for _, np := range cond.namedClaimPatterns() {
+		if err := add(np.claim, np.claim, np.patterns); err != nil {
+			return err
+		}
 	}
 
 	// Sorted iteration: reproducible error reporting across runs. A map key
 	// with a nil value (`repository:` with nothing after it) is checked here,
 	// where presence is observable — add() treats nil as "not written".
-	for _, claim := range sortedKeys(cond.Claims) {
+	for _, claim := range utils.SortedKeys(cond.Claims) {
 		if cond.Claims[claim] == nil {
 			return errNoPatternForKey(path, claim)
 		}
@@ -167,7 +170,7 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 			return err
 		}
 	}
-	for _, claim := range sortedKeys(cond.ExplicitClaims) {
+	for _, claim := range utils.SortedKeys(cond.ExplicitClaims) {
 		if cond.ExplicitClaims[claim] == nil {
 			return errNoPatternForKey(path, "claims."+claim)
 		}
@@ -199,20 +202,6 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 // from `repository: []` ("match nothing"), but both compile to no predicate.
 func errNoPatternForKey(path, key string) error {
 	return fmt.Errorf("%s: %q has no value; a condition key with no pattern gates nothing — give it a pattern or remove the key", path, key)
-}
-
-// sortedKeys returns m's keys in lexical order, for reproducible error
-// reporting. Runs at Validate() time only.
-func sortedKeys(m map[string]Patterns) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // compileGroup compiles one boolean group's members and rejects the two shapes

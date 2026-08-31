@@ -4,11 +4,13 @@ package handler_test
 // authorization, the resolved role_session_name, and serving a request across
 // a config hot-reload.
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -268,6 +270,77 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 		"rid", slog.Default())
 	require.NoError(t, err, "tag-auth should authorize despite the failed mapping constraint")
 	assert.Equal(t, "AK", *creds.AccessKeyId)
+}
+
+// A failed IAM tag read must deny, not fall through as if the role carried no
+// disqualifying tags. GetRoleTags reaches the network (and, cross-account, an
+// spoke AssumeRole), so an error here is the expected transient case.
+func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
+	cfg := baseTagCfg(t)
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
+		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
+	}
+	exp := time.Now()
+	fc := &fakeConsumer{
+		tags:         map[string]string{"aow/repo": "acme/api"}, // would authorize if it were read
+		tagsErr:      errors.New("AccessDenied: iam:GetRole"),
+		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
+		allowAccount: true,
+	}
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", log)
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted), "want ErrRoleNotPermitted, got %v", err)
+	assert.Empty(t, fc.assumed, "FAIL-OPEN: credentials minted after the role-tag read failed")
+	assert.Contains(t, buf.String(), "could not read role tags", "the read failure must be visible in the log stream")
+	assert.Contains(t, buf.String(), "AccessDenied: iam:GetRole", "the underlying AWS error must be reported")
+}
+
+// The audit record must attribute a tag-authorized grant to tag-auth, not to an
+// explicit mapping: it is the only signal that a grant came from a role tag
+// rather than from config, and tag-auth carries no session policy.
+func TestProcessRequest_TagAuthAuditRecordsMatchedVia(t *testing.T) {
+	cfg := baseTagCfg(t)
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
+		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
+	}
+	exp := time.Now()
+	fc := &fakeConsumer{
+		tags:         map[string]string{"aow/repo": "acme/api"},
+		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
+		allowAccount: true,
+	}
+	sink := &fakeAuditSink{}
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, sink, "test")
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid-tagauth", log)
+	require.NoError(t, err)
+
+	rec := sink.last(t)
+	assert.Equal(t, "allow", rec["decision"])
+	assert.Equal(t, "tag-auth", rec["matchedVia"])
+	assert.Equal(t, "rid-tagauth", rec["requestId"])
+	assert.Equal(t, "arn:aws:iam::111111111111:role/app", rec["grantedRole"])
+	assert.True(t, strings.Contains(buf.String(), "Authorized via role tags"),
+		"the tag-auth grant must be distinguishable in the log stream too")
 }
 
 func TestProcessRequest_AccountNotAllowed(t *testing.T) {

@@ -47,17 +47,9 @@ func collectConditionClaims(c *Condition, add func(string)) {
 	if c == nil {
 		return
 	}
-	for name, named := range map[string]Patterns{
-		"ref":                c.Ref,
-		"ref_type":           c.RefType,
-		"event_name":         c.EventName,
-		"workflow_ref":       c.WorkflowRef,
-		"actor":              c.Actor,
-		"runner_environment": c.RunnerEnvironment,
-		"environment":        c.Environment,
-	} {
-		if len(named) > 0 {
-			add(name)
+	for _, np := range c.namedClaimPatterns() {
+		if len(np.patterns) > 0 {
+			add(np.claim)
 		}
 	}
 	for name := range c.Claims {

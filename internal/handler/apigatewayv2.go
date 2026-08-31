@@ -2,11 +2,8 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
@@ -35,27 +32,13 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 	ctx, cancel := h.createRequestContext(ctx, event)
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
-	frontendRequestID, _ := ctx.Value(FrontendRequestIDContextKey).(string)
-	sourceIP, _ := ctx.Value(SourceIPContextKey).(string)
-	sourceIPFrom, _ := ctx.Value(SourceIPSourceContextKey).(string)
 
-	log := slog.With(
+	log := requestLogger(ctx,
 		slog.String("requestId", requestID),
 		slog.String("path", event.RawPath),
 		slog.String("method", event.RequestContext.HTTP.Method),
 		slog.String("userAgent", event.RequestContext.HTTP.UserAgent),
 	)
-	if frontendRequestID != "" {
-		log = log.With(slog.String("frontendRequestId", frontendRequestID))
-	}
-	if sourceIP != "" {
-		log = log.With(slog.String("sourceIp", sourceIP))
-	}
-	// Only surfaced when not the platform-attested value, so an anomaly is
-	// visible without a constant "sourceIpFrom=frontend" on every line.
-	if sourceIPFrom != "" && sourceIPFrom != ipSourceFrontend {
-		log = log.With(slog.String("sourceIpFrom", sourceIPFrom))
-	}
 
 	requestData, err := ParseRoleOnlyRequestBody(event.Body)
 	if err != nil {
@@ -77,35 +60,23 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 }
 
 func (h *AwsApiGatewayV2) createRequestContext(ctx context.Context, event events.APIGatewayV2HTTPRequest) (context.Context, context.CancelFunc) {
-	requestID, frontendRequestID := resolveRequestID(ctx, event.RequestContext.RequestID)
-	sourceIP, sourceIPFrom := clientIP(event.RequestContext.HTTP.SourceIP, event.Headers)
-	ctx = context.WithValue(ctx, RequestIDContextKey, requestID)
-	ctx = context.WithValue(ctx, FrontendRequestIDContextKey, frontendRequestID)
-	ctx = context.WithValue(ctx, StartTimeContextKey, time.Now())
-	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
-	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
-	ctx = context.WithValue(ctx, UserAgentContextKey, event.RequestContext.HTTP.UserAgent)
-	return context.WithTimeout(ctx, DefaultTimeout)
+	return newRequestContext(ctx,
+		event.RequestContext.RequestID,
+		event.RequestContext.HTTP.SourceIP,
+		event.Headers,
+		event.RequestContext.HTTP.UserAgent,
+	)
+}
+
+// newResponse builds this frontend's response type from a status and body.
+func (h *AwsApiGatewayV2) newResponse(statusCode int, body string) events.APIGatewayV2HTTPResponse {
+	return events.APIGatewayV2HTTPResponse{StatusCode: statusCode, Headers: ResponseHeaders, Body: body}
 }
 
 func (h *AwsApiGatewayV2) respondError(ctx context.Context, err error, statusCode int) (events.APIGatewayV2HTTPResponse, error) {
-	response, statusCode := buildErrorResponse(ctx, err, statusCode)
-	body, jsonErr := json.Marshal(response)
-	if jsonErr != nil {
-		return events.APIGatewayV2HTTPResponse{
-			StatusCode: http.StatusInternalServerError,
-			Headers:    ResponseHeaders,
-			Body:       fallbackErrorBody,
-		}, nil
-	}
-	return events.APIGatewayV2HTTPResponse{StatusCode: statusCode, Headers: ResponseHeaders, Body: string(body)}, nil
+	return errorResponse(ctx, err, statusCode, h.newResponse), nil
 }
 
 func (h *AwsApiGatewayV2) respondJSON(ctx context.Context, credentials *types.Credentials) (events.APIGatewayV2HTTPResponse, error) {
-	response := buildSuccessResponse(ctx, credentials)
-	body, err := json.Marshal(response)
-	if err != nil {
-		return h.respondError(ctx, fmt.Errorf("failed to marshal response: %w", err), http.StatusInternalServerError)
-	}
-	return events.APIGatewayV2HTTPResponse{StatusCode: http.StatusOK, Headers: ResponseHeaders, Body: string(body)}, nil
+	return successResponse(ctx, credentials, h.newResponse), nil
 }

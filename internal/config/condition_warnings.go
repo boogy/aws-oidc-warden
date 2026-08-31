@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 // This file holds Validate()'s one advisory check: a condition key naming a
@@ -94,7 +95,7 @@ func warnUnknownClaims(claims map[string]Patterns, prefix, where string, known m
 	if underNoneOf {
 		msg = "none_of references a claim this issuer does not issue; it can never match, so this member can never veto and the mapping authorizes what it was meant to refuse — check the spelling"
 	}
-	for _, claim := range sortedKeys(claims) {
+	for _, claim := range utils.SortedKeys(claims) {
 		if !known[claim] {
 			slog.Warn(msg,
 				slog.String("mapping", where),
