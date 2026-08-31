@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	gTypes "github.com/boogy/aws-oidc-warden/internal/types"
@@ -22,21 +20,11 @@ type dynamoDBAPI interface {
 	PutItem(ctx context.Context, params *dynamodb.PutItemInput, optFns ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
 }
 
-// cacheEntry represents an entry in the local memory cache
-type cacheEntry struct {
-	value      *gTypes.JWKS // Cached JWKS value
-	expiration time.Time    // Expiration time for the cache entry
-	lastAccess time.Time    // Last access time for LRU eviction
-}
-
 // dynamoDBCache implements the Cache interface using DynamoDB
 type dynamoDBCache struct {
-	client       dynamoDBAPI            // DynamoDB client
-	tableName    string                 // DynamoDB table name
-	memCache     map[string]*cacheEntry // Local in-memory cache for frequently accessed items
-	memCacheMu   sync.Mutex             // Protects the in-memory cache
-	maxLocalSize int                    // Maximum number of items in local cache
-	defaultTTL   time.Duration          // Default TTL for cache items
+	client    dynamoDBAPI // DynamoDB client
+	tableName string      // DynamoDB table name
+	local     *localCache // Local tier in front of DynamoDB
 }
 
 // dynamoDBCacheOptions configures the DynamoDB cache behavior
@@ -82,28 +70,15 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 		opt(options)
 	}
 
-	var cfg aws.Config
-	var err error
-
-	// Use provided AWS config or load default
-	if options.awsConfig.Credentials != nil {
-		cfg = options.awsConfig
-	} else {
-		cfg, err = config.LoadDefaultConfig(context.Background(),
-			config.WithRetryMaxAttempts(Defaults.MaxRetries),
-		)
-		if err != nil {
-			slog.Error("Failed to load AWS config for DynamoDB cache", "error", err.Error())
-			return nil, fmt.Errorf("failed to load AWS config: %w", err)
-		}
+	cfg, err := resolveAWSConfig(options.awsConfig, "DynamoDB cache")
+	if err != nil {
+		return nil, err
 	}
 
 	return &dynamoDBCache{
-		client:       dynamodb.NewFromConfig(cfg),
-		tableName:    tableName,
-		memCache:     make(map[string]*cacheEntry),
-		maxLocalSize: options.maxLocalSize,
-		defaultTTL:   options.defaultTTL,
+		client:    dynamodb.NewFromConfig(cfg),
+		tableName: tableName,
+		local:     newLocalCache(options.maxLocalSize, options.defaultTTL),
 	}, nil
 }
 
@@ -128,24 +103,8 @@ func (c *dynamoDBCache) Get(key string) (*gTypes.JWKS, bool) {
 
 // getFromLocalCache checks the local memory cache
 func (c *dynamoDBCache) getFromLocalCache(key string) (*gTypes.JWKS, bool) {
-	c.memCacheMu.Lock()
-	defer c.memCacheMu.Unlock()
-
-	entry, found := c.memCache[key]
-	if !found {
-		return nil, false
-	}
-
-	// Check if the entry is expired
-	if time.Now().After(entry.expiration) {
-		delete(c.memCache, key)
-		return nil, false
-	}
-
-	// Update last access time for LRU
-	entry.lastAccess = time.Now()
-
-	return entry.value, true
+	value, lookup := c.local.get(key)
+	return value, lookup == localHit
 }
 
 // getFromDynamoDB retrieves an item from DynamoDB, returning the cached JWKS
@@ -240,7 +199,7 @@ func parseExpiration(attr types.AttributeValue) (time.Time, error) {
 // frozen when the handler returns, so a background write could be lost.
 func (c *dynamoDBCache) Set(key string, value *gTypes.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
-		ttl = c.defaultTTL
+		ttl = c.local.defaultTTL
 	}
 
 	// Store in local cache first for fast access
@@ -252,44 +211,7 @@ func (c *dynamoDBCache) Set(key string, value *gTypes.JWKS, ttl time.Duration) {
 
 // storeInLocalCache adds or updates an item in the local memory cache
 func (c *dynamoDBCache) storeInLocalCache(key string, value *gTypes.JWKS, expiration time.Time) {
-	c.memCacheMu.Lock()
-	defer c.memCacheMu.Unlock()
-
-	// If the expiration time wasn't specified, use default
-	if expiration.IsZero() {
-		expiration = time.Now().Add(c.defaultTTL)
-	}
-
-	// Evict only when adding a new key at capacity; overwrites don't grow the map
-	if _, exists := c.memCache[key]; !exists && len(c.memCache) >= c.maxLocalSize {
-		c.evictLRU()
-	}
-
-	c.memCache[key] = &cacheEntry{
-		value:      value,
-		expiration: expiration,
-		lastAccess: time.Now(),
-	}
-}
-
-// evictLRU removes the least recently used item from the local memory cache.
-// Caller must hold c.memCacheMu.
-func (c *dynamoDBCache) evictLRU() {
-	var oldestKey string
-	var oldestTime time.Time
-
-	// Find the oldest accessed item
-	for k, entry := range c.memCache {
-		if oldestTime.IsZero() || entry.lastAccess.Before(oldestTime) {
-			oldestKey = k
-			oldestTime = entry.lastAccess
-		}
-	}
-
-	// Remove it
-	if oldestKey != "" {
-		delete(c.memCache, oldestKey)
-	}
+	c.local.put(key, value, expiration)
 }
 
 // storeInDynamoDB persists an item to DynamoDB

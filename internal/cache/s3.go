@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/boogy/aws-oidc-warden/internal/types"
@@ -28,21 +26,11 @@ type s3API interface {
 
 // s3Cache implements the Cache interface using an S3 bucket
 type s3Cache struct {
-	client       s3API
-	bucketName   string
-	prefix       string
-	cleanup      bool                     // Delete expired objects discovered on read
-	memCache     map[string]*s3CacheEntry // Local in-memory cache for frequently accessed items
-	memCacheMu   sync.Mutex               // Protects the in-memory cache
-	maxLocalSize int                      // Maximum number of items in local cache
-	defaultTTL   time.Duration            // Default TTL for cache items
-}
-
-// s3CacheEntry  represents an item in the local memory cache
-type s3CacheEntry struct {
-	value      *types.JWKS
-	expiration time.Time
-	lastAccess time.Time // Used for LRU eviction
+	client     s3API
+	bucketName string
+	prefix     string
+	cleanup    bool        // Delete expired objects discovered on read
+	local      *localCache // Local tier in front of S3
 }
 
 // s3CacheItem wraps the JWKS value with metadata for caching
@@ -105,30 +93,17 @@ func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error)
 		opt(options)
 	}
 
-	var cfg aws.Config
-	var err error
-
-	// Use provided AWS config or load default
-	if options.awsConfig.Credentials != nil {
-		cfg = options.awsConfig
-	} else {
-		cfg, err = config.LoadDefaultConfig(context.Background(),
-			config.WithRetryMaxAttempts(Defaults.MaxRetries),
-		)
-		if err != nil {
-			slog.Error("Failed to load AWS config", "error", err.Error())
-			return nil, fmt.Errorf("failed to load AWS config: %w", err)
-		}
+	cfg, err := resolveAWSConfig(options.awsConfig, "S3 cache")
+	if err != nil {
+		return nil, err
 	}
 
 	return &s3Cache{
-		client:       s3.NewFromConfig(cfg),
-		bucketName:   bucketName,
-		prefix:       prefix,
-		cleanup:      options.cleanup,
-		memCache:     make(map[string]*s3CacheEntry),
-		maxLocalSize: options.maxLocalSize,
-		defaultTTL:   options.defaultTTL,
+		client:     s3.NewFromConfig(cfg),
+		bucketName: bucketName,
+		prefix:     prefix,
+		cleanup:    options.cleanup,
+		local:      newLocalCache(options.maxLocalSize, options.defaultTTL),
 	}, nil
 }
 
@@ -153,24 +128,8 @@ func (c *s3Cache) Get(key string) (*types.JWKS, bool) {
 
 // getFromLocalCache checks the local memory cache
 func (c *s3Cache) getFromLocalCache(key string) (*types.JWKS, bool) {
-	c.memCacheMu.Lock()
-	defer c.memCacheMu.Unlock()
-
-	entry, found := c.memCache[key]
-	if !found {
-		return nil, false
-	}
-
-	// Check if expired
-	if time.Now().After(entry.expiration) {
-		delete(c.memCache, key)
-		return nil, false
-	}
-
-	// Update last access time for LRU
-	entry.lastAccess = time.Now()
-
-	return entry.value, true
+	value, lookup := c.local.get(key)
+	return value, lookup == localHit
 }
 
 // getFromS3 retrieves an item from S3, returning the cached JWKS and its
@@ -241,7 +200,7 @@ func (c *s3Cache) getFromS3(key string) (*types.JWKS, time.Time, bool) {
 // when the handler returns, so a background write could be lost.
 func (c *s3Cache) Set(key string, value *types.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
-		ttl = c.defaultTTL
+		ttl = c.local.defaultTTL
 	}
 
 	// Store in local cache first for fast access
@@ -253,44 +212,7 @@ func (c *s3Cache) Set(key string, value *types.JWKS, ttl time.Duration) {
 
 // storeInLocalCache adds or updates an item in the local memory cache
 func (c *s3Cache) storeInLocalCache(key string, value *types.JWKS, expiration time.Time) {
-	c.memCacheMu.Lock()
-	defer c.memCacheMu.Unlock()
-
-	// If the expiration time wasn't specified, use default
-	if expiration.IsZero() {
-		expiration = time.Now().Add(c.defaultTTL)
-	}
-
-	// Evict only when adding a new key at capacity; overwrites don't grow the map
-	if _, exists := c.memCache[key]; !exists && len(c.memCache) >= c.maxLocalSize {
-		c.evictLRU()
-	}
-
-	c.memCache[key] = &s3CacheEntry{
-		value:      value,
-		expiration: expiration,
-		lastAccess: time.Now(),
-	}
-}
-
-// evictLRU removes the least recently used item from cache.
-// Caller must hold c.memCacheMu.
-func (c *s3Cache) evictLRU() {
-	var oldestKey string
-	var oldestTime time.Time
-
-	// Find the oldest accessed item
-	for k, entry := range c.memCache {
-		if oldestTime.IsZero() || entry.lastAccess.Before(oldestTime) {
-			oldestKey = k
-			oldestTime = entry.lastAccess
-		}
-	}
-
-	// Remove it
-	if oldestKey != "" {
-		delete(c.memCache, oldestKey)
-	}
+	c.local.put(key, value, expiration)
 }
 
 // storeInS3 persists an item to S3

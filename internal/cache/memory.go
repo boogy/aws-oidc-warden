@@ -2,23 +2,14 @@ package cache
 
 import (
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
 
+// memoryCache is the local LRU tier used on its own, with no remote store.
 type memoryCache struct {
-	data       map[string]cacheItem
-	mu         sync.Mutex
-	maxSize    int           // Maximum number of items to store
-	defaultTTL time.Duration // Default TTL for cache entries
-}
-
-type cacheItem struct {
-	value      *types.JWKS
-	expiration time.Time
-	lastAccess time.Time // For LRU eviction
+	local *localCache
 }
 
 // MemoryCacheOption is a function that configures the memory cache
@@ -28,7 +19,7 @@ type MemoryCacheOption func(*memoryCache)
 func WithMemoryMaxSize(size int) MemoryCacheOption {
 	return func(c *memoryCache) {
 		if size > 0 {
-			c.maxSize = size
+			c.local.maxSize = size
 		}
 	}
 }
@@ -37,17 +28,13 @@ func WithMemoryMaxSize(size int) MemoryCacheOption {
 func WithMemoryDefaultTTL(ttl time.Duration) MemoryCacheOption {
 	return func(c *memoryCache) {
 		if ttl > 0 {
-			c.defaultTTL = ttl
+			c.local.defaultTTL = ttl
 		}
 	}
 }
 
 func NewMemoryCache(opts ...MemoryCacheOption) Cache {
-	c := &memoryCache{
-		data:       make(map[string]cacheItem),
-		maxSize:    Defaults.MaxLocalSize,
-		defaultTTL: Defaults.TTL,
-	}
+	c := &memoryCache{local: newLocalCache(Defaults.MaxLocalSize, Defaults.TTL)}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -55,69 +42,25 @@ func NewMemoryCache(opts ...MemoryCacheOption) Cache {
 }
 
 func (c *memoryCache) Get(key string) (*types.JWKS, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	item, found := c.data[key]
-	if !found {
+	value, lookup := c.local.get(key)
+	switch lookup {
+	case localMiss:
 		slog.Debug("Cache miss", "key", key)
 		return nil, false
-	}
-
-	if time.Now().After(item.expiration) {
+	case localExpired:
 		slog.Debug("Cache entry expired", "key", key)
-		delete(c.data, key)
 		return nil, false
 	}
 
-	// Update last access time for LRU tracking
-	item.lastAccess = time.Now()
-	c.data[key] = item
-
 	slog.Debug("Cache hit", "key", key)
-	return item.value, true
+	return value, true
 }
 
 func (c *memoryCache) Set(key string, value *types.JWKS, ttl time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Use default TTL if not specified
 	if ttl <= 0 {
-		ttl = c.defaultTTL
+		ttl = c.local.defaultTTL
 	}
-
-	// Evict only when adding a new key at capacity; overwrites don't grow the map
-	if _, exists := c.data[key]; !exists && len(c.data) >= c.maxSize {
-		c.evictLRU()
-	}
-
-	c.data[key] = cacheItem{
-		value:      value,
-		expiration: time.Now().Add(ttl),
-		lastAccess: time.Now(),
-	}
+	c.local.put(key, value, time.Now().Add(ttl))
 
 	slog.Debug("Cached value", "key", key, "ttl", ttl)
-}
-
-// evictLRU removes the least recently used item from the cache.
-// Caller must hold c.mu.
-func (c *memoryCache) evictLRU() {
-	var oldestKey string
-	var oldestTime time.Time
-
-	// Find the oldest accessed item
-	for k, entry := range c.data {
-		if oldestTime.IsZero() || entry.lastAccess.Before(oldestTime) {
-			oldestKey = k
-			oldestTime = entry.lastAccess
-		}
-	}
-
-	// Remove it
-	if oldestKey != "" {
-		slog.Debug("Evicting LRU cache item", "key", oldestKey, "lastAccess", oldestTime)
-		delete(c.data, oldestKey)
-	}
 }

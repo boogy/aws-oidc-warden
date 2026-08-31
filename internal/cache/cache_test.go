@@ -78,11 +78,11 @@ func TestNewCacheMemoryHonorsConfig(t *testing.T) {
 	}
 
 	mc := c.(*memoryCache)
-	if mc.maxSize != 7 {
-		t.Fatalf("maxSize = %d, want 7 from config", mc.maxSize)
+	if mc.local.maxSize != 7 {
+		t.Fatalf("maxSize = %d, want 7 from config", mc.local.maxSize)
 	}
-	if mc.defaultTTL != 2*time.Hour {
-		t.Fatalf("defaultTTL = %v, want 2h from config", mc.defaultTTL)
+	if mc.local.defaultTTL != 2*time.Hour {
+		t.Fatalf("defaultTTL = %v, want 2h from config", mc.local.defaultTTL)
 	}
 }
 
@@ -107,11 +107,11 @@ func TestMemoryCacheConcurrentAccessRace(t *testing.T) {
 	wg.Wait()
 }
 
-// Run with -race; stresses memCache/memCacheMu concurrently.
+// Run with -race; stresses the shared local tier concurrently.
 func TestDynamoDBCacheConcurrentLocalTierRace(t *testing.T) {
 	mock := &mockDynamoDB{}
 	c := newTestDynamoDBCache(mock)
-	c.maxLocalSize = 5
+	c.local.maxSize = 5
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
@@ -134,7 +134,7 @@ func TestDynamoDBCacheConcurrentLocalTierRace(t *testing.T) {
 func TestS3CacheConcurrentLocalTierRace(t *testing.T) {
 	mock := &mockS3{}
 	c := newTestS3Cache(mock)
-	c.maxLocalSize = 5
+	c.local.maxSize = 5
 
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {

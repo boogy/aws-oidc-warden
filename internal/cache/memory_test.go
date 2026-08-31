@@ -42,9 +42,9 @@ func TestMemoryCacheTTLExpiry(t *testing.T) {
 		t.Fatal("expected miss for expired entry")
 	}
 
-	c.mu.Lock()
-	_, stillThere := c.data["key1"]
-	c.mu.Unlock()
+	c.local.mu.Lock()
+	_, stillThere := c.local.entries["key1"]
+	c.local.mu.Unlock()
 	if stillThere {
 		t.Fatal("expired entry should be removed on Get")
 	}
@@ -55,9 +55,9 @@ func TestMemoryCacheDefaultTTL(t *testing.T) {
 
 	c.Set("key1", testJWKS("kid1"), 0) // no TTL -> default
 
-	c.mu.Lock()
-	item := c.data["key1"]
-	c.mu.Unlock()
+	c.local.mu.Lock()
+	item := c.local.entries["key1"]
+	c.local.mu.Unlock()
 
 	if until := time.Until(item.expiration); until < 59*time.Minute {
 		t.Fatalf("expected ~1h TTL from default, got %v", until)
@@ -66,14 +66,14 @@ func TestMemoryCacheDefaultTTL(t *testing.T) {
 
 func TestMemoryCacheOptionsHonored(t *testing.T) {
 	c := NewMemoryCache(WithMemoryMaxSize(1)).(*memoryCache)
-	if c.maxSize != 1 {
-		t.Fatalf("maxSize = %d, want 1", c.maxSize)
+	if c.local.maxSize != 1 {
+		t.Fatalf("maxSize = %d, want 1", c.local.maxSize)
 	}
 
 	// Non-positive values fall back to defaults
 	d := NewMemoryCache(WithMemoryMaxSize(0), WithMemoryDefaultTTL(0)).(*memoryCache)
-	if d.maxSize != Defaults.MaxLocalSize || d.defaultTTL != Defaults.TTL {
-		t.Fatalf("zero options should keep defaults, got maxSize=%d ttl=%v", d.maxSize, d.defaultTTL)
+	if d.local.maxSize != Defaults.MaxLocalSize || d.local.defaultTTL != Defaults.TTL {
+		t.Fatalf("zero options should keep defaults, got maxSize=%d ttl=%v", d.local.maxSize, d.local.defaultTTL)
 	}
 }
 
