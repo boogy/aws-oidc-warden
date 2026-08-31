@@ -24,6 +24,7 @@
 | [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md)                       | Onboard any OIDC provider — discovery, `provider`, `claim_mappings`, per-issuer audiences                        |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md)                     | Full config reference — all keys, env vars, remote S3 reload, cache, session policies                            |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                       | Component diagram, request pipeline, deployment options, full build/deploy commands                              |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md)                         | Measured behaviour at thousands of repositories — request cost, load time, memory sizing, benchmarks             |
 | [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                 | Per-issuer session tags applied to every STS call, ABAC patterns                                                 |
 | [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) | Tag-based authorization, hub/spoke cross-account model                                                           |
 | [docs/LOGGING.md](docs/LOGGING.md)                                 | Structured logging, durable audit trail, `audit_required`, SIEM signals, alerts                                  |

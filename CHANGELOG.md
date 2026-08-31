@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Documentation
 
+- `docs/PERFORMANCE.md` records measured behaviour at scale: per-request cost is flat from 100 to 10,000 repositories (~500 ns, 7 allocs), wildcard subjects sharing an owner are linear, and load time and memory are linear and roughly double when every mapping carries its own conditions instead of sharing them. Includes Lambda memory sizing and the hardware the numbers came from.
 - **`docs/CONFIGURATION.md` claimed `role_mappings: null` in an overlay is deny-all. It is not** — it clears the literal mappings only, and every `role_groups` grant stays live, because the two keys are cleared independently. An operator following that sentence to revoke all grants during an incident would have believed they had shipped deny-all. Revoking all grants in an overlay requires **both** `role_mappings: null` and `role_groups: null`; the corrected text says so, and `TestMergeBytesDeclaredSlicesReplaceRatherThanIndexMerge` now covers both cases.
 - Documented the third overlay merge shape: `role_sets` is a map, so it merges by name, an alias the overlay does not mention survives untouched, and an overlay can neither narrow nor delete a `role_set` (`role_sets: null` does not clear it). The section previously described only field-wise struct merging and wholesale list replacement, which read as exhaustive.
 - Documented that restating `config_fragment_checksums` unpins every fragment it omits, and that a rejected overlay is never partially applied.
