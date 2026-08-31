@@ -400,12 +400,18 @@ When `s3_config_bucket`/`s3_config_path` are set, the process fetches and overla
 
 ### Overlay merge semantics
 
-The S3 object is an **overlay**, not a replacement: a key it does not mention keeps its base value, and a key it does mention wins (an `AOW_` env var still outranks both). Two rules matter for authorization:
+The S3 object is an **overlay**, not a replacement: a key it does not mention keeps its base value, and a key it does mention wins (an `AOW_` env var still outranks both). Three rules matter for authorization, one per shape:
 
 - **Scalars and struct keys merge field-wise.** `cross_account: {enabled: true}` keeps the base's `allowed_accounts`, `cache: {type: s3}` keeps the base's `ttl`. Restate a field in the overlay to change it.
-- **A declared list of objects replaces that list wholesale.** `issuers`, `role_mappings`, `role_groups`, and `config_fragment_checksums` are replaced entirely when the overlay declares them — entries are never merged element-by-element onto the base's, so an overlay entry never inherits a field (roles, conditions, session policy) from the base entry it displaces. Each replacement entry must therefore be complete: a `role_mappings` entry with no `roles` is a validation error, not an inherited grant. An explicit `null` counts as declared, so `role_mappings: null` clears the base's mappings (deny-all) and `issuers: null` is rejected by the zero-issuers check.
+- **A declared list of objects replaces that list wholesale.** `issuers`, `role_mappings`, `role_groups`, and `config_fragment_checksums` are replaced entirely when the overlay declares them — entries are never merged element-by-element onto the base's, so an overlay entry never inherits a field (roles, conditions, session policy) from the base entry it displaces. Each replacement entry must therefore be complete: a `role_mappings` entry with no `roles` is a validation error, not an inherited grant. An explicit `null` counts as declared, so `role_mappings: null` clears the base's `role_mappings` and `issuers: null` is rejected by the zero-issuers check.
+- **A map key merges by name, and cannot be narrowed.** `role_sets` is a map: an overlay restating `admins` replaces that one alias and leaves every alias it does not mention exactly as the base defined it. An overlay cannot delete a `role_set` — `role_sets: null` does not clear the map either — so a mapping referencing `@dev` still resolves to the base's ARNs no matter what the overlay says. Remove a `role_set` in the base config, not in the overlay.
 
-An overlay that fails validation is never served: startup fails fast, and a hot reload logs the error and keeps the last-known-good config.
+Two consequences worth stating plainly:
+
+- **`role_mappings: null` is not deny-all.** It clears the literal mappings only; every `role_groups` grant stays live, because the two keys are cleared independently. To revoke all grants in an overlay, set **both** `role_mappings: null` and `role_groups: null`.
+- **Restating `config_fragment_checksums` unpins every fragment it omits.** Wholesale replacement fails closed for grants — a dropped `role_mappings` entry authorizes nothing — but fails open here: a dropped pin leaves that fragment fetched with etag change-detection only, and nothing rejects the incomplete list, since a partially pinned `config_fragments` set is a valid configuration. An overlay that rotates one pin must restate **all** of them. A merge that drops a pin on a still-listed fragment is logged at `WARN` (`overlay replaced config_fragment_checksums and dropped pins`).
+
+An overlay that fails validation is never served, and never partially applied: the merge runs on a copy and is swapped in only after `Validate()` succeeds, so a rejected overlay leaves the running config — and the authorization index serving requests — byte-for-byte as it was. Startup fails fast; a hot reload logs the error and keeps the last-known-good config.
 
 ## Configuration File Format
 
