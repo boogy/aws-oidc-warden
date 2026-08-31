@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- One authorization traversal per request instead of three. `ProcessRequest` ran `AuthorizeRoles`, `FindSessionPolicy` and `FindRoleSessionName` over the same inputs, each re-matching every subject regex and condition tree. `Config.Authorize` now returns a `Decision` computed in one walk, retiring `findAuthorizingMapping` and the duplicate matching loop it held. On a 2000-mapping config a decision drops from 1556 ns / 19 allocs to 514 ns / 7 allocs.
+- `Validate()` compiles each distinct anchored pattern once instead of once per mapping, via a `regexCache` shared across the pass. On a 5000-mapping config: 76.6 ms → 20.7 ms, 181 MB → 37 MB. Costs ~4% on 16-way parallel authorization from matcher-pool contention; Lambda serves one request per environment, so it does not apply there.
 - The four slice-of-struct clears in `MergeBytes` are now driven by a `clearOnDeclare` table, and `TestClearOnDeclareCoversEverySliceOfStructField` reflects over `Config` and asserts the table covers every `[]struct` field with a `mapstructure` tag. The guard was four hardcoded key literals that nothing failed on when a fifth such field was added — the index-merge inheritance bug fixed in 3.0.2 would have silently returned for it. The test fails when any entry is dropped from the table.
 - A merge that drops a `config_fragment_checksums` pin for a fragment still listed in `config_fragments` is logged at `WARN`. Wholesale list replacement fails closed for grants but fails open for integrity pins: an overlay restating one pin to rotate it silently unpins the rest, and nothing rejects it, because a partially pinned `config_fragments` set is a valid configuration.
 
@@ -24,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Tests
 
 - Four cases in `TestMergeBytesDeclaredSlicesReplaceRatherThanIndexMerge` were named for behavior they did not test. `role_groups entry replaces the base group` passed with the `role_groups` clear removed — its overlay group restated every field the base group set, so the index-merged result was identical; the base group now carries `conditions` the replacement omits, and the case fails without the clear. `role_groups entry omitting roles is rejected` asserted `NotContains(err, groupRole)` against an error message that never interpolates a role ARN, an assertion that could not fail; it now asserts the message positively. `a struct key still merges field-wise` never asserted `spoke_role_name`, the only field its overlay set. `role_mappings entry without roles inherits nothing` used an overlay that does specify roles, and is renamed for the replacement property it actually exercises.
+- `internal/config/scale_bench_test.go` covers the single-org shape: thousands of literal `owner/repo` subjects, wildcard team patterns under one owner, `Validate()`, and a parallel decision benchmark guarding the shared-regex memo. The existing `BenchmarkAuthorizeRoles` measures 500 distinct owners, where the owner bucket already makes lookup O(1).
 - Added `TestMergeBytesFragmentChecksumsReplaceWholesale`, `TestLostFragmentPins`, and `TestMergeBytesRoleSetsMergeByKey`, pinning the three merge behaviors the documentation corrections describe.
 
 ## [3.0.2] - 2026-08-28
