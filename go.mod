@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/aws/aws-lambda-go v1.54.0
-	github.com/aws/aws-sdk-go-v2 v1.43.7
+	github.com/aws/aws-sdk-go-v2 v1.45.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.38
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.37
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.63.4
@@ -33,7 +33,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.5.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.33.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.38.7 // indirect
-	github.com/aws/smithy-go v1.28.0 // indirect
+	github.com/aws/smithy-go v1.28.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
