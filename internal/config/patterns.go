@@ -9,9 +9,10 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Patterns is a list of regex patterns for ONE claim, OR'd together; decodes
-// from a scalar or a list. Nil means the key was absent (no predicate); an
-// explicit empty list is rejected by compileConditionAt as gating nothing.
+// Patterns is a list of regex patterns OR'd together — one claim's patterns in
+// a condition, or a role_mapping's subjects; decodes from a scalar or a list.
+// Nil means the key was absent; an explicit empty list is rejected as gating
+// nothing (compileConditionAt for conditions, appendEffective for subjects).
 type Patterns []string
 
 // patternsType is the decode target the mapstructure hook below keys on.
@@ -30,7 +31,7 @@ func (p *Patterns) UnmarshalJSON(data []byte) error {
 	}
 	var one string
 	if err := json.Unmarshal(data, &one); err != nil {
-		return fmt.Errorf("condition pattern must be a string or a list of strings: %w", err)
+		return fmt.Errorf("pattern must be a string or a list of strings: %w", err)
 	}
 	*p = Patterns{one}
 	return nil
@@ -45,8 +46,8 @@ func stringToPatternsHookFunc() mapstructure.DecodeHookFuncType {
 		if to != patternsType {
 			return data, nil
 		}
-		// Empty key (`ref:`) -> empty Patterns, which the compiler rejects as
-		// gating nothing; reached only because decoderOptions sets DecodeNil.
+		// Empty key (`ref:`, `subject:`) -> empty Patterns, which the compiler
+		// rejects as gating nothing; reached only because DecodeNil is set.
 		if v := reflect.ValueOf(data); !v.IsValid() || ((v.Kind() == reflect.Slice || v.Kind() == reflect.Map) && v.IsNil()) {
 			return Patterns{}, nil
 		}

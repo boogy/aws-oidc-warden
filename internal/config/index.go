@@ -35,10 +35,10 @@ func buildAuthzIndex(mappings []*RoleMapping) authzIndex {
 			idx[m.Issuer] = bucket
 		}
 
-		owner, class := classifySubject(m.Subject, m.compiledPattern)
+		owner, class := classifySubject(m.resolvedSubject, m.compiledPattern)
 		switch class {
 		case subjectExact:
-			bucket.exact[m.Subject] = append(bucket.exact[m.Subject], m)
+			bucket.exact[m.resolvedSubject] = append(bucket.exact[m.resolvedSubject], m)
 		case subjectOwner:
 			bucket.byOwner[owner] = append(bucket.byOwner[owner], m)
 		default:

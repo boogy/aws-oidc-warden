@@ -361,7 +361,7 @@ func tagAuthScopingCfg(tagAuthEnabled bool, m RoleMapping) *Config {
 // way into that role and nothing in the config says so.
 func TestValidate_WarnsWhenTagAuthCanBypassSessionPolicy(t *testing.T) {
 	cfg := tagAuthScopingCfg(true, RoleMapping{
-		Subject:       "org/repo",
+		Subject:       Patterns{"org/repo"},
 		Roles:         []string{"arn:aws:iam::111111111111:role/deploy"},
 		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
 	})
@@ -390,7 +390,7 @@ func TestValidate_WarnsWhenTagAuthCanBypassSessionPolicy(t *testing.T) {
 // falls back to the global name, so CloudTrail attribution silently changes.
 func TestValidate_WarnsWhenTagAuthCanBypassRoleSessionName(t *testing.T) {
 	cfg := tagAuthScopingCfg(true, RoleMapping{
-		Subject:         "org/repo",
+		Subject:         Patterns{"org/repo"},
 		Roles:           []string{"arn:aws:iam::111111111111:role/deploy"},
 		RoleSessionName: "gha-org-repo",
 	})
@@ -413,7 +413,7 @@ func TestValidate_WarnsWhenTagAuthCanBypassRoleSessionName(t *testing.T) {
 // a warning every config emits is a warning operators learn to ignore.
 func TestValidate_NoTagAuthWarningWhenTagAuthDisabled(t *testing.T) {
 	cfg := tagAuthScopingCfg(false, RoleMapping{
-		Subject:       "org/repo",
+		Subject:       Patterns{"org/repo"},
 		Roles:         []string{"arn:aws:iam::111111111111:role/deploy"},
 		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
 	})
@@ -434,7 +434,7 @@ func TestValidate_NoTagAuthWarningWhenTagAuthDisabled(t *testing.T) {
 // An unscoped mapping has nothing for tag-auth to bypass.
 func TestValidate_NoTagAuthWarningForUnscopedMapping(t *testing.T) {
 	cfg := tagAuthScopingCfg(true, RoleMapping{
-		Subject: "org/repo",
+		Subject: Patterns{"org/repo"},
 		Roles:   []string{"arn:aws:iam::111111111111:role/deploy"},
 	})
 

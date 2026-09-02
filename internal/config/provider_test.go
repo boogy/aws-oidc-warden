@@ -306,8 +306,8 @@ role_mappings:
 
 	cfg := p.Get()
 	require.Len(t, cfg.RoleMappings, 2)
-	assert.Equal(t, "owner/frag1-repo", cfg.RoleMappings[0].Subject)
-	assert.Equal(t, "owner/frag2-repo", cfg.RoleMappings[1].Subject)
+	assert.Equal(t, Patterns{"owner/frag1-repo"}, cfg.RoleMappings[0].Subject)
+	assert.Equal(t, Patterns{"owner/frag2-repo"}, cfg.RoleMappings[1].Subject)
 
 	matched, roles := cfg.AuthorizeRoles(base.Issuers[0].Issuer, "owner/frag2-repo", map[string]any{})
 	assert.True(t, matched)
@@ -423,7 +423,7 @@ role_mappings:
 	p := NewProvider(base, time.Minute, "yaml", noopBaseFetch, WithFragmentFetcher(store.fetch))
 	require.NoError(t, p.Refresh(context.Background()))
 	require.Len(t, p.Get().RoleMappings, 1)
-	assert.Equal(t, "owner/v1", p.Get().RoleMappings[0].Subject)
+	assert.Equal(t, Patterns{"owner/v1"}, p.Get().RoleMappings[0].Subject)
 
 	store.set(uri, []byte(`
 role_mappings:
@@ -432,7 +432,7 @@ role_mappings:
 `))
 	require.NoError(t, p.Refresh(context.Background()))
 	require.Len(t, p.Get().RoleMappings, 1)
-	assert.Equal(t, "owner/v2", p.Get().RoleMappings[0].Subject)
+	assert.Equal(t, Patterns{"owner/v2"}, p.Get().RoleMappings[0].Subject)
 	assert.Equal(t, 2, store.fetches[uri])
 }
 
@@ -538,7 +538,7 @@ role_mappings:
 	p.now = func() time.Time { return time.Now().Add(2 * time.Minute) }
 	p.MaybeRefresh(context.Background())
 	require.Len(t, p.Get().RoleMappings, 1)
-	assert.Equal(t, "owner/repo2", p.Get().RoleMappings[0].Subject)
+	assert.Equal(t, Patterns{"owner/repo2"}, p.Get().RoleMappings[0].Subject)
 }
 
 // TestProvider_FragmentReload_Race exercises concurrent MaybeRefresh (with

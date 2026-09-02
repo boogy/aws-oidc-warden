@@ -626,7 +626,7 @@ func apigwOpaqueParityFixture(t *testing.T) (cfg *config.Config, privateKey *rsa
 			RequiredClaims: []string{"project_path"},
 		}},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "grp/prj",
+			Subject: config.Patterns{"grp/prj"},
 			Roles:   []string{"arn:aws:iam::123456789012:role/deploy"},
 			Conditions: &config.Condition{NoneOf: []*config.Condition{
 				{Claims: map[string]config.Patterns{"groups": {"break-glass"}}},
@@ -742,7 +742,7 @@ func TestApigwPositiveConditionMatchesOpaqueClaimVerbatim(t *testing.T) {
 			RequiredClaims: []string{"project_path"},
 		}},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "grp/prj",
+			Subject: config.Patterns{"grp/prj"},
 			Roles:   []string{"arn:aws:iam::123456789012:role/deploy"},
 			Conditions: &config.Condition{
 				Claims: map[string]config.Patterns{"groups": {regexp.QuoteMeta("[break-glass]")}},

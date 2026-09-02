@@ -484,7 +484,7 @@ role_mappings:
 	require.Error(t, err)
 
 	require.Len(t, c.RoleMappings, 1)
-	assert.Equal(t, "myorg/admin-repo", c.RoleMappings[0].Subject, "a rejected overlay must not land in the served config")
+	assert.Equal(t, Patterns{"myorg/admin-repo"}, c.RoleMappings[0].Subject, "a rejected overlay must not land in the served config")
 
 	matched, roles := c.AuthorizeRoles(issuer, "myorg/admin-repo", map[string]any{"ref": "refs/heads/main"})
 	require.True(t, matched, "the last-known-good grants must keep serving")

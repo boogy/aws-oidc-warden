@@ -57,7 +57,7 @@ var (
 // RoleMapping binds a subject (pattern) to a set of assumable roles, scoped
 // to a single issuer, optionally gated by conditions on the raw claims.
 type RoleMapping struct {
-	Subject           string     `mapstructure:"subject"             json:"subject"`                       // Subject pattern (e.g., "owner/repo"); provider-defined shape
+	Subject           Patterns   `mapstructure:"subject"             json:"subject"`                       // One subject pattern or a list of them (OR'd); each element anchored and validated independently
 	Issuer            string     `mapstructure:"issuer"              json:"issuer,omitempty"`              // Trusted issuer this mapping applies to; resolved at Validate() (see resolveIssuer)
 	SessionPolicy     string     `mapstructure:"session_policy"      json:"session_policy,omitempty"`      // Inline session policy (JSON string)
 	SessionPolicyFile string     `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"` // S3 session policy file
@@ -65,9 +65,11 @@ type RoleMapping struct {
 	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`          // Conditions for role assumption
 	RoleSessionName   string     `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`   // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
 
-	// Cached compiled pattern and declaration order (not serialized). order
-	// preserves first-match-wins semantics for FindSessionPolicy once
-	// mappings are bucketed into the index (see index.go).
+	// Resolved state, rebuilt by Validate() and not serialized. An effective
+	// mapping carries exactly ONE resolvedSubject (Validate() fans a Subject
+	// list out into one mapping per element); index.go and the warnings read it,
+	// never the list. order preserves first-match-wins for FindSessionPolicy.
+	resolvedSubject string         `mapstructure:"-" json:"-"`
 	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
 	order           int            `mapstructure:"-" json:"-"`
 }
@@ -882,7 +884,11 @@ func (c *Config) Validate() error {
 	// effective is rebuilt from scratch every Validate() call so repeated
 	// validation (e.g. a hot-reload clone) is idempotent: role_groups always
 	// re-expand from their source, never from a previously-expanded state.
-	c.effective = make([]*RoleMapping, 0, len(c.RoleMappings))
+	effectiveHint := 0
+	for i := range c.RoleMappings {
+		effectiveHint += len(c.RoleMappings[i].Subject)
+	}
+	c.effective = make([]*RoleMapping, 0, effectiveHint)
 
 	// Claim vocabulary per issuer, for the unknown-claim warning below. Built
 	// once here rather than per mapping.
@@ -895,33 +901,33 @@ func (c *Config) Validate() error {
 
 	patterns := make(regexCache)
 
-	appendEffective := func(m RoleMapping, source string, i int) error {
-		if m.Subject == "" || len(m.Roles) == 0 {
-			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
-		}
+	// appendOne resolves ONE subject into an effective mapping; m is by value,
+	// so these writes are private to this element.
+	appendOne := func(m RoleMapping, subject, source string, i int) error {
 		if m.RoleSessionName != "" {
 			if err := validateRoleSessionName(m.RoleSessionName); err != nil {
-				return fmt.Errorf("%s[%d] (%s): role_session_name: %w", source, i, m.Subject, err)
+				return fmt.Errorf("%s[%d] (%s): role_session_name: %w", source, i, subject, err)
 			}
 		}
 		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
+			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
 		}
 		m.Issuer = resolvedIssuer
 
 		roles, err := c.resolveRoleSet(m.Roles)
 		if err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
+			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
 		}
 		if len(roles) == 0 {
-			return fmt.Errorf("%s[%d] (%s): subject and roles are required", source, i, m.Subject)
+			return fmt.Errorf("%s[%d] (%s): subject and roles are required", source, i, subject)
 		}
 		m.Roles = roles
 
-		m.compiledPattern, err = compileAnchoredSubject(m.Subject, patterns)
+		m.resolvedSubject = subject
+		m.compiledPattern, err = compileAnchoredSubject(subject, patterns)
 		if err != nil {
-			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, m.Subject, err)
+			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, subject, err)
 		}
 
 		// Clone into effective-private memory BEFORE compiling: compileCondition
@@ -930,16 +936,39 @@ func (c *Config) Validate() error {
 		// would race a concurrent reader and could transiently pass all conditions.
 		m.Conditions = cloneCondition(m.Conditions)
 		if err := compileCondition(m.Conditions, patterns); err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, m.Subject, err)
+			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
 		}
 
 		// Advisory only, and deliberately after compilation: a claim name the
 		// issuer never mints is a config smell, never an authorization failure.
 		// See condition_warnings.go.
-		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, m.Subject), knownClaims[m.Issuer])
+		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, subject), knownClaims[m.Issuer])
 
 		m.order = len(c.effective)
 		c.effective = append(c.effective, &m)
+		return nil
+	}
+
+	// appendEffective fans m.Subject out in declaration order, so first-match-wins
+	// still means first-declared.
+	//
+	// m.Subject must be treated as READ-ONLY: m is by value, so it is a slice
+	// header aliasing the declared config, which a config_fragment shares across
+	// hot-reload snapshots. Never sort or dedup it in place.
+	appendEffective := func(m RoleMapping, source string, i int) error {
+		if len(m.Subject) == 0 || len(m.Roles) == 0 {
+			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
+		}
+		for si, subject := range m.Subject {
+			// A repeat within one entry gates nothing new; across entries it is
+			// legal (distinct roles/conditions/policies).
+			if slices.Contains(m.Subject[:si], subject) {
+				return fmt.Errorf("%s[%d]: duplicate subject %q", source, i, subject)
+			}
+			if err := appendOne(m, subject, source, i); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 
@@ -956,7 +985,7 @@ func (c *Config) Validate() error {
 		}
 		for si, subject := range group.Subjects {
 			m := RoleMapping{
-				Subject:           subject,
+				Subject:           Patterns{subject},
 				Issuer:            group.Issuer,
 				Roles:             group.Defaults.Roles,
 				Conditions:        group.Defaults.Conditions,
@@ -1138,7 +1167,13 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 // regex, rejecting bare wildcards (bareWildcards) like compileAnchoredCondition:
 // a subject is the primary identity gate, so ".*" would grant every subject
 // of the bound issuer.
+//
+// The empty guard lives here, not in the caller, so every subject path shares
+// it: "" anchors to "^(?:)$", which reads as a gate but matches nothing real.
 func compileAnchoredSubject(pattern string, rc regexCache) (*regexp.Regexp, error) {
+	if pattern == "" {
+		return nil, errors.New("subject pattern must not be empty")
+	}
 	if bareWildcards[pattern] {
 		return nil, fmt.Errorf("subject pattern %q is too permissive; it matches every subject for this issuer — use a specific pattern", pattern)
 	}
@@ -1200,8 +1235,8 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 			"the session policy will NOT be applied when both match",
 			slog.String("issuer", issuer),
 			slog.String("role", role),
-			slog.String("winningSubject", g.lowest.Subject),
-			slog.String("ignoredPolicySubject", g.scoped.Subject))
+			slog.String("winningSubject", g.lowest.resolvedSubject),
+			slog.String("ignoredPolicySubject", g.scoped.resolvedSubject))
 	}
 }
 
@@ -1241,7 +1276,7 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 				"that the tag-auth path is unscoped.",
 				slog.String("role", role),
 				slog.String("scopedBy", scopedBy),
-				slog.String("subject", m.Subject))
+				slog.String("subject", m.resolvedSubject))
 		}
 	}
 }

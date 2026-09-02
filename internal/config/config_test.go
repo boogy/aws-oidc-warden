@@ -101,7 +101,7 @@ cache_type: "memory"
 	assert.Equal(t, []string{"test-audience"}, cfg.Issuers[0].Audiences)
 	assert.Equal(t, "test-session", cfg.RoleSessionName)
 	assert.Equal(t, 2, len(cfg.RoleMappings))
-	assert.Equal(t, "org/repo1", cfg.RoleMappings[0].Subject)
+	assert.Equal(t, Patterns{"org/repo1"}, cfg.RoleMappings[0].Subject)
 	assert.Equal(t, "policy1", cfg.RoleMappings[0].SessionPolicy)
 	assert.Equal(t, []string{"role1", "role2"}, cfg.RoleMappings[0].Roles)
 }
@@ -142,7 +142,7 @@ func TestValidate(t *testing.T) {
 				RoleSessionName: "session",
 				RoleMappings: []RoleMapping{
 					{
-						Subject:       "org/repo",
+						Subject:       Patterns{"org/repo"},
 						SessionPolicy: "policy",
 						Roles:         []string{"role1"},
 					},
@@ -157,7 +157,7 @@ func TestValidate(t *testing.T) {
 				RoleSessionName: "session",
 				RoleMappings: []RoleMapping{
 					{
-						Subject:       "org/repo",
+						Subject:       Patterns{"org/repo"},
 						SessionPolicy: "policy",
 						Roles:         []string{"role1"},
 					},
@@ -348,7 +348,7 @@ func TestValidate(t *testing.T) {
 				RoleSessionName: "session",
 				RoleMappings: []RoleMapping{
 					{
-						Subject: "org/repo",
+						Subject: Patterns{"org/repo"},
 						Roles:   []string{"role1"},
 					},
 				},
@@ -362,7 +362,7 @@ func TestValidate(t *testing.T) {
 				RoleSessionName: "session",
 				RoleMappings: []RoleMapping{
 					{
-						Subject:       "org/repo",
+						Subject:       Patterns{"org/repo"},
 						SessionPolicy: "policy",
 						Roles:         []string{},
 					},
@@ -500,12 +500,12 @@ func TestFindSessionPolicy(t *testing.T) {
 		RoleSessionName: "session",
 		RoleMappings: []RoleMapping{
 			{
-				Subject:       "org/repo1",
+				Subject:       Patterns{"org/repo1"},
 				SessionPolicy: "policy1",
 				Roles:         []string{"role1"},
 			},
 			{
-				Subject:       "org/repo2.*",
+				Subject:       Patterns{"org/repo2.*"},
 				SessionPolicy: "policy2",
 				Roles:         []string{"role2"},
 			},
@@ -569,15 +569,15 @@ func TestAuthorizeRoles(t *testing.T) {
 		RoleSessionName: "session",
 		RoleMappings: []RoleMapping{
 			{
-				Subject: "org/repo1",
+				Subject: Patterns{"org/repo1"},
 				Roles:   []string{"role1", "role2"},
 			},
 			{
-				Subject: "org/repo2.*",
+				Subject: Patterns{"org/repo2.*"},
 				Roles:   []string{"role3"},
 			},
 			{
-				Subject: "org/shared-.*",
+				Subject: Patterns{"org/shared-.*"},
 				Roles:   []string{"shared-role"},
 			},
 		},
@@ -966,8 +966,8 @@ func TestFindRoleSessionName_ComesFromAuthorizingMapping(t *testing.T) {
 		RoleSessionName: "aws-oidc-warden",
 		RoleMappings: []RoleMapping{
 			// Declared first (lowest order) but does NOT grant the role below.
-			{Subject: "acme/.+", Roles: []string{"arn:aws:iam::111122223333:role/other"}},
-			{Subject: "acme/api", Roles: []string{"arn:aws:iam::111122223333:role/deploy"},
+			{Subject: Patterns{"acme/.+"}, Roles: []string{"arn:aws:iam::111122223333:role/other"}},
+			{Subject: Patterns{"acme/api"}, Roles: []string{"arn:aws:iam::111122223333:role/deploy"},
 				RoleSessionName: "acme-api-deploy"},
 		},
 	}
@@ -995,7 +995,7 @@ func TestFindRoleSessionName_RespectsConditions(t *testing.T) {
 		Issuers:         singleIssuer(iss, "sts.amazonaws.com"),
 		RoleSessionName: "aws-oidc-warden",
 		RoleMappings: []RoleMapping{
-			{Subject: "acme/api", Roles: []string{role}, RoleSessionName: "prod-only",
+			{Subject: Patterns{"acme/api"}, Roles: []string{role}, RoleSessionName: "prod-only",
 				Conditions: &Condition{Claims: map[string]Patterns{"ref": {"refs/heads/main"}}}},
 		},
 	}
@@ -1024,7 +1024,7 @@ func TestRoleSessionName_RejectedAtValidate(t *testing.T) {
 				Issuers:         singleIssuer("https://issuer.com", "aud"),
 				RoleSessionName: "aws-oidc-warden",
 				RoleMappings: []RoleMapping{{
-					Subject: "acme/api", Roles: []string{"arn:aws:iam::111122223333:role/deploy"},
+					Subject: Patterns{"acme/api"}, Roles: []string{"arn:aws:iam::111122223333:role/deploy"},
 					RoleSessionName: tc.sessionName,
 				}},
 			}

@@ -22,7 +22,7 @@ import (
 func condCfg(t *testing.T, c *Condition) *Config {
 	t.Helper()
 	return vcfg(t, []RoleMapping{{
-		Subject:    "acme/app",
+		Subject:    Patterns{"acme/app"},
 		Roles:      []string{"arn:aws:iam::111111111111:role/app"},
 		Conditions: c,
 	}})
@@ -275,7 +275,7 @@ func TestNestedGroups(t *testing.T) {
 func TestGroupsGateSessionPolicyAndSessionName(t *testing.T) {
 	const role = "arn:aws:iam::111111111111:role/app"
 	cfg := vcfg(t, []RoleMapping{{
-		Subject:         "acme/app",
+		Subject:         Patterns{"acme/app"},
 		Roles:           []string{role},
 		SessionPolicy:   `{"Version":"2012-10-17","Statement":[]}`,
 		RoleSessionName: "acme-app",
@@ -315,7 +315,7 @@ func validateCond(c *Condition) error {
 		DefaultIssuer:   vIss,
 		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{{
-			Subject:    "acme/app",
+			Subject:    Patterns{"acme/app"},
 			Roles:      []string{"arn:aws:iam::111111111111:role/app"},
 			Conditions: c,
 		}},
@@ -442,7 +442,7 @@ func TestNestedConditionsSurviveJSONClone(t *testing.T) {
 		DefaultIssuer:   vIss,
 		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{{
-			Subject: "acme/app",
+			Subject: Patterns{"acme/app"},
 			Roles:   []string{role},
 			Conditions: &Condition{
 				AnyOf:          []*Condition{{EventName: Patterns{"push"}}, {EventName: Patterns{"workflow_dispatch"}}},
@@ -545,7 +545,7 @@ func TestValidate_RejectsTooManyNodes(t *testing.T) {
 func TestNestedConditionIndexParity(t *testing.T) {
 	mappings := []RoleMapping{
 		{ // exact-literal subject bucket
-			Subject: "acme/app",
+			Subject: Patterns{"acme/app"},
 			Roles:   []string{"arn:aws:iam::111111111111:role/app"},
 			Conditions: &Condition{AnyOf: []*Condition{
 				{EventName: Patterns{"push"}, Ref: Patterns{"refs/heads/main"}},
@@ -553,7 +553,7 @@ func TestNestedConditionIndexParity(t *testing.T) {
 			}},
 		},
 		{ // byOwner bucket
-			Subject: `acme/service-.+`,
+			Subject: Patterns{`acme/service-.+`},
 			Roles:   []string{"arn:aws:iam::111111111111:role/service"},
 			Conditions: &Condition{
 				RefType: Patterns{"tag"},
@@ -561,7 +561,7 @@ func TestNestedConditionIndexParity(t *testing.T) {
 			},
 		},
 		{ // "any" bucket (top-level alternation has no literal prefix)
-			Subject: `acme/app|other/app`,
+			Subject: Patterns{`acme/app|other/app`},
 			Roles:   []string{"arn:aws:iam::111111111111:role/either"},
 			Conditions: &Condition{AllOf: []*Condition{
 				{EventName: Patterns{"push"}},
@@ -833,7 +833,7 @@ func TestValidate_WarnsOnUnknownGitHubClaim(t *testing.T) {
 			DefaultIssuer:   issuer.Issuer,
 			RoleSessionName: "test",
 			RoleMappings: []RoleMapping{{
-				Subject:    "acme/app",
+				Subject:    Patterns{"acme/app"},
 				Roles:      []string{"arn:aws:iam::111111111111:role/app"},
 				Conditions: cond,
 			}},
@@ -1035,7 +1035,7 @@ func TestWorkflowRefConstraint_Anchored(t *testing.T) {
 				Issuers:         singleIssuer(iss, "sts.amazonaws.com"),
 				RoleSessionName: "test",
 				RoleMappings: []RoleMapping{{
-					Subject:    "org/repo",
+					Subject:    Patterns{"org/repo"},
 					Roles:      []string{"arn:aws:iam::111111111111:role/app"},
 					Conditions: &Condition{WorkflowRef: Patterns{tc.workflowRef}},
 				}},

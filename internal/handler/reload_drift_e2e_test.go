@@ -168,7 +168,7 @@ func driftGenA(issuer string) *config.Config {
 		Cache:                &config.Cache{TTL: 10 * time.Minute},
 		AllowInsecureIssuers: true,
 		RoleMappings: []config.RoleMapping{{
-			Subject: "owner/repo",
+			Subject: config.Patterns{"owner/repo"},
 			Roles:   []string{driftAllowedRole},
 		}},
 	}
