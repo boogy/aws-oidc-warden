@@ -383,8 +383,25 @@ func TestValidate_WarnsWhenTagAuthCanBypassSessionPolicy(t *testing.T) {
 	}
 }
 
-// A per-mapping role_session_name is bypassed the same way: the tag-auth path
-// falls back to the global name, so CloudTrail attribution silently changes.
+// A multi-subject entry fans out to N mappings, but the warning is deduped by
+// role, so consolidating entries into a list must not multiply or silence it.
+func TestValidate_WarnsOncePerRoleForMultiSubjectEntry(t *testing.T) {
+	cfg := tagAuthScopingCfg(true, RoleMapping{
+		Subject:       Patterns{"org/repo", "org/other", "org/third"},
+		Roles:         []string{"arn:aws:iam::111111111111:role/deploy"},
+		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
+	})
+
+	out := captureWarnings(t, func() {
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	if n := strings.Count(out, "tag_auth is enabled and this role is scoped"); n != 1 {
+		t.Errorf("want exactly 1 bypass warning for the role, got %d; out: %s", n, out)
+	}
+}
 
 // A per-mapping role_session_name is bypassed the same way: the tag-auth path
 // falls back to the global name, so CloudTrail attribution silently changes.

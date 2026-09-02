@@ -276,6 +276,39 @@ func TestMergeBytesExplicitNullIssuersRejectsSeed(t *testing.T) {
 // mapping declared first must not shadow the narrow mapping that granted the
 // role — that is the bug FindSessionPolicy's doc comment describes.
 
+// An overlay declaring a shorter subject list must replace it outright: an
+// index merge would leave the base's extra subjects authorized (the 3.0.2 bug
+// class, now reachable per-element rather than per-entry).
+func TestMergeBytesSubjectListReplacesRatherThanIndexMerges(t *testing.T) {
+	c := &Config{}
+	require.NoError(t, c.MergeBytes([]byte(`
+role_session_name: "aow"
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+role_mappings:
+  - subject: ["myorg/a", "myorg/b", "myorg/c"]
+    roles: ["arn:aws:iam::111111111111:role/Role"]
+`), "yaml"))
+
+	require.NoError(t, c.MergeBytes([]byte(`
+role_mappings:
+  - subject: ["myorg/a"]
+    roles: ["arn:aws:iam::111111111111:role/Role"]
+`), "yaml"))
+
+	assert.Equal(t, Patterns{"myorg/a"}, c.RoleMappings[0].Subject)
+
+	const iss = "https://token.actions.githubusercontent.com"
+	ok, _ := c.AuthorizeRoles(iss, "myorg/a", nil)
+	assert.True(t, ok, "the overlay's subject must still authorize")
+	for _, dropped := range []string{"myorg/b", "myorg/c"} {
+		ok, _ := c.AuthorizeRoles(iss, dropped, nil)
+		assert.False(t, ok, "%s was dropped by the overlay and must not authorize", dropped)
+	}
+}
+
 func TestMergeBytesDeclaredSlicesReplaceRatherThanIndexMerge(t *testing.T) {
 	base := func(t *testing.T) *Config {
 		t.Helper()
