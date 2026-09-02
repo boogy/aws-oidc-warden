@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-09-02
+
+### Added
+
+- **`role_mappings[].subject` accepts a list of patterns, not just one.** Granting the same roles under the same conditions to several repositories no longer needs one entry per repository or the extra `subjects:`/`defaults:` nesting of a `role_groups` block:
+
+  ```yaml
+  role_mappings:
+    - subject:
+        - "octocorp/repo-name"
+        - "octocorp/another-repo"
+      roles:
+        - arn:aws:iam::123456789012:role/some-role
+        - arn:aws:iam::123456789012:role/some-other-role
+      conditions:
+        ref: "refs/heads/main"
+        environment: ["production", "canary"]
+  ```
+
+  A scalar `subject: "org/repo"` keeps working unchanged, and `role_groups` is not deprecated — prefer it when a group also needs its own `issuer` or per-group defaults. The field reuses the existing `Patterns` type, so the scalar-or-list decode and the `UnmarshalJSON` hot-reload path come with it; a subject regex containing a comma is safe because `Patterns` is a defined type and mapstructure's `StringToSliceHookFunc` declines anything but `reflect.SliceOf(string)` (`TestSubjectListKeepsCommasInRegexes`).
+
+  `Validate()` fans the list out into one effective mapping per element, structurally identical to the same subjects written as separate entries — the same thing `role_groups` already does. Elements are OR'd, each is anchored and validated on its own (an empty element, a bare `.*`/`.+`, or a repeat within one entry is a load error; the same subject in two different entries stays legal), and each is classified into the authorization index independently, so `["org/api", "org/svc-.*"]` files one exact-match and one owner-bucketed entry. The list is a spelling convenience, not an optimization: N subjects cost what N entries cost. Everything the entry declares applies to every subject it lists — `roles`, `conditions`, an inline `session_policy` or an S3 `session_policy_file`, and `role_session_name` (`TestSubjectListSharesInlineSessionPolicy`, `TestSubjectListSharesSessionPolicyFile`, `TestSubjectListSharesRoleSessionName`); because those are literal strings rather than templates, one entry cannot vary them per subject. `tag_auth` is untouched — it matches the caller's subject against the role's IAM tags and never reads a mapping.
+
+  OpenTofu keeps `var.role_mappings[].subject` typed `string`, so a list is a `config.yaml`/`config_fragments` feature exactly as `role_groups` already is.
+
+### Fixed
+
+- **`compileAnchoredSubject` had no empty-pattern guard**, unlike its twin `compileAnchoredCondition` and unlike the contract `regexCache.anchor` states for its callers. Nothing was exposed: the only caller checked `subject == ""` first, and the token path cannot produce an empty subject. But a list makes the caller's check miss — `subject: ["", "org/repo"]` has two elements, so the length check passes and `""` compiles to `^(?:)$`, a mapping that reads as a gate and is filed under the empty subject. The guard now lives in the compile helper alongside `bareWildcards`, where both subject paths share it rather than each carrying its own copy. `TestSubjectListRejectsEmptyAndWildcardElements` puts the bad element in a non-first position, so it fails if the fan-out ever validates only element 0.
+
 ## [3.1.0] - 2026-08-31
 
 ### Fixed

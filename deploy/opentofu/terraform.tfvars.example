@@ -70,6 +70,8 @@ assumable_role_arns = [
 # default_issuer is set — the service refuses to boot otherwise. With the
 # single-issuer shorthand active (as below) it's optional.
 #
+# A list-valued `role_mappings[].subject` (several subjects in one entry) is
+# likewise config.yaml-only: `subject` here is a string and renders as a scalar.
 # `role_groups` (expand one set of role/condition defaults across many
 # subjects) is not exposed as a Terraform variable in this module — it is a
 # config.yaml-only convenience. To grant the same roles/conditions to many

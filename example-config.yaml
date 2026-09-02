@@ -194,6 +194,9 @@ role_sets:
 #
 # Each mapping binds a `subject` PATTERN (auto-anchored ^(?:...)$) to a set of
 # assumable roles, scoped to a single issuer, optionally gated by `conditions`.
+# `subject` takes one pattern or a LIST of them: a list expands to one mapping
+# per element, each anchored and validated on its own, all sharing the entry's
+# roles/conditions/session policy/session name.
 # The requested role must be one of the mapping's resolved roles — a token can
 # never select an arbitrary role. `issuer` defaults to default_issuer above.
 # Every key under `conditions` (other than the boolean groups) is the RAW
@@ -222,6 +225,12 @@ role_sets:
 #     event_name: ""         # an empty pattern
 #     actor: []              # an empty list
 #     repository: ".*"       # a bare wildcard (subjects too) — be specific
+#
+#   subject: []              # an empty subject list, and `subject: [""]` or any
+#   subject: ["org/a", ""]   # empty element — "" would match only the empty
+#                            # subject. A repeat within ONE entry
+#   subject: ["org/a","org/a"]  # is rejected too (it gates nothing new); the
+#                            # same subject in two different entries is fine.
 #   conditions:
 #     any_of: []             # an empty group, or a group member that gates
 #     none_of: [{}]          # nothing: always-true members make any_of always
@@ -240,6 +249,18 @@ role_mappings:
     roles: ["@deployers"] # role_set alias
     conditions:
       ref: "refs/heads/main"
+
+  # Several repositories sharing one set of roles and conditions. Equivalent to
+  # writing one entry per subject; the session policy and role_session_name
+  # below apply to EVERY subject listed (both are static strings, not
+  # templates, so one entry cannot vary them per subject).
+  - subject:
+      - "org/frontend-app"
+      - "org/backend-api"
+    roles: ["@deployers"]
+    conditions:
+      ref: "refs/heads/main"
+      environment: ["production", "canary"]
 
   # External session policy file in S3. This mapping names its role directly
   # rather than reusing @deployers: a role granted BOTH here and by a
@@ -377,6 +398,10 @@ role_mappings:
 ####################################################################################
 # ROLE GROUPS (DRY: one entry expands to one mapping per subject, sharing
 # issuer + defaults). Great for onboarding many repos with identical access.
+#
+# A list-valued `role_mappings[].subject` (above) does the same expansion with
+# one less level of nesting; prefer a role_group when the group needs its own
+# `issuer` or you want the defaults named separately from the subjects.
 ####################################################################################
 role_groups:
   - issuer: "https://token.actions.githubusercontent.com"

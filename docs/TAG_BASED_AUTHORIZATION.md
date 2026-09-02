@@ -30,6 +30,8 @@ Serving roles from **other AWS accounts** is configured separately via the top-l
 
 The account ID is parsed from the requested role ARN. If the role lives in a different account than the warden (the _hub_), `cross_account.enabled` must be `true` (and the account allow-listed) or the request fails closed. When tag-auth needs to read that role's tags, the warden assumes a convention-named **spoke** role in that account for the `iam:GetRole` call only. The final `sts:AssumeRole` on the target role is always **direct**, using the warden's own (hub) credentials — the spoke is never part of the assume path. Same-account requests need no spoke at all. See [Cross-account](#cross-account).
 
+`tag_auth` is independent of how `role_mappings` spells its subjects: it matches the caller's canonical subject against the **role's** IAM tags, never against a mapping. A multi-subject `role_mappings` entry therefore changes nothing here — including the caveat above that a tag-auth grant carries no session policy and no `role_session_name`, which still applies to a role scoped by a multi-subject entry.
+
 ---
 
 ## Conditions (multi-dimensional matching)
