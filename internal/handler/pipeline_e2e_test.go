@@ -268,6 +268,36 @@ func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 	}
 }
 
+// A multi-subject entry fans out into one effective mapping per subject, so
+// tag-auth must stay exactly where it was: unreachable for a listed subject,
+// and the unscoped fallback for one that is not listed.
+func TestSubjectListTagAuthFallbackUnaffected(t *testing.T) {
+	role := "arn:aws:iam::111111111111:role/deploy"
+	cfg := vE2ECfg(t, []config.RoleMapping{{
+		Subject:       config.Patterns{"myorg/api", "myorg/web"},
+		Roles:         []string{role},
+		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
+	}})
+	cfg.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
+	require.NoError(t, cfg.Validate())
+
+	for _, subject := range []string{"myorg/api", "myorg/web"} {
+		rec := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "myorg/api"}}
+		_, err := vRun(t, cfg, rec, vE2EClaims(subject, "refs/heads/main"), role)
+		require.NoErrorf(t, err, "listed subject %q should be authorized explicitly", subject)
+		assert.Zerof(t, rec.tagAuthCalled, "role tags read for listed subject %q", subject)
+		require.NotNilf(t, rec.gotPolicy, "listed subject %q lost the entry's session policy", subject)
+		assert.Equal(t, cfg.RoleMappings[0].SessionPolicy, *rec.gotPolicy)
+	}
+
+	// Not listed: tag-auth still grants, still without the entry's policy.
+	rec := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "myorg/batch"}}
+	_, err := vRun(t, cfg, rec, vE2EClaims("myorg/batch", "refs/heads/main"), role)
+	require.NoError(t, err, "unlisted subject should reach the tag-auth fallback")
+	assert.Equal(t, 1, rec.tagAuthCalled)
+	assert.Nil(t, rec.gotPolicy, "POLICY LEAK: tag-authorized role inherited the multi-subject entry's policy")
+}
+
 // End-to-end verification that the pipeline is issuer-agnostic: a non-GitHub
 // OIDC issuer, with none of GitHub's claim names, must flow through claims
 // extraction, condition evaluation, session-policy selection, and session
