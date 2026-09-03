@@ -119,17 +119,17 @@ func TestMergeFragment_RoleSetCollision(t *testing.T) {
 
 func TestMergeFragment_AppendsRoleMappingsAndGroupsInOrder(t *testing.T) {
 	cfg := &Config{
-		RoleMappings: []RoleMapping{{Subject: "base/repo", Roles: []string{"arn:aws:iam::111111111111:role/base"}}},
+		RoleMappings: []RoleMapping{{Subject: Patterns{"base/repo"}, Roles: []string{"arn:aws:iam::111111111111:role/base"}}},
 	}
 	frag := &FragmentConfig{
-		RoleMappings: []RoleMapping{{Subject: "frag/repo", Roles: []string{"arn:aws:iam::111111111111:role/frag"}}},
+		RoleMappings: []RoleMapping{{Subject: Patterns{"frag/repo"}, Roles: []string{"arn:aws:iam::111111111111:role/frag"}}},
 		RoleGroups:   []RoleGroup{{Subjects: []string{"frag/a"}}},
 	}
 
 	require.NoError(t, mergeFragment(cfg, frag, "frag1", nil))
 	require.Len(t, cfg.RoleMappings, 2)
-	assert.Equal(t, "base/repo", cfg.RoleMappings[0].Subject)
-	assert.Equal(t, "frag/repo", cfg.RoleMappings[1].Subject)
+	assert.Equal(t, Patterns{"base/repo"}, cfg.RoleMappings[0].Subject)
+	assert.Equal(t, Patterns{"frag/repo"}, cfg.RoleMappings[1].Subject)
 	require.Len(t, cfg.RoleGroups, 1)
 }
 
@@ -250,7 +250,7 @@ func TestAudit_MergeFragmentTouchesOnlyFourFields(t *testing.T) {
 	before := cloneMustJSON(t, cfg)
 
 	frag := &FragmentConfig{
-		RoleMappings: []RoleMapping{{Subject: "o/r", Roles: []string{"arn:aws:iam::111111111111:role/x"}}},
+		RoleMappings: []RoleMapping{{Subject: Patterns{"o/r"}, Roles: []string{"arn:aws:iam::111111111111:role/x"}}},
 	}
 	require.NoError(t, mergeFragment(cfg, frag, "f", map[string]bool{cfg.Issuers[0].Issuer: true}))
 
@@ -297,7 +297,7 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 		Cache:           &Cache{Type: "memory", TTL: time.Hour},
 		RoleSets:        map[string][]string{"prod": {"arn:aws:iam::111111111111:role/prod"}},
 		RoleMappings: []RoleMapping{
-			{Subject: "o/r", Roles: []string{"@prod"}, SessionPolicyFile: "p.json",
+			{Subject: Patterns{"o/r"}, Roles: []string{"@prod"}, SessionPolicyFile: "p.json",
 				Conditions: &Condition{Ref: Patterns{"main"}, Claims: map[string]Patterns{"custom": {"v"}}}},
 		},
 		TagAuth:                 &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "acme", TransitiveSessionTags: true},
@@ -438,7 +438,7 @@ func TestAudit_ChecksumPinTrustsFetcherETagNotContent(t *testing.T) {
 	// pin authenticates the fetcher's token, never the bytes.
 	require.NoError(t, err, "a fetcher-supplied etag matching the pin is accepted regardless of content")
 	require.Len(t, p.Get().RoleMappings, 1)
-	assert.Equal(t, "victim/.+", p.Get().RoleMappings[0].Subject)
+	assert.Equal(t, Patterns{"victim/.+"}, p.Get().RoleMappings[0].Subject)
 }
 
 // ---------------------------------------------------------------------------
@@ -501,7 +501,7 @@ role_mappings:
 `)
 	base := a2Base(t)
 	base.RoleMappings = []RoleMapping{{
-		Subject:           "acme/app",
+		Subject:           Patterns{"acme/app"},
 		Roles:             []string{"arn:aws:iam::111111111111:role/prod"},
 		SessionPolicyFile: "restrict-prod.json",
 	}}
@@ -533,7 +533,7 @@ func TestAudit_FragmentDefaultIssuerCannotRebindBaseMappings(t *testing.T) {
 	})
 	// Base mapping with NO explicit issuer + 2 issuers + no default_issuer.
 	base.RoleMappings = []RoleMapping{{
-		Subject: "acme/app", Roles: []string{"arn:aws:iam::111111111111:role/prod"},
+		Subject: Patterns{"acme/app"}, Roles: []string{"arn:aws:iam::111111111111:role/prod"},
 	}}
 	base.ConfigFragments = []string{f}
 	err := base.Validate()
@@ -560,7 +560,7 @@ func TestAudit_OverlayAddsIssuerThenFragmentDefaultIssuer(t *testing.T) {
 
 	base := a2Base(t)
 	base.RoleMappings = []RoleMapping{{
-		Subject: "acme/app", Roles: []string{"arn:aws:iam::111111111111:role/prod"},
+		Subject: Patterns{"acme/app"}, Roles: []string{"arn:aws:iam::111111111111:role/prod"},
 	}}
 	base.ConfigFragments = []string{f}
 	require.NoError(t, base.Validate())
@@ -582,7 +582,7 @@ default_issuer: "https://evil.example"
 	t.Logf("refresh with overlay-supplied default_issuer: %v", err)
 	cfg := p.Get()
 	for _, m := range cfg.effective {
-		t.Logf("effective subject=%q issuer=%q roles=%v", m.Subject, m.Issuer, m.Roles)
+		t.Logf("effective subject=%q issuer=%q roles=%v", m.resolvedSubject, m.Issuer, m.Roles)
 	}
 
 	// FINDING F3 (current, insecure behavior asserted). mergeFragment guards
@@ -734,13 +734,13 @@ func TestAudit_RoleMappingOutranksRoleGroupWithoutFragments(t *testing.T) {
 	}}
 	// Declared SECOND: an unrestricted role_mapping for the same subject+role.
 	c.RoleMappings = []RoleMapping{{
-		Subject: "acme/app",
+		Subject: Patterns{"acme/app"},
 		Roles:   []string{"arn:aws:iam::111111111111:role/prod"},
 	}}
 	require.NoError(t, c.Validate())
 
 	for _, m := range c.effective {
-		t.Logf("order=%d subject=%q policyFile=%q", m.order, m.Subject, m.SessionPolicyFile)
+		t.Logf("order=%d subject=%q policyFile=%q", m.order, m.resolvedSubject, m.SessionPolicyFile)
 	}
 
 	pol, polFile := c.FindSessionPolicy(c.Issuers[0].Issuer, "acme/app",

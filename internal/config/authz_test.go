@@ -50,7 +50,7 @@ func wildcardCfg(subject string) *Config {
 		}},
 		RoleSessionName: "aow",
 		RoleMappings: []RoleMapping{{
-			Subject: subject,
+			Subject: Patterns{subject},
 			Roles:   []string{"arn:aws:iam::111111111111:role/Deploy"},
 		}},
 	}
@@ -150,7 +150,7 @@ func deref(p *string) string {
 func patternsOf(ms []RoleMapping) []string {
 	out := make([]string, len(ms))
 	for i, m := range ms {
-		out[i] = m.Subject
+		out[i] = strings.Join(m.Subject, ",")
 	}
 	return out
 }
@@ -204,7 +204,7 @@ func TestIndexDifferentialFuzz(t *testing.T) {
 		for i := 0; i < n; i++ {
 			p := patterns[rng.Intn(len(patterns))]
 			m := RoleMapping{
-				Subject: p,
+				Subject: Patterns{p},
 				Roles:   []string{fmt.Sprintf("arn:aws:iam::111111111111:role/r%d", rng.Intn(3))},
 			}
 			if rng.Intn(2) == 0 {
@@ -272,7 +272,7 @@ func TestIndexParity(t *testing.T) {
 	addMapping := func(issuer, subject string) {
 		mappings = append(mappings, RoleMapping{
 			Issuer:  issuer,
-			Subject: subject,
+			Subject: Patterns{subject},
 			Roles:   []string{fmt.Sprintf("arn:aws:iam::123456789012:role/role-%d", roleN)},
 			// Distinct per-mapping policy so the role-aware FindSessionPolicy
 			// parity check is non-vacuous: overlapping mappings (an exact
@@ -403,7 +403,7 @@ func TestLiteralPrefixSoundness(t *testing.T) {
 // those matches, diverging from a linear scan (and mis-scoping session policy).
 func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 	compile := func(p string) *RoleMapping {
-		m := &RoleMapping{Subject: p}
+		m := &RoleMapping{Subject: Patterns{p}, resolvedSubject: p}
 		re, err := regexp.Compile("^(?:" + p + ")$") // same anchoring Validate() applies
 		if err != nil {
 			t.Fatalf("compile %q: %v", p, err)
@@ -421,7 +421,7 @@ func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 	}
 	for _, p := range anyShapes {
 		m := compile(p)
-		owner, class := classifySubject(m.Subject, m.compiledPattern)
+		owner, class := classifySubject(m.resolvedSubject, m.compiledPattern)
 		if class == subjectOwner {
 			t.Errorf("pattern %q bucketed as owner=%q (subjectOwner); must be subjectAny", p, owner)
 		}
@@ -434,7 +434,7 @@ func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 		{"a/b|a/c", "a"}, // common-prefix alternation is legitimately owner-scoped
 	} {
 		m := compile(tc.pattern)
-		owner, class := classifySubject(m.Subject, m.compiledPattern)
+		owner, class := classifySubject(m.resolvedSubject, m.compiledPattern)
 		if class != subjectOwner || owner != tc.owner {
 			t.Errorf("pattern %q: got (owner=%q, class=%d), want (owner=%q, subjectOwner)", tc.pattern, owner, class, tc.owner)
 		}
@@ -458,7 +458,7 @@ func TestClassifySubject_EndToEndAuthzParity(t *testing.T) {
 		DefaultIssuer:   iss,
 		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{
-			{Subject: "myorg/?opt-.*", Roles: []string{role}, SessionPolicy: policy},
+			{Subject: Patterns{"myorg/?opt-.*"}, Roles: []string{role}, SessionPolicy: policy},
 		},
 	}
 	if err := c.Validate(); err != nil {
@@ -481,7 +481,7 @@ func TestClassifySubject_EndToEndAuthzParity(t *testing.T) {
 
 func TestSubjectAnchoringNoNewlineBypass(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
-		Subject: "myorg/allowed",
+		Subject: Patterns{"myorg/allowed"},
 		Roles:   []string{"arn:aws:iam::111111111111:role/r"},
 	}})
 	for _, s := range []string{
@@ -591,8 +591,8 @@ func TestValidate_WildcardRejectionIsLiteralOnly(t *testing.T) {
 
 func TestIssuerBinding(t *testing.T) {
 	c := vcfg(t, []RoleMapping{
-		{Issuer: vIss, Subject: "myorg/repo", Roles: []string{"arn:aws:iam::111111111111:role/a"}, SessionPolicy: "pa"},
-		{Issuer: vIss2, Subject: "myorg/repo", Roles: []string{"arn:aws:iam::111111111111:role/b"}, SessionPolicy: "pb"},
+		{Issuer: vIss, Subject: Patterns{"myorg/repo"}, Roles: []string{"arn:aws:iam::111111111111:role/a"}, SessionPolicy: "pa"},
+		{Issuer: vIss2, Subject: Patterns{"myorg/repo"}, Roles: []string{"arn:aws:iam::111111111111:role/b"}, SessionPolicy: "pb"},
 	})
 	_, roles := c.AuthorizeRoles(vIss, "myorg/repo", map[string]any{})
 	if slices.Contains(roles, "arn:aws:iam::111111111111:role/b") {
@@ -632,8 +632,8 @@ func TestFindSessionPolicy_ScopedToGrantingRole(t *testing.T) {
 		DefaultIssuer:   iss,
 		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{
-			{Subject: "myorg/.*", Roles: []string{readonly}},                                  // order 0: broad, no policy
-			{Subject: "myorg/.*-deploy", Roles: []string{deploy}, SessionPolicy: restrictive}, // order 1: scoped
+			{Subject: Patterns{"myorg/.*"}, Roles: []string{readonly}},                                  // order 0: broad, no policy
+			{Subject: Patterns{"myorg/.*-deploy"}, Roles: []string{deploy}, SessionPolicy: restrictive}, // order 1: scoped
 		},
 	}
 	if err := c.Validate(); err != nil {
@@ -687,10 +687,10 @@ func TestFindSessionPolicy_ConditionsGateThePolicy(t *testing.T) {
 		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{
 			// order 0: grants role but only on refs/heads/main, with a policy.
-			{Subject: "acme/app", Roles: []string{role}, SessionPolicy: mainOnly,
+			{Subject: Patterns{"acme/app"}, Roles: []string{role}, SessionPolicy: mainOnly,
 				Conditions: &Condition{Ref: Patterns{"refs/heads/main"}}},
 			// order 1: grants role on any branch, no policy.
-			{Subject: "acme/app", Roles: []string{role}},
+			{Subject: Patterns{"acme/app"}, Roles: []string{role}},
 		},
 	}
 	if err := c.Validate(); err != nil {
@@ -715,9 +715,9 @@ func TestFindSessionPolicy_ConditionsGateThePolicy(t *testing.T) {
 		DefaultIssuer:   iss,
 		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{
-			{Subject: "acme/app", Roles: []string{role}, SessionPolicy: mainOnly,
+			{Subject: Patterns{"acme/app"}, Roles: []string{role}, SessionPolicy: mainOnly,
 				Conditions: &Condition{Ref: Patterns{"refs/heads/main"}}},
-			{Subject: "acme/app", Roles: []string{role}, SessionPolicy: devOnly},
+			{Subject: Patterns{"acme/app"}, Roles: []string{role}, SessionPolicy: devOnly},
 		},
 	}
 	if err := c2.Validate(); err != nil {
@@ -745,8 +745,8 @@ func TestFindSessionPolicy_ConditionsGateThePolicy(t *testing.T) {
 func TestOrderWinsAmongMappingsGrantingTheSameRole(t *testing.T) {
 	priv := "arn:aws:iam::111111111111:role/privileged"
 	c := vcfg(t, []RoleMapping{
-		{Subject: "myorg/.*", Roles: []string{priv}},
-		{Subject: "myorg/repo", Roles: []string{priv}, SessionPolicy: `{"scoped":true}`},
+		{Subject: Patterns{"myorg/.*"}, Roles: []string{priv}},
+		{Subject: Patterns{"myorg/repo"}, Roles: []string{priv}, SessionPolicy: `{"scoped":true}`},
 	})
 	p, f := c.FindSessionPolicy(vIss, "myorg/repo", priv, map[string]any{})
 	if p != nil || f != nil {
@@ -757,8 +757,8 @@ func TestOrderWinsAmongMappingsGrantingTheSameRole(t *testing.T) {
 
 	// Reversing the declaration order is the documented remedy.
 	c2 := vcfg(t, []RoleMapping{
-		{Subject: "myorg/repo", Roles: []string{priv}, SessionPolicy: `{"scoped":true}`},
-		{Subject: "myorg/.*", Roles: []string{priv}},
+		{Subject: Patterns{"myorg/repo"}, Roles: []string{priv}, SessionPolicy: `{"scoped":true}`},
+		{Subject: Patterns{"myorg/.*"}, Roles: []string{priv}},
 	})
 	if p2, _ := c2.FindSessionPolicy(vIss, "myorg/repo", priv, map[string]any{}); p2 == nil || *p2 != `{"scoped":true}` {
 		t.Fatalf("declaring the scoped mapping first should win, got %v", p2)
@@ -772,7 +772,7 @@ func TestOrderWinsAmongMappingsGrantingTheSameRole(t *testing.T) {
 func TestConditionSemantics(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/r"
 	c := vcfg(t, []RoleMapping{{
-		Subject:    "myorg/repo",
+		Subject:    Patterns{"myorg/repo"},
 		Roles:      []string{role},
 		Conditions: &Condition{Ref: Patterns{"refs/heads/main"}, EventName: Patterns{"push"}},
 	}})
@@ -832,7 +832,7 @@ func TestConditionSemantics(t *testing.T) {
 // a claim that does not exist, denying the request.
 func TestTypoedConditionKeyFailsClosed(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
-		Subject:    "myorg/repo",
+		Subject:    Patterns{"myorg/repo"},
 		Roles:      []string{"arn:aws:iam::111111111111:role/r"},
 		Conditions: &Condition{Claims: map[string]Patterns{"event-name": {"push"}}}, // typo: dash not underscore
 	}})
@@ -843,7 +843,7 @@ func TestTypoedConditionKeyFailsClosed(t *testing.T) {
 
 func TestActorIsOrAndAnded(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
-		Subject:    "myorg/repo",
+		Subject:    Patterns{"myorg/repo"},
 		Roles:      []string{"arn:aws:iam::111111111111:role/r"},
 		Conditions: &Condition{Actor: Patterns{"alice", "bob"}, EventName: Patterns{"push"}},
 	}})
@@ -871,7 +871,7 @@ func TestPermissiveConditionPatternsRejected(t *testing.T) {
 			Issuers:         []IssuerConfig{{Issuer: vIss, Provider: "generic", Audiences: []string{"a"}, ClaimMappings: map[string]string{"subject": "sub"}}},
 			RoleSessionName: "test",
 			RoleMappings: []RoleMapping{{
-				Subject: "myorg/repo", Roles: []string{"arn:aws:iam::111111111111:role/r"},
+				Subject: Patterns{"myorg/repo"}, Roles: []string{"arn:aws:iam::111111111111:role/r"},
 				Conditions: &Condition{Ref: Patterns{p}},
 			}},
 		}
@@ -891,7 +891,7 @@ func TestPermissiveConditionPatternsRejected(t *testing.T) {
 
 func TestRequestedRoleMustMatchExactly(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/Deploy"
-	c := vcfg(t, []RoleMapping{{Subject: "myorg/repo", Roles: []string{role}}})
+	c := vcfg(t, []RoleMapping{{Subject: Patterns{"myorg/repo"}, Roles: []string{role}}})
 	_, roles := c.AuthorizeRoles(vIss, "myorg/repo", map[string]any{})
 	for _, variant := range []string{
 		"arn:aws:iam::111111111111:role/deploy",
@@ -915,7 +915,7 @@ func TestRoleSetResolvedFromConfigNotToken(t *testing.T) {
 		Issuers:         []IssuerConfig{{Issuer: vIss, Provider: "generic", Audiences: []string{"a"}, ClaimMappings: map[string]string{"subject": "sub"}}},
 		RoleSessionName: "test",
 		RoleSets:        map[string][]string{"deploy": {"arn:aws:iam::111111111111:role/A", "arn:aws:iam::111111111111:role/B"}},
-		RoleMappings:    []RoleMapping{{Subject: "myorg/repo", Roles: []string{"@deploy"}}},
+		RoleMappings:    []RoleMapping{{Subject: Patterns{"myorg/repo"}, Roles: []string{"@deploy"}}},
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
@@ -931,7 +931,7 @@ func TestRoleSetResolvedFromConfigNotToken(t *testing.T) {
 	c2 := &Config{
 		Issuers:         []IssuerConfig{{Issuer: vIss, Provider: "generic", Audiences: []string{"a"}, ClaimMappings: map[string]string{"subject": "sub"}}},
 		RoleSessionName: "test",
-		RoleMappings:    []RoleMapping{{Subject: "myorg/repo", Roles: []string{"@nope"}}},
+		RoleMappings:    []RoleMapping{{Subject: Patterns{"myorg/repo"}, Roles: []string{"@nope"}}},
 	}
 	if err := c2.Validate(); err == nil {
 		t.Error("undefined role set accepted")

@@ -129,8 +129,8 @@ func TestPipeline_ScopedPolicyReachesSTS(t *testing.T) {
 	priv := "arn:aws:iam::111111111111:role/privileged"
 	broad := "arn:aws:iam::111111111111:role/broad"
 	cfg := vE2ECfg(t, []config.RoleMapping{
-		{Subject: "myorg/.*", Roles: []string{broad}},
-		{Subject: "myorg/repo", Roles: []string{priv}, SessionPolicy: `{"scoped":true}`},
+		{Subject: config.Patterns{"myorg/.*"}, Roles: []string{broad}},
+		{Subject: config.Patterns{"myorg/repo"}, Roles: []string{priv}, SessionPolicy: `{"scoped":true}`},
 	})
 	rec := &vRecorder{allowAccount: true}
 	if _, err := vRun(t, cfg, rec, vE2EClaims("myorg/repo", "refs/heads/main"), priv); err != nil {
@@ -149,7 +149,7 @@ func TestPipeline_ScopedPolicyReachesSTS(t *testing.T) {
 func TestPipeline_DenyPathsNeverReachSTS(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{{
-		Subject: "myorg/repo", Roles: []string{role},
+		Subject: config.Patterns{"myorg/repo"}, Roles: []string{role},
 		Conditions: &config.Condition{Ref: config.Patterns{"refs/heads/main"}},
 	}})
 
@@ -198,7 +198,7 @@ func TestPipeline_DenyPathsNeverReachSTS(t *testing.T) {
 func TestPipeline_PolicyFileFailureDenies(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{
-		{Subject: "myorg/repo", Roles: []string{role}, SessionPolicyFile: "scoped.json"},
+		{Subject: config.Patterns{"myorg/repo"}, Roles: []string{role}, SessionPolicyFile: "scoped.json"},
 	})
 
 	// S3 read fails -> deny, no assumption.
@@ -233,7 +233,7 @@ func TestPipeline_PolicyFileFailureDenies(t *testing.T) {
 
 func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
-	cfg := vE2ECfg(t, []config.RoleMapping{{Subject: "myorg/repo", Roles: []string{role}}})
+	cfg := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/repo"}, Roles: []string{role}}})
 
 	// tag_auth disabled (default): role tags must never be consulted.
 	rec := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "evil/repo"}}
@@ -254,7 +254,7 @@ func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 	}
 
 	// tag_auth enabled: a matching tag authorizes, but with NO session policy.
-	cfg2 := vE2ECfg(t, []config.RoleMapping{{Subject: "myorg/other", Roles: []string{role}, SessionPolicy: "unrelated"}})
+	cfg2 := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/other"}, Roles: []string{role}, SessionPolicy: "unrelated"}})
 	cfg2.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
 	if err := cfg2.Validate(); err != nil {
 		t.Fatal(err)
@@ -266,6 +266,36 @@ func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 	if rec3.gotPolicy != nil {
 		t.Errorf("POLICY LEAK: tag-authorized role inherited an unrelated mapping's policy %q", *rec3.gotPolicy)
 	}
+}
+
+// A multi-subject entry fans out into one effective mapping per subject, so
+// tag-auth must stay exactly where it was: unreachable for a listed subject,
+// and the unscoped fallback for one that is not listed.
+func TestSubjectListTagAuthFallbackUnaffected(t *testing.T) {
+	role := "arn:aws:iam::111111111111:role/deploy"
+	cfg := vE2ECfg(t, []config.RoleMapping{{
+		Subject:       config.Patterns{"myorg/api", "myorg/web"},
+		Roles:         []string{role},
+		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
+	}})
+	cfg.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
+	require.NoError(t, cfg.Validate())
+
+	for _, subject := range []string{"myorg/api", "myorg/web"} {
+		rec := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "myorg/api"}}
+		_, err := vRun(t, cfg, rec, vE2EClaims(subject, "refs/heads/main"), role)
+		require.NoErrorf(t, err, "listed subject %q should be authorized explicitly", subject)
+		assert.Zerof(t, rec.tagAuthCalled, "role tags read for listed subject %q", subject)
+		require.NotNilf(t, rec.gotPolicy, "listed subject %q lost the entry's session policy", subject)
+		assert.Equal(t, cfg.RoleMappings[0].SessionPolicy, *rec.gotPolicy)
+	}
+
+	// Not listed: tag-auth still grants, still without the entry's policy.
+	rec := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "myorg/batch"}}
+	_, err := vRun(t, cfg, rec, vE2EClaims("myorg/batch", "refs/heads/main"), role)
+	require.NoError(t, err, "unlisted subject should reach the tag-auth fallback")
+	assert.Equal(t, 1, rec.tagAuthCalled)
+	assert.Nil(t, rec.gotPolicy, "POLICY LEAK: tag-authorized role inherited the multi-subject entry's policy")
 }
 
 // End-to-end verification that the pipeline is issuer-agnostic: a non-GitHub
@@ -332,7 +362,7 @@ func gE2EClaims(projectPath, pipelineSource string, groups []any) *types.Claims 
 func TestGenericIssuer_AllowPathReachesSTSWithPolicyAndTags(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/gitlab-deploy"
 	cfg := gE2ECfg(t, []config.RoleMapping{{
-		Subject: "acme/platform/api",
+		Subject: config.Patterns{"acme/platform/api"},
 		Issuer:  gE2EIssuer,
 		Roles:   []string{role},
 		Conditions: &config.Condition{
@@ -360,7 +390,7 @@ func TestGenericIssuer_AllowPathReachesSTSWithPolicyAndTags(t *testing.T) {
 func TestGenericIssuer_ConditionOnIssuerClaimDenies(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/gitlab-deploy"
 	cfg := gE2ECfg(t, []config.RoleMapping{{
-		Subject: "acme/platform/api",
+		Subject: config.Patterns{"acme/platform/api"},
 		Issuer:  gE2EIssuer,
 		Roles:   []string{role},
 		Conditions: &config.Condition{
@@ -381,7 +411,7 @@ func TestGenericIssuer_ConditionOnIssuerClaimDenies(t *testing.T) {
 func TestGenericIssuer_ArrayClaimConditionGatesEndToEnd(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/gitlab-deploy"
 	cfg := gE2ECfg(t, []config.RoleMapping{{
-		Subject:    "acme/platform/api",
+		Subject:    config.Patterns{"acme/platform/api"},
 		Issuer:     gE2EIssuer,
 		Roles:      []string{role},
 		Conditions: &config.Condition{Claims: map[string]config.Patterns{"groups": {"platform-admins"}}},
@@ -423,7 +453,7 @@ func TestGenericIssuer_SubjectDoesNotCrossIssuerBoundary(t *testing.T) {
 		RoleSessionName: "aow",
 		// Granted to the GitHub issuer ONLY.
 		RoleMappings: []config.RoleMapping{{
-			Subject: "acme/platform", Issuer: vE2EIssuer, Roles: []string{role},
+			Subject: config.Patterns{"acme/platform"}, Issuer: vE2EIssuer, Roles: []string{role},
 		}},
 	}
 	require.NoError(t, cfg.Validate())
@@ -605,7 +635,7 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 
 	t.Run("github issuer carries subject and the populated github fields", func(t *testing.T) {
 		role := "arn:aws:iam::111111111111:role/app"
-		cfg := vE2ECfg(t, []config.RoleMapping{{Subject: "myorg/repo", Roles: []string{role}}})
+		cfg := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/repo"}, Roles: []string{role}}})
 		var buf bytes.Buffer
 		log := slog.New(slog.NewJSONHandler(&buf, nil))
 
@@ -638,7 +668,7 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 	t.Run("generic issuer carries subject and omits the github fields", func(t *testing.T) {
 		role := "arn:aws:iam::111111111111:role/app"
 		cfg := gE2ECfg(t, []config.RoleMapping{
-			{Subject: "mygroup/myproject", Roles: []string{role}, Issuer: gE2EIssuer},
+			{Subject: config.Patterns{"mygroup/myproject"}, Roles: []string{role}, Issuer: gE2EIssuer},
 		})
 		var buf bytes.Buffer
 		log := slog.New(slog.NewJSONHandler(&buf, nil))
@@ -668,7 +698,7 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 		granted := "arn:aws:iam::111111111111:role/app"
 		other := "arn:aws:iam::111111111111:role/forbidden"
 		cfg := gE2ECfg(t, []config.RoleMapping{
-			{Subject: "mygroup/myproject", Roles: []string{granted}, Issuer: gE2EIssuer},
+			{Subject: config.Patterns{"mygroup/myproject"}, Roles: []string{granted}, Issuer: gE2EIssuer},
 		})
 		var buf bytes.Buffer
 		log := slog.New(slog.NewJSONHandler(&buf, nil))

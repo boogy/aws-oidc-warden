@@ -87,7 +87,7 @@ func auditTestCfg(t *testing.T, auditRequired, logClaimValues bool) *config.Conf
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "org/repo",
+			Subject: config.Patterns{"org/repo"},
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
 		LogClaimValues: logClaimValues,
@@ -719,7 +719,7 @@ func TestAuditClaims_GenericIssuerUsesClaimMappings(t *testing.T) {
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "group/project",
+			Subject: config.Patterns{"group/project"},
 			Issuer:  gitlabIssuer,
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
@@ -783,7 +783,7 @@ func TestAuditClaims_GenericIssuerRepositoryAliasIsProviderIndependent(t *testin
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "acme/api",
+			Subject: config.Patterns{"acme/api"},
 			Issuer:  genericIssuer,
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
@@ -840,7 +840,7 @@ func TestAuditClaims_AliasAppliesWhenTargetClaimIsNotEmitted(t *testing.T) {
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "acme/api",
+			Subject: config.Patterns{"acme/api"},
 			Issuer:  genericIssuer,
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
@@ -1107,7 +1107,7 @@ func TestAudit_RequiredAudit_StaleS3LoggerConfig_ReturnsCredentialsWithNoDurable
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "org/repo",
+			Subject: config.Patterns{"org/repo"},
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
 		LogToS3:       false, // default
@@ -1230,7 +1230,7 @@ func TestAuditClaims_GenericIssuerRecordsDecisionRelevantClaims(t *testing.T) {
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "group/project",
+			Subject: config.Patterns{"group/project"},
 			Issuer:  genericIssuer,
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 			Conditions: &config.Condition{

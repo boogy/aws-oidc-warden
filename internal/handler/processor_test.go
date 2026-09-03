@@ -48,7 +48,7 @@ func staticProvider(t *testing.T) *config.Provider {
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
-			Subject: "org/repo",
+			Subject: config.Patterns{"org/repo"},
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
 	}
@@ -243,7 +243,7 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 		Cache:           &config.Cache{TTL: 0},
 		TagAuth:         &config.TagAuth{Enabled: true, TagPrefix: "aow/"},
 		RoleMappings: []config.RoleMapping{{
-			Subject:    "acme/api",
+			Subject:    config.Patterns{"acme/api"},
 			Roles:      []string{"arn:aws:iam::111111111111:role/app"},
 			Conditions: &config.Condition{Ref: config.Patterns{"main"}}, // requires ref == main
 		}},
@@ -460,7 +460,7 @@ func sessionNameCfg(t *testing.T, override string) *config.Config {
 		RoleSessionName: "global-default",
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
-			Subject:         "org/repo",
+			Subject:         config.Patterns{"org/repo"},
 			Roles:           []string{"arn:aws:iam::123456789012:role/MyRole"},
 			RoleSessionName: override,
 		}},
@@ -524,12 +524,12 @@ func TestAssumeRole_SessionNameComesFromAuthorizingMapping(t *testing.T) {
 			{
 				// Declared first and matches the subject, but does not grant
 				// the requested role.
-				Subject:         "org/repo",
+				Subject:         config.Patterns{"org/repo"},
 				Roles:           []string{"arn:aws:iam::123456789012:role/OtherRole"},
 				RoleSessionName: "wrong-name",
 			},
 			{
-				Subject:         "org/repo",
+				Subject:         config.Patterns{"org/repo"},
 				Roles:           []string{"arn:aws:iam::123456789012:role/MyRole"},
 				RoleSessionName: "right-name",
 			},

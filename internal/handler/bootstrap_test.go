@@ -78,7 +78,7 @@ func fragmentTestBaseConfig(t *testing.T, fragmentPath string) *config.Config {
 		}},
 		RoleSessionName: "test-session",
 		RoleMappings: []config.RoleMapping{{
-			Subject: "org/base-repo",
+			Subject: config.Patterns{"org/base-repo"},
 			Roles:   []string{"arn:aws:iam::123456789012:role/BaseRole"},
 		}},
 	}
