@@ -66,6 +66,24 @@ func knownClaimsFor(iss *IssuerConfig) map[string]bool {
 	return known
 }
 
+// withSessionTagClaims widens known with the claims a mapping's own
+// session_tags name, so a mapping that both tags and gates on a claim outside
+// the issuer's vocabulary is not warned about. Copies rather than mutating:
+// known is shared by every mapping bound to the issuer.
+func withSessionTagClaims(known map[string]bool, tags map[string]string) map[string]bool {
+	if known == nil || len(tags) == 0 {
+		return known
+	}
+	out := make(map[string]bool, len(known)+len(tags))
+	for name := range known {
+		out[name] = true
+	}
+	for _, claim := range tags {
+		out[claim] = true
+	}
+	return out
+}
+
 // warnConditionKeys walks a whole condition tree warning once per unknown
 // claim name. where identifies the mapping, path the node within it.
 func warnConditionKeys(cond *Condition, path, where string, known map[string]bool) {

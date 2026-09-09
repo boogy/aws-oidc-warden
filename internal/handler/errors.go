@@ -36,6 +36,10 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		errCode = "policy_error"
 		errMsg = "Error accessing policy information"
 		*statusCode = http.StatusInternalServerError
+	case errors.Is(err, ErrAssumeRoleDenied):
+		errCode = "assume_role_denied"
+		errMsg = "AWS STS denied the role assumption for the requested role"
+		*statusCode = http.StatusForbidden
 	case errors.Is(err, ErrAssumeRoleFailed):
 		errCode = "assume_role_failed"
 		errMsg = "Failed to assume the requested role"

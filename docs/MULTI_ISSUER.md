@@ -74,7 +74,15 @@ role_mappings:
 
 ## Tag-based authorization across issuers
 
-With tag-based authorization ([TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md)) the canonical identity tag is `aow/subject`, matched against any issuer's canonical subject (`aow/repo`/`aow/repo-owner` remain accepted as legacy GitHub-shaped aliases). Once **more than one** issuer is configured, a role must also carry a matching `aow/issuer` tag or tag-auth fails closed for it — otherwise a role scoped to one issuer's subjects would be reachable by another issuer's identically-shaped subject (e.g. a GitHub `owner/repo` colliding with a GitLab `group/project`). Add `aow/issuer` to tag-authorized roles **before** adding a second issuer. Beyond identity, every other named tag suffix (`aow/ref`, `aow/actor`, …) spells a GitHub Actions claim; a non-GitHub issuer narrows a tag-authorized role with `aow/claim.<name>`, which matches the raw verified claim — e.g. `aow/claim.project_path: acme/api`.
+With tag-based authorization ([TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md)) the canonical identity tag is `aow/subject`, matched against any issuer's canonical subject. `aow/repo` / `aow/repo-owner` remain accepted as legacy GitHub-shaped aliases.
+
+<!-- prettier-ignore -->
+> [!WARNING]
+> **Add `aow/issuer` to tag-authorized roles *before* adding a second issuer.** Once more than one issuer is configured, a role without a matching `aow/issuer` tag becomes unreachable via tag-auth (fails closed).
+>
+> The requirement exists because otherwise a role scoped to one issuer's subjects would be reachable by another issuer's identically-shaped subject — a GitHub `owner/repo` colliding with a GitLab `group/project`.
+
+Beyond identity, every other named tag suffix (`aow/ref`, `aow/actor`, …) spells a GitHub Actions claim. A non-GitHub issuer narrows a tag-authorized role with `aow/claim.<name>`, which matches the raw verified claim — e.g. `aow/claim.project_path: acme/api`.
 
 ## Security notes
 

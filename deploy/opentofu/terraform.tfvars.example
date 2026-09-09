@@ -6,6 +6,30 @@ tags = {
   owner       = "platform-team"
 }
 
+# Override individual resource names below; each defaults to a
+# name_prefix-derived value if left unset.
+# role_name                   = "aws-oidc-warden-exec"
+# lambda_function_name        = "aws-oidc-warden"
+# api_gateway_name            = "aws-oidc-warden"
+# config_bucket_name          = "aws-oidc-warden-config-123456789012"
+# cache_bucket_name           = "aws-oidc-warden-cache-123456789012"
+# log_bucket_name             = "aws-oidc-warden-logs-123456789012"
+# session_policy_bucket_name  = "aws-oidc-warden-session-policies-123456789012"
+# cache_table_name            = "aws-oidc-warden-cache"
+
+# Reuse an execution role owned elsewhere instead of creating one — how a
+# multi-region deployment shares a single role ARN. Its trust policy and
+# managed-policy attachments stay with its owner; this stack still attaches the
+# "<name_prefix>-perms" inline policy for the resources it creates. See
+# deploy/README.md.
+# execution_role_arn = "arn:aws:iam::123456789012:role/aws-oidc-warden-exec"
+
+# Set false to hand-write config.yaml and upload it to the config bucket
+# yourself; the bucket is still created and the Lambda still reads config.yaml
+# from it, but every config variable below stops being rendered. See
+# deploy/README.md.
+# manage_config = false
+
 # STS role session name, visible in CloudTrail on every AssumeRole.
 # role_session_name = "aws-oidc-warden"
 

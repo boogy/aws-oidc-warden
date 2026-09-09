@@ -9,6 +9,74 @@ variable "name_prefix" {
   default     = "aws-oidc-warden"
 }
 
+# ---- Per-resource name overrides ----
+# Each defaults to a name_prefix-derived value (see main.tf locals) when left
+# null, so setting name_prefix alone still renames everything as before.
+variable "role_name" {
+  description = "Lambda execution IAM role name. Defaults to \"<name_prefix>-exec\". Used only when var.execution_role_arn is null."
+  type        = string
+  default     = null
+}
+
+# ---- Execution role ownership ----
+# IAM is global, so a multi-region deployment can share one execution role
+# instead of minting one per region — its ARN is the value every target role
+# has to trust. Point each regional stack at the role a bootstrap stack owns and
+# it contributes only its own inline policy, scoped to that region's buckets and
+# table. See deploy/README.md.
+variable "execution_role_arn" {
+  description = "ARN of an existing Lambda execution role to use instead of creating one. Its trust policy and managed-policy attachments (including AWSLambdaBasicExecutionRole) stay with whoever owns it; this stack still attaches its own inline policy for the resources it creates. Null creates the role."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.execution_role_arn == null || can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$", coalesce(var.execution_role_arn, "")))
+    error_message = "execution_role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/<name>)."
+  }
+}
+
+variable "lambda_function_name" {
+  description = "Lambda function name. Defaults to name_prefix."
+  type        = string
+  default     = null
+}
+
+variable "api_gateway_name" {
+  description = "API Gateway name (both http and rest variants). Defaults to name_prefix."
+  type        = string
+  default     = null
+}
+
+variable "config_bucket_name" {
+  description = "S3 config bucket name. Defaults to \"<name_prefix>-config-<suffix>\"."
+  type        = string
+  default     = null
+}
+
+variable "cache_bucket_name" {
+  description = "S3 cache bucket name. Defaults to \"<name_prefix>-cache-<suffix>\"."
+  type        = string
+  default     = null
+}
+
+variable "log_bucket_name" {
+  description = "S3 audit-log bucket name. Defaults to \"<name_prefix>-logs-<suffix>\"."
+  type        = string
+  default     = null
+}
+
+variable "session_policy_bucket_name" {
+  description = "S3 session-policy bucket name. Defaults to \"<name_prefix>-session-policies-<suffix>\"."
+  type        = string
+  default     = null
+}
+
+variable "cache_table_name" {
+  description = "DynamoDB cache table name. Defaults to \"<name_prefix>-cache\"."
+  type        = string
+  default     = null
+}
+
 variable "tags" {
   description = "Additional tags applied to all resources."
   type        = map(string)
@@ -19,7 +87,14 @@ variable "tags" {
 # By default this stack renders a single GitHub Actions issuer entry into the
 # v2 `issuers[]` list. For multiple issuers or non-GitHub providers, set
 # var.issuers instead — the module renders its config.yaml too, no hand
-# management needed.
+# management needed. Every variable in this section applies only while
+# var.manage_config is true.
+variable "manage_config" {
+  description = "Render config.yaml from the variables below and upload it to the config bucket. Set false to bring your own YAML: the bucket is still created and the Lambda still reads config.yaml from it, but the object is yours to upload (see deploy/README.md)."
+  type        = bool
+  default     = true
+}
+
 variable "issuer" {
   type        = string
   description = "OIDC issuer URL (rendered as a single github issuers[] entry). Mutually exclusive with var.issuers. Null uses the GitHub Actions default."

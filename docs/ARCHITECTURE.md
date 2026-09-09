@@ -190,7 +190,17 @@ Three modes controlled by `jwt_validation.mode`:
 
 **Security invariant:** In delegated modes, if no upstream-injected claims arrive (direct Lambda invocation bypass), `Extract()` returns an error wrapping `ErrTokenValidationFailed` → HTTP 401.
 
-> **Trust boundary warning — `apigw` mode has no cryptographic backstop.** In `apigw` mode the Lambda never sees or verifies the original OIDC token's signature; it fully trusts `event.requestContext.authorizer.jwt.claims` as handed to it. The invariant above only rejects an **empty** claims map — it does **not** detect a direct invoke that supplies **forged, non-empty** claims (an arbitrary `iss`/`aud`/`sub`/`exp`), which pass straight through with no signature to check them against. **`lambda:InvokeFunction` on this function is therefore equivalent to full identity impersonation in `apigw` mode** — anyone who can invoke it directly can obtain AWS credentials for any spoofed subject your `role_mappings`/`role_groups`/`tag_auth` would authorize. `alb` mode does not share this gap: the Lambda itself verifies the ALB's ES256 signature over `x-amzn-oidc-data`, so a forged direct invoke fails that check. **Mitigation:** the function's resource-based (invoke) policy must restrict `lambda:InvokeFunction` to the fronting API Gateway's execution/service principal only — never a broader principal. See [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode) for the full write-up.
+<!-- prettier-ignore -->
+> [!WARNING]
+> **`apigw` mode has no cryptographic backstop.**
+>
+> The Lambda never verifies the original token's signature — it trusts `event.requestContext.authorizer.jwt.claims` as handed to it. The invariant above rejects an **empty** claims map, but it cannot detect a direct invoke supplying **forged, non-empty** claims (arbitrary `iss`/`aud`/`sub`/`exp`): there is no signature left to check them against.
+>
+> - **`lambda:InvokeFunction` on this function is equivalent to full identity impersonation** in `apigw` mode. Anyone who can invoke it directly can obtain credentials for any subject your `role_mappings` / `role_groups` / `tag_auth` would authorize.
+> - **Mitigation:** the function's resource-based (invoke) policy must restrict `lambda:InvokeFunction` to the fronting API Gateway's execution/service principal only — never a broader principal.
+> - **`alb` mode does not share this gap.** The Lambda verifies the ALB's ES256 signature over `x-amzn-oidc-data` itself, so a forged direct invoke fails that check.
+>
+> Full write-up: [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).
 
 **API Gateway mode** requires an `aws_apigatewayv2_authorizer` JWT resource per configured issuer, each pointing at that issuer's own URL (`https://token.actions.githubusercontent.com` for GitHub Actions, `https://gitlab.com` for GitLab, and so on) — the authorizer's verified `iss` must appear in `issuers[]` or the request is denied with `ErrUnknownIssuer`. Restrict Lambda invocations to the API Gateway execution role via Lambda resource-based policies.
 
@@ -534,31 +544,46 @@ No claim is privileged or evaluated in a fixed order: every key under `condition
 
 ### 4. Tag-Based Authorization & Cross-Account
 
-Tag-based authorization is opt-in (`tag_auth.enabled`, default `false`) and is a fallback after explicit `role_mappings` matching fails. Cross-account is a separate opt-in policy gate (`cross_account.enabled`, default `false`): `false` (or the block omitted) hard-blocks **every** cross-account operation — both role assumption and tag reads fail closed with an error, for explicit mappings and tag-auth alike. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md) for the full tag reference and IAM setup, and [examples/cross-account/](examples/cross-account/) for a worked example.
+Both features are opt-in and default to `false`:
+
+| Toggle | Off means | On means |
+| --- | --- | --- |
+| `tag_auth.enabled` | Only explicit `role_mappings` authorize | Role IAM tags authorize as a **fallback**, after mapping matching fails |
+| `cross_account.enabled` | **Every** cross-account operation fails closed — assumption and tag reads, mappings and tag-auth alike | Accounts in `allowed_accounts` are reachable |
+
+**The one-hop rule.** Every role assumption — same-account or cross-account — goes directly from the hub's own credentials to the target role. The spoke role exists only to read tags, and is never an assume target.
 
 **Flow:**
 
-1. The hub (warden's own AWS account) is the central trust anchor; every role assumption — same-account or cross-account — goes **directly** from the hub's own credentials to the target role, one hop.
-2. For each requested role ARN the account ID is parsed from the ARN. If it differs from the hub and `cross_account.enabled` is not true, the request fails closed.
-3. _(tag-auth only, and only when no explicit mapping already authorized the role)_ If the target account differs from the hub, the warden assumes a convention-named spoke role (`arn:aws:iam::<account>:role/<SpokeRoleName>`, default `aow-spoke`) using `sts:AssumeRole` with an optional `ExternalID`, solely to call `iam:GetRole` on the target role and read its IAM tags. The spoke session is short-lived (`SpokeSessionDuration`, default 15 min) and the credentials are cached in-process per account. The spoke is never used to assume the target role itself.
-4. `TagAuth.Authorize` evaluates the tags: the role must carry at least one identity tag — the canonical `aow/subject`, or the legacy `aow/repo`/`aow/repo-owner` aliases — that matches the verified subject/claims; with more than one configured issuer it must also carry a matching `aow/issuer` tag; every other present dimension tag must also match (AND logic; space-separated values in a tag = OR), including any issuer-agnostic `aow/claim.<name>` tag, which matches the raw verified claim `<name>` and can only narrow the decision.
-5. If authorized, `AssumeRole` is called directly on the target role using the hub's own credentials (never spoke credentials). When `Config.TransitiveSessionTags()` (the top-level `session_tags_transitive`, RECOMMENDED — the deprecated `tag_auth.transitive_session_tags` still works as a fallback) is true, every attached session tag (the issuer's `session_tags` spec) is marked transitive so it propagates immutably through subsequent role chaining; without it, the tags are dropped at this hop and any ABAC policy past it loses the caller's identity. Because the hub's credentials are always a role session on Lambda, this assume — same-account included — is clamped to 1 hour; only `local` mode with IAM user credentials avoids the clamp.
+1. Parse the account ID out of the requested role ARN. If it isn't the hub's and `cross_account.enabled` isn't true, fail closed.
+2. `IsTargetAccountAllowed` checks that account against `cross_account.allowed_accounts` — before any tag read or assumption. With `cross_account` disabled only the hub is allowed; with it enabled the hub is always implicitly allowed, and an **empty list permits any account** (logged as a warning). Non-12-digit IDs are rejected at config load.
+3. _(tag-auth only, cross-account only)_ Assume the convention-named spoke role (`aow-spoke` by default, optional `ExternalID`) just to call `iam:GetRole` and read the target role's tags. Short-lived (`SpokeSessionDuration`, default 15 min), cached in-process per account.
+4. `TagAuth.Authorize` evaluates the tags — see the rules below.
+5. Assume the target role directly with the hub's credentials. Because those are themselves a role session on Lambda, the assume is clamped to 1 hour; only `local` mode with IAM user credentials avoids the clamp.
 
-**Account Allow-List (`IsTargetAccountAllowed`):** Before reading role tags or assuming any role, `IsTargetAccountAllowed` checks the target ARN's account ID against `cross_account.allowed_accounts`. With `cross_account` disabled, only the hub account is allowed. With it enabled, the hub account is always implicitly allowed, and an empty list permits any account (a warning is logged). Non-12-digit account IDs are rejected at config load by `Validate()`.
+**Tag matching rules:**
 
-**`DefaultOrg` shorthand:** When `tag_auth.default_org` is set, bare repo names in `aow/repo` tag values (no `/`) are automatically expanded to `<default_org>/<name>` before comparison, enabling short tag values like `my-service` instead of `org/my-service`.
+- The role must carry at least one identity tag matching the verified subject — canonical `aow/subject`, or the legacy `aow/repo` / `aow/repo-owner` aliases.
+- With more than one configured issuer, a matching `aow/issuer` tag is also required.
+- Every *other* dimension tag present must also match — AND across tags, OR within one tag's space-separated values. `aow/claim.<name>` matches the raw verified claim and can only ever narrow the decision.
+- `tag_auth.default_org` expands a bare `aow/repo` value (no `/`) to `<default_org>/<name>`, so tags can read `my-service` instead of `org/my-service`.
+
+**Session tags and chaining.** When `session_tags_transitive` is true (**recommended**; the deprecated `tag_auth.transitive_session_tags` still works as a fallback), every attached session tag is marked transitive and propagates immutably through later role chaining. Without it the tags are dropped at the first hop and any ABAC policy past it loses the caller's identity.
+
+Full tag reference and IAM setup: [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md). Worked example: [examples/cross-account/](examples/cross-account/).
 
 **Diagrams:**
 
-| Diagram                        | File                                                                 |
-| ------------------------------ | -------------------------------------------------------------------- |
-| Authorization decision flow    | [images/tag-auth-decision.svg](images/tag-auth-decision.svg)         |
-| Cross-account hub/spoke flow   | [images/tag-auth-crossaccount.svg](images/tag-auth-crossaccount.svg) |
-| ABAC session tag flow          | [images/tag-auth-abac.svg](images/tag-auth-abac.svg)                 |
-| Transitive session tags        | [images/tag-auth-transitive.svg](images/tag-auth-transitive.svg)     |
-| Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg)         |
-| Tag matching logic             | [images/tag-auth-matching.svg](images/tag-auth-matching.svg)         |
-| Authorization precedence       | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg)     |
+| Diagram | File |
+| --- | --- |
+| Authorization decision flow | [images/tag-auth-decision.svg](images/tag-auth-decision.svg) |
+| Cross-account hub/spoke flow | [images/tag-auth-crossaccount.svg](images/tag-auth-crossaccount.svg) |
+| ABAC session tag flow | [images/tag-auth-abac.svg](images/tag-auth-abac.svg) |
+| Transitive session tags | [images/tag-auth-transitive.svg](images/tag-auth-transitive.svg) |
+| Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg) |
+| Tag matching logic | [images/tag-auth-matching.svg](images/tag-auth-matching.svg) |
+| Authorization precedence | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg) |
+
 
 ### 5. Residual Risk: Stateless Replay
 
@@ -597,82 +622,48 @@ JWKS documents change rarely (issuer key rotations), so with any backend and a s
 - Efficient JWT parsing and validation
 - Optimized regular expression compilation
 
-## Scalability Architecture
+## Scaling
 
-### 1. Horizontal Scaling
+Nothing in the request path holds state, so scale is AWS's problem rather than the service's:
 
-```mermaid
-graph LR
-    subgraph "Multi-Region Deployment"
-        subgraph "Region 1"
-            ALB1[ALB] --> LAMBDA1[Lambda Functions]
-            LAMBDA1 --> DDB1[DynamoDB]
-            LAMBDA1 --> S3_1[S3 Cache]
-        end
+| Layer | How it scales | What to watch |
+| --- | --- | --- |
+| Lambda | Concurrency scales automatically per request | Reserved/provisioned concurrency if cold starts matter |
+| JWKS cache (memory) | Per-execution-environment LRU; free | Lost on every cold start |
+| JWKS cache (DynamoDB) | On-demand, shared across all environments and regions | Needs a TTL attribute configured, or entries never expire |
+| JWKS cache (S3) | Effectively unlimited | Highest latency of the three |
+| Config in S3 | One read per refresh interval per environment, not per request | A bad config object is rejected and the previous one is kept |
 
-        subgraph "Region 2"
-            ALB2[ALB] --> LAMBDA2[Lambda Functions]
-            LAMBDA2 --> DDB2[DynamoDB]
-            LAMBDA2 --> S3_2[S3 Cache]
-        end
+For multi-region, deploy the stack per region. Nothing coordinates between regions, so this needs no additional application config.
 
-        subgraph "Global"
-            ROUTE53[Route 53] --> ALB1
-            ROUTE53 --> ALB2
-            DDB1 -.->|Global Tables| DDB2
-        end
-    end
-```
+Keep the JWKS cache **per-region** — do not reach for Global Tables. The cache holds public signing keys and is rebuildable from a single JWKS fetch, so replication buys nothing and couples two deployments that are otherwise independent. The same reasoning applies with more force to the audit bucket, where sharing one bucket makes the secondary region fail closed during a primary-region S3 outage. See [deploy/README.md — Multi-region deployment](../deploy/README.md#multi-region-deployment-resilience).
 
-**Scaling Strategies:**
+Measured numbers — per-request cost, load time at thousands of mappings, memory sizing: [PERFORMANCE.md](PERFORMANCE.md).
 
-- **Lambda Auto-scaling**: Automatic scaling based on incoming requests
-- **DynamoDB On-Demand**: Pay-per-request with automatic scaling
-- **S3 Unlimited Scale**: No capacity planning required
-- **Global Distribution**: Multi-region deployment for low latency
+## Deployment
 
-## Deployment Architecture
+Images are built with [ko](https://ko.build) from `.ko.yaml`, not a Dockerfile — there is no Dockerfile in this repo. The base image is `public.ecr.aws/lambda/provided:al2023` and the binary is named `bootstrap`, as Lambda container images require.
 
-### 1. Container-Based Deployment
+One image per frontend, published to GHCR and Docker Hub for arm64 and amd64:
 
-```dockerfile
-# Multi-stage build for optimal image size
-FROM golang:1.26-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -o bootstrap cmd/lambdaurl/main.go
+| Frontend | `cmd/` | Image tag |
+| --- | --- | --- |
+| API Gateway REST v1 | `cmd/apigateway` | `apigateway-latest` (also plain `latest`) |
+| API Gateway HTTP v2 | `cmd/apigatewayv2` | `apigatewayv2-latest` |
+| ALB | `cmd/alb` | `alb-latest` |
+| Lambda URL | `cmd/lambdaurl` | `lambdaurl-latest` |
 
-FROM public.ecr.aws/lambda/provided:al2023
-COPY --from=builder /app/bootstrap /var/runtime/bootstrap
-CMD ["bootstrap"]
-```
+Version-pinned tags (`apigatewayv2-v3.2.0`) are published alongside; a prerelease never moves a `*-latest` tag. Builds carry provenance attestations and are scanned in the release workflow.
 
-**Container Registry Options:**
+### Infrastructure as code
 
-- GitHub Container Registry (GHCR): `ghcr.io/boogy/aws-oidc-warden`
-- Docker Hub: `boogy/aws-oidc-warden`
-- AWS ECR: Private registry with pull-through cache
+Use the maintained stacks in [`deploy/`](../deploy/README.md) rather than hand-rolling one:
 
-### 2. Infrastructure as Code
+- **[`deploy/opentofu/`](../deploy/opentofu/)** — the full module: Lambda, IAM, the config S3 object rendered from `templates/config.yaml.tftpl`, DynamoDB cache, optional API Gateway hardening. Includes `hardening.tftest.hcl`.
+- **[`deploy/cloudformation/quickstart.yaml`](../deploy/cloudformation/quickstart.yaml)** — a single-file quick-start for evaluation.
 
-**Terraform Example:**
+[`deploy/README.md`](../deploy/README.md) covers the toggle reference, how `config.yaml` is delivered, choosing a JWT validation mode, hardening a public endpoint, and smoke tests.
 
-```hcl
-resource "aws_lambda_function" "aws_oidc_warden" {
-  function_name = "aws-oidc-warden"
-  package_type  = "Image"
-  image_uri     = "ghcr.io/boogy/aws-oidc-warden:latest"
-  role          = aws_iam_role.lambda_execution.arn
-
-  environment {
-    variables = {
-      AOW_CACHE_TYPE         = "dynamodb"
-      AOW_CACHE_DYNAMODB_TABLE = aws_dynamodb_table.cache.name
-    }
-  }
-}
-```
 
 ### Required IAM Permissions
 

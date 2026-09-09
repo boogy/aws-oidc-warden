@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -178,11 +179,17 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		slog.Bool("hasSessionPolicy", sessionPolicy != nil),
 		slog.String("sessionName", sessionName))
 
-	sessionTagSpec := cfg.IssuerSessionTags(claims.Issuer)
+	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, decision)
 	credentials, err := r.consumer.AssumeRole(requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
-		return nil, deny("Failed to assume role", fmt.Errorf("failed to assume role: %w", ErrAssumeRoleFailed), rec.reasonAttr(cfg.LogClaimValues))
+		// A trust-policy/IAM refusal is the caller's answer (403); anything else
+		// (throttling, expired hub creds, bad policy document) is ours (500).
+		ret := ErrAssumeRoleFailed
+		if errors.Is(err, aws.ErrAssumeRoleDenied) {
+			ret = ErrAssumeRoleDenied
+		}
+		return nil, deny("Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
 	// Guard the derefs so a pathological STS response can't panic the handler.

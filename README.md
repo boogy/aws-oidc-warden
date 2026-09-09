@@ -4,85 +4,40 @@
 
 ![AWS OIDC Warden Architecture](./docs/img/aws-oidc-warden.png)
 
-## Overview
+A Go service that validates OIDC tokens (GitHub Actions, GitLab, any OIDC IdP) and exchanges them for short-lived AWS credentials via STS AssumeRole. It sits between your CI/CD jobs and AWS, so no long-lived keys are stored anywhere.
 
-**AWS OIDC Warden** is a secure, lightweight Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS AssumeRole. It acts as a trusted intermediary between CI/CD workflows and AWS resources, enforcing fine-grained access control on the token's verified subject and on any claim its issuer publishes — combined with `all_of`/`any_of`/`none_of` boolean groups — without storing long-lived credentials.
+Authorization is decided on the token's **verified** subject plus regex conditions on any claim the issuer publishes, composable with `all_of` / `any_of` / `none_of`.
 
 <!-- prettier-ignore -->
 > [!CAUTION]
-> Not all OIDC claims can be trusted. See the great tool and table created [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for a comprehensive list of claims.
->
-> This lambda allows you to include specific constraints for a repository before it can obtain credentials from a role. Choose wisely based on the table that Palo Alto Networks has provided in the repository linked above.
+> **Not all OIDC claims can be trusted.** Some GitHub claims are attacker-influenced. Before you gate access on a claim, check it against [PaloAltoNetworks/github-oidc-utils](https://github.com/PaloAltoNetworks/github-oidc-utils), which classifies every GitHub OIDC claim by how trustworthy it is. This service lets you require any claim; choosing the wrong one is the most likely way to build an insecure setup.
 
 ---
 
 ## Documentation
 
-| Document                                                           | What's inside                                                                                                    |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)               | **How token validation works** — the security core: modes, JWKS, crypto hardening, claim checks, SSRF protection |
-| [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md)                       | Onboard any OIDC provider — discovery, `provider`, `claim_mappings`, per-issuer audiences                        |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md)                     | Full config reference — all keys, env vars, remote S3 reload, cache, session policies                            |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                       | Component diagram, request pipeline, deployment options, full build/deploy commands                              |
-| [docs/PERFORMANCE.md](docs/PERFORMANCE.md)                         | Measured behaviour at thousands of repositories — request cost, load time, memory sizing, benchmarks             |
-| [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                 | Per-issuer session tags applied to every STS call, ABAC patterns                                                 |
-| [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) | Tag-based authorization, hub/spoke cross-account model                                                           |
-| [docs/LOGGING.md](docs/LOGGING.md)                                 | Structured logging, durable audit trail, `audit_required`, SIEM signals, alerts                                  |
-| [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md)                       | Upgrading from v2 to v3 — condition keys are claim names; `environment` changed meaning                          |
-| [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md)                       | Upgrading from v1 (single-issuer) to the v2 `issuers[]` model — breaking-change checklist                        |
+**New here?** Read in this order: **[deploy/](deploy/README.md)** to get it running → **[CONFIGURATION.md](docs/CONFIGURATION.md)** to write your policy → **[GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)** to call it from CI → **[TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)** to understand what is actually guaranteed.
+
+| Document                                                           | What's inside                                                                                                                             |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| [deploy/README.md](deploy/README.md)                               | **Deploy it** — OpenTofu modules and a CloudFormation quick-start, toggle reference, smoke tests, endpoint hardening                      |
+| [docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)                   | **Call it from CI** — the request/response contract, GitHub Actions examples, multi-region failover, and the composite action to roll out |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md)                     | Full config reference — every key, env vars, conditions, session policies, S3 hot-reload, fragments                                       |
+| [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)               | **The security core** — validation modes, JWKS handling, crypto hardening, claim checks, SSRF protection                                  |
+| [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md)                       | Onboard any OIDC provider — discovery, `provider`, `claim_mappings`, per-issuer audiences                                                 |
+| [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                 | Session tags on every STS call, and the ABAC patterns they enable                                                                         |
+| [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) | Authorize via IAM role tags instead of config; hub/spoke cross-account model                                                              |
+| [docs/LOGGING.md](docs/LOGGING.md)                                 | Structured logs, the durable audit trail, `audit_required`, SIEM signals, alerts                                                          |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                       | Component diagram, request pipeline, package layout, IAM permissions                                                                      |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md)                         | Measured behaviour at thousands of repositories — request cost, load time, memory sizing                                                  |
+| [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md)                       | v2 → v3: condition keys are claim names, and `environment` changed meaning                                                                |
+| [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md)                       | v1 → v2: the `issuers[]` model, with a breaking-change checklist                                                                          |
 
 ---
 
-## Features
+## Quick start
 
-- **Multi-Issuer, Any-Provider Validation**: Trust any number of OIDC issuers at once (`issuers[]`); GitHub Actions has native support, and `provider: generic` onboards any OIDC IdP by mapping its claims — see [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md)
-- **Hardened Token Validation**: Strict algorithm allow-list (RS/ES 256–512, never `none`/`HS*`), `kid`+`alg`+key-type key pinning, RSA≥2048 / EC on-curve checks, SSRF-safe JWKS fetching, and bounded time/size — full detail in [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)
-- **Delegated Validation Modes**: Let API Gateway (HTTP API v2 JWT Authorizer) or ALB OIDC verify the signature, while the service still re-validates every claim (`jwt_validation.mode: self`/`apigw`/`alb`)
-- **Multiple Deployment Options**: API Gateway (REST v1 + HTTP v2), Lambda URLs, Application Load Balancer, and a local development server
-- **Fine-Grained Access Control**: Authorization on a provider-neutral canonical **subject**; auto-anchored regex `conditions` keyed by the claim name itself (`ref`, `actor`, `event_name`, `project_path`, `groups`, … — any verified claim, any provider), each taking one pattern or a list of alternatives, AND-ed by default and composable with `all_of` / `any_of` / `none_of` boolean groups
-- **Session Policy Support**: Inline JSON or S3-stored policy files to scope AWS permissions per mapping
-- **Per-Issuer Session Tagging & ABAC**: Claims are forwarded as STS session tags for auditability and attribute-based access control — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)
-- **Tag-Based Authorization & Cross-Account (hub/spoke)**: Authorize role assumptions via IAM role tags without enumerating roles in config; extend to other AWS accounts through a spoke role — see [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md)
-- **Structured Audit Trail**: One JSON record per allow/deny decision, secret-safe redaction, and an optional fail-closed `audit_required` mode — see [docs/LOGGING.md](docs/LOGGING.md)
-- **Hot Config Reload**: Update issuers, `role_mappings`, and session policies in S3 without redeploying — the Lambda picks up changes within the configured interval, fail-safe on a bad reload
-- **Multi-Tier Caching**: Memory (LRU), DynamoDB (persistent/shared), and S3 backends for JWKS
-- **Multi-Architecture Support**: Native ARM64 and AMD64 builds; pre-built container images on GHCR
-
----
-
-## Getting Started
-
-### Installation
-
-1. Clone the repository:
-
-   ```bash
-   git clone git@github.com:boogy/aws-oidc-warden.git
-   cd aws-oidc-warden
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   go mod tidy
-   ```
-
-3. Build the binary:
-   ```bash
-   make build
-   ```
-
-**Alternative methods:**
-
-- **Pre-built binaries**: [Releases](https://github.com/boogy/aws-oidc-warden/releases) page
-- **Container images**: `ghcr.io/boogy/aws-oidc-warden:latest` (see [Deployment](#deploying-to-aws-lambda))
-- **Build with ko**: `make ko-build`
-
----
-
-### Configuration
-
-AWS OIDC Warden reads config from environment variables (`AOW_` prefix), a YAML/JSON/TOML file, or an S3 object. A minimal example:
+**1. Write a config** (`config.yaml`):
 
 ```yaml
 issuers:
@@ -90,11 +45,9 @@ issuers:
     provider: github
     audiences:
       - sts.amazonaws.com
-
-cache:
-  type: dynamodb
-  ttl: 1h
-  dynamodb_table: aws-oidc-warden-cache
+    session_tags: # attached to every STS session, for ABAC and audit
+      repo: repository
+      ref: ref
 
 role_mappings:
   - subject: "my-org/my-repo"
@@ -104,205 +57,96 @@ role_mappings:
       ref: "refs/heads/main"
 ```
 
-> **v3 note:** every `conditions:` key is the claim it checks. `branch`/`actor_matches` were renamed to `ref`/`actor`, and `environment` now checks the deployment-environment claim rather than `runner_environment` — see [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md).
->
-> **v2 note:** the top-level `issuer`/`audiences` and `repo_role_mappings`/`constraints` keys from v1 were replaced by `issuers[]`, `role_mappings`, and `conditions`. See [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md).
+**2. Run it locally** to check the config loads and authorizes what you expect:
 
-For the full reference — all keys, condition fields, session-policy options, remote S3 hot-reload, multi-issuer setup, and tag-auth config — see [docs/CONFIGURATION.md](docs/CONFIGURATION.md), [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md), and [`example-config.yaml`](example-config.yaml).
+```bash
+make run   # local server on :8080 with example-config.yaml
+# or: go run cmd/local/main.go -port 9090 -config config.yaml -log-level debug
+```
+
+Endpoints: `POST /verify` (matches Lambda behaviour) and `GET /health`. The local server has no S3 hot-reload — that is a Lambda feature.
+
+**3. Deploy** with the maintained OpenTofu module or the CloudFormation quick-start — see **[deploy/README.md](deploy/README.md)**.
+
+**4. Call it from a workflow** — see **[GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)**.
+
+The target IAM role must trust the warden's execution role, with both `sts:AssumeRole` and `sts:TagSession`.
+
+> **Upgrading?** In v3 every `conditions:` key is the claim it checks: `branch`/`actor_matches` became `ref`/`actor`, and `environment` now means the deployment environment, not the runner ([MIGRATION_V3](docs/MIGRATION_V3.md)). v2 replaced the top-level `issuer`/`audiences` and `repo_role_mappings`/`constraints` with `issuers[]`, `role_mappings` and `conditions` ([MIGRATION_V2](docs/MIGRATION_V2.md)).
 
 ---
 
-### Usage
+## Calling it from CI
 
-#### Request Format
-
-The wire contract depends on `jwt_validation.mode` — specifically, **who verifies the token**. The role ARN is always in the JSON body; the token's location differs.
-
-| Mode             | `Authorization` header                | Request body                      | Token verified by          |
-| ---------------- | ------------------------------------- | --------------------------------- | -------------------------- |
-| `self` (default) | none                                  | `{"token": "...", "role": "..."}` | This service               |
-| `apigw`          | `Authorization: Bearer <token>`       | `{"role": "..."}`                 | API Gateway JWT Authorizer |
-| `alb`            | none — ALB injects `x-amzn-oidc-data` | `{"role": "..."}`                 | ALB OIDC                   |
-
-> **The token is never sent twice.** In `apigw` mode it lives **only** in the `Authorization` header — a `token` field in the body is ignored (`ParseRoleOnlyRequestBody` reads only `role`), and a missing header makes API Gateway reject the call before this service runs. See [docs/TOKEN_VALIDATION.md §2.1](docs/TOKEN_VALIDATION.md#21-request-contract-per-mode).
-
-**Self mode** (default) — POST the OIDC token and role ARN in the body:
-
-```json
-{
-  "token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "role": "arn:aws:iam::123456789012:role/github-actions-role"
-}
-```
-
-**apigw mode** — send the token as a Bearer header (API Gateway validates it); the body carries only the role:
-
-```http
-POST /verify HTTP/1.1
-Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
-Content-Type: application/json
-
-{"role": "arn:aws:iam::123456789012:role/github-actions-role"}
-```
-
-#### Running Locally
-
-```bash
-# Start local development server (default port 8080)
-make run
-
-# With custom options
-go run cmd/local/main.go -port 9090 -config example-config.yaml -log-level debug
-```
-
-The local server loads config at startup from a static provider — there is no live S3 hot-reload locally. Hot-reload is a Lambda deployment feature; see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-
-Endpoints:
-
-- `POST /verify` — token validation (matches Lambda behavior)
-- `GET /health` — health check
-
-#### Using in GitHub Actions Workflows
-
-The recommended approach uses `@actions/core` to request an OIDC token with a specific audience. The example below targets **self mode** (token in the body). For **apigw mode**, see the variant that follows.
+A caller requests an OIDC token, POSTs it with the role ARN it wants, and exports the credentials that come back. The job needs `id-token: write`:
 
 ```yaml
-name: AWS Deployment
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Get AWS credentials via OIDC warden
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const core = require('@actions/core');
-            const token = await core.getIDToken('sts.amazonaws.com');
-
-            const response = await fetch('https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/verify', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                token: token,
-                role: 'arn:aws:iam::123456789012:role/github-actions-role'
-              })
-            });
-
-            const { data } = await response.json();
-            core.setSecret(data.AccessKeyId);
-            core.setSecret(data.SecretAccessKey);
-            core.setSecret(data.SessionToken);
-            core.exportVariable('AWS_ACCESS_KEY_ID', data.AccessKeyId);
-            core.exportVariable('AWS_SECRET_ACCESS_KEY', data.SecretAccessKey);
-            core.exportVariable('AWS_SESSION_TOKEN', data.SessionToken);
-
-      - name: Use AWS credentials
-        run: aws sts get-caller-identity
-```
-
-> **curl alternative**: You can also call the endpoint directly via `curl` using `$ACTIONS_ID_TOKEN_REQUEST_URL`. The `@actions/core` method above is preferred for cleaner audience control.
-
-**apigw mode variant** — send the token as an `Authorization: Bearer` header (API Gateway's JWT Authorizer validates it) and put only the role in the body:
-
-```yaml
-- name: Get AWS credentials via OIDC warden (apigw mode)
-  uses: actions/github-script@v7
+- uses: actions/github-script@v7
   with:
     script: |
       const core = require('@actions/core');
       const token = await core.getIDToken('sts.amazonaws.com');
-
-      const response = await fetch('https://your-api-gateway-url.execute-api.region.amazonaws.com/prod/verify', {
+      const res = await fetch(process.env.WARDEN_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          role: 'arn:aws:iam::123456789012:role/github-actions-role'
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, role: process.env.ROLE_ARN }),
       });
-
-      const { data } = await response.json();
-      core.setSecret(data.AccessKeyId);
-      core.setSecret(data.SecretAccessKey);
+      const { data } = await res.json();
+      core.setSecret(data.SecretAccessKey);   // mask before exporting
       core.setSecret(data.SessionToken);
-      core.exportVariable('AWS_ACCESS_KEY_ID', data.AccessKeyId);
-      core.exportVariable('AWS_SECRET_ACCESS_KEY', data.SecretAccessKey);
-      core.exportVariable('AWS_SESSION_TOKEN', data.SessionToken);
+      // ...export as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
 ```
 
-The audience requested by `getIDToken(...)` must match the audience configured on both the API Gateway JWT Authorizer and this service's issuer.
+**[GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)** has the rest: the full request/response contract for all three modes, which status codes are worth retrying, a `curl` variant, **multi-region failover** in both JavaScript and shell, and the composite action to put in front of a fleet of repositories. Non-GitHub issuers such as GitLab call the same endpoint the same way.
 
-#### Deploying to AWS Lambda
-
-Four Lambda variants are available — API Gateway HTTP v2 (recommended: `apigw` delegated mode puts a JWT Authorizer in front of the Lambda and the source IP is platform-attested), API Gateway REST v1 (`self` mode, the only flavor AWS WAF can attach to), Lambda URLs (simple setups), and ALB (high traffic). All share the same core logic; only the entry point differs.
-
-**Quickstart with pre-built container images (recommended):**
-
-```bash
-# API Gateway (REST v1) variant — self mode
-aws lambda create-function \
-  --function-name aws-oidc-warden \
-  --package-type Image \
-  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:latest \
-  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
-
-# API Gateway (HTTP v2) variant — apigw mode (JWT Authorizer)
-aws lambda create-function \
-  --function-name aws-oidc-warden-apigwv2 \
-  --package-type Image \
-  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:apigatewayv2-latest \
-  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
-
-# ALB variant
-aws lambda create-function \
-  --function-name aws-oidc-warden-alb \
-  --package-type Image \
-  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:alb-latest \
-  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
-
-# Lambda URL variant
-aws lambda create-function \
-  --function-name aws-oidc-warden-lambdaurl \
-  --package-type Image \
-  --code ImageUri=ghcr.io/boogy/aws-oidc-warden:lambdaurl-latest \
-  --role arn:aws:iam::ACCOUNT:role/lambda-execution-role
-```
-
-For full build commands, ECR pull-through cache setup, and infrastructure details see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> **Mask the credentials before exporting them.** Without `core.setSecret` (or `::add-mask::` in shell) any later step can print live AWS credentials into the job log.
 
 ---
 
-## Tag-Based Authorization (Cross-Account)
+## How it works
 
-Tag-based authorization lets a repository assume an IAM role authorized by **tags on the role itself**, without listing the role in `role_mappings`. This is especially useful when roles are managed across many accounts or teams: add `aow/subject` (or the legacy `aow/repo`), `aow/ref`, and similar tags to the IAM role and the warden will evaluate them against the OIDC claims.
+1. **Receive** — a CI job sends an OIDC token and the role ARN it wants.
+2. **Route by issuer** — the _unverified_ `iss` selects the issuer spec. Routing only; never trusted for identity.
+3. **Verify signature** — JWKS fetched cache-first, signature checked against a `kid` + `alg` + key-type pinned key.
+4. **Validate claims** — issuer re-asserted, audience (ANY-match), `exp`/`nbf`/`iat`, lifetime and age caps, `required_claims`. All fail-closed.
+5. **Derive canonical subject** — from config (`claim_mappings.subject`, or GitHub's `repository`), never self-asserted.
+6. **Authorize** — issuer-bound subject match against `role_mappings`, then auto-anchored regex `conditions`. IAM role tags can authorize as a fallback.
+7. **Apply session policy** — optional inline or S3 policy narrows the credentials.
+8. **Assume role** — with [STS session tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html) built from verified claims.
+9. **Audit and return** — the decision is recorded, then credentials are returned.
 
-For cross-account (hub/spoke) scenarios, enable the separate top-level `cross_account` block. The target role is always assumed **directly**, in one hop, with the warden's own hub credentials — never through an intermediate role. A convention-named spoke role (`aow-spoke` by default) is assumed only to call `iam:GetRole` and read a member-account role's tags, which is needed for cross-account tag-auth alone; it is never an assume target. The transport is independent of tag-auth — explicit `role_mappings` can target member-account ARNs on their own. Explicit `role_mappings` are always evaluated first; tag-auth is a fallback path only.
+Token validation is the security core. The fail-closed pipeline in `self` mode:
 
-Both features are opt-in (`tag_auth.enabled` / `cross_account.enabled`, default `false`); cross-account supports a target-account allow-list and an external ID for spoke-role trust. Independently of either, the top-level `session_tags_transitive` (RECOMMENDED, default `false`) marks every session tag transitive so the requester's identity survives role chaining instead of being dropped at the first hop — see [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags) for setup, tag reference, and IAM examples, and [docs/examples/cross-account/](docs/examples/cross-account/) for a full worked cross-account example (config + IAM roles + StackSets template).
+![Token validation pipeline](docs/img/token-validation.svg)
+
+Full detail — crypto hardening, JWKS handling, SSRF protection: **[docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)**.
 
 ---
 
-## Session Tags as ABAC: an EKS Pod Identity Analogy
+## Features
 
-If you've used **EKS Pod Identity**, the shape of this service will feel familiar: the platform attests a workload's identity, the workload assumes an IAM role with no long-lived credential, and AWS automatically attaches session tags describing the workload — cluster name, **namespace**, service account, pod name — that IAM policies condition on via `aws:PrincipalTag/...`. This service does the same thing for CI/CD: the OIDC token attests the workflow's identity (repository, ref, actor), the workflow assumes an IAM role with no stored credential, and the warden attaches session tags derived from **verified** claims. The repository plays the role a Kubernetes namespace plays — the natural unit to write ABAC policy against. It's an analogy, not an AWS-native equivalent.
+|                                |                                                                                                                                    |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Multi-issuer, any provider** | Trust any number of issuers at once. GitHub is native; `provider: generic` onboards any OIDC IdP by mapping its claims             |
+| **Hardened validation**        | RS/ES 256–512 only (never `none`/`HS*`), key pinning, RSA ≥ 2048 / EC on-curve checks, SSRF-safe JWKS, bounded time and size       |
+| **Delegated modes**            | Let API Gateway or ALB verify the signature; claims are still re-validated here                                                    |
+| **Four deployment shapes**     | API Gateway REST v1 + HTTP v2, Lambda URL, ALB, plus a local dev server                                                            |
+| **Claim-based conditions**     | Auto-anchored regex on any verified claim, one pattern or a list, AND-ed by default, nestable with `all_of` / `any_of` / `none_of` |
+| **Session policies**           | Inline JSON or S3-stored, scoping permissions per mapping                                                                          |
+| **Session tags & ABAC**        | Verified claims become STS tags for audit, cost allocation, and `aws:PrincipalTag` policies                                        |
+| **Tag-based authorization**    | Authorize from tags on the IAM role itself, no config enumeration; extends cross-account via a spoke role                          |
+| **Structured audit trail**     | One JSON record per decision, secret-safe, with an optional fail-closed `audit_required`                                           |
+| **Hot config reload**          | Change issuers, mappings and policies in S3 with no redeploy; fail-safe on a bad reload                                            |
+| **Multi-tier JWKS cache**      | Memory LRU, DynamoDB (shared/persistent), or S3                                                                                    |
+| **Multi-arch**                 | Native ARM64 and AMD64; pre-built images on GHCR                                                                                   |
 
-Where it differs from Pod Identity matters for how you configure it:
+---
 
-- The tags are **not** a fixed AWS-provided set — they come from the issuer's `session_tags` block in config, which maps an STS tag key to a raw claim name (see `example-config.yaml`: for GitHub, `repo: "repository"`, `repo-owner: "repository_owner"`, `ref: "ref"`, `ref-type: "ref_type"`, `actor: "actor"`, `event-name: "event_name"`; for GitLab, `project: "project_path"`, `ref: "ref"`, `ref-type: "ref_type"`). The operator chooses the tag vocabulary, and it works for any OIDC issuer, not just one platform.
-- `repo` carries the FULL `owner/repo` (the raw `repository` claim).
-- Tags are attached at `AssumeRole` and are **not** transitive by default — set the top-level `session_tags_transitive: true` so a tag survives when the target role assumes another role; without it, an ABAC policy past that hop can no longer see who the original caller was. It defaults to `false` for upgrade safety.
-- Only verified claims become tags — a tag can never carry something the token did not prove.
+## How it helps at scale
 
-This is what makes it matter at scale: without ABAC, a large org needs one IAM role per repo (or per repo × environment), a count that grows without bound. With claim-derived session tags, a small number of shared roles carry policies conditioned on `aws:PrincipalTag/repo`, `aws:PrincipalTag/ref`, and so on, and onboarding a new repo becomes a config change rather than a new IAM role — this composes with session policies for further per-repo scoping.
+**Session tags turn verified claims into IAM policy inputs.** If you know **EKS Pod Identity**, this will feel familiar: the platform attests a workload, the workload assumes a role with no stored credential, and tags describing it become available to policy via `aws:PrincipalTag/...`. Here the OIDC token is the attestation and the repository plays the part a Kubernetes namespace does.
 
 ```json
 {
@@ -316,126 +160,90 @@ This is what makes it matter at scale: without ABAC, a large org needs one IAM r
 }
 ```
 
-See [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md) for the full tag reference and [docs/TAG_BASED_AUTHORIZATION.md#session-tags--abac](docs/TAG_BASED_AUTHORIZATION.md#session-tags--abac) for how session tags combine with tag-based role authorization.
+So instead of one IAM role per repo (or per repo × environment), a few shared roles carry policies conditioned on the tags, and onboarding a repo becomes a config change. Unlike Pod Identity the tag vocabulary is **yours**, and only verified claims can become tags — [SESSION_TAGGING.md](docs/SESSION_TAGGING.md).
+
+**Tag-based authorization removes the config entry entirely.** A repository can assume a role authorized by **tags on the role itself**, which suits roles managed across many accounts or teams. Explicit `role_mappings` are always evaluated first; tag-auth is an additive fallback — read its [security model](docs/TAG_BASED_AUTHORIZATION.md#security-model--foot-guns) before enabling it, because it can authorize a role _independently of_ the mapping conditions you wrote to constrain it.
+
+Serving roles in **other AWS accounts** is a separate opt-in block. Two things are commonly misread: the target role is always assumed **directly, in one hop**, with the warden's own hub credentials; and the spoke role is assumed _only_ to call `iam:GetRole` and read a member-account role's tags, never as an assume target. Both features default to `false` — [TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md), plus a worked example in [docs/examples/cross-account/](docs/examples/cross-account/).
 
 ---
 
-## API Responses
+## Deploying
 
-### Success Response
+Use the maintained infrastructure in **[deploy/](deploy/README.md)** — an OpenTofu module and a CloudFormation quick-start, with toggle reference, smoke tests, endpoint hardening and a two-region resilient setup.
 
-```json
-{
-  "success": true,
-  "statusCode": 200,
-  "requestId": "12258876-a981-452b-a7ae-415f8fa737b6",
-  "processingMs": 254,
-  "message": "Token validation successful and role assumed",
-  "data": {
-    "AccessKeyId": "ASIA1234567890EXAMPLE",
-    "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-    "SessionToken": "FwoGZXIvYXdzEPH//////////wEaDKLZ3MQOJZBKxR1JDiLBARJhUlx1g09xLW+oIYHDt15IZY4...",
-    "Expiration": "2023-09-29T20:31:14Z"
-  }
-}
-```
+Pick a Lambda variant by image tag; all four share the same core logic and differ only in the event they parse:
 
-### Error Response
+| Variant             | Image tag                                 | When to use                                                                                           |
+| ------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| API Gateway HTTP v2 | `apigatewayv2-latest`                     | **Recommended** — `apigw` mode puts a JWT Authorizer in front, and the source IP is platform-attested |
+| API Gateway REST v1 | `apigateway-latest` (also plain `latest`) | `self` mode; the only flavour AWS WAF can attach to                                                   |
+| Lambda URL          | `lambdaurl-latest`                        | Simple setups, no gateway                                                                             |
+| ALB                 | `alb-latest`                              | High traffic                                                                                          |
 
-```json
-{
-  "success": false,
-  "statusCode": 403,
-  "requestId": "12258876-a981-452b-a7ae-415f8fa737b6",
-  "processingMs": 383,
-  "message": "Permission denied for the requested operation",
-  "errorCode": "permission_denied"
-}
-```
+Images are published to `ghcr.io/boogy/aws-oidc-warden` and `docker.io/boogy/aws-oidc-warden`, multi-arch (arm64 + amd64), with build provenance attestations and version-pinnable tags (`apigatewayv2-v3.2.0`); a prerelease never moves a `*-latest` tag. Building from source: `make build`, `make build-lambda`, `make ko-build` (via [ko](https://ko.build) — there is no Dockerfile).
 
-Error responses carry only the classified `errorCode`/`message`; internal error detail stays in the server-side logs, correlatable via `requestId`.
+The Lambda needs an execution role with `sts:AssumeRole` + `sts:TagSession` on its target roles, `iam:GetRole` for tag-auth, and read/write on whichever S3 buckets and DynamoDB table you enable — complete policy in [ARCHITECTURE.md](docs/ARCHITECTURE.md#required-iam-permissions). **The target role must trust that execution role, with both `sts:AssumeRole` and `sts:TagSession`.**
+
+<!-- prettier-ignore -->
+> [!CAUTION]
+> **In `apigw` mode, `lambda:InvokeFunction` is equivalent to minting credentials.** The signature is verified by the gateway, not by this service, so anything able to invoke the function directly can supply its own claims. Grant invoke to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — [details](deploy/README.md#jwt-validation-mode).
+
+<!-- prettier-ignore -->
+> [!TIP]
+> Give Lambda one broader role and scope it per-repo with session policies, rather than creating an IAM role per repository.
 
 ---
 
-## Security Considerations
+## What to watch out for
 
-- Use specific subject patterns; avoid overly broad patterns like `.*` (patterns are auto-anchored `^(?:...)$`)
-- Apply multiple `conditions` for sensitive roles, and session policies to scope AWS permissions
-- Follow least-privilege when defining IAM roles; review CloudWatch logs and the audit trail regularly (`audit_required` for a fail-closed durable trail — see [docs/LOGGING.md](docs/LOGGING.md))
-- Understand the validation guarantees before relying on any claim — see [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)
+The failure modes that actually bite, in rough order of likelihood:
 
-Per-issuer session tags are attached to every STS session for auditing, cost allocation, and ABAC — see [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md).
-
----
-
-## How It Works
-
-1. **Receive Request**: a CI job sends an OIDC token + desired role ARN
-2. **Route by Issuer**: the unverified `iss` selects the configured issuer spec (routing only — never trusted for identity)
-3. **Verify Signature**: the issuer's JWKS is fetched (cache-first) and the signature verified against a `kid`+`alg`+key-type–pinned key
-4. **Validate Claims**: issuer re-asserted, audience (ANY-match), expiration, `nbf`/`iat`, lifetime/age caps, and `required_claims` checked — all fail-closed
-5. **Derive Canonical Subject**: the authorization identity is derived from config (`claim_mappings.subject` / GitHub `repository`), never self-asserted
-6. **Authorize**: the subject is matched (issuer-bound) against `role_mappings`, then evaluated against auto-anchored regex `conditions`; a tag-auth fallback can authorize via IAM role tags
-7. **Apply Session Policy**: optional inline or S3 session policy scopes the credentials
-8. **Assume Role**: the role is assumed with per-issuer [STS session tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html)
-9. **Audit + Return**: the allow/deny decision is recorded and temporary credentials are returned
-
-Token validation is the security core of the service. The fail-closed validation pipeline (self mode):
-
-![Token validation pipeline](docs/img/token-validation.svg)
-
-For the full step-by-step flow, crypto hardening, JWKS handling, and SSRF protection see **[docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)**.
+| Pitfall                                           | What happens                                                                                                              | Do this instead                                                                                                              |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Gating on an untrusted claim                      | An attacker who can influence the claim can obtain credentials                                                            | Check the [claim trust table](https://github.com/PaloAltoNetworks/github-oidc-utils) first                                   |
+| Broad `lambda:InvokeFunction` in `apigw` mode     | **Credential minting for any authorized subject.** The signature is not verified in that mode, so IAM is the only defence | Grant invoke to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — [details](deploy/README.md#jwt-validation-mode) |
+| A broad `subject` pattern                         | Every subject of that issuer gets the roles                                                                               | Keep patterns specific; a bare `.*`/`.+` is rejected at boot, but `(.*)` still compiles                                      |
+| Target role doesn't trust the warden              | `403 assume_role_denied`                                                                                                  | Add the warden's execution role as a principal, with `sts:AssumeRole` **and** `sts:TagSession`                               |
+| ABAC breaks after a role chain                    | Session tags are dropped at the first hop                                                                                 | Set `session_tags_transitive: true` (recommended; off by default for upgrade safety)                                         |
+| Audience mismatch in `apigw` mode                 | API Gateway rejects before this service runs                                                                              | `getIDToken(aud)` must match both the JWT Authorizer **and** the issuer's `audiences`                                        |
+| `audit_required` (default **on**) with no S3 sink | Enforcement never engages — decisions only reach CloudWatch. It logs a warning at boot; nothing fails                     | Also set `log_to_s3: true` + `log_bucket` — see [LOGGING.md](docs/LOGGING.md)                                                |
+| Cross-account assume with the block off           | Fails closed with an error                                                                                                | Set `cross_account.enabled: true` and list the account in `allowed_accounts`                                                 |
 
 ---
 
 ## Troubleshooting
 
-- **Token validation fails** — ensure the workflow has `id-token: write`; verify the repository name matches your configured patterns and the issuer/audience settings.
-- **Role assumption fails** — confirm the Lambda execution role can assume the target role; check for conflicting constraints or overly restrictive session policies.
-- **Cache issues** — DynamoDB needs a TTL field configured; S3 needs bucket read/write; raise `max_local_size` for high traffic.
-- **Cross-account** — set `cross_account.enabled: true`, ensure the spoke role (`aow-spoke` by default) exists in each member account and trusts the hub Lambda role, grant `iam:GetRole`, and list the target account in `cross_account.allowed_accounts`. See [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) and [docs/examples/cross-account/](docs/examples/cross-account/).
+| Symptom                   | Likely cause                                                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `401 token_invalid`       | Workflow missing `id-token: write`; issuer or audience mismatch; clock skew beyond `jwt_leeway`                                                        |
+| `403 permission_denied`   | Subject doesn't match any mapping, or a condition failed. The audit record's `stage` and `reason` say which                                            |
+| `403 assume_role_denied`  | STS refused: the target role's trust policy, or the execution role missing `sts:AssumeRole`/`sts:TagSession`. The log line carries `stsErrorCode`      |
+| `500 assume_role_failed`  | Not a permission problem — throttling, expired broker credentials, or a malformed session policy                                                       |
+| Cache misses / throttling | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                |
+| Cross-account failures    | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts` |
+
+Every denial writes one audit record naming the `stage` that refused — start there. See [LOGGING.md](docs/LOGGING.md).
 
 ---
 
 ## Contributing
 
-1. Fork the repository
-2. Clone your fork: `git clone git@github.com:your-username/aws-oidc-warden.git`
-3. Create a feature branch: `git checkout -b feature/your-feature-name`
-4. Make changes and write tests
-5. Run checks: `make check`
-6. Submit a pull request with a clear description
+Fork, branch (`feature/…`), make the change with tests, run `make check`, open a PR with a clear description.
 
 <!-- prettier-ignore -->
 > [!TIP]
-> If you find a bug please don't just create an issue. Create a pull request with your fix so that everyone can benefit from it.
-
----
-
-## AWS Infrastructure Requirements
-
-- **Lambda Function** — runs the validator service
-- **IAM Role for Lambda** — assume target roles (`sts:AssumeRole`, `sts:TagSession`), read role tags for tag-auth (`iam:GetRole`), DynamoDB cache access, S3 read/write (logs/policies), and CloudWatch Logs
-- **DynamoDB Table** — persistent caching (optional)
-- **S3 Bucket** — logs and session policies (optional)
-
-<!-- prettier-ignore -->
-> [!TIP]
-> A generic role with broader privileges can be given to Lambda, then scoped per-repo with session policies. This reduces the total number of IAM roles needed.
-
-For the complete IAM policy and infrastructure details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#required-iam-permissions).
+> Found a bug? Please open a pull request with the fix rather than only an issue, so everyone benefits.
 
 ---
 
 ## License
 
-This project is licensed under the Apache License 2.0.
-
----
+Apache License 2.0.
 
 ## Acknowledgments
 
-- This project started from the need for secure GitHub Actions integration with AWS at scale for thousands of repositories.
-- Inspired by [AOEpeople/lambda_token_auth](https://github.com/AOEpeople/lambda_token_auth)
-- Thanks to [PaloAltoNetworks/GitHub OIDC Utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for their research on GitHub OIDC claims
-- Thanks to Jonathan for the tool name inspiration
+- Built out of the need to connect thousands of GitHub Actions repositories to AWS securely.
+- Inspired by [AOEpeople/lambda_token_auth](https://github.com/AOEpeople/lambda_token_auth).
+- Thanks to [PaloAltoNetworks/github-oidc-utils](https://github.com/PaloAltoNetworks/github-oidc-utils) for their research on GitHub OIDC claim trustworthiness.
+- Thanks to Jonathan for the name.

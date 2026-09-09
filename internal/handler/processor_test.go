@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	gtvaws "github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/types"
@@ -146,6 +147,7 @@ type fakeConsumer struct {
 	assumeOut       *ststypes.Credentials
 	allowAccount    bool
 	allowAccountErr error
+	assumeErr       error
 }
 
 func (f *fakeConsumer) ReadS3Configuration() error { return nil }
@@ -162,6 +164,9 @@ func (f *fakeConsumer) AssumeRole(roleARN, sessionName string, _ *string, _ *int
 	f.gotSessionName = sessionName
 	f.gotClaims = claims
 	f.gotSessionTags = sessionTags
+	if f.assumeErr != nil {
+		return nil, f.assumeErr
+	}
 	return f.assumeOut, nil
 }
 
@@ -631,4 +636,108 @@ func TestHotReload_AuthorizationDecisionFollowsRemoteConfig(t *testing.T) {
 		"a config Validate() rejects must not be applied, so RoleA stays withdrawn")
 	assert.NoError(t, assume(hotReloadRoleB),
 		"the last-good config keeps being served after a rejected reload")
+}
+
+// TestProcessRequest_AssumeRoleDenied locks in that an STS authorization
+// refusal is reported as its own sentinel (403) rather than folded into the
+// generic 5xx, so a caller can tell "the trust policy said no" from "the
+// broker is broken".
+func TestProcessRequest_AssumeRoleDenied(t *testing.T) {
+	fc, proc := assumeFailingProc(t, fmt.Errorf("unable to perform sts.AssumeRole: %w", gtvaws.ErrAssumeRoleDenied))
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, handler.ErrAssumeRoleDenied))
+	assert.False(t, errors.Is(err, handler.ErrAssumeRoleFailed))
+	assert.Equal(t, "arn:aws:iam::111111111111:role/app", fc.assumed)
+}
+
+func TestProcessRequest_AssumeRoleInfraFailure(t *testing.T) {
+	_, proc := assumeFailingProc(t, errors.New("ThrottlingException: rate exceeded"))
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, handler.ErrAssumeRoleFailed))
+	assert.False(t, errors.Is(err, handler.ErrAssumeRoleDenied))
+}
+
+// assumeFailingProc builds a processor that reaches AssumeRole and fails there.
+func assumeFailingProc(t *testing.T, assumeErr error) (*fakeConsumer, *handler.RequestProcessor) {
+	t.Helper()
+	cfg := baseTagCfg(t)
+	claims := &types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
+		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
+	}
+	fc := &fakeConsumer{
+		tags:         map[string]string{"aow/repo": "acme/api"},
+		allowAccount: true,
+		assumeErr:    assumeErr,
+	}
+	return fc, handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
+}
+
+// The spec that reaches AssumeRole must be the issuer's tags plus the
+// authorizing mapping's extras — and the audit record's sessionTagKeys must
+// report the same set, since that field is what an operator reads to confirm
+// which tags an ABAC policy actually received.
+func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{{
+			Issuer:      testIssuer,
+			Provider:    "github",
+			Audiences:   []string{"sts.amazonaws.com"},
+			SessionTags: map[string]string{"repo": "repository"},
+		}},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 0},
+		RoleMappings: []config.RoleMapping{{
+			Subject:     config.Patterns{"acme/api"},
+			Roles:       []string{"arn:aws:iam::111111111111:role/app"},
+			SessionTags: map[string]string{"tier": "environment"},
+		}, {
+			Subject: config.Patterns{"acme/web"},
+			Roles:   []string{"arn:aws:iam::111111111111:role/web"},
+		}},
+		LogClaimValues: true,
+	}
+	require.NoError(t, cfg.Validate())
+
+	exp := time.Now()
+	for _, tc := range []struct {
+		subject, role string
+		wantKeys      map[string]string
+	}{
+		{"acme/api", "arn:aws:iam::111111111111:role/app", map[string]string{"repo": "repository", "tier": "environment"}},
+		{"acme/web", "arn:aws:iam::111111111111:role/web", map[string]string{"repo": "repository"}},
+	} {
+		t.Run(tc.subject, func(t *testing.T) {
+			claims := &types.Claims{
+				RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: tc.subject},
+				Repository:       tc.subject,
+				Raw:              map[string]any{"repository": tc.subject, "environment": "prod"},
+			}
+			fc := &fakeConsumer{
+				assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
+				allowAccount: true,
+			}
+			sink := &fakeAuditSink{}
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &fixedExtractor{claims: claims}, sink, "test")
+			_, err := proc.ProcessRequest(context.Background(),
+				&handler.RequestData{Token: "t", Role: tc.role},
+				validator.ExtractionInput{Token: "t"},
+				"rid", slog.Default())
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantKeys, fc.gotSessionTags)
+
+			keys := sink.last(t)["sessionTagKeys"]
+			require.NotNil(t, keys, "audit record carried no sessionTagKeys")
+			assert.Len(t, keys, len(tc.wantKeys))
+		})
+	}
 }

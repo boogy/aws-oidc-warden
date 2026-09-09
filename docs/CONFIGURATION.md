@@ -1,16 +1,32 @@
 # AWS OIDC Warden Configuration
 
-This document explains how to configure AWS OIDC Warden using environment variables and configuration files.
+The complete configuration reference. If you are setting the service up for the first time, start with [`example-config.yaml`](../example-config.yaml) — a full annotated reference config — and use this document to look up individual keys.
+
+**On this page**
+
+| Section | Contents |
+| --- | --- |
+| [Configuration Methods](#configuration-methods) | Precedence: env vars > file > defaults |
+| [The issuer model](#the-issuer-model) | `issuers[]`, per-issuer fields, the zero-config seed |
+| [Authorization](#authorization-role_mappings-role_groups-role_sets) | `role_mappings`, `role_groups`, `role_sets`, conditions, boolean logic |
+| [How a grant resolves](#how-a-grant-its-policy-and-its-overrides-resolve) | Session policies, `role_session_name`, per-mapping `session_tags`, **and the ordering foot-gun** |
+| [Environment Variable Reference](#environment-variable-reference) | Every `AOW_*` variable, by area |
+| [Config fragments](#config-fragments) | Splitting mappings across files |
+| [Hot-reloading](#hot-reloading) | S3 refresh and overlay merge semantics |
 
 ## Configuration Methods
 
-AWS OIDC Warden can be configured using:
+Three sources, in **increasing** precedence:
 
-1. Environment variables (prefixed with `AOW_`)
-2. Configuration file (YAML, JSON, or TOML)
-3. A combination of both (environment variables override config file values)
+| Source | Notes |
+| --- | --- |
+| Defaults | Built in; listed in the tables below |
+| Configuration file | YAML, JSON or TOML — local path or an S3 object |
+| Environment variables | `AOW_` prefix; **overrides the file** |
 
-See [example-config.yaml](../example-config.yaml) for a complete, annotated reference configuration.
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> The loader **ignores unknown top-level keys silently**. A typo'd or renamed key does not error — it configures nothing while appearing to work. Check a new config against the real loader with `make run` (or `go run cmd/local/main.go -config yours.yaml`) before deploying it.
 
 ## The issuer model
 
@@ -142,7 +158,23 @@ role_groups:
 | `role_groups`   | (new)                | Expands to one `role_mappings` entry per `subjects[]` entry, sharing `issuer` + `defaults` (roles/conditions/session_policy). Re-expanded on every `Validate()`.                                      |
 | `subject`       | `repo`               | One anchored pattern or a **list** of them. A list expands to one internal mapping per element, each anchored and validated independently, all sharing the entry's roles/conditions/policies.         |
 
-`subject` is matched with the same auto-anchored-regex semantics `repo` used (`^(?:pattern)$`) — keep patterns specific. A bare `.*`/`.+` is rejected by `Validate()` wherever it gates an authorization decision: both in `conditions` fields and as a `subject` (including every element of a `subject` list and `role_groups.subjects`), since a wildcard subject would grant its roles to every subject of the bound issuer. The same is true of the other per-element rules — an empty list, an empty-string element, and a repeated element within one entry are all load errors, checked at every position rather than only the first. Repeating a subject across _different_ entries stays legal; that is how distinct roles, conditions or policies are layered onto one subject. The check is literal, so an equivalent pattern written another way (`(.*)`, `[\s\S]*`) still compiles — it stops the accident, not a determined operator.
+`subject` is matched with the same auto-anchored-regex semantics `repo` used (`^(?:pattern)$`) — **keep patterns specific.**
+
+<!-- prettier-ignore -->
+> [!WARNING]
+> **A bare `.*` / `.+` is rejected by `Validate()`** wherever it gates an authorization decision — in `conditions` fields and as a `subject`, including every element of a `subject` list and of `role_groups.subjects`. A wildcard subject would grant its roles to every subject of the bound issuer.
+>
+> **The check is literal.** An equivalent pattern written another way (`(.*)`, `[\s\S]*`) still compiles. It stops the accident, not a determined operator.
+
+The other per-element rules are checked at **every** position, not only the first. All three are load errors:
+
+| Rejected | |
+| --- | --- |
+| An empty list | `subject: []` |
+| An empty-string element | `subject: ["octo-org/api", ""]` |
+| A repeated element **within one entry** | `subject: ["octo-org/api", "octo-org/api"]` |
+
+Repeating a subject across *different* entries stays legal — that is how distinct roles, conditions or policies are layered onto one subject.
 
 ### Condition keys are claim names
 
@@ -255,15 +287,45 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 - **Pattern values are coerced to strings.** A YAML scalar written unquoted (`ref: 123`, `ref: true`) is decoded as the pattern `123` / `1`, not rejected. Always quote patterns.
 - **`all_of`, `any_of`, `none_of`, and `claims` are reserved keys** under `conditions:`. A raw claim with one of those exact names can no longer be matched by writing it at the top level — it parses as a boolean group (or as the `claims:` block), and a leftover string value (`any_of: "some-pattern"`) fails to load with a decode error rather than changing meaning silently. Nest it under `claims:` instead, whose keys are always claim names. Nothing else changes about generic claim predicates.
 
-Authorization is evaluated by `Config.AuthorizeRoles(issuer, subject, claims)`, which unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping. `Config.FindSessionPolicy(issuer, subject, role, claims)` then picks the session policy using the **same** match semantics, so a role's scoping policy always travels with the grant: the policy comes from a mapping that matches the subject, satisfies its conditions, **and** lists the role being assumed. Where several mappings qualify, the first-declared (config order) wins.
+### How a grant, its policy, and its overrides resolve
 
-> **Ordering foot-gun.** "First-declared wins" applies only among mappings that actually grant the requested role. If a broad mapping grants a role with **no** `session_policy` and a later, narrower mapping grants that _same_ role _with_ one, the broad mapping wins on order and the role is assumed **unscoped** — the narrow mapping's policy never applies. This matches the union semantics of `AuthorizeRoles` (the broad entry did explicitly grant the role), but it is rarely what you intend. Declare the scoped mapping first, or don't grant a policy-scoped role from a broader policy-less entry.
+`Config.AuthorizeRoles(issuer, subject, claims)` unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping.
+
+Everything else a mapping can specify — session policy, `role_session_name`, extra `session_tags` — then resolves through the **same** `(issuer, subject, role, conditions)` match. That is the point: a role's scoping always travels with the grant that authorized it, and can never be supplied by an unrelated mapping that merely shares the subject. Where several mappings qualify, the first-declared (config order) wins.
+
+<!-- prettier-ignore -->
+> [!WARNING]
+> **Ordering foot-gun.** "First-declared wins" applies only among mappings that actually grant the requested role. If a broad mapping grants a role with **no** `session_policy`, and a later narrower mapping grants that *same* role *with* one, the broad mapping wins on order and the role is assumed **unscoped** — the narrow mapping's policy never applies.
 >
-> Before v2.1.0 this lookup ignored both the requested role and conditions, so an unrelated broad mapping that merely shared the _subject_ could strip a privileged role's session policy. See the [2.1.0 changelog](../CHANGELOG.md).
+> This follows from the union semantics of `AuthorizeRoles` (the broad entry did explicitly grant the role), but it is rarely what you intend. **Declare the scoped mapping first**, or don't grant a policy-scoped role from a broader policy-less entry.
+>
+> Before v2.1.0 this lookup ignored both the requested role and conditions, so an unrelated broad mapping sharing only the *subject* could strip a privileged role's session policy. See the [2.1.0 changelog](../CHANGELOG.md).
 
-`role_mappings[].role_session_name` and `role_groups[].defaults.role_session_name` override the global `role_session_name` for roles granted by that mapping (or every subject the group expands to), so CloudTrail can name the requester instead of the service. Resolution goes through the exact same `(issuer, subject, role, conditions)` match as the session policy above — an override never comes from an unrelated mapping that merely shares the subject. Precedence is per-mapping wins, global is the fallback; an override applies only where declared, and an empty value is indistinguishable from absent. STS accepts 2–64 characters from `[\w+=,.@-]` — note `/` is excluded, so a GitHub `owner/repo` subject cannot be used verbatim. An invalid value fails the service at boot rather than being silently reshaped by the runtime sanitizer. A mapping whose `subject` is a regex matching many repositories (or a list of subjects, or a `role_groups` entry expanding to many subjects) gets **one** name for the whole set, not one per repository — the field is a static string, not a template.
+#### Per-mapping `role_session_name`
 
-The same applies to session policies, and it is the question a multi-subject entry usually raises: **both** an inline `session_policy` and an S3 `session_policy_file` apply to **every** subject the entry lists. The S3 key is a literal string with no subject interpolation, so one entry cannot vary the policy per subject; if you need per-subject policies, declare separate entries.
+`role_mappings[].role_session_name` and `role_groups[].defaults.role_session_name` override the global `role_session_name` for roles granted by that mapping, so CloudTrail can name the requester instead of the service.
+
+| | |
+| --- | --- |
+| **Precedence** | Per-mapping wins; global is the fallback. An override applies only where declared |
+| **Empty value** | Indistinguishable from absent |
+| **Valid charset** | STS accepts 2–64 chars from `[\w+=,.@-]`. **`/` is excluded**, so a GitHub `owner/repo` subject cannot be used verbatim |
+| **Invalid value** | Fails the service at boot, rather than being silently reshaped by the runtime sanitizer |
+| **Not a template** | A `subject` regex matching many repos (or a subject list, or a `role_groups` entry) gets **one** name for the whole set — the field is a static string |
+
+#### Per-mapping `session_tags`
+
+`role_mappings[].session_tags` and `role_groups[].defaults.session_tags` attach STS session tags **in addition to** the issuer's `session_tags`, for roles granted by that mapping.
+
+- **Additive only.** A key the issuer already defines is **rejected at boot**, not silently overridden — the tag feeds ABAC conditions in the target role, and an ignored override would read as applied.
+- **No global spec.** Session tags stay per-issuer: different issuers mint different claims, so a global tag spec could not be satisfied by all of them. A mapping adds to whatever its issuer already sets.
+- **Tag-auth grants get the issuer spec alone**, since there is no authorizing mapping to add to.
+
+See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefine-them).
+
+#### Multi-subject entries share one policy
+
+This is the question a multi-subject entry usually raises: **both** an inline `session_policy` and an S3 `session_policy_file` apply to **every** subject the entry lists. The S3 key is a literal string with no subject interpolation, so one entry cannot vary the policy per subject. If you need per-subject policies, declare separate entries.
 
 ### Owner-bucketed index
 

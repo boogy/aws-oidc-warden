@@ -7,17 +7,20 @@ locals {
   # via var.bucket_suffix) so "aws-oidc-warden-config" does not collide.
   suffix = var.bucket_suffix != "" ? var.bucket_suffix : data.aws_caller_identity.current.account_id
 
-  config_bucket_name         = "${var.name_prefix}-config-${local.suffix}"
-  cache_bucket_name          = "${var.name_prefix}-cache-${local.suffix}"
-  log_bucket_name            = "${var.name_prefix}-logs-${local.suffix}"
-  session_policy_bucket_name = "${var.name_prefix}-session-policies-${local.suffix}"
-  cache_table_name           = "${var.name_prefix}-cache"
+  config_bucket_name         = coalesce(var.config_bucket_name, "${var.name_prefix}-config-${local.suffix}")
+  cache_bucket_name          = coalesce(var.cache_bucket_name, "${var.name_prefix}-cache-${local.suffix}")
+  log_bucket_name            = coalesce(var.log_bucket_name, "${var.name_prefix}-logs-${local.suffix}")
+  session_policy_bucket_name = coalesce(var.session_policy_bucket_name, "${var.name_prefix}-session-policies-${local.suffix}")
+  cache_table_name           = coalesce(var.cache_table_name, "${var.name_prefix}-cache")
+  role_name                  = coalesce(var.role_name, "${var.name_prefix}-exec")
+  lambda_function_name       = coalesce(var.lambda_function_name, var.name_prefix)
+  api_gateway_name           = coalesce(var.api_gateway_name, var.name_prefix)
   config_key                 = "config.yaml"
 
   # The singular issuer/audiences shorthand renders as one GitHub entry, and in
   # apigw mode keeps today's single route (var.route_key). Setting var.issuers
   # replaces the shorthand entirely — the two are mutually exclusive, enforced
-  # by a precondition on aws_s3_object.config.
+  # by a precondition on terraform_data.guardrails.
   issuers_shorthand = {
     github = {
       issuer          = coalesce(var.issuer, "https://token.actions.githubusercontent.com")
@@ -51,10 +54,10 @@ locals {
   # match between the authorizer-verified iss and issuers[].issuer
   # (internal/validator's resolveIssuerSpec), so a different
   # jwt_authorizer_issuer here would make every request fail at runtime with
-  # ErrUnknownIssuer. A precondition on aws_s3_object.config rejects that
+  # ErrUnknownIssuer. A precondition on terraform_data.guardrails rejects that
   # combination at plan time.
   # Entries missing route_key are filtered out rather than passed through:
-  # the "requires route_key" precondition on aws_s3_object.config is what
+  # the "requires route_key" precondition on terraform_data.guardrails is what
   # rejects that misconfiguration (blocking apply), so this filter exists
   # only to keep a bad entry from reaching modules/apigateway's route_key
   # string interpolation, which has no null guard.
@@ -190,13 +193,14 @@ module "dynamodb" {
   table_name = local.cache_table_name
 }
 
-# ---- Rendered config object ----
-resource "aws_s3_object" "config" {
-  bucket       = module.config_bucket.bucket_id
-  key          = local.config_key
-  content      = local.rendered_config
-  content_type = "application/x-yaml"
-
+# ---- Plan-time guardrails ----
+# These checks constrain the infrastructure this module builds, so they must
+# hold whether or not Terraform manages config.yaml. They cannot live on
+# aws_s3_object.config: that resource is count-gated by var.manage_config, and
+# a count = 0 resource's preconditions are never evaluated. The checks that do
+# depend on the rendered content stay on the object itself, where skipping them
+# with the render is correct.
+resource "terraform_data" "guardrails" {
   lifecycle {
     precondition {
       condition     = !(var.enable_dynamodb_cache && var.enable_s3_cache)
@@ -217,26 +221,6 @@ resource "aws_s3_object" "config" {
     precondition {
       condition     = length(local.issuers_effective) > 0
       error_message = "At least one issuer is required — the service rejects a config with zero issuers at boot (internal/config/config.go). Set var.issuers to a non-empty map, or leave it null to use the var.issuer/var.audiences shorthand."
-    }
-    precondition {
-      condition     = length(local.issuers_effective) <= 1 || var.default_issuer != null || alltrue([for m in var.role_mappings : m.issuer != null])
-      error_message = "Multiple issuers are configured — every role_mappings entry needs its own issuer, or set var.default_issuer, or the service refuses to boot (internal/config/config.go)."
-    }
-    precondition {
-      # Deliberately no "<= 1" short-circuit: with a single issuer, an
-      # unrelated var.default_issuer is just as much a boot-time rejection
-      # (internal/config/config.go:783) as with several — the short-circuit
-      # above exists only for the "is one set at all" question, not this
-      # "is it a real one" question.
-      condition     = var.default_issuer == null || contains([for k, v in local.issuers_effective : v.issuer], var.default_issuer)
-      error_message = "var.default_issuer (${coalesce(var.default_issuer, "null")}) is not one of the configured issuers — the service rejects it at boot (internal/config/config.go). Configured issuers come from var.issuers, or the var.issuer shorthand if var.issuers is unset."
-    }
-    precondition {
-      # Same reasoning: no short-circuit on issuer count. A mapping's issuer
-      # is checked against internal/config/config.go:797 regardless of how
-      # many issuers are configured, including exactly one.
-      condition     = alltrue([for m in var.role_mappings : m.issuer == null || contains([for k, v in local.issuers_effective : v.issuer], m.issuer)])
-      error_message = "role_mappings issuer(s) not among the configured issuers: ${jsonencode(distinct([for m in var.role_mappings : m.issuer if m.issuer != null && !contains([for k, v in local.issuers_effective : v.issuer], m.issuer)]))} — the service rejects these at boot (internal/config/config.go). Configured issuers come from var.issuers, or the var.issuer shorthand if var.issuers is unset."
     }
     precondition {
       condition     = var.issuers == null || (var.jwt_authorizer_issuer == null && var.jwt_authorizer_audiences == null)
@@ -262,6 +246,41 @@ resource "aws_s3_object" "config" {
       condition     = var.jwt_validation_mode != "apigw" || length(local.issuers_effective) <= 10
       error_message = "API Gateway allows at most 10 JWT Authorizers per HTTP API; split across two APIs beyond that."
     }
+  }
+}
+
+# ---- Rendered config object ----
+# var.manage_config = false leaves this object unmanaged: the bucket is still
+# created and the Lambda still reads config.yaml from it, but the operator
+# uploads their own YAML (see deploy/README.md).
+resource "aws_s3_object" "config" {
+  count        = var.manage_config ? 1 : 0
+  bucket       = module.config_bucket.bucket_id
+  key          = local.config_key
+  content      = local.rendered_config
+  content_type = "application/x-yaml"
+
+  lifecycle {
+    precondition {
+      condition     = length(local.issuers_effective) <= 1 || var.default_issuer != null || alltrue([for m in var.role_mappings : m.issuer != null])
+      error_message = "Multiple issuers are configured — every role_mappings entry needs its own issuer, or set var.default_issuer, or the service refuses to boot (internal/config/config.go)."
+    }
+    precondition {
+      # Deliberately no "<= 1" short-circuit: with a single issuer, an
+      # unrelated var.default_issuer is just as much a boot-time rejection
+      # (internal/config/config.go:783) as with several — the short-circuit
+      # above exists only for the "is one set at all" question, not this
+      # "is it a real one" question.
+      condition     = var.default_issuer == null || contains([for k, v in local.issuers_effective : v.issuer], var.default_issuer)
+      error_message = "var.default_issuer (${coalesce(var.default_issuer, "null")}) is not one of the configured issuers — the service rejects it at boot (internal/config/config.go). Configured issuers come from var.issuers, or the var.issuer shorthand if var.issuers is unset."
+    }
+    precondition {
+      # Same reasoning: no short-circuit on issuer count. A mapping's issuer
+      # is checked against internal/config/config.go:797 regardless of how
+      # many issuers are configured, including exactly one.
+      condition     = alltrue([for m in var.role_mappings : m.issuer == null || contains([for k, v in local.issuers_effective : v.issuer], m.issuer)])
+      error_message = "role_mappings issuer(s) not among the configured issuers: ${jsonencode(distinct([for m in var.role_mappings : m.issuer if m.issuer != null && !contains([for k, v in local.issuers_effective : v.issuer], m.issuer)]))} — the service rejects these at boot (internal/config/config.go). Configured issuers come from var.issuers, or the var.issuer shorthand if var.issuers is unset."
+    }
     precondition {
       condition     = jsonencode(local.rendered_config_decoded_for_drift_check) == jsonencode(local.app_config_for_drift_check)
       error_message = "Rendered config.yaml does not round-trip to local.app_config — templates/config.yaml.tftpl has drifted from the config structure."
@@ -272,6 +291,8 @@ resource "aws_s3_object" "config" {
 # ---- IAM ----
 module "iam" {
   source              = "./modules/iam"
+  execution_role_arn  = var.execution_role_arn
+  role_name           = local.role_name
   name_prefix         = var.name_prefix
   assumable_role_arns = var.assumable_role_arns
   # iam:GetRole is only needed for tag-auth's hub-account tag reads; cross-account
@@ -287,7 +308,7 @@ module "iam" {
 # ---- Lambda ----
 module "lambda" {
   source               = "./modules/lambda"
-  function_name        = var.name_prefix
+  function_name        = local.lambda_function_name
   role_arn             = module.iam.role_arn
   zip_path             = "${path.module}/dist/function.zip"
   expected_variant     = var.jwt_validation_mode == "apigw" ? "apigatewayv2" : "apigateway"
@@ -313,7 +334,7 @@ module "lambda" {
 module "apigateway" {
   count                = var.api_gateway_type == "http" ? 1 : 0
   source               = "./modules/apigateway"
-  name                 = var.name_prefix
+  name                 = local.api_gateway_name
   lambda_invoke_arn    = module.lambda.invoke_arn
   lambda_function_name = module.lambda.function_name
   # "apigw" mode: v2 payload format + one JWT Authorizer and route per issuer,
@@ -329,7 +350,7 @@ module "apigateway" {
 module "apigateway_rest" {
   count                  = var.api_gateway_type == "rest" ? 1 : 0
   source                 = "./modules/apigateway-rest"
-  name                   = var.name_prefix
+  name                   = local.api_gateway_name
   lambda_invoke_arn      = module.lambda.invoke_arn
   lambda_function_name   = module.lambda.function_name
   throttling_burst_limit = var.throttling_burst_limit
