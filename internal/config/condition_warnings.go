@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -74,10 +75,7 @@ func withSessionTagClaims(known map[string]bool, tags map[string]string) map[str
 	if known == nil || len(tags) == 0 {
 		return known
 	}
-	out := make(map[string]bool, len(known)+len(tags))
-	for name := range known {
-		out[name] = true
-	}
+	out := maps.Clone(known)
 	for _, claim := range tags {
 		out[claim] = true
 	}
