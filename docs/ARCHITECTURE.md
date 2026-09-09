@@ -652,7 +652,7 @@ One image per frontend, published to GHCR and Docker Hub for arm64 and amd64:
 | ALB                 | `cmd/alb`          | `alb-latest`                              |
 | Lambda URL          | `cmd/lambdaurl`    | `lambdaurl-latest`                        |
 
-Version-pinned tags (`apigatewayv2-v3.2.0`) are published alongside; a prerelease never moves a `*-latest` tag. Builds carry provenance attestations and are scanned in the release workflow.
+Version-pinned tags (`apigatewayv2-v3.3.0`) are published alongside; a prerelease never moves a `*-latest` tag. Builds carry provenance attestations and are scanned in the release workflow.
 
 ### Infrastructure as code
 

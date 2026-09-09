@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-09-09
+
 ### Added
 
 - **`role_mappings[].session_tags` (and `role_groups[].defaults.session_tags`) attach extra STS session tags to the roles that mapping grants.** Session tags stay **per-issuer** — issuers mint different claims, so there is deliberately no global spec — and the issuer's `session_tags` remains the contract every token from that issuer carries. A mapping can now extend it per subject:
@@ -24,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   The merge is **additive only**: a mapping key the issuer already defines is rejected by `Validate()` at boot rather than silently overridden, because a dropped override reads as applied and the tag feeds ABAC conditions in the target role. Resolution goes through the same `Decision` as `session_policy` and `role_session_name`, so the extras come from the mapping that actually authorized the role — never an unrelated one sharing the subject. A role granted by tag-based authorization has no authorizing mapping and receives the issuer spec alone; an unconfigured issuer receives nothing.
 
-  `AuditableClaims` now covers the session-tag claims of both layers, so a claim attached to the STS session is always recordable in the audit record — the two can never disagree about what the caller asserted.
+  `AuditableClaims` now covers the session-tag claims of both layers, so a claim attached to the STS session is always recordable in the audit record — the two can never disagree about what the caller asserted. The unknown-condition-claim warning learned about them too: a mapping that both tags and gates on a claim outside its issuer's vocabulary no longer draws a spurious "this issuer does not issue" WARN at boot.
 
 ### Changed
 
@@ -60,6 +62,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `docs/ARCHITECTURE.md` no longer documents a **Dockerfile that does not exist** (images are built with `ko` from `.ko.yaml`) or hand-rolled Terraform that duplicated `deploy/opentofu/`; the deployment section now points at the maintained stacks and lists the real image tags.
   - `docs/LOGGING.md` field reference moved from prose to per-surface tables, and the three overlapping explanations of `audit_required` were merged into one section. The **`log_level` trap** (`AOW_LOG_LEVEL` is validated but never wired to the running handler) is now a callout rather than a closing footnote.
   - `docs/CONFIGURATION.md`, `docs/TOKEN_VALIDATION.md`, `docs/TAG_BASED_AUTHORIZATION.md` and `docs/SESSION_TAGGING.md` gained on-page navigation, and the foot-guns they each described in passing — the session-policy ordering rule, the `apigw` invoke trust boundary, tag-auth as an additive fallback, session-tag key case-folding — are now callouts on the way past.
+
+- **Dependencies: `smithy-go` promoted to a direct requirement, `testify` 1.11.1 → 1.12.1.** `github.com/aws/smithy-go` moves out of the indirect block because this release's STS error classifier imports it directly (`internal/aws/stserr.go` reads `smithy.APIError` to tell a trust-policy refusal from a retryable fault), so listing it as indirect would be inaccurate. `govulncheck` reports no vulnerabilities and the full suite passes unchanged.
   - `deploy/README.md` documents which service features are **`config.yaml`-only** because the module does not expose them as variables: `role_groups`, list-valued `subject`, the boolean condition groups, and `role_mappings[].session_tags`.
 
 ## [3.2.0] - 2026-09-03
@@ -755,7 +759,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.2...v3.1.0
 [3.0.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.1...v3.0.2

@@ -181,7 +181,7 @@ Pick a Lambda variant by image tag; all four share the same core logic and diffe
 | Lambda URL          | `lambdaurl-latest`                        | Simple setups, no gateway                                                                             |
 | ALB                 | `alb-latest`                              | High traffic                                                                                          |
 
-Images are published to `ghcr.io/boogy/aws-oidc-warden` and `docker.io/boogy/aws-oidc-warden`, multi-arch (arm64 + amd64), with build provenance attestations and version-pinnable tags (`apigatewayv2-v3.2.0`); a prerelease never moves a `*-latest` tag. Building from source: `make build`, `make build-lambda`, `make ko-build` (via [ko](https://ko.build) — there is no Dockerfile).
+Images are published to `ghcr.io/boogy/aws-oidc-warden` and `docker.io/boogy/aws-oidc-warden`, multi-arch (arm64 + amd64), with build provenance attestations and version-pinnable tags (`apigatewayv2-v3.3.0`); a prerelease never moves a `*-latest` tag. Building from source: `make build`, `make build-lambda`, `make ko-build` (via [ko](https://ko.build) — there is no Dockerfile).
 
 The Lambda needs an execution role with `sts:AssumeRole` + `sts:TagSession` on its target roles, `iam:GetRole` for tag-auth, and read/write on whichever S3 buckets and DynamoDB table you enable — complete policy in [ARCHITECTURE.md](docs/ARCHITECTURE.md#required-iam-permissions). **The target role must trust that execution role, with both `sts:AssumeRole` and `sts:TagSession`.**
 
