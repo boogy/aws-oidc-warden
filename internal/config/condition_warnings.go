@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -64,6 +65,21 @@ func knownClaimsFor(iss *IssuerConfig) map[string]bool {
 		known[claim] = true
 	}
 	return known
+}
+
+// withSessionTagClaims widens known with the claims a mapping's own
+// session_tags name, so a mapping that both tags and gates on a claim outside
+// the issuer's vocabulary is not warned about. Copies rather than mutating:
+// known is shared by every mapping bound to the issuer.
+func withSessionTagClaims(known map[string]bool, tags map[string]string) map[string]bool {
+	if known == nil || len(tags) == 0 {
+		return known
+	}
+	out := maps.Clone(known)
+	for _, claim := range tags {
+		out[claim] = true
+	}
+	return out
 }
 
 // warnConditionKeys walks a whole condition tree warning once per unknown

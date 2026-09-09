@@ -7,6 +7,11 @@
           {
             "type": "command",
             "command": "if [[ \"$CLAUDE_FILE_PATHS\" =~ \\.go$ ]] && ! [[ \"$CLAUDE_FILE_PATHS\" =~ _test\\.go$ ]]; then gofmt -w \"$CLAUDE_FILE_PATHS\" 2>/dev/null || true; fi"
+          },
+          {
+            "type": "command",
+            "command": "if [[ \"$CLAUDE_FILE_PATHS\" =~ \\.mdx?$ ]]; then prettier --write \"$CLAUDE_FILE_PATHS\" >/dev/null 2>&1 || true; fi",
+            "statusMessage": "Formatting markdown with prettier..."
           }
         ]
       }
@@ -24,7 +29,6 @@
     ]
   },
   "enabledPlugins": {
-    "gopls-lsp@claude-plugins-official": true,
-    "context7@claude-plugins-official": true
+    "gopls-lsp@claude-plugins-official": true
   }
 }

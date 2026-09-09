@@ -3,9 +3,14 @@ package config
 import "strings"
 
 // auditableClaimsFor returns, per issuer, the raw claim names its config
-// references: claim_mappings, required_claims, session_tags, and any claim
-// named by a condition on a mapping bound to it (so a none_of/any_of
-// deciding claim is always recordable, not just claim_mappings targets).
+// references: claim_mappings, required_claims, session_tags (the issuer's own
+// AND those added by any mapping bound to it), and any claim named by a
+// condition on such a mapping (so a none_of/any_of deciding claim is always
+// recordable, not just claim_mappings targets).
+//
+// Both session_tags layers must be here: a claim attached as a session tag but
+// not recordable would break the guarantee that a claim reported in the audit
+// record and the same claim attached to the STS session agree.
 //
 // Stored as written plus lower-cased: viper lower-cases config keys but not
 // raw claims; callers resolve exact-then-folded (see claimResolver).
@@ -34,6 +39,9 @@ func auditableClaimsFor(issuer string, spec *IssuerConfig, mappings []*RoleMappi
 	for _, m := range mappings {
 		if m.Issuer != issuer {
 			continue
+		}
+		for _, claimName := range m.SessionTags {
+			add(claimName)
 		}
 		collectConditionClaims(m.Conditions, add)
 	}

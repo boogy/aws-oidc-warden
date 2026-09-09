@@ -1,6 +1,6 @@
 # AWS OIDC Warden — Deployment Guide
 
-Two deployment paths are provided: **OpenTofu** and **CloudFormation**. Both provision the same infrastructure (either API Gateway flavor, WAF, throttling, caches, optional buckets); the one functional difference is that OpenTofu also renders and uploads `config.yaml`, while with CloudFormation you upload it yourself.
+Two deployment paths are provided: **OpenTofu** and **CloudFormation**. Both provision the same infrastructure (either API Gateway flavor, WAF, throttling, caches, optional buckets); the one functional difference is that OpenTofu also renders and uploads `config.yaml` by default, while with CloudFormation you upload it yourself. Set `manage_config = false` to get the CloudFormation behavior from OpenTofu too — see [Bringing your own config.yaml](#bringing-your-own-configyaml).
 
 ## Prerequisites
 
@@ -46,6 +46,7 @@ The `api_endpoint` output is the full verify URL (e.g. `https://<id>.execute-api
 
 | Variable                       | Default | Provisions                                                                           | IAM granted                                      |
 | ------------------------------ | ------- | ------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| `manage_config`                | `true`  | The `config.yaml` object in the config bucket (the bucket itself is unconditional)   | —                                                |
 | `enable_dynamodb_cache`        | `false` | DynamoDB table `<prefix>-cache`                                                      | `dynamodb:GetItem/PutItem/DeleteItem`            |
 | `enable_s3_cache`              | `false` | S3 bucket `<prefix>-cache-<suffix>`                                                  | `s3:GetObject/PutObject/DeleteObject/ListBucket` |
 | `enable_s3_logs`               | `false` | S3 bucket `<prefix>-logs-<suffix>` (versioned, `audit_log_retention_days` lifecycle) | `s3:PutObject`, `s3:PutObjectTagging`            |
@@ -89,15 +90,86 @@ CloudFormation exposes the same three knobs as `AuditLogRetentionDays`, `AuditLo
 
 ## How config.yaml is delivered
 
-`main.tf` renders the service config — `var.issuers` (or, if unset, the `var.issuer`/`var.audiences` shorthand rendered as a single GitHub `issuers[]` entry), `var.role_mappings`, cache settings, and `jwt_validation` — into a `config.yaml` object and uploads it to the config S3 bucket. Each `var.role_mappings` entry may set `role_session_name` to override the global `var.role_session_name` for the roles it grants, so CloudTrail names the requester instead of the service — STS accepts 2–64 characters from `[\w+=,.@-]` (no `/`, so a repository name cannot be used verbatim); an invalid value fails the service at boot. `role_groups`, the analogous DRY convenience for many subjects sharing one set of defaults, is a `config.yaml`-only feature — it is not exposed as a Terraform variable in this module. The same goes for a list-valued `role_mappings[].subject`: `var.role_mappings[].subject` is typed `string` and renders as a scalar, which the service still accepts, so multiple subjects in one entry need `config.yaml` or a `config_fragments` source. The Lambda receives three env vars at startup:
+By default `main.tf` renders the service config into a `config.yaml` object and uploads it to the config S3 bucket. What it renders:
 
-- `AOW_S3_CONFIG_BUCKET` — bucket name
-- `AOW_S3_CONFIG_PATH` — object key (`config.yaml`)
-- `AOW_JWT_VALIDATION_MODE` — set from `var.jwt_validation_mode`; the extractor implementation is wired at cold start from this env var, not from `config.yaml` (which is hot-reloadable), so it must match the deployed Lambda binary variant
+- `var.issuers` — or, if unset, the `var.issuer`/`var.audiences` shorthand, rendered as a single GitHub `issuers[]` entry
+- `var.role_mappings`
+- cache settings
+- `jwt_validation`
 
-> **v3:** `var.role_mappings[].conditions` follows the service's v3 condition schema — every key is the raw claim it checks. `branch` and `actor_matches` are gone (`ref`, `actor`), `runner_environment` is the new name for the runner-type check, and `environment` now renders a gate on GitHub's deployment-environment claim. Rename these in `terraform.tfvars` before applying: a plan against the old attribute names fails at plan time, and an `environment` left unrenamed plans clean but gates a different claim. Beyond the named keys, `conditions.claims` is a `map(list(string))` reaching any other claim (`repository_visibility`, `base_ref`, a GitLab claim, or one named like a reserved key), each entry a list of OR-ed alternatives. The `all_of`/`any_of`/`none_of` groups remain `config.yaml`-only — a mapping that needs one belongs in a `config_fragments` file. A `conditions` object that carries no usable field — every field null, or only empties like `actor = []` / `claims = {}` — is rejected at plan time: it reads as a gated mapping and gates nothing. So is an empty value sitting beside a real condition (`ref = "refs/heads/main"` with `actor = []`): an empty pattern matches nothing, and the service refuses to boot on it rather than denying, so the apply would succeed and the Lambda would crash-loop. See [docs/MIGRATION_V3.md](../docs/MIGRATION_V3.md).
+The Lambda fetches and parses that file on startup. All complex configuration (role mappings, nested objects) lives there; scalar overrides can also come from `AOW_*` env vars.
 
-On startup the Lambda fetches and parses this file. All complex configuration (role mappings, nested objects) lives here; scalar overrides can also be set via `AOW_*` env vars.
+Three env vars are set on the Lambda itself:
+
+| Env var                   | Value                                                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AOW_S3_CONFIG_BUCKET`    | Bucket name                                                                                                                                                                                       |
+| `AOW_S3_CONFIG_PATH`      | Object key (`config.yaml`)                                                                                                                                                                        |
+| `AOW_JWT_VALIDATION_MODE` | From `var.jwt_validation_mode`. **The extractor is wired at cold start from this env var, not from `config.yaml`** (which is hot-reloadable), so it must match the deployed Lambda binary variant |
+
+### Bringing your own config.yaml
+
+Set `manage_config = false` to keep the config file out of Terraform entirely. This is the right choice if you want to hand-write the YAML documented in [docs/CONFIGURATION.md](../docs/CONFIGURATION.md) — including the features listed under [`config.yaml`-only](#features-that-are-configyaml-only) — rather than express it through variables.
+
+Terraform still creates the config bucket, sets `AOW_S3_CONFIG_BUCKET`/`AOW_S3_CONFIG_PATH`, and grants the Lambda `s3:GetObject` on it. It just doesn't own the object:
+
+```bash
+tofu apply
+aws s3 cp config.yaml "s3://$(tofu output -raw config_bucket)/config.yaml"
+```
+
+The Lambda fetches `config.yaml` at cold start, so upload it before sending traffic — a missing object fails startup (`buildConfigProvider` returns the fetch error). With the object outside Terraform state, an `apply` will never revert an edit you made by hand.
+
+Your YAML then becomes the only source of the service's own settings: `role_mappings`, `default_issuer`, `role_session_name`, `tag_auth`, `cross_account`, `session_tags_transitive` and the other rendered content stop having any effect as variables. The variables that **also** build or wire infrastructure keep working, and your YAML has to agree with them:
+
+| Variable                                    | Still does                                                             |
+| ------------------------------------------- | ---------------------------------------------------------------------- |
+| `jwt_validation_mode`                       | Sets `AOW_JWT_VALIDATION_MODE` and selects the expected binary variant |
+| `issuers` / `route_key`                     | One JWT Authorizer and route per issuer, in `apigw` mode               |
+| `enable_dynamodb_cache` / `enable_s3_cache` | Provisions the cache table/bucket and the IAM to use it                |
+| `audit_required` / `enable_s3_logs`         | Provisions the audit bucket and grants `s3:PutObject`                  |
+| `enable_session_policy_bucket`              | Provisions the session-policy bucket and grants `s3:GetObject`         |
+
+A mismatch here is the one real hazard of this mode — e.g. `cache.type: dynamodb` in your YAML with `enable_dynamodb_cache = false` leaves the service pointed at a table that was never created, and no IAM to read it.
+
+The plan-time guardrails on infrastructure combinations (cache exclusivity, `apigw` requiring an HTTP API, WAF requiring a REST API, the authorizer rules) still apply — they live on `terraform_data.guardrails` rather than on the config object. Only the checks that validate rendered content go away with the render.
+
+### `role_session_name` overrides
+
+Each `var.role_mappings` entry may set `role_session_name` to override the global `var.role_session_name` for the roles it grants, so CloudTrail names the requester instead of the service.
+
+STS accepts 2–64 characters from `[\w+=,.@-]` — **`/` is not in that set**, so a repository name cannot be used verbatim. An invalid value fails the service at boot rather than being silently reshaped.
+
+### Features that are `config.yaml`-only
+
+These exist in the service but are **not** exposed as module variables. A mapping that needs one belongs in a `config_fragments` file:
+
+| Feature                         | Why it isn't a variable                                                                                   | Workaround                                               |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `role_groups`                   | The DRY convenience for many subjects sharing one set of defaults                                         | `config.yaml` or a fragment                              |
+| List-valued `subject`           | `var.role_mappings[].subject` is typed `string` and renders as a scalar (which the service still accepts) | One entry per subject, or a fragment                     |
+| `role_mappings[].session_tags`  | Per-mapping additive session tags are not in the variable's object type                                   | A fragment; issuer-level `session_tags` **are** rendered |
+| `all_of` / `any_of` / `none_of` | Boolean condition groups are not expressible in the variable schema                                       | A fragment                                               |
+
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> **v3 condition schema.** `var.role_mappings[].conditions` follows the service's v3 schema — every key is the raw claim it checks. Rename these in `terraform.tfvars` before applying:
+>
+> | v2 | v3 |
+> | --- | --- |
+> | `branch` | `ref` |
+> | `actor_matches` | `actor` |
+> | *(runner type)* | `runner_environment` |
+> | `environment` | Still `environment`, but now gates GitHub's **deployment**-environment claim |
+>
+> A plan against the old attribute names fails at plan time. An `environment` left unrenamed **plans clean but gates a different claim** — that is the dangerous one. See [docs/MIGRATION_V3.md](../docs/MIGRATION_V3.md).
+>
+> Beyond the named keys, `conditions.claims` is a `map(list(string))` reaching any other claim (`repository_visibility`, `base_ref`, a GitLab claim, or one named like a reserved key), each entry a list of OR-ed alternatives.
+
+Two plan-time rejections protect against conditions that read as gates but gate nothing:
+
+- **A `conditions` object with no usable field** — every field null, or only empties like `actor = []` / `claims = {}`. It reads as a gated mapping and gates nothing.
+- **An empty value beside a real condition** — e.g. `ref = "refs/heads/main"` with `actor = []`. An empty pattern matches nothing, and the service refuses to boot on it rather than denying, so the apply would succeed and the Lambda would crash-loop.
 
 ---
 
@@ -119,7 +191,38 @@ Build the correct binary before running `tofu apply`:
 ./deploy/opentofu/build.sh apigatewayv2 # apigw mode
 ```
 
-**Security note (apigw mode):** The Lambda resource policy (`source_arn = <api>.execute-api.<region>.amazonaws.com/*/*`) restricts invocations to the provisioned API Gateway — direct Lambda invocations are rejected by the resource policy and also by the application when authorizer claims are absent.
+<!-- prettier-ignore -->
+> [!CAUTION]
+> ### `apigw` mode: `lambda:InvokeFunction` **is** identity impersonation
+>
+> In `apigw` mode this service **does not verify the token's signature**. API Gateway's JWT Authorizer does that, upstream, and the Lambda trusts `event.requestContext.authorizer.jwt.claims` exactly as handed to it.
+>
+> The application's only guard against a direct invoke is **"claims must be non-empty"**. That stops an empty payload. It **cannot** stop a direct invoke carrying *forged, non-empty* claims — an arbitrary `iss`/`aud`/`sub`/`exp` passes straight through, because there is no signature left to check it against.
+>
+> **Therefore anyone holding `lambda:InvokeFunction` on this function can mint AWS credentials for any subject your `role_mappings` / `role_groups` / `tag_auth` would authorize.** The resource policy is not one layer of two — in `apigw` mode **it is the only line of defence.**
+>
+> The stack sets this correctly: invocation is granted to `apigateway.amazonaws.com` alone, narrowed by `source_arn` to the provisioned API.
+>
+> ```hcl
+> resource "aws_lambda_permission" "apigw_only" {
+>   statement_id  = "AllowInvokeFromThisApiOnly"
+>   action        = "lambda:InvokeFunction"
+>   function_name = module.lambda.function_name
+>   principal     = "apigateway.amazonaws.com"
+>   source_arn    = "${aws_apigatewayv2_api.this.execution_arn}/*/*"
+> }
+> ```
+>
+> **What you must not do**, in this stack or alongside it: grant `lambda:InvokeFunction` to a wildcard principal, to an account root, to a CI/deployment role, to a developer role for "testing", or to `apigateway.amazonaws.com` *without* a `source_arn`. Any of those hands out credential minting for every subject in your config. The same applies to anything that can invoke on your behalf — an EventBridge rule, a Step Functions state machine, a Function URL (`AuthType: NONE` especially), or a second API Gateway.
+>
+> Audit the deployed function's resource policy, and expect exactly one statement:
+>
+> ```bash
+> aws lambda get-policy --function-name aws-oidc-warden \
+>   --query Policy --output text | jq '.Statement[] | {Sid, Principal, Condition}'
+> ```
+>
+> `self` mode does not carry this exposure in the same way — the Lambda verifies the token itself, so a forged direct invoke fails signature verification. `alb` mode also verifies the ALB's ES256 signature over `x-amzn-oidc-data` in-process. **Only `apigw` mode has no cryptographic backstop.** Full write-up: [docs/TOKEN_VALIDATION.md §2.2](../docs/TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).
 
 ---
 
@@ -144,6 +247,276 @@ The pre-invocation layer depends on the API Gateway flavor (`api_gateway_type`),
 **No IP allowlisting:** GitHub-hosted runners use vast, constantly-changing Azure IP ranges and self-hosted runners can be anywhere — WAF IP sets or resource policies would break legitimate callers, so neither posture uses them.
 
 Both stacks support both postures: in OpenTofu via `api_gateway_type`/`enable_waf`, in CloudFormation via the `ApiGatewayType`/`EnableWAF` parameters (equivalent assertions run at stack creation).
+
+---
+
+## Multi-region deployment (resilience)
+
+The request path is stateless, so resilience means **two independent stacks** — one per region — with the caller failing over. Nothing is shared at request time, and neither region needs to know the other exists.
+
+Workflow-side failover example: [Multi-region failover](../docs/GITHUB_ACTIONS.md#multi-region-failover) — in both JavaScript and shell.
+
+### Per-region vs. shared
+
+| Resource                             | Scope                                       | Why                                                                                                                                 |
+| ------------------------------------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Lambda + API Gateway                 | **Per-region**                              | The point of the exercise                                                                                                           |
+| Audit log bucket (`*-logs-*`)        | **Per-region — never shared**               | See the fail-closed trap below                                                                                                      |
+| DynamoDB JWKS cache                  | **Per-region**                              | Do _not_ use Global Tables — see below                                                                                              |
+| Config bucket (`*-config-*`)         | **Per-region**, rendered from shared tfvars | See [Keeping authorization identical](#keeping-authorization-identical)                                                             |
+| Session policy bucket                | Per-region, safe to replicate               | Objects are operator-managed, not stack-managed                                                                                     |
+| IAM execution role                   | **One, shared by every region**             | IAM is global, and this ARN is the service's public contract — see [One execution role](#one-execution-role-shared-by-both-regions) |
+| Target roles (what workflows assume) | Shared                                      | Trust exactly **one** warden ARN, regardless of region count                                                                        |
+
+### The fail-closed trap: never share the audit bucket
+
+`audit_required` defaults to `true` and is fail-closed — an allow decision's audit record must be durably written **before** credentials are returned.
+
+<!-- prettier-ignore -->
+> [!CAUTION]
+> Point both regions at one audit bucket and you have **inverted** the design: an S3 outage in the primary region makes the **secondary deny every request**, precisely when it is meant to take over.
+
+The module already does the right thing — each stack creates its own versioned `${name_prefix}-logs-${suffix}` bucket, with optional Object Lock. Leave it that way and aggregate the two buckets when you query for compliance; `requestId` is the Lambda invocation UUID, so records from the two regions never collide.
+
+### A distinct `name_prefix` per region is mandatory
+
+S3 bucket names are **global**, and `suffix` defaults to the account ID — the same in both regions. Without distinct prefixes, `${name_prefix}-config-${suffix}`, `-logs-`, `-cache-` and `-session-policies-` all collide. (The DynamoDB table and the Lambda function are regional and would not collide, but one prefix per region keeps everything legible.)
+
+```hcl
+# eu-west-1.tfvars
+region      = "eu-west-1"
+name_prefix = "aws-oidc-warden-euw1"
+
+# eu-central-1.tfvars
+region      = "eu-central-1"
+name_prefix = "aws-oidc-warden-euc1"
+```
+
+Use **separate state** per region — distinct backend keys, or a workspace each:
+
+```bash
+tofu init -backend-config="key=aws-oidc-warden/eu-west-1.tfstate"
+tofu apply -var-file=authz.tfvars -var-file=eu-west-1.tfvars
+```
+
+The **execution role is deliberately excluded** from this per-region naming — see below.
+
+### One execution role, shared by both regions
+
+IAM is global, so one role serves every regional Lambda. This matters because the role ARN is this service's **public contract**: it is the one value every target-role owner, in every account, has to trust. Keep it region-free and that contract never changes, no matter how many regions you add.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::123456789012:role/aws-oidc-warden-exec" },
+      "Action": ["sts:AssumeRole", "sts:TagSession"],
+      "Condition": {
+        "StringEquals": { "aws:RequestTag/repo": "${aws:ResourceTag/repo}" }
+      }
+    }
+  ]
+}
+```
+
+Nothing about the role needs region-specific handling: its trust policy is the `lambda.amazonaws.com` service principal with **no `aws:SourceArn` or region condition**, so Lambda in any region can assume it as-is, and `AWSLambdaBasicExecutionRole` grants logs on `arn:aws:logs:*:*:*`.
+
+#### Ownership: who creates what
+
+| Owner                                              | Resource                                                                  | Scope                                |
+| -------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------ |
+| **Bootstrap stack** (or your central IAM pipeline) | `aws-oidc-warden-exec` + its trust policy + `AWSLambdaBasicExecutionRole` | Once, globally                       |
+| **Bootstrap stack**                                | `aws-oidc-warden-assume` managed policy — target roles + `iam:GetRole`    | Once, globally                       |
+| **Each regional stack**                            | One **inline** policy, `<name_prefix>-perms` — and no role of its own     | That region's buckets and table only |
+
+Keep the role in a **separate bootstrap stack**, not in one of the regional stacks. If region A's stack owned the role, `tofu destroy` there would delete the identity region B depends on, and the two stacks would stop being symmetric.
+
+Point each regional stack at that role with `var.execution_role_arn`, and it creates none of its own:
+
+```hcl
+# eu-west-1.tfvars — and the same ARN in eu-central-1.tfvars
+execution_role_arn  = "arn:aws:iam::123456789012:role/aws-oidc-warden-exec"
+assumable_role_arns = [] # AssumeTargetRoles belongs in the shared managed policy
+```
+
+The module then skips both the role and its `AWSLambdaBasicExecutionRole` attachment — the bootstrap stack owns those — while still attaching the `${name_prefix}-perms` inline policy for the buckets and table that stack created. Leave `assumable_role_arns` empty so the statement that grows stays in the one shared managed policy rather than being duplicated into every region's inline budget (see the quotas below). `var.role_name` applies only when the module creates the role, so it has no effect here.
+
+#### The bootstrap stack
+
+The region-agnostic grants live here, attached **once**. This is deliberately where the list that _grows_ lives:
+
+```hcl
+resource "aws_iam_role" "warden" {
+  name = "aws-oidc-warden-exec" # no region — this ARN is the public contract
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "basic" {
+  role       = aws_iam_role.warden.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Region-agnostic. Attached once, NOT duplicated per region — this is the
+# statement that grows with the number of target roles.
+resource "aws_iam_policy" "assume_targets" {
+  name = "aws-oidc-warden-assume"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AssumeTargetRoles"
+        Effect = "Allow"
+        Action = ["sts:AssumeRole", "sts:TagSession"]
+        # A naming convention, not an enumeration — see the quota note below.
+        Resource = ["arn:aws:iam::*:role/gha-*"]
+      },
+      {
+        Sid      = "ReadRoleTags" # only needed when tag_auth is enabled
+        Effect   = "Allow"
+        Action   = "iam:GetRole"
+        Resource = "*"
+      },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "assume_targets" {
+  role       = aws_iam_role.warden.name
+  policy_arn = aws_iam_policy.assume_targets.arn
+}
+```
+
+#### Per-region policy
+
+Each regional stack attaches its own **inline** policy, scoped to that region's resources. Distinct names mean the two stacks never fight over one resource, and destroying a region removes only its own policy. `modules/iam` builds this for you from the buckets and table that stack enabled — the equivalent written out, so you can see what lands on the shared role:
+
+```hcl
+resource "aws_iam_role_policy" "region" {
+  name = "${var.name_prefix}-perms" # "aws-oidc-warden-euw1-perms"
+  role = "aws-oidc-warden-exec"     # the shared role
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ReadConfig"
+        Effect   = "Allow"
+        Action   = "s3:GetObject"
+        Resource = "arn:aws:s3:::aws-oidc-warden-euw1-config-123456789012/*"
+      },
+      {
+        Sid      = "WriteAuditLogs"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:PutObjectTagging"]
+        Resource = "arn:aws:s3:::aws-oidc-warden-euw1-logs-123456789012/*"
+      },
+      {
+        Sid      = "ReadSessionPolicies"
+        Effect   = "Allow"
+        Action   = "s3:GetObject"
+        Resource = "arn:aws:s3:::aws-oidc-warden-euw1-session-policies-123456789012/*"
+      },
+      {
+        Sid      = "CacheDynamoDB"
+        Effect   = "Allow"
+        Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+        Resource = "arn:aws:dynamodb:eu-west-1:123456789012:table/aws-oidc-warden-euw1-cache"
+      },
+    ]
+  })
+}
+```
+
+The second region is the same block with `euc1` and `eu-central-1` substituted. No wildcards across regions, so each region still reaches only its own resources — you get the single shared ARN **and** exact per-region scoping.
+
+#### Why inline per-region, managed for the shared part — the quotas
+
+| IAM quota                                 | Value                                      | What it constrains here                                                                                                                                                        |
+| ----------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Managed policy document size              | **6,144 characters** (whitespace excluded) | The shared `AssumeTargetRoles` policy. Enumerating hundreds of target-role ARNs will exceed this                                                                               |
+| Managed policies attached per role        | **10** (adjustable to 20)                  | Why per-region policies are **inline**: managed ones would burn this cap one region at a time, and `AWSLambdaBasicExecutionRole` plus the shared assume policy already use two |
+| Aggregate **inline** policy size per role | **10,240 characters**                      | The budget shared across all per-region policies. The block above is roughly 1 KB, so this comfortably holds far more regions than you will deploy                             |
+
+The design consequence is the important part:
+
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> **Express target roles as a naming convention, not a list.** `AssumeTargetRoles` is the only statement that grows without bound, so it must (a) live in the single shared policy rather than being duplicated per region, and (b) use a pattern like `arn:aws:iam::*:role/gha-*` instead of an enumeration. Duplicating a long list across per-region policies is what would actually exhaust the 10,240-character inline budget.
+>
+> The trade-off is explicit: **the naming convention becomes the security boundary.** Anyone who can create a role matching `gha-*` in a reachable account has created something the warden may assume — subject to that role's own trust policy, which still has to name the warden. Constrain role creation with a permissions boundary or SCP, and keep the pattern narrow.
+
+If you must enumerate and exceed 6,144 characters, split into a second managed policy rather than pushing it inline — the 10-attachment cap has more headroom than the shared inline budget.
+
+#### Revoking one region without a per-region role
+
+A shared identity means you cannot revoke "region A's role". Two levers replace it:
+
+| Lever                                                       | Effect                                                                                                                                                                                               |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lambda_reserved_concurrency = 0` on that region's function | Stops all invocations. The most direct kill, and no IAM change                                                                                                                                       |
+| A `Deny` on `sts:*` conditioned on `aws:RequestedRegion`    | Each Lambda calls its **own regional** STS endpoint, so this cuts off exactly one region's assume calls. Scope it to `sts:*`, not `*` — global services such as IAM report their own endpoint region |
+
+The residual cost of sharing is blast radius on the service's _own_ infrastructure: credentials stolen from either region carry the union of both per-region policies, including `s3:PutObject` on the other region's audit prefix. Two properties already bound that damage — the role is granted `s3:PutObject`/`s3:PutObjectTagging` and **never `s3:DeleteObject`**, so audit records cannot be deleted; and the audit bucket is created with versioning enabled, so an overwrite at an existing key retains the prior version. The target-role grant is identical either way, so nothing is widened where it would matter most.
+
+### Keeping authorization identical
+
+Two regions mean two `config.yaml` objects, and a stale one is a **silent authorization difference** — the secondary could still grant a role you removed.
+
+The module renders `config.yaml` from your variables, so the reliable way to keep them identical is to render both from the **same authorization tfvars** (with `manage_config = false` this sync is yours to own — upload the same file to both buckets in one pipeline step):
+
+| File              | Contents                                                                                  | Shared?                |
+| ----------------- | ----------------------------------------------------------------------------------------- | ---------------------- |
+| `authz.tfvars`    | `issuers`, `role_mappings`, `role_session_name`, `tag_auth`, `cross_account`              | **Yes — both regions** |
+| `<region>.tfvars` | `region`, `name_prefix`, `api_gateway_type`, `jwt_validation_mode`, cache and log toggles | No                     |
+
+Apply both in the **same pipeline run**, so "authorization changed" and "both regions updated" are one atomic operation. Divergence then reduces to "did the second apply succeed", which CI can assert.
+
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> **Do not put Cross-Region Replication on the *config* bucket.** `aws_s3_object.config` is the one S3 object the stack manages, and its rendered content embeds region-local names (`log_bucket`, `dynamodb_table`, `session_policy_bucket` — all built from `name_prefix`). The two regions' config objects are therefore *legitimately different*, and CRR would overwrite the secondary's copy with the primary's, after which the next `tofu plan` sees drift and writes it back — a loop, plus a secondary pointed at buckets in the wrong region.
+>
+> Replication *is* the right tool for the **session policy bucket**, whose objects you manage yourself rather than through the stack. CRR requires versioning on both source and destination; the module creates that bucket with versioning **disabled** (`versioning_enabled` defaults to `false` and only the audit bucket overrides it), so enable it on both before configuring replication.
+
+To spot-check that the authorization content matches, compare the rendered objects. Buckets use SSE-S3 (`AES256`), so for a single-part upload the ETag is the content MD5:
+
+```bash
+aws s3api head-object --bucket aws-oidc-warden-euw1-config-<acct> --key config.yaml --query ETag --region eu-west-1
+aws s3api head-object --bucket aws-oidc-warden-euc1-config-<acct> --key config.yaml --query ETag --region eu-central-1
+```
+
+These differ by design (region-local bucket names). Diff the objects themselves when you need certainty about the authorization sections:
+
+```bash
+diff <(aws s3 cp s3://aws-oidc-warden-euw1-config-<acct>/config.yaml - --region eu-west-1) \
+     <(aws s3 cp s3://aws-oidc-warden-euc1-config-<acct>/config.yaml - --region eu-central-1)
+```
+
+Only the `cache`/`log_bucket`/`session_policy_bucket` lines should show up.
+
+### Do not replicate the JWKS cache
+
+Per-region DynamoDB tables, and **no Global Tables**. The cache holds public signing keys and is rebuildable from a single JWKS fetch, so replicating it buys nothing while adding a cross-region dependency to the one component that does not need one. A cold secondary simply re-fetches the JWKS on its first request.
+
+### What each region does _not_ share
+
+Both stacks resolve AWS clients through the default credential/region chain, so each Lambda uses `AWS_REGION` — the region it runs in — and SDK v2's **regional** STS endpoints. There is no shared global endpoint between the two deployments.
+
+### One hostname instead of client-side failover?
+
+Route 53 failover routing would avoid touching workflows, but health-checking it well is awkward with what this stack provisions: only `POST /verify` exists (no `GET /health` in any Lambda variant), and the REST flavour's WAF rule deliberately blocks anything that is not `POST /verify`. Route 53 health checks issue GET/HEAD, so you would get either a shallow check — an API Gateway mock route returning 200, which will not notice a broken Lambda or a bad config — or a synthetic canary doing a real `POST` into a CloudWatch alarm, with the health check reading the alarm state. The latter is a genuine deep check, but it is real extra machinery.
+
+Client-side failover needs none of it, and the caller can distinguish a deterministic refusal from an outage, which a DNS health check cannot.
 
 ---
 
@@ -199,7 +572,7 @@ All S3 bucket names are suffixed with the AWS account ID for global uniqueness:
 <name_prefix>-session-policies-<account-id>
 ```
 
-Override the suffix with `var.bucket_suffix` if your naming convention requires it.
+Override the suffix with `var.bucket_suffix` if your naming convention requires it, or set a bucket's full name directly with `var.config_bucket_name` / `cache_bucket_name` / `log_bucket_name` / `session_policy_bucket_name`. The IAM role (`var.role_name`), Lambda function (`var.lambda_function_name`), API Gateway (`var.api_gateway_name`), and DynamoDB cache table (`var.cache_table_name`) have the same kind of override — each defaults to a `name_prefix`-derived name when left unset. `var.execution_role_arn` goes one step further: it reuses a role owned elsewhere instead of naming one this stack creates (see [One execution role](#one-execution-role-shared-by-both-regions)).
 
 ---
 

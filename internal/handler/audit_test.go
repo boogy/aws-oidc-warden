@@ -7,13 +7,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	"github.com/aws/smithy-go"
+	gtvaws "github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/s3logger"
@@ -1167,6 +1171,41 @@ func TestAudit_APIGatewayHandler_AssumeRoleErrorBodyLeaksNothing(t *testing.T) {
 	assert.NotContains(t, resp.Body, "999988887777")
 	assert.NotContains(t, resp.Body, "arn:aws:iam::")
 	assert.NotContains(t, resp.Body, "AccessDenied")
+	assert.NotContains(t, resp.Body, "eyJhbGciOiJSUzI1NiJ9")
+}
+
+// A denial reaches the client as a 403 with its own errorCode, while still
+// leaking none of the STS message the classification was derived from.
+func TestAudit_APIGatewayHandler_AssumeRoleDeniedIs403(t *testing.T) {
+	cfg := auditTestCfg(t, false, true)
+	// Shaped like the real SDK: a GenericAPIError under an OperationError, so
+	// errors.As has to walk the chain the way it does in production.
+	sdkErr := &smithy.OperationError{
+		ServiceID:     "STS",
+		OperationName: "AssumeRole",
+		Err: &smithy.GenericAPIError{
+			Code: "AccessDenied",
+			Message: "User: arn:aws:sts::999988887777:assumed-role/warden-hub/lambda is not authorized " +
+				"to perform: sts:AssumeRole on resource: arn:aws:iam::123456789012:role/MyRole",
+		},
+	}
+	consumer := &leakyConsumer{fakeConsumer: mockConsumer(t), assumeErr: fmt.Errorf(
+		"unable to perform sts.AssumeRole: %w", fmt.Errorf("%w: %w", gtvaws.ErrAssumeRoleDenied, sdkErr))}
+	h := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), consumer,
+		&fixedExtractor{claims: allowClaims("org/repo")}, nil)
+
+	resp, err := h.Handler(context.Background(), events.APIGatewayProxyRequest{
+		Path: "/", HTTPMethod: "POST",
+		Body: `{"token":"eyJhbGciOiJSUzI1NiJ9.payload.sig","role":"arn:aws:iam::123456789012:role/MyRole"}`,
+	})
+	require.NoError(t, err)
+	t.Logf("status=%d body=%s", resp.StatusCode, resp.Body)
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, resp.Body, "assume_role_denied")
+	assert.NotContains(t, resp.Body, "999988887777")
+	assert.NotContains(t, resp.Body, "AccessDenied")
+	assert.NotContains(t, resp.Body, "sts:AssumeRole")
 	assert.NotContains(t, resp.Body, "eyJhbGciOiJSUzI1NiJ9")
 }
 

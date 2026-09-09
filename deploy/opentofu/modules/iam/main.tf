@@ -9,14 +9,31 @@ data "aws_iam_policy_document" "assume" {
 }
 
 resource "aws_iam_role" "this" {
-  name               = "${var.name_prefix}-exec"
+  count              = local.create_role ? 1 : 0
+  name               = var.role_name
   assume_role_policy = data.aws_iam_policy_document.assume.json
   tags               = var.tags
 }
 
+# Skipped with the role: whoever manages an external role manages its
+# managed-policy attachments too, and attaching from here would fight them.
 resource "aws_iam_role_policy_attachment" "basic" {
-  role       = aws_iam_role.this.name
+  count      = local.create_role ? 1 : 0
+  role       = aws_iam_role.this[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+locals {
+  # One variable, not a create/reuse pair: an ARN handed in means "use that
+  # role", absent means "create one". There is no combination left to get wrong.
+  create_role = var.execution_role_arn == null
+
+  # The identity this module attaches its inline policy to, whichever way the
+  # role arrived. The name comes from the ARN rather than a second variable: an
+  # IAM role ARN is arn:aws:iam::<acct>:role[/path/]<name>, so the last segment
+  # is the name even when the role carries a path.
+  role_arn  = local.create_role ? aws_iam_role.this[0].arn : var.execution_role_arn
+  role_name = local.create_role ? aws_iam_role.this[0].name : reverse(split("/", var.execution_role_arn))[0]
 }
 
 data "aws_iam_policy_document" "perms" {
@@ -129,6 +146,6 @@ resource "aws_iam_role_policy" "this" {
   # Only attach when at least one statement exists.
   count  = local.has_perms ? 1 : 0
   name   = "${var.name_prefix}-perms"
-  role   = aws_iam_role.this.id
+  role   = local.role_name
   policy = data.aws_iam_policy_document.perms.json
 }

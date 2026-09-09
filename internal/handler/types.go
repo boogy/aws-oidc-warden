@@ -37,6 +37,7 @@ var (
 	ErrRoleNotPermitted      = errors.New("role not allowed for this subject or its conditions are not met")
 	ErrAccountNotAllowed     = errors.New("target account is not in the allowed_accounts list")
 	ErrAssumeRoleFailed      = errors.New("failed to assume the requested role")
+	ErrAssumeRoleDenied      = errors.New("aws denied the assume-role request for the requested role")
 	ErrAuditWriteFailed      = errors.New("audit record could not be durably written")
 )
 

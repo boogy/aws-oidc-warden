@@ -4,17 +4,27 @@ Tag-based authorization lets a workload assume an IAM role whose **tags** author
 
 Serving roles from **other AWS accounts** is configured separately via the top-level `cross_account` block. `cross_account.enabled` is a policy gate: `false` (or the block omitted) hard-blocks every cross-account operation — both role assumption and tag reads fail closed. The assume itself is always **direct**, hub → target, one hop, using the warden's own credentials; a convention-named per-account spoke role exists only to read a target role's IAM tags cross-account (`iam:GetRole`), since IAM has no resource-based policies. It works with plain `role_mappings`, with tag-auth, or both — see [Cross-account](#cross-account) and the full worked example in [examples/cross-account/](examples/cross-account/).
 
-- [How it works](#how-it-works)
-- [Conditions (multi-dimensional matching)](#conditions-multi-dimensional-matching)
-- [Tag reference](#tag-reference)
-- [Precedence: mappings + tags together](#precedence-mappings--tags-together)
-- [Corner cases](#corner-cases)
-- [Session tags & ABAC](#session-tags--abac)
-- [Role chaining & transitive session tags](#role-chaining--transitive-session-tags)
-- [Target account allow-list](#target-account-allow-list)
-- [Cross-account](#cross-account)
-- [IAM setup](#iam-setup)
-- [Configuration](#configuration)
+<!-- prettier-ignore -->
+> [!CAUTION]
+> **Read [Security model & foot-guns](#security-model--foot-guns) before enabling this in production.** Tag-auth is an additive fallback: it can authorize a role *independently of* the `role_mappings` conditions you wrote to constrain it.
+
+**On this page**
+
+| Section                                                                            | Contents                                                                        |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [How it works](#how-it-works)                                                      | The request flow, end to end                                                    |
+| [Conditions](#conditions-multi-dimensional-matching)                               | Multi-dimensional matching, and its equivalence with `role_mappings.conditions` |
+| [Tag reference](#tag-reference)                                                    | Every `aow/*` tag, with examples and `default_org` short forms                  |
+| [Precedence](#precedence-mappings--tags-together)                                  | What happens when mappings and tags both apply                                  |
+| [`aow/claim.<name>`](#constraining-any-claim-aowclaimname)                         | Constraining any claim the issuer publishes                                     |
+| [Corner cases](#corner-cases)                                                      | The complete list of denies, caching windows and charset limits                 |
+| **[Security model & foot-guns](#security-model--foot-guns)**                       | **The three behaviours that are easy to misjudge**                              |
+| [Session tags & ABAC](#session-tags--abac)                                         | Tags on the resulting STS session                                               |
+| [Role chaining & transitive session tags](#role-chaining--transitive-session-tags) | When identity survives a second hop, and when it doesn't                        |
+| [Target account allow-list](#target-account-allow-list)                            | `allowed_accounts` semantics — **including the empty-list case**                |
+| [Cross-account](#cross-account)                                                    | The hub/spoke model                                                             |
+| [IAM setup](#iam-setup)                                                            | Hub, spoke and target role policies                                             |
+| [Configuration](#configuration)                                                    | The `tag_auth` / `cross_account` keys                                           |
 
 ---
 

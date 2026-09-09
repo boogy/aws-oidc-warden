@@ -276,7 +276,7 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 
 	result, err := a.AWS.AssumeRole(&assumeRoleInput)
 	if err != nil {
-		return nil, fmt.Errorf("unable to perform sts.AssumeRole: %w", err)
+		return nil, fmt.Errorf("unable to perform sts.AssumeRole: %w", classifyAssumeRoleError(err))
 	}
 
 	if result.Credentials == nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -65,6 +66,11 @@ type RoleMapping struct {
 	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`          // Conditions for role assumption
 	RoleSessionName   string     `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`   // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
 
+	// SessionTags are STS tags ADDED to the issuer's session_tags for roles
+	// granted by this mapping. Additive only: a key the issuer already defines
+	// is rejected by Validate(), never silently overridden.
+	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
+
 	// Resolved state, rebuilt by Validate() and not serialized. An effective
 	// mapping carries exactly ONE resolvedSubject (Validate() fans a Subject
 	// list out into one mapping per element); index.go and the warnings read it,
@@ -77,11 +83,12 @@ type RoleMapping struct {
 // RoleGroupDefaults are the fields a role_group applies uniformly to every
 // subject it expands to.
 type RoleGroupDefaults struct {
-	Roles             []string   `mapstructure:"roles"               json:"roles,omitempty"`
-	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`
-	SessionPolicy     string     `mapstructure:"session_policy"      json:"session_policy,omitempty"`
-	SessionPolicyFile string     `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
-	RoleSessionName   string     `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
+	Roles             []string          `mapstructure:"roles"               json:"roles,omitempty"`
+	Conditions        *Condition        `mapstructure:"conditions"          json:"conditions,omitempty"`
+	SessionPolicy     string            `mapstructure:"session_policy"      json:"session_policy,omitempty"`
+	SessionPolicyFile string            `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
+	RoleSessionName   string            `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
+	SessionTags       map[string]string `mapstructure:"session_tags"  json:"session_tags,omitempty"`
 }
 
 // RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
@@ -915,6 +922,18 @@ func (c *Config) Validate() error {
 		}
 		m.Issuer = resolvedIssuer
 
+		issuerTags := c.IssuerSessionTags(resolvedIssuer)
+		for tagKey := range m.SessionTags {
+			if !sessionTagKeyPattern.MatchString(tagKey) {
+				return fmt.Errorf("%s[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", source, i, subject, tagKey)
+			}
+			// Rejected rather than ignored: a silently dropped override reads
+			// as applied, and the tag feeds ABAC conditions in the target role.
+			if _, dup := issuerTags[tagKey]; dup {
+				return fmt.Errorf("%s[%d] (%s): session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", source, i, subject, tagKey, resolvedIssuer)
+			}
+		}
+
 		roles, err := c.resolveRoleSet(m.Roles)
 		if err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
@@ -942,7 +961,7 @@ func (c *Config) Validate() error {
 		// Advisory only, and deliberately after compilation: a claim name the
 		// issuer never mints is a config smell, never an authorization failure.
 		// See condition_warnings.go.
-		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, subject), knownClaims[m.Issuer])
+		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, subject), withSessionTagClaims(knownClaims[m.Issuer], m.SessionTags))
 
 		m.order = len(c.effective)
 		c.effective = append(c.effective, &m)
@@ -992,6 +1011,7 @@ func (c *Config) Validate() error {
 				SessionPolicy:     group.Defaults.SessionPolicy,
 				SessionPolicyFile: group.Defaults.SessionPolicyFile,
 				RoleSessionName:   group.Defaults.RoleSessionName,
+				SessionTags:       group.Defaults.SessionTags,
 			}
 			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
 				return err
@@ -1281,16 +1301,48 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 	}
 }
 
-// IssuerSessionTags returns the session_tags spec (STS tag key -> raw claim
-// name) configured for issuer, or nil if issuer is not configured or has no
-// session_tags. Used to drive aws.BuildSessionTags at role-assumption time.
-func (c *Config) IssuerSessionTags(issuer string) map[string]string {
+// issuerConfig returns the configured spec for issuer, or nil when the issuer
+// is not configured at all (distinct from configured-but-empty).
+func (c *Config) issuerConfig(issuer string) *IssuerConfig {
 	for i := range c.Issuers {
 		if c.Issuers[i].Issuer == issuer {
-			return c.Issuers[i].SessionTags
+			return &c.Issuers[i]
 		}
 	}
 	return nil
+}
+
+// IssuerSessionTags returns the session_tags spec (STS tag key -> raw claim
+// name) configured for issuer, or nil if issuer is not configured or has no
+// session_tags. The spec actually attached at assumption time is
+// EffectiveSessionTags, which adds the authorizing mapping's tags on top.
+func (c *Config) IssuerSessionTags(issuer string) map[string]string {
+	if iss := c.issuerConfig(issuer); iss != nil {
+		return iss.SessionTags
+	}
+	return nil
+}
+
+// EffectiveSessionTags is the session_tags spec for a granted role: the
+// issuer's spec plus whatever the authorizing mapping adds. Session tags are
+// per-issuer by design — issuers mint different claims, so there is no global
+// spec to inherit. Additive only: Validate() rejects a mapping key the issuer
+// already defines, and the issuer's value still wins here so the issuer's
+// contract holds regardless. A role granted by tag-auth has no authorizing
+// mapping and gets the issuer spec alone; an unconfigured issuer gets nothing.
+func (c *Config) EffectiveSessionTags(issuer string, d Decision) map[string]string {
+	iss := c.issuerConfig(issuer)
+	if iss == nil {
+		return nil
+	}
+	extra := d.sessionTags()
+	if len(extra) == 0 {
+		return iss.SessionTags
+	}
+	merged := make(map[string]string, len(iss.SessionTags)+len(extra))
+	maps.Copy(merged, extra)
+	maps.Copy(merged, iss.SessionTags)
+	return merged
 }
 
 // FindSessionPolicy returns the session policy from the mapping that
@@ -1342,6 +1394,15 @@ func (d Decision) SessionPolicy() (*string, *string) {
 		return &d.authorizing.SessionPolicy, nil
 	}
 	return nil, nil
+}
+
+// sessionTags returns the additional tags declared by the mapping that
+// authorized the role; nil when no mapping did.
+func (d Decision) sessionTags() map[string]string {
+	if d.authorizing == nil {
+		return nil
+	}
+	return d.authorizing.SessionTags
 }
 
 // RoleSessionName returns the authorizing mapping's session-name override, or

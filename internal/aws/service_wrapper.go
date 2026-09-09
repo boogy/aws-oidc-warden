@@ -160,6 +160,7 @@ func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeR
 	if err != nil {
 		slog.Error("Error assuming role",
 			slog.String("roleArn", *input.RoleArn),
+			slog.String("stsErrorCode", stsErrorCode(err)),
 			slog.String("error", err.Error()),
 		)
 		return nil, err

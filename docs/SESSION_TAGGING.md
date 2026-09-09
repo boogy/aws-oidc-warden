@@ -1,6 +1,19 @@
 # Session Tagging
 
-The AWS OIDC Warden attaches STS session tags when assuming a role, for ABAC, audit trails, and cost allocation.
+AWS OIDC Warden attaches STS session tags when assuming a role, for ABAC, audit trails, and cost allocation. Tags come from **verified claims only**, and are declared **per issuer**.
+
+**On this page**
+
+| Section                                                                              | Contents                                                    |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| [Per-issuer and spec-driven](#session-tags-are-per-issuer-and-spec-driven)           | The `session_tags` map, and **the key case-folding gotcha** |
+| [A mapping can add tags](#a-mapping-can-add-tags-never-redefine-them)                | Per-mapping additive tags                                   |
+| [Security benefits](#security-benefits)                                              | Audit trail, IAM policy conditions, cost allocation         |
+| [Example workflow](#example-github-workflow) & [CloudTrail](#cloudtrail-log-example) | What it looks like end to end                               |
+| [Monitoring and alerting](#monitoring-and-alerting)                                  | Queries worth having                                        |
+| [Best practices](#best-practices)                                                    |                                                             |
+| [Surviving a role chain](#surviving-a-role-chain-session_tags_transitive)            | `session_tags_transitive`                                   |
+| [Limitations](#limitations)                                                          | **What to watch out for**                                   |
 
 ## Session tags are per-issuer and spec-driven
 
@@ -20,7 +33,17 @@ issuers:
       event-name: "event_name"
 ```
 
-Tag **keys** must be written lower-case; values are capped at 256 chars. The validation pattern itself is `^[A-Za-z0-9 _.:/=+@-]{1,128}$` — it accepts both cases, and the lower-case restriction is a loader constraint rather than something the regex enforces: a `session_tags` key is a _config key_, and the config loader case-folds every key it reads. `CostCenter: cost_center` is therefore attached as `costcenter`, and the original case is gone before any validation could object — so write the key in the case you want STS to receive, and key ABAC policies on that. This applies only to the tag **key**; the tag **value** is a config value and is passed through with the claim's case untouched. An invalid key or value is **skipped and logged — never sanitized or truncated**, so an ABAC condition can trust that a tag it sees carries the exact claim value (a silently mangled value would be a security bug).
+Tag **keys** must be written lower-case; values are capped at 256 chars.
+
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> **Write the key in the case you want STS to receive — it will be lower-cased.** A `session_tags` key is a *config key*, and the config loader case-folds every key it reads. `CostCenter: cost_center` is attached as `costcenter`, and the original case is gone before validation could object. **Key your ABAC policies on the lower-case form.**
+>
+> The validation pattern (`^[A-Za-z0-9 _.:/=+@-]{1,128}$`) accepts both cases — the lower-case restriction is a loader behaviour, not something the regex enforces.
+>
+> This applies to the tag **key** only. The tag **value** is a config value and is passed through with the claim's case untouched.
+
+**An invalid key or value is skipped and logged — never sanitized or truncated.** That is deliberate: an ABAC condition must be able to trust that a tag it sees carries the exact claim value, since a silently mangled value would be a security bug.
 
 > **Breaking change from v1:** the default `repo` tag now carries the **full `owner/repo`** (the raw `repository` claim). v1 stripped the owner to a bare repo name. If an ABAC policy matched a bare repo name, update it — or map `repo` to a claim that is already bare.
 
@@ -36,6 +59,46 @@ Tag **keys** must be written lower-case; values are capped at 256 chars. The val
 | `event-name` | `event_name`       | `push`             |
 
 For a non-GitHub (`generic`) issuer, key the tags on that provider's raw claim names (e.g. GitLab `project_path`, `ref`). See [MULTI_ISSUER.md](MULTI_ISSUER.md).
+
+## A mapping can add tags, never redefine them
+
+Session tags are declared **per issuer** — different IdPs mint different claims, so there is no global spec to inherit. The issuer's `session_tags` is the contract: every token from that issuer carries those tags, on every role. A `role_mappings` entry may declare its own `session_tags` to attach **extra** tags to the roles it grants:
+
+```yaml
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: "github"
+    audiences: ["sts.amazonaws.com"]
+    session_tags:
+      repo: "repository"
+      actor: "actor"
+
+role_mappings:
+  # Gets repo + actor + tier.
+  - subject: "my-org/payments-api"
+    roles: ["arn:aws:iam::123456789012:role/payments"]
+    session_tags:
+      tier: "environment"
+
+  # Gets repo + actor.
+  - subject: "my-org/docs-site"
+    roles: ["arn:aws:iam::123456789012:role/docs"]
+```
+
+The merge is **additive only**. A mapping key that the issuer already defines is a **boot-time configuration error**, not a silent override:
+
+```
+role_mappings[0] (my-org/payments-api): session_tags key "repo" is already
+defined by issuer "https://token.actions.githubusercontent.com"; a mapping may
+only add tags, never redefine one
+```
+
+That is deliberate. A silently-ignored override reads as applied, and the tag it names feeds ABAC conditions in the target role — so the config is rejected instead of drifting from what its author believes it says.
+
+Two consequences worth knowing:
+
+- **`role_groups` defaults carry `session_tags` too**, applied to every subject the group expands to, under the same additive-only rule.
+- **A role granted by [tag-based authorization](TAG_BASED_AUTHORIZATION.md) gets the issuer spec only.** There is no authorizing mapping in that path, so there is no mapping layer to apply. If an ABAC policy depends on a tag, keep that tag at issuer level whenever tag-auth can also grant the role.
 
 > **Session tagging vs. tag-based authorization.** This page covers the STS session tags attached to every assumed-role session (for ABAC policy conditions, audit, and cost allocation). A separate, opt-in mechanism — [tag-based authorization](TAG_BASED_AUTHORIZATION.md) — lets a role's own IAM tags _grant_ the authorization decision itself (in place of `role_mappings`), which is the recommended path once you're managing authorization for hundreds/thousands of roles or need cross-account hub/spoke delegation. The two compose: an IAM-tag-authorized role still gets the same per-issuer `session_tags` attached on assumption.
 
@@ -251,7 +314,7 @@ It defaults off only for upgrade safety: a transitive tag cannot be changed down
 
 ## Limitations
 
-- Session tags are limited to 50 tags per session
+- Session tags are limited to 50 tags per session — the cap applies to the **merged** issuer + mapping spec, and the overflow is skipped and logged at assumption time rather than rejected at boot
 - Each tag key and value has character and length restrictions
 - Session tags only apply to the assumed role session, not the underlying IAM role
 - An invalid tag key or value is **skipped and logged, never sanitized or truncated** — an ABAC condition can trust that any tag it sees carries the exact verified claim value (see the note above)

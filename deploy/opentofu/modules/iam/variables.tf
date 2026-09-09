@@ -1,6 +1,22 @@
+variable "execution_role_arn" {
+  type        = string
+  description = "ARN of an externally managed execution role to attach this module's inline policy to. Null creates the role instead. Its trust policy and managed-policy attachments stay with whoever owns it."
+  default     = null
+
+  validation {
+    condition     = var.execution_role_arn == null || can(regex("^arn:aws[a-z-]*:iam::[0-9]{12}:role/.+$", coalesce(var.execution_role_arn, "")))
+    error_message = "execution_role_arn must be an IAM role ARN (arn:aws:iam::<account>:role/<name>)."
+  }
+}
+
+variable "role_name" {
+  type        = string
+  description = "Lambda execution IAM role name. Used only when execution_role_arn is null."
+}
+
 variable "name_prefix" {
   type        = string
-  description = "Prefix for the role and policy names."
+  description = "Prefix for the inline policy name."
 }
 
 variable "assumable_role_arns" {

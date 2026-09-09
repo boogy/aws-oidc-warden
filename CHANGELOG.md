@@ -4,6 +4,68 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [3.3.0] - 2026-09-09
+
+### Added
+
+- **`role_mappings[].session_tags` (and `role_groups[].defaults.session_tags`) attach extra STS session tags to the roles that mapping grants.** Session tags stay **per-issuer** — issuers mint different claims, so there is deliberately no global spec — and the issuer's `session_tags` remains the contract every token from that issuer carries. A mapping can now extend it per subject:
+
+  ```yaml
+  issuers:
+    - issuer: "https://token.actions.githubusercontent.com"
+      session_tags:
+        repo: "repository"
+  role_mappings:
+    - subject: "my-org/payments-api"
+      roles: ["arn:aws:iam::123456789012:role/payments"]
+      session_tags:
+        tier: "environment" # → repo + tier
+  ```
+
+  The merge is **additive only**: a mapping key the issuer already defines is rejected by `Validate()` at boot rather than silently overridden, because a dropped override reads as applied and the tag feeds ABAC conditions in the target role. Resolution goes through the same `Decision` as `session_policy` and `role_session_name`, so the extras come from the mapping that actually authorized the role — never an unrelated one sharing the subject. A role granted by tag-based authorization has no authorizing mapping and receives the issuer spec alone; an unconfigured issuer receives nothing.
+
+  `AuditableClaims` now covers the session-tag claims of both layers, so a claim attached to the STS session is always recordable in the audit record — the two can never disagree about what the caller asserted. The unknown-condition-claim warning learned about them too: a mapping that both tags and gates on a claim outside its issuer's vocabulary no longer draws a spurious "this issuer does not issue" WARN at boot.
+
+### Changed
+
+- **An `AccessDenied` from STS is now reported as `403 assume_role_denied`, not `500 assume_role_failed`.** Every `sts:AssumeRole` failure used to collapse into one generic 5xx, so a caller could not tell "the target role's trust policy refused this identity" from "the broker is broken". `internal/aws/stserr.go` classifies the STS error code and wraps an authorization refusal in `aws.ErrAssumeRoleDenied`, which `internal/handler/errors.go` maps to 403 with its own `errorCode`; throttling, expired broker credentials, and policy-document faults keep the retryable 500. A 5xx claimed the broker had failed when it had not: validation, authorization and the STS call were all correct, and AWS refused the request. The STS message — the only thing that separates a rejecting trust policy from the broker's role missing `sts:AssumeRole`/`sts:TagSession` — stays in the logs and the audit record (`stage: assume_role`), never in the response.
+
+  Clients that branch on the status code need updating: a trust-policy refusal is no longer retryable.
+
+- The `Error assuming role` log line now carries a `stsErrorCode` field, so denials can be separated from throttling in a log query without parsing the message.
+
+- **CI integration moved to [docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md), and the README is now an overview.** The workflow examples had grown to roughly 380 of the README's 621 lines, which pushed what the service _is_ below several screens of YAML. The new document holds the request/response contract for all three modes, a retry-or-not column per status code, the `github-script` and `curl` variants, multi-region failover, the composite action, and a GitLab example; the README keeps a short pointer with one minimal snippet. No document was renamed, so every existing link still resolves.
+
+  The README's security material stays in place and in full: the claim-trust `[!CAUTION]`, the **What to watch out for** table, and the fail-closed and delegated-mode caveats. Two sections were merged into **How it helps at scale** (session tags as ABAC, tag-based authorization, cross-account) and `Deploying` was condensed onto `deploy/`, which is also where the new `apigw` `lambda:InvokeFunction` caution now appears in the README.
+
+- **Documented a resilient two-region deployment.** `deploy/README.md` gained **Multi-region deployment (resilience)**: the request path is stateless, so resilience is two independent stacks with the caller failing over.
+
+  - What is per-region vs. shared, and why a **shared audit bucket inverts the design** — `audit_required` is fail-closed, so one region's S3 outage would make the other deny every request, precisely when it is meant to take over.
+  - Why a distinct `name_prefix` per region is mandatory: S3 bucket names are global and `bucket_suffix` defaults to the account ID, so `-config-`, `-logs-`, `-cache-` and `-session-policies-` all collide without it.
+  - **One region-free `aws-oidc-warden-exec` role, shared by every region.** IAM is global, so one role serves every regional Lambda, and its ARN becomes the service's stable public contract — target-role owners trust one value regardless of how many regions exist. The role's trust policy is the bare `lambda.amazonaws.com` service principal with no `aws:SourceArn` or region condition, so this needs nothing region-specific. Worked IAM example: a bootstrap stack owning the role plus one **managed** policy for the region-agnostic grants, and each regional stack attaching its own small **inline** policy scoped to that region's buckets and table. Documented against the real quotas — 6,144 characters per managed policy, 10 managed policies per role (adjustable to 20), and a 10,240-character aggregate inline budget — with the design consequence spelled out: `AssumeTargetRoles` is the only statement that grows, so it belongs in the single shared policy and should be a naming convention rather than an enumeration, accepting that the convention then _is_ the security boundary.
+  - Per-region revocation, which a shared identity gives up, is covered by two replacements: `lambda_reserved_concurrency = 0`, or a `Deny` on `sts:*` conditioned on `aws:RequestedRegion`.
+  - Audit-integrity guidance relies on the grants rather than S3 Object Lock: the role receives `s3:PutObject`/`s3:PutObjectTagging` and **never `s3:DeleteObject`**, and the audit bucket is versioned, so records cannot be deleted and an overwrite retains the prior version.
+  - **Cross-Region Replication does not belong on the config bucket**: `aws_s3_object.config` is stack-managed and its rendered content embeds region-local bucket and table names, so CRR would overwrite the secondary and then fight `tofu plan` on every run. Keeping both regions' authorization identical is instead a matter of rendering both from one shared `authz.tfvars`. Replication does suit the session-policy bucket, whose objects are operator-managed — noting that the module creates it with versioning disabled, which CRR requires.
+  - Corrected the multi-region note added earlier in `docs/ARCHITECTURE.md`, which suggested sharing the JWKS cache via DynamoDB Global Tables. The cache holds public keys and is rebuildable from one fetch, so replicating it adds a cross-region dependency for no benefit.
+
+- **Multi-region failover for callers, in both shell and JavaScript** ([docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md#multi-region-failover)). Both variants apply the same policy — one OIDC token reused across endpoints, `400`/`401`/`403` final because the other region shares the authorization config and would return the same answer, only unreachable or transient failures failing over, masking before export. The difference between them is documented rather than glossed: `curl` separates `--connect-timeout` from `--max-time`, so a blackholed region is abandoned in about two seconds, while `fetch` cannot separate a connect timeout from a response timeout, so `AbortSignal.timeout` bounds the whole request and a blackholed region consumes the full budget (measured: 8006 ms).
+
+- **`docs/GITHUB_ACTIONS.md` gained "Ship it as a composite action"**: a complete `action.yml` that owns the endpoint list, failover order, retry predicate, timeouts and the `self`/`apigw` wire contract, so a region move or a mode switch is one change instead of an edit in every consuming repository. Includes the caveat that the action sees the OIDC token and its repository must be protected accordingly.
+
+- **The `apigw` invoke restriction is now a prominent warning** in `deploy/README.md` rather than a passing note. The previous wording implied the application provided a second layer; it does not — it rejects only _empty_ claims, so forged non-empty claims pass and `lambda:InvokeFunction` is equivalent to credential minting for any authorized subject. The section lists what must never be granted and a `get-policy` command to audit a deployed function.
+
+- **Documentation restructured for readability and accuracy.** No file was renamed, moved, or merged, so every existing link and anchor still resolves.
+
+  - `README.md` gained a "Start here" reading path, a `deploy/` row in the doc index (the maintained OpenTofu/CloudFormation stacks were previously undiscoverable from the entry point), a consolidated **What to watch out for** table, and the `403 assume_role_denied` / `500 assume_role_failed` distinction. The full `github-script` workflow example, with its `apigw`-mode and `curl` variants, now lives in [docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md); the README keeps one minimal snippet and a pointer.
+  - `docs/ARCHITECTURE.md` no longer documents a **Dockerfile that does not exist** (images are built with `ko` from `.ko.yaml`) or hand-rolled Terraform that duplicated `deploy/opentofu/`; the deployment section now points at the maintained stacks and lists the real image tags.
+  - `docs/LOGGING.md` field reference moved from prose to per-surface tables, and the three overlapping explanations of `audit_required` were merged into one section. The **`log_level` trap** (`AOW_LOG_LEVEL` is validated but never wired to the running handler) is now a callout rather than a closing footnote.
+  - `docs/CONFIGURATION.md`, `docs/TOKEN_VALIDATION.md`, `docs/TAG_BASED_AUTHORIZATION.md` and `docs/SESSION_TAGGING.md` gained on-page navigation, and the foot-guns they each described in passing — the session-policy ordering rule, the `apigw` invoke trust boundary, tag-auth as an additive fallback, session-tag key case-folding — are now callouts on the way past.
+
+- **Dependencies: `smithy-go` promoted to a direct requirement, `testify` 1.11.1 → 1.12.1.** `github.com/aws/smithy-go` moves out of the indirect block because this release's STS error classifier imports it directly (`internal/aws/stserr.go` reads `smithy.APIError` to tell a trust-policy refusal from a retryable fault), so listing it as indirect would be inaccurate. `govulncheck` reports no vulnerabilities and the full suite passes unchanged.
+  - `deploy/README.md` documents which service features are **`config.yaml`-only** because the module does not expose them as variables: `role_groups`, list-valued `subject`, the boolean condition groups, and `role_mappings[].session_tags`.
+
 ## [3.2.0] - 2026-09-03
 
 ### Added
@@ -697,7 +759,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.2...v3.1.0
 [3.0.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.1...v3.0.2

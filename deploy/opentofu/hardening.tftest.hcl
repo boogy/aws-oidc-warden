@@ -92,7 +92,7 @@ run "apigw_mode_requires_http_api" {
     jwt_validation_mode = "apigw"
   }
 
-  expect_failures = [aws_s3_object.config]
+  expect_failures = [terraform_data.guardrails]
 }
 
 # (d) Invalid combination: WAF on an HTTP API must fail the precondition.
@@ -104,7 +104,7 @@ run "waf_requires_rest_api" {
     enable_waf       = true
   }
 
-  expect_failures = [aws_s3_object.config]
+  expect_failures = [terraform_data.guardrails]
 }
 
 # (e) Regression guard: multi-issuer self mode must remain deployable. Every
@@ -188,12 +188,12 @@ run "multi_issuer_apigw" {
   }
 
   assert {
-    condition     = length(yamldecode(aws_s3_object.config.content).issuers) == 2
+    condition     = length(yamldecode(aws_s3_object.config[0].content).issuers) == 2
     error_message = "The rendered config must list both issuers."
   }
 
   assert {
-    condition     = strcontains(aws_s3_object.config.content, "\nissuers:\n")
+    condition     = strcontains(aws_s3_object.config[0].content, "\nissuers:\n")
     error_message = "Rendered YAML keys must be unquoted."
   }
 }
@@ -216,7 +216,7 @@ run "apigw_requires_route_key" {
     }
   }
 
-  expect_failures = [aws_s3_object.config]
+  expect_failures = [terraform_data.guardrails]
 }
 
 # (h) route_key is meaningless in self mode and must be rejected, not ignored.
@@ -238,7 +238,7 @@ run "self_mode_rejects_route_key" {
     }
   }
 
-  expect_failures = [aws_s3_object.config]
+  expect_failures = [terraform_data.guardrails]
 }
 
 # (i) var.issuers and the singular shorthand are mutually exclusive.
@@ -258,7 +258,7 @@ run "issuers_excludes_shorthand" {
     }
   }
 
-  expect_failures = [aws_s3_object.config]
+  expect_failures = [terraform_data.guardrails]
 }
 
 # (j) Duplicate route keys would make the plan ambiguous.
@@ -289,7 +289,7 @@ run "duplicate_route_keys_rejected" {
     }
   }
 
-  expect_failures = [aws_s3_object.config]
+  expect_failures = [terraform_data.guardrails]
 }
 
 # (k) Self mode (no var.issuers override) still produces exactly one open
@@ -329,7 +329,7 @@ run "session_policy_heredoc_trailing_newline" {
   }
 
   assert {
-    condition     = length(yamldecode(aws_s3_object.config.content).role_mappings) == 1
+    condition     = length(yamldecode(aws_s3_object.config[0].content).role_mappings) == 1
     error_message = "The rendered config must include the heredoc-sourced role mapping despite its trailing-newline session_policy."
   }
 }
@@ -347,7 +347,7 @@ run "apigw_rejects_empty_issuers" {
     issuers             = {}
   }
 
-  expect_failures = [aws_s3_object.config]
+  expect_failures = [terraform_data.guardrails]
 }
 
 # (n) An issuer with no session tags is an ordinary, valid config — it must
@@ -368,7 +368,7 @@ run "empty_session_tags_is_valid" {
   }
 
   assert {
-    condition     = yamldecode(aws_s3_object.config.content).issuers[0].session_tags == {}
+    condition     = yamldecode(aws_s3_object.config[0].content).issuers[0].session_tags == {}
     error_message = "An issuer's session_tags must round-trip to an empty map, not null."
   }
 }
@@ -438,7 +438,7 @@ run "multi_issuer_role_mapping_boots_with_issuer" {
   }
 
   assert {
-    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].issuer == "https://token.actions.githubusercontent.com"
+    condition     = yamldecode(aws_s3_object.config[0].content).role_mappings[0].issuer == "https://token.actions.githubusercontent.com"
     error_message = "The rendered role_mappings entry must carry its issuer."
   }
 }
@@ -474,7 +474,7 @@ run "multi_issuer_role_mapping_boots_with_default_issuer" {
   }
 
   assert {
-    condition     = yamldecode(aws_s3_object.config.content).default_issuer == "https://gitlab.com"
+    condition     = yamldecode(aws_s3_object.config[0].content).default_issuer == "https://gitlab.com"
     error_message = "The rendered config must carry default_issuer."
   }
 }
@@ -496,7 +496,7 @@ run "regex_backslash_dot_plans" {
   }
 
   assert {
-    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].subject == "myorg/myrepo\\.git"
+    condition     = yamldecode(aws_s3_object.config[0].content).role_mappings[0].subject == "myorg/myrepo\\.git"
     error_message = "A subject containing an escaped dot must round-trip through config.yaml unchanged."
   }
 }
@@ -519,7 +519,7 @@ run "regex_word_boundary_survives_roundtrip" {
   }
 
   assert {
-    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].subject == "^myorg/repo\\b.*x$"
+    condition     = yamldecode(aws_s3_object.config[0].content).role_mappings[0].subject == "^myorg/repo\\b.*x$"
     error_message = "A subject containing \\b must round-trip as the literal backslash+b, not a YAML backspace control byte."
   }
 }
@@ -538,7 +538,7 @@ run "jwt_authorizer_issuer_divergence_rejected" {
     jwt_authorizer_issuer = "https://example.com"
   }
 
-  expect_failures = [aws_s3_object.config]
+  expect_failures = [terraform_data.guardrails]
 }
 
 # (u) jwt_authorizer_audiences MAY diverge from the app config's audiences —
@@ -788,12 +788,68 @@ run "conditions_claims_map_renders" {
   }
 
   assert {
-    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].conditions.environment == "production"
+    condition     = yamldecode(aws_s3_object.config[0].content).role_mappings[0].conditions.environment == "production"
     error_message = "A named condition field must render alongside the claims map."
   }
 
   assert {
-    condition     = yamldecode(aws_s3_object.config.content).role_mappings[0].conditions.claims.base_ref == ["refs/heads/main", "refs/heads/release/.+"]
+    condition     = yamldecode(aws_s3_object.config[0].content).role_mappings[0].conditions.claims.base_ref == ["refs/heads/main", "refs/heads/release/.+"]
     error_message = "Each claims entry must render as its full list of alternatives, in order."
+  }
+}
+
+# (x) manage_config = false hands config.yaml to the operator: no object is
+# managed, while the bucket the Lambda reads it from is still created.
+run "manage_config_false_leaves_object_unmanaged" {
+  command = plan
+
+  variables {
+    manage_config = false
+  }
+
+  assert {
+    condition     = length(aws_s3_object.config) == 0
+    error_message = "manage_config = false must not manage a config object."
+  }
+
+  assert {
+    condition     = module.config_bucket.bucket_id != null
+    error_message = "The config bucket must still be created when manage_config = false."
+  }
+}
+
+# (y) The infrastructure guardrails are not part of the rendered config, so
+# unmanaging it must not disarm them — they live on terraform_data.guardrails
+# precisely because a count = 0 resource's preconditions never run.
+run "guardrails_survive_unmanaged_config" {
+  command = plan
+
+  variables {
+    manage_config    = false
+    enable_waf       = true
+    api_gateway_type = "http"
+  }
+
+  expect_failures = [terraform_data.guardrails]
+}
+
+# (z) An externally owned execution role: the stack creates none and attaches
+# its inline policy to the ARN it was handed. This is what a multi-region
+# deployment sharing one role needs (deploy/README.md).
+run "byo_execution_role" {
+  command = plan
+
+  variables {
+    execution_role_arn = "arn:aws:iam::123456789012:role/aws-oidc-warden-exec"
+  }
+
+  assert {
+    condition     = module.iam.role_arn == "arn:aws:iam::123456789012:role/aws-oidc-warden-exec"
+    error_message = "The stack must use the supplied role ARN verbatim."
+  }
+
+  assert {
+    condition     = module.iam.role_name == "aws-oidc-warden-exec"
+    error_message = "The role name must be derived from the last segment of the supplied ARN."
   }
 }
