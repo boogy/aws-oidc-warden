@@ -10,21 +10,21 @@ For where validation sits in the wider request pipeline see [ARCHITECTURE.md](AR
 
 **On this page**
 
-| | Section | Contents |
-| --- | --- | --- |
-| 1 | [Trust model](#1-trust-model) | The two rules everything else follows from |
-| 2 | [Validation modes](#2-validation-modes) | `self` / `apigw` / `alb`, the request contract, **and the `apigw` trust boundary** |
-| 3 | [The self-mode pipeline](#3-the-self-mode-pipeline) | Step-by-step, in order |
-| 4 | [Key selection & crypto hardening](#4-key-selection--crypto-hardening) | Algorithm allow-list, `kid` pinning, key-strength floors |
-| 5 | [JWKS retrieval](#5-jwks-retrieval) | Discovery, caching, forced refetch and its cooldown |
-| 6 | [Claim checks](#6-claim-checks) | Audience, time bounds, `required_claims` |
-| 7 | [Canonical subject normalization](#7-canonical-subject-normalization) | How `Subject` is derived, and why it can't be self-asserted |
-| 8 | [SSRF hardening](#8-ssrf-hardening-of-outbound-fetches) | What outbound JWKS fetches may reach |
-| 9 | [Hardening knobs](#9-hardening-knobs) | Tunables and their defaults |
-| 10 | [Failure modes → HTTP status](#10-failure-modes--http-status) | The sentinel → status → `errorCode` table |
-| 11 | [Sequence (self mode)](#11-sequence-self-mode) | Diagram |
-| 12 | [Security invariants](#12-security-invariants-summary) | The summary checklist |
-| 13 | [Source map](#13-source-map) | Where each guarantee lives in the code |
+|     | Section                                                                | Contents                                                                           |
+| --- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| 1   | [Trust model](#1-trust-model)                                          | The two rules everything else follows from                                         |
+| 2   | [Validation modes](#2-validation-modes)                                | `self` / `apigw` / `alb`, the request contract, **and the `apigw` trust boundary** |
+| 3   | [The self-mode pipeline](#3-the-self-mode-pipeline)                    | Step-by-step, in order                                                             |
+| 4   | [Key selection & crypto hardening](#4-key-selection--crypto-hardening) | Algorithm allow-list, `kid` pinning, key-strength floors                           |
+| 5   | [JWKS retrieval](#5-jwks-retrieval)                                    | Discovery, caching, forced refetch and its cooldown                                |
+| 6   | [Claim checks](#6-claim-checks)                                        | Audience, time bounds, `required_claims`                                           |
+| 7   | [Canonical subject normalization](#7-canonical-subject-normalization)  | How `Subject` is derived, and why it can't be self-asserted                        |
+| 8   | [SSRF hardening](#8-ssrf-hardening-of-outbound-fetches)                | What outbound JWKS fetches may reach                                               |
+| 9   | [Hardening knobs](#9-hardening-knobs)                                  | Tunables and their defaults                                                        |
+| 10  | [Failure modes → HTTP status](#10-failure-modes--http-status)          | The sentinel → status → `errorCode` table                                          |
+| 11  | [Sequence (self mode)](#11-sequence-self-mode)                         | Diagram                                                                            |
+| 12  | [Security invariants](#12-security-invariants-summary)                 | The summary checklist                                                              |
+| 13  | [Source map](#13-source-map)                                           | Where each guarantee lives in the code                                             |
 
 ![Token validation pipeline (self mode)](img/token-validation.svg)
 

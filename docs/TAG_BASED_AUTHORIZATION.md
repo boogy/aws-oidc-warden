@@ -10,21 +10,21 @@ Serving roles from **other AWS accounts** is configured separately via the top-l
 
 **On this page**
 
-| Section | Contents |
-| --- | --- |
-| [How it works](#how-it-works) | The request flow, end to end |
-| [Conditions](#conditions-multi-dimensional-matching) | Multi-dimensional matching, and its equivalence with `role_mappings.conditions` |
-| [Tag reference](#tag-reference) | Every `aow/*` tag, with examples and `default_org` short forms |
-| [Precedence](#precedence-mappings--tags-together) | What happens when mappings and tags both apply |
-| [`aow/claim.<name>`](#constraining-any-claim-aowclaimname) | Constraining any claim the issuer publishes |
-| [Corner cases](#corner-cases) | The complete list of denies, caching windows and charset limits |
-| **[Security model & foot-guns](#security-model--foot-guns)** | **The three behaviours that are easy to misjudge** |
-| [Session tags & ABAC](#session-tags--abac) | Tags on the resulting STS session |
-| [Role chaining & transitive session tags](#role-chaining--transitive-session-tags) | When identity survives a second hop, and when it doesn't |
-| [Target account allow-list](#target-account-allow-list) | `allowed_accounts` semantics — **including the empty-list case** |
-| [Cross-account](#cross-account) | The hub/spoke model |
-| [IAM setup](#iam-setup) | Hub, spoke and target role policies |
-| [Configuration](#configuration) | The `tag_auth` / `cross_account` keys |
+| Section                                                                            | Contents                                                                        |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| [How it works](#how-it-works)                                                      | The request flow, end to end                                                    |
+| [Conditions](#conditions-multi-dimensional-matching)                               | Multi-dimensional matching, and its equivalence with `role_mappings.conditions` |
+| [Tag reference](#tag-reference)                                                    | Every `aow/*` tag, with examples and `default_org` short forms                  |
+| [Precedence](#precedence-mappings--tags-together)                                  | What happens when mappings and tags both apply                                  |
+| [`aow/claim.<name>`](#constraining-any-claim-aowclaimname)                         | Constraining any claim the issuer publishes                                     |
+| [Corner cases](#corner-cases)                                                      | The complete list of denies, caching windows and charset limits                 |
+| **[Security model & foot-guns](#security-model--foot-guns)**                       | **The three behaviours that are easy to misjudge**                              |
+| [Session tags & ABAC](#session-tags--abac)                                         | Tags on the resulting STS session                                               |
+| [Role chaining & transitive session tags](#role-chaining--transitive-session-tags) | When identity survives a second hop, and when it doesn't                        |
+| [Target account allow-list](#target-account-allow-list)                            | `allowed_accounts` semantics — **including the empty-list case**                |
+| [Cross-account](#cross-account)                                                    | The hub/spoke model                                                             |
+| [IAM setup](#iam-setup)                                                            | Hub, spoke and target role policies                                             |
+| [Configuration](#configuration)                                                    | The `tag_auth` / `cross_account` keys                                           |
 
 ---
 

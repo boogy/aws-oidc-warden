@@ -546,10 +546,10 @@ No claim is privileged or evaluated in a fixed order: every key under `condition
 
 Both features are opt-in and default to `false`:
 
-| Toggle | Off means | On means |
-| --- | --- | --- |
-| `tag_auth.enabled` | Only explicit `role_mappings` authorize | Role IAM tags authorize as a **fallback**, after mapping matching fails |
-| `cross_account.enabled` | **Every** cross-account operation fails closed — assumption and tag reads, mappings and tag-auth alike | Accounts in `allowed_accounts` are reachable |
+| Toggle                  | Off means                                                                                              | On means                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `tag_auth.enabled`      | Only explicit `role_mappings` authorize                                                                | Role IAM tags authorize as a **fallback**, after mapping matching fails |
+| `cross_account.enabled` | **Every** cross-account operation fails closed — assumption and tag reads, mappings and tag-auth alike | Accounts in `allowed_accounts` are reachable                            |
 
 **The one-hop rule.** Every role assumption — same-account or cross-account — goes directly from the hub's own credentials to the target role. The spoke role exists only to read tags, and is never an assume target.
 
@@ -565,7 +565,7 @@ Both features are opt-in and default to `false`:
 
 - The role must carry at least one identity tag matching the verified subject — canonical `aow/subject`, or the legacy `aow/repo` / `aow/repo-owner` aliases.
 - With more than one configured issuer, a matching `aow/issuer` tag is also required.
-- Every *other* dimension tag present must also match — AND across tags, OR within one tag's space-separated values. `aow/claim.<name>` matches the raw verified claim and can only ever narrow the decision.
+- Every _other_ dimension tag present must also match — AND across tags, OR within one tag's space-separated values. `aow/claim.<name>` matches the raw verified claim and can only ever narrow the decision.
 - `tag_auth.default_org` expands a bare `aow/repo` value (no `/`) to `<default_org>/<name>`, so tags can read `my-service` instead of `org/my-service`.
 
 **Session tags and chaining.** When `session_tags_transitive` is true (**recommended**; the deprecated `tag_auth.transitive_session_tags` still works as a fallback), every attached session tag is marked transitive and propagates immutably through later role chaining. Without it the tags are dropped at the first hop and any ABAC policy past it loses the caller's identity.
@@ -574,16 +574,15 @@ Full tag reference and IAM setup: [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORI
 
 **Diagrams:**
 
-| Diagram | File |
-| --- | --- |
-| Authorization decision flow | [images/tag-auth-decision.svg](images/tag-auth-decision.svg) |
-| Cross-account hub/spoke flow | [images/tag-auth-crossaccount.svg](images/tag-auth-crossaccount.svg) |
-| ABAC session tag flow | [images/tag-auth-abac.svg](images/tag-auth-abac.svg) |
-| Transitive session tags | [images/tag-auth-transitive.svg](images/tag-auth-transitive.svg) |
-| Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg) |
-| Tag matching logic | [images/tag-auth-matching.svg](images/tag-auth-matching.svg) |
-| Authorization precedence | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg) |
-
+| Diagram                        | File                                                                 |
+| ------------------------------ | -------------------------------------------------------------------- |
+| Authorization decision flow    | [images/tag-auth-decision.svg](images/tag-auth-decision.svg)         |
+| Cross-account hub/spoke flow   | [images/tag-auth-crossaccount.svg](images/tag-auth-crossaccount.svg) |
+| ABAC session tag flow          | [images/tag-auth-abac.svg](images/tag-auth-abac.svg)                 |
+| Transitive session tags        | [images/tag-auth-transitive.svg](images/tag-auth-transitive.svg)     |
+| Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg)         |
+| Tag matching logic             | [images/tag-auth-matching.svg](images/tag-auth-matching.svg)         |
+| Authorization precedence       | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg)     |
 
 ### 5. Residual Risk: Stateless Replay
 
@@ -626,13 +625,13 @@ JWKS documents change rarely (issuer key rotations), so with any backend and a s
 
 Nothing in the request path holds state, so scale is AWS's problem rather than the service's:
 
-| Layer | How it scales | What to watch |
-| --- | --- | --- |
-| Lambda | Concurrency scales automatically per request | Reserved/provisioned concurrency if cold starts matter |
-| JWKS cache (memory) | Per-execution-environment LRU; free | Lost on every cold start |
-| JWKS cache (DynamoDB) | On-demand, shared across all environments and regions | Needs a TTL attribute configured, or entries never expire |
-| JWKS cache (S3) | Effectively unlimited | Highest latency of the three |
-| Config in S3 | One read per refresh interval per environment, not per request | A bad config object is rejected and the previous one is kept |
+| Layer                 | How it scales                                                  | What to watch                                                |
+| --------------------- | -------------------------------------------------------------- | ------------------------------------------------------------ |
+| Lambda                | Concurrency scales automatically per request                   | Reserved/provisioned concurrency if cold starts matter       |
+| JWKS cache (memory)   | Per-execution-environment LRU; free                            | Lost on every cold start                                     |
+| JWKS cache (DynamoDB) | On-demand, shared across all environments and regions          | Needs a TTL attribute configured, or entries never expire    |
+| JWKS cache (S3)       | Effectively unlimited                                          | Highest latency of the three                                 |
+| Config in S3          | One read per refresh interval per environment, not per request | A bad config object is rejected and the previous one is kept |
 
 For multi-region, deploy the stack per region. Nothing coordinates between regions, so this needs no additional application config.
 
@@ -646,12 +645,12 @@ Images are built with [ko](https://ko.build) from `.ko.yaml`, not a Dockerfile �
 
 One image per frontend, published to GHCR and Docker Hub for arm64 and amd64:
 
-| Frontend | `cmd/` | Image tag |
-| --- | --- | --- |
-| API Gateway REST v1 | `cmd/apigateway` | `apigateway-latest` (also plain `latest`) |
-| API Gateway HTTP v2 | `cmd/apigatewayv2` | `apigatewayv2-latest` |
-| ALB | `cmd/alb` | `alb-latest` |
-| Lambda URL | `cmd/lambdaurl` | `lambdaurl-latest` |
+| Frontend            | `cmd/`             | Image tag                                 |
+| ------------------- | ------------------ | ----------------------------------------- |
+| API Gateway REST v1 | `cmd/apigateway`   | `apigateway-latest` (also plain `latest`) |
+| API Gateway HTTP v2 | `cmd/apigatewayv2` | `apigatewayv2-latest`                     |
+| ALB                 | `cmd/alb`          | `alb-latest`                              |
+| Lambda URL          | `cmd/lambdaurl`    | `lambdaurl-latest`                        |
 
 Version-pinned tags (`apigatewayv2-v3.2.0`) are published alongside; a prerelease never moves a `*-latest` tag. Builds carry provenance attestations and are scanned in the release workflow.
 
@@ -663,7 +662,6 @@ Use the maintained stacks in [`deploy/`](../deploy/README.md) rather than hand-r
 - **[`deploy/cloudformation/quickstart.yaml`](../deploy/cloudformation/quickstart.yaml)** — a single-file quick-start for evaluation.
 
 [`deploy/README.md`](../deploy/README.md) covers the toggle reference, how `config.yaml` is delivered, choosing a JWT validation mode, hardening a public endpoint, and smoke tests.
-
 
 ### Required IAM Permissions
 

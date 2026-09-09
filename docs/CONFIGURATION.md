@@ -4,25 +4,25 @@ The complete configuration reference. If you are setting the service up for the 
 
 **On this page**
 
-| Section | Contents |
-| --- | --- |
-| [Configuration Methods](#configuration-methods) | Precedence: env vars > file > defaults |
-| [The issuer model](#the-issuer-model) | `issuers[]`, per-issuer fields, the zero-config seed |
-| [Authorization](#authorization-role_mappings-role_groups-role_sets) | `role_mappings`, `role_groups`, `role_sets`, conditions, boolean logic |
+| Section                                                                   | Contents                                                                                         |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [Configuration Methods](#configuration-methods)                           | Precedence: env vars > file > defaults                                                           |
+| [The issuer model](#the-issuer-model)                                     | `issuers[]`, per-issuer fields, the zero-config seed                                             |
+| [Authorization](#authorization-role_mappings-role_groups-role_sets)       | `role_mappings`, `role_groups`, `role_sets`, conditions, boolean logic                           |
 | [How a grant resolves](#how-a-grant-its-policy-and-its-overrides-resolve) | Session policies, `role_session_name`, per-mapping `session_tags`, **and the ordering foot-gun** |
-| [Environment Variable Reference](#environment-variable-reference) | Every `AOW_*` variable, by area |
-| [Config fragments](#config-fragments) | Splitting mappings across files |
-| [Hot-reloading](#hot-reloading) | S3 refresh and overlay merge semantics |
+| [Environment Variable Reference](#environment-variable-reference)         | Every `AOW_*` variable, by area                                                                  |
+| [Config fragments](#config-fragments)                                     | Splitting mappings across files                                                                  |
+| [Hot-reloading](#hot-reloading)                                           | S3 refresh and overlay merge semantics                                                           |
 
 ## Configuration Methods
 
 Three sources, in **increasing** precedence:
 
-| Source | Notes |
-| --- | --- |
-| Defaults | Built in; listed in the tables below |
-| Configuration file | YAML, JSON or TOML — local path or an S3 object |
-| Environment variables | `AOW_` prefix; **overrides the file** |
+| Source                | Notes                                           |
+| --------------------- | ----------------------------------------------- |
+| Defaults              | Built in; listed in the tables below            |
+| Configuration file    | YAML, JSON or TOML — local path or an S3 object |
+| Environment variables | `AOW_` prefix; **overrides the file**           |
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]
@@ -168,13 +168,13 @@ role_groups:
 
 The other per-element rules are checked at **every** position, not only the first. All three are load errors:
 
-| Rejected | |
-| --- | --- |
-| An empty list | `subject: []` |
-| An empty-string element | `subject: ["octo-org/api", ""]` |
+| Rejected                                |                                             |
+| --------------------------------------- | ------------------------------------------- |
+| An empty list                           | `subject: []`                               |
+| An empty-string element                 | `subject: ["octo-org/api", ""]`             |
 | A repeated element **within one entry** | `subject: ["octo-org/api", "octo-org/api"]` |
 
-Repeating a subject across *different* entries stays legal — that is how distinct roles, conditions or policies are layered onto one subject.
+Repeating a subject across _different_ entries stays legal — that is how distinct roles, conditions or policies are layered onto one subject.
 
 ### Condition keys are claim names
 
@@ -305,12 +305,12 @@ Everything else a mapping can specify — session policy, `role_session_name`, e
 
 `role_mappings[].role_session_name` and `role_groups[].defaults.role_session_name` override the global `role_session_name` for roles granted by that mapping, so CloudTrail can name the requester instead of the service.
 
-| | |
-| --- | --- |
-| **Precedence** | Per-mapping wins; global is the fallback. An override applies only where declared |
-| **Empty value** | Indistinguishable from absent |
-| **Valid charset** | STS accepts 2–64 chars from `[\w+=,.@-]`. **`/` is excluded**, so a GitHub `owner/repo` subject cannot be used verbatim |
-| **Invalid value** | Fails the service at boot, rather than being silently reshaped by the runtime sanitizer |
+|                    |                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Precedence**     | Per-mapping wins; global is the fallback. An override applies only where declared                                                                      |
+| **Empty value**    | Indistinguishable from absent                                                                                                                          |
+| **Valid charset**  | STS accepts 2–64 chars from `[\w+=,.@-]`. **`/` is excluded**, so a GitHub `owner/repo` subject cannot be used verbatim                                |
+| **Invalid value**  | Fails the service at boot, rather than being silently reshaped by the runtime sanitizer                                                                |
 | **Not a template** | A `subject` regex matching many repos (or a subject list, or a `role_groups` entry) gets **one** name for the whole set — the field is a static string |
 
 #### Per-mapping `session_tags`
