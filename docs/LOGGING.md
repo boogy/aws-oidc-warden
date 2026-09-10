@@ -148,7 +148,7 @@ Verifying the JWT does not make that header trustworthy: token verification auth
 >
 > **Topology caveat (ALB only).** The rightmost hop is the client's IP only when the ALB is the internet-facing edge. Put CloudFront or a second load balancer in front and the rightmost hop becomes *that proxy's* address, with the client's real IP one or more entries to its left. The service does not guess at a trusted-hop count, so in that topology `sourceIp` identifies the proxy, not the caller. If you need per-client IPs there, terminate the trust decision in the proxy layer.
 
-**Recommended posture.** Use API Gateway HTTP (v2) with `jwt_validation.mode: "apigw"` (the OpenTofu variable for the same setting is `jwt_validation_mode`). It is the most secure supported frontend on two independent axes: the source IP is platform-attested, so no client-supplied header is ever trusted and the caveat above cannot apply; and a JWT Authorizer rejects invalid tokens at the gateway before the Lambda is invoked. The OpenTofu stack does not provision an ALB at all.
+**Recommended posture.** Use API Gateway HTTP (v2) with `jwt_validation.mode: "apigw"`. It is the most secure supported frontend on two independent axes: the source IP is platform-attested, so no client-supplied header is ever trusted and the caveat above cannot apply; and a JWT Authorizer rejects invalid tokens at the gateway before the Lambda is invoked.
 
 ## The durable trail & `audit_required`
 

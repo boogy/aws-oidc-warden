@@ -16,22 +16,22 @@ Authorization is decided on the token's **verified** subject plus regex conditio
 
 ## Documentation
 
-**New here?** Read in this order: **[deploy/](deploy/README.md)** to get it running → **[CONFIGURATION.md](docs/CONFIGURATION.md)** to write your policy → **[GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)** to call it from CI → **[TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)** to understand what is actually guaranteed.
+**New here?** Read in this order: **[CONFIGURATION.md](docs/CONFIGURATION.md)** to write your policy → **[ARCHITECTURE.md](docs/ARCHITECTURE.md#infrastructure-as-code)** to deploy it → **[GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)** to call it from CI → **[TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)** to understand what is actually guaranteed.
 
-| Document                                                           | What's inside                                                                                                                             |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| [deploy/README.md](deploy/README.md)                               | **Deploy it** — OpenTofu modules and a CloudFormation quick-start, toggle reference, smoke tests, endpoint hardening                      |
-| [docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)                   | **Call it from CI** — the request/response contract, GitHub Actions examples, multi-region failover, and the composite action to roll out |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md)                     | Full config reference — every key, env vars, conditions, session policies, S3 hot-reload, fragments                                       |
-| [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)               | **The security core** — validation modes, JWKS handling, crypto hardening, claim checks, SSRF protection                                  |
-| [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md)                       | Onboard any OIDC provider — discovery, `provider`, `claim_mappings`, per-issuer audiences                                                 |
-| [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                 | Session tags on every STS call, and the ABAC patterns they enable                                                                         |
-| [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md) | Authorize via IAM role tags instead of config; hub/spoke cross-account model                                                              |
-| [docs/LOGGING.md](docs/LOGGING.md)                                 | Structured logs, the durable audit trail, `audit_required`, SIEM signals, alerts                                                          |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                       | Component diagram, request pipeline, package layout, IAM permissions                                                                      |
-| [docs/PERFORMANCE.md](docs/PERFORMANCE.md)                         | Measured behaviour at thousands of repositories — request cost, load time, memory sizing                                                  |
-| [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md)                       | v2 → v3: condition keys are claim names, and `environment` changed meaning                                                                |
-| [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md)                       | v1 → v2: the `issuers[]` model, with a breaking-change checklist                                                                          |
+| Document                                                            | What's inside                                                                                                                             |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#infrastructure-as-code) | **Deploy it** — the packaging, config-delivery, IAM and front-end contract your own IaC has to satisfy                                    |
+| [docs/GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)                    | **Call it from CI** — the request/response contract, GitHub Actions examples, multi-region failover, and the composite action to roll out |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md)                      | Full config reference — every key, env vars, conditions, session policies, S3 hot-reload, fragments                                       |
+| [docs/TOKEN_VALIDATION.md](docs/TOKEN_VALIDATION.md)                | **The security core** — validation modes, JWKS handling, crypto hardening, claim checks, SSRF protection                                  |
+| [docs/MULTI_ISSUER.md](docs/MULTI_ISSUER.md)                        | Onboard any OIDC provider — discovery, `provider`, `claim_mappings`, per-issuer audiences                                                 |
+| [docs/SESSION_TAGGING.md](docs/SESSION_TAGGING.md)                  | Session tags on every STS call, and the ABAC patterns they enable                                                                         |
+| [docs/TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md)  | Authorize via IAM role tags instead of config; hub/spoke cross-account model                                                              |
+| [docs/LOGGING.md](docs/LOGGING.md)                                  | Structured logs, the durable audit trail, `audit_required`, SIEM signals, alerts                                                          |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                        | Component diagram, request pipeline, package layout, IAM permissions                                                                      |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md)                          | Measured behaviour at thousands of repositories — request cost, load time, memory sizing                                                  |
+| [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md)                        | v2 → v3: condition keys are claim names, and `environment` changed meaning                                                                |
+| [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md)                        | v1 → v2: the `issuers[]` model, with a breaking-change checklist                                                                          |
 
 ---
 
@@ -66,7 +66,7 @@ make run   # local server on :8080 with example-config.yaml
 
 Endpoints: `POST /verify` (matches Lambda behaviour) and `GET /health`. The local server has no S3 hot-reload — that is a Lambda feature.
 
-**3. Deploy** with the maintained OpenTofu module or the CloudFormation quick-start — see **[deploy/README.md](deploy/README.md)**.
+**3. Deploy** it with your own IaC — the contract to satisfy (packaging, config delivery, IAM, front-end) is in **[ARCHITECTURE.md](docs/ARCHITECTURE.md#infrastructure-as-code)**.
 
 **4. Call it from a workflow** — see **[GITHUB_ACTIONS.md](docs/GITHUB_ACTIONS.md)**.
 
@@ -170,7 +170,7 @@ Serving roles in **other AWS accounts** is a separate opt-in block. Two things a
 
 ## Deploying
 
-Use the maintained infrastructure in **[deploy/](deploy/README.md)** — an OpenTofu module and a CloudFormation quick-start, with toggle reference, smoke tests, endpoint hardening and a two-region resilient setup.
+**Infrastructure is not shipped here.** This repo is the service; deploying it is yours to own, with whichever tool your organization already uses. What a deployment must provide — packaging, config delivery, execution-role policy, front-end wiring — is specified in **[ARCHITECTURE.md § Infrastructure as code](docs/ARCHITECTURE.md#infrastructure-as-code)**.
 
 Pick a Lambda variant by image tag; all four share the same core logic and differ only in the event they parse:
 
@@ -181,13 +181,15 @@ Pick a Lambda variant by image tag; all four share the same core logic and diffe
 | Lambda URL          | `lambdaurl-latest`                        | Simple setups, no gateway                                                                             |
 | ALB                 | `alb-latest`                              | High traffic                                                                                          |
 
+Each variant pairs with a `jwt_validation.mode`: `apigateway` and `lambdaurl` are `self` only, `apigatewayv2` is `apigw` only, and `alb` takes `alb` or `self`. The pairing is checked at boot and a mismatch panics rather than mis-parsing every request.
+
 Images are published to `ghcr.io/boogy/aws-oidc-warden` and `docker.io/boogy/aws-oidc-warden`, multi-arch (arm64 + amd64), with build provenance attestations and version-pinnable tags (`apigatewayv2-v3.3.0`); a prerelease never moves a `*-latest` tag. Building from source: `make build`, `make build-lambda`, `make ko-build` (via [ko](https://ko.build) — there is no Dockerfile).
 
 The Lambda needs an execution role with `sts:AssumeRole` + `sts:TagSession` on its target roles, `iam:GetRole` for tag-auth, and read/write on whichever S3 buckets and DynamoDB table you enable — complete policy in [ARCHITECTURE.md](docs/ARCHITECTURE.md#required-iam-permissions). **The target role must trust that execution role, with both `sts:AssumeRole` and `sts:TagSession`.**
 
 <!-- prettier-ignore -->
 > [!CAUTION]
-> **In `apigw` mode, `lambda:InvokeFunction` is equivalent to minting credentials.** The signature is verified by the gateway, not by this service, so anything able to invoke the function directly can supply its own claims. Grant invoke to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — [details](deploy/README.md#jwt-validation-mode).
+> **In `apigw` mode, `lambda:InvokeFunction` is equivalent to minting credentials.** The signature is verified by the gateway, not by this service, so anything able to invoke the function directly can supply its own claims. Grant invoke to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — [details](docs/TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).
 
 <!-- prettier-ignore -->
 > [!TIP]
@@ -199,16 +201,16 @@ The Lambda needs an execution role with `sts:AssumeRole` + `sts:TagSession` on i
 
 The failure modes that actually bite, in rough order of likelihood:
 
-| Pitfall                                           | What happens                                                                                                              | Do this instead                                                                                                              |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Gating on an untrusted claim                      | An attacker who can influence the claim can obtain credentials                                                            | Check the [claim trust table](https://github.com/PaloAltoNetworks/github-oidc-utils) first                                   |
-| Broad `lambda:InvokeFunction` in `apigw` mode     | **Credential minting for any authorized subject.** The signature is not verified in that mode, so IAM is the only defence | Grant invoke to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — [details](deploy/README.md#jwt-validation-mode) |
-| A broad `subject` pattern                         | Every subject of that issuer gets the roles                                                                               | Keep patterns specific; a bare `.*`/`.+` is rejected at boot, but `(.*)` still compiles                                      |
-| Target role doesn't trust the warden              | `403 assume_role_denied`                                                                                                  | Add the warden's execution role as a principal, with `sts:AssumeRole` **and** `sts:TagSession`                               |
-| ABAC breaks after a role chain                    | Session tags are dropped at the first hop                                                                                 | Set `session_tags_transitive: true` (recommended; off by default for upgrade safety)                                         |
-| Audience mismatch in `apigw` mode                 | API Gateway rejects before this service runs                                                                              | `getIDToken(aud)` must match both the JWT Authorizer **and** the issuer's `audiences`                                        |
-| `audit_required` (default **on**) with no S3 sink | Enforcement never engages — decisions only reach CloudWatch. It logs a warning at boot; nothing fails                     | Also set `log_to_s3: true` + `log_bucket` — see [LOGGING.md](docs/LOGGING.md)                                                |
-| Cross-account assume with the block off           | Fails closed with an error                                                                                                | Set `cross_account.enabled: true` and list the account in `allowed_accounts`                                                 |
+| Pitfall                                           | What happens                                                                                                              | Do this instead                                                                                                                                                                                 |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gating on an untrusted claim                      | An attacker who can influence the claim can obtain credentials                                                            | Check the [claim trust table](https://github.com/PaloAltoNetworks/github-oidc-utils) first                                                                                                      |
+| Broad `lambda:InvokeFunction` in `apigw` mode     | **Credential minting for any authorized subject.** The signature is not verified in that mode, so IAM is the only defence | Grant invoke to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — [details](docs/TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode) |
+| A broad `subject` pattern                         | Every subject of that issuer gets the roles                                                                               | Keep patterns specific; a bare `.*`/`.+` is rejected at boot, but `(.*)` still compiles                                                                                                         |
+| Target role doesn't trust the warden              | `403 assume_role_denied`                                                                                                  | Add the warden's execution role as a principal, with `sts:AssumeRole` **and** `sts:TagSession`                                                                                                  |
+| ABAC breaks after a role chain                    | Session tags are dropped at the first hop                                                                                 | Set `session_tags_transitive: true` (recommended; off by default for upgrade safety)                                                                                                            |
+| Audience mismatch in `apigw` mode                 | API Gateway rejects before this service runs                                                                              | `getIDToken(aud)` must match both the JWT Authorizer **and** the issuer's `audiences`                                                                                                           |
+| `audit_required` (default **on**) with no S3 sink | Enforcement never engages — decisions only reach CloudWatch. It logs a warning at boot; nothing fails                     | Also set `log_to_s3: true` + `log_bucket` — see [LOGGING.md](docs/LOGGING.md)                                                                                                                   |
+| Cross-account assume with the block off           | Fails closed with an error                                                                                                | Set `cross_account.enabled: true` and list the account in `allowed_accounts`                                                                                                                    |
 
 ---
 

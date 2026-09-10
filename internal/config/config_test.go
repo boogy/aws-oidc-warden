@@ -902,10 +902,9 @@ func TestJWTValidationConfig(t *testing.T) {
 // role_mappings entry has neither `issuer` nor `default_issuer` (the golden
 // fixture supplies both, one per mapping) must validate, and the zero-config
 // GitHub seed must not leak its required_claims/session_tags into issuers[0]
-// via MergeBytes. testdata/golden_multi_issuer_config.yaml is the same shape
-// deploy/opentofu/templates/config.yaml.tftpl renders; LoadConfig() then
-// MergeBytes() is exactly what internal/config/provider.go does for the S3
-// config source.
+// via MergeBytes. testdata/golden_multi_issuer_config.yaml is the shape a
+// rendered multi-issuer config.yaml has; LoadConfig() then MergeBytes() is
+// exactly what internal/config/provider.go does for the S3 config source.
 func TestGoldenMultiIssuerConfigBoots(t *testing.T) {
 	viper.Reset()
 	once = sync.Once{}

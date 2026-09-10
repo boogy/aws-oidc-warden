@@ -26,7 +26,7 @@ goreleaser check                # validates .goreleaser.yaml
 
 ### 3. Changelog
 
-`CHANGELOG.md` has an entry for the new version. Deploy-only (`deploy/`) changes belong in `deploy/README.md`, not the changelog.
+`CHANGELOG.md` has an entry for the new version.
 
 ### 4. Tag semantics
 
