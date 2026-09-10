@@ -1,6 +1,5 @@
-# Golden config.yaml — byte-for-byte what deploy/opentofu/templates/config.yaml.tftpl
-# renders for a two-issuer deploy (var.issuers with a non-github issuer
-# sorting before "github", plus var.role_mappings/var.default_issuer). Used by
+# Golden config.yaml — a rendered two-issuer deploy (a non-github issuer
+# sorting before "github", plus role_mappings and default_issuer). Used by
 # TestGoldenMultiIssuerConfigBoots to pin the LoadConfig()+MergeBytes() boot
 # path against both findings it caught: a multi-issuer config with no
 # `issuer`/`default_issuer` on a role mapping (refused to boot), and the

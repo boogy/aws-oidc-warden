@@ -635,7 +635,7 @@ Nothing in the request path holds state, so scale is AWS's problem rather than t
 
 For multi-region, deploy the stack per region. Nothing coordinates between regions, so this needs no additional application config.
 
-Keep the JWKS cache **per-region** — do not reach for Global Tables. The cache holds public signing keys and is rebuildable from a single JWKS fetch, so replication buys nothing and couples two deployments that are otherwise independent. The same reasoning applies with more force to the audit bucket, where sharing one bucket makes the secondary region fail closed during a primary-region S3 outage. See [deploy/README.md — Multi-region deployment](../deploy/README.md#multi-region-deployment-resilience).
+Keep the JWKS cache **per-region** — do not reach for Global Tables. The cache holds public signing keys and is rebuildable from a single JWKS fetch, so replication buys nothing and couples two deployments that are otherwise independent. The same reasoning applies with more force to the audit bucket, where sharing one bucket makes the secondary region fail closed during a primary-region S3 outage. One more trap worth naming: a target role's trust policy must list **every** region's execution role, or failover succeeds at the gateway and then fails at `sts:AssumeRole`.
 
 Measured numbers — per-request cost, load time at thousands of mappings, memory sizing: [PERFORMANCE.md](PERFORMANCE.md).
 
@@ -656,12 +656,19 @@ Version-pinned tags (`apigatewayv2-v3.3.0`) are published alongside; a prereleas
 
 ### Infrastructure as code
 
-Use the maintained stacks in [`deploy/`](../deploy/README.md) rather than hand-rolling one:
+**This repo ships no IaC** — it is the service, not a deployment of it. Bring your own OpenTofu/Terraform, CloudFormation, CDK, or SAM; the contract a deployment has to satisfy is small:
 
-- **[`deploy/opentofu/`](../deploy/opentofu/)** — the full module: Lambda, IAM, the config S3 object rendered from `templates/config.yaml.tftpl`, DynamoDB cache, optional API Gateway hardening. Includes `hardening.tftest.hcl`.
-- **[`deploy/cloudformation/quickstart.yaml`](../deploy/cloudformation/quickstart.yaml)** — a single-file quick-start for evaluation.
+| What           | Requirement                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package        | Zip whose entry is named `bootstrap`, executable, on the `provided.al2023` runtime — or the published container image, whose entrypoint is already `bootstrap`.                                                                                                                                                                                                                 |
+| Architecture   | Must match the build. `make build-lambda` targets **arm64**; use `GOARCH=amd64` for x86_64 functions.                                                                                                                                                                                                                                                                           |
+| Binary ↔ mode  | Pick the `cmd/` variant matching the front-end (table above), and pair it with `jwt_validation.mode`: `apigateway`/`lambdaurl` are `self` only, `apigatewayv2` is `apigw` only, `alb` accepts `alb` or `self`. A mismatch **panics at boot**, by design — `validateAdapterMode` in `internal/handler/bootstrap.go` refuses to serve rather than mis-extract claims per request. |
+| Config         | Either bake `config.yaml` into the package (`CONFIG_NAME`/`CONFIG_PATH`) or serve it from S3 with `AOW_S3_CONFIG_BUCKET` + `AOW_S3_CONFIG_PATH`, which the provider re-reads on its refresh interval so policy changes need no redeploy. Every setting also has an `AOW_*` override (`AOW_JWT_VALIDATION_MODE`, `LOG_LEVEL`, …).                                                |
+| Execution role | The policy in [Required IAM Permissions](#required-iam-permissions), narrowed to the buckets, table, and target roles you actually enable.                                                                                                                                                                                                                                      |
+| Resources      | Only what the config turns on: the config bucket, a DynamoDB cache table (**with a TTL attribute configured**, or entries never expire), an S3 cache bucket, the audit bucket (`audit_required` needs one, or the fail-closed guarantee silently degrades to a no-op), and a session-policy bucket.                                                                             |
+| Front-end      | `apigw` mode needs one HTTP API JWT Authorizer + route per issuer (max 10 per API); WAF attaches to REST APIs only. In `apigw` mode, grant `lambda:InvokeFunction` to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — see [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).          |
 
-[`deploy/README.md`](../deploy/README.md) covers the toggle reference, how `config.yaml` is delivered, choosing a JWT validation mode, hardening a public endpoint, and smoke tests.
+Cross-account target and spoke roles: [examples/cross-account/](examples/cross-account/README.md).
 
 ### Required IAM Permissions
 

@@ -2,11 +2,10 @@
 
 This example shows how to run the warden in **one central (hub) account** and let CI workloads assume roles in **any number of member accounts**. It contains:
 
-| File                                                     | Purpose                                                                                |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| [`config.yaml`](config.yaml)                             | Annotated warden configuration for the hub                                             |
-| [`member-account-roles.yaml`](member-account-roles.yaml) | CloudFormation for each member account (target role + optional spoke), StackSets-ready |
-| This README                                              | The IAM roles, trust policies, and rollout steps                                       |
+| File                         | Purpose                                          |
+| ---------------------------- | ------------------------------------------------ |
+| [`config.yaml`](config.yaml) | Annotated warden configuration for the hub       |
+| This README                  | The IAM roles, trust policies, and rollout steps |
 
 Background reading: [TAG_BASED_AUTHORIZATION.md](../../TAG_BASED_AUTHORIZATION.md) (cross-account model, tag reference), [SESSION_TAGGING.md](../../SESSION_TAGGING.md) (ABAC).
 
@@ -92,29 +91,9 @@ Notes:
 
 ## Step 2 — Member accounts: deploy target roles (and the spoke, if needed)
 
-Deploy [`member-account-roles.yaml`](member-account-roles.yaml) to every member account. From one central place, use **CloudFormation StackSets** so a single operation covers the whole organization (and new accounts are provisioned automatically via auto-deployment):
+Every member account needs one or two roles. Create them with whatever you already use for org-wide IAM — CloudFormation StackSets (`SERVICE_MANAGED` with auto-deployment covers new accounts automatically), Terraform/OpenTofu with a per-account provider, or Control Tower account customizations. IAM is global, so one region per account is enough.
 
-```sh
-aws cloudformation create-stack-set \
-  --stack-set-name aws-oidc-warden-member \
-  --template-body file://member-account-roles.yaml \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --permission-model SERVICE_MANAGED \
-  --auto-deployment Enabled=true,RetainStacksOnAccountRemoval=false \
-  --parameters \
-    ParameterKey=HubAccountId,ParameterValue=111111111111 \
-    ParameterKey=HubExecutionRoleName,ParameterValue=aws-oidc-warden-execution-role \
-    ParameterKey=ExternalId,ParameterValue=CHANGE-ME-org-wide-external-id
-
-aws cloudformation create-stack-instances \
-  --stack-set-name aws-oidc-warden-member \
-  --deployment-targets OrganizationalUnitIds=ou-abcd-11111111 \
-  --regions us-east-1
-```
-
-(IAM is global — one region per account is enough. For a small number of accounts, `aws cloudformation deploy` per account works just as well.)
-
-What the template creates:
+The policies below are the whole contract; nothing about them is tool-specific:
 
 **Target roles** — each trusts the **hub execution role directly** (no `sts:ExternalId` condition; the warden sends none on this direct assume), with an optional `aws:RequestTag` condition as defense-in-depth (session tags are attached by the warden from _verified_ token claims, so the condition holds independently of warden configuration):
 
@@ -137,6 +116,18 @@ What the template creates:
 ```
 
 `sts:TagSession` must be in the trust policy's `Action` — the warden always attaches the issuer's session tags, and STS rejects a tagged AssumeRole without it.
+
+Create target roles under the **`/aow/` path** (`arn:aws:iam::222222222222:role/aow/deploy-staging`): that path is what the hub policy above and the spoke policy below are scoped to, so putting a role under it is the deliberate act that makes it reachable. Give each role `MaxSessionDuration: 3600` — anything higher is moot, since the warden's own Lambda credentials are a role session and chaining clamps every issued session to 1 hour.
+
+To authorize a role through `tag_auth` instead of a mapping, tag it — an untagged role is never tag-authorized:
+
+```
+aow/issuer    https://token.actions.githubusercontent.com
+aow/subject   acme/api acme/web        (space-separated, or one pattern)
+aow/ref       refs/heads/main
+```
+
+Attach whatever permissions the workload actually needs; the warden never inspects them.
 
 **The spoke role** (`aow-spoke`) — deploy only if `tag_auth` reads role tags in this account. Its trust policy is unchanged from before (hub principal, optional external ID):
 

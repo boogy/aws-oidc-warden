@@ -44,7 +44,6 @@ Add cases to the existing table-driven tests; cover edge cases.
 make check          # fmt + lint + vuln + test — must pass
 ```
 
-If the fix touches `deploy/`, also run the deploy-check skill.
 
 ### 7. Commit
 

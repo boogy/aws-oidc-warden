@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Removed
+
+- **All infrastructure-as-code has left this repo.** `deploy/` (the OpenTofu module, the CloudFormation quick-start, `build.sh`, the deployment guide) and `docs/examples/cross-account/member-account-roles.yaml` are gone. This repo is now only the service: a Go application, its images, and its documentation. Deploying it is the operator's, with whichever tool their organization already uses — which is the point, since an IaC stack that ships with the app has to model everyone's landing zone and cannot.
+
+  **Migrating:** nothing in the application changed — same binaries, same config schema, same env vars, same IAM. What a deployment has to provide is now specified in [docs/ARCHITECTURE.md § Infrastructure as code](docs/ARCHITECTURE.md#infrastructure-as-code): the `bootstrap`/`provided.al2023` packaging contract, the architecture match, which `cmd/` variant pairs with which `jwt_validation.mode` (a mismatch panics at boot rather than mis-extracting claims per request), config delivery via `AOW_S3_CONFIG_BUCKET`/`AOW_S3_CONFIG_PATH` or a baked-in file, the execution-role policy, and the resources each toggle expects. If you were using the OpenTofu module, keep your own copy — the last version lives in this repo's git history. The shape of the `config.yaml` it rendered is still pinned by `TestGoldenMultiIssuerConfigBoots`, so a hand-maintained fork of that template has a boot-path test to check itself against.
+
+  Cross-account rollout no longer ships a CloudFormation template; [docs/examples/cross-account/README.md](docs/examples/cross-account/README.md) now carries every trust policy, permissions policy, role path and `aow/*` tag inline, so it applies whatever tool creates the roles.
+
 ## [3.3.0] - 2026-09-09
 
 ### Added

@@ -36,6 +36,6 @@ make ko-publish          # ghcr.io
 
 ## Pitfalls
 
-- Zip for direct upload must contain the binary renamed to `bootstrap` (`deploy/opentofu/build.sh` does this correctly — reuse it).
+- Zip for direct upload must contain the binary renamed to `bootstrap`, at the archive root, with the exec bit set — `archive_file`/`zip -r` from a parent directory silently gets both wrong, so stage the file and zip from inside that directory.
 - Pick the binary matching `jwt_validation.mode`: self → `apigateway`, apigw → `apigatewayv2`.
 - Run `make check` before committing build-related changes.
