@@ -746,6 +746,15 @@ func TestTagAuth_NestedTagPrefixesDoNotLeak(t *testing.T) {
 	outer := map[string]string{"aow/issuer": vIss, "aow/subject": "acme/api"}
 	assert.True(t, c.TagAuth.Authorize(outer, claims, vIss, "acme/api"))
 	assert.False(t, c.TagAuth.Authorize(outer, claims, vIss2, "acme/api"))
+
+	// The case only exact-key lookup can refuse: the nested role names the
+	// OUTER issuer and a subject that caller really has, so the issuer and
+	// identity gates would both pass on the tag VALUES. Nothing but reading
+	// "aow/issuer"/"aow/subject" as literal keys — never "aow/" + something
+	// that ends in "issuer" — keeps this from granting.
+	trap := map[string]string{"aow/gh/issuer": vIss, "aow/gh/subject": "acme/api"}
+	assert.False(t, c.TagAuth.Authorize(trap, claims, vIss, "acme/api"),
+		"PREFIX LEAK: a nested-namespace tag whose value names the outer issuer must not authorize it")
 }
 
 // TestTagAuth_PerIssuerTagPrefixOverGlobalOverride pins the resolution order:
