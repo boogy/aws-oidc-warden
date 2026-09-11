@@ -41,6 +41,10 @@ var (
 	accountIDPattern     = regexp.MustCompile(`^\d{12}$`)
 	sessionTagKeyPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]{1,128}$`)
 
+	// tagPrefixPattern is the IAM tag-key charset minus the space, bounded so a
+	// dimension suffix still fits inside IAM's 128-char key limit.
+	tagPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9_.:/=+@-]{1,64}$`)
+
 	// sessionNameCharset is STS's accepted RoleSessionName charset. Note the
 	// absence of "/": a GitHub canonical subject ("owner/repo") is NOT a valid
 	// session name, which is the most likely thing an operator will try.
@@ -123,6 +127,10 @@ type IssuerConfig struct {
 	// SessionTags maps an STS tag key to the raw claim populating it. Keys
 	// must be lower-case: viper case-folds config keys before this decodes.
 	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
+
+	// TagPrefix overrides tag_auth.tag_prefix for tokens verified by this
+	// issuer. The trailing separator is part of the value ("gh/" -> gh/subject).
+	TagPrefix string `mapstructure:"tag_prefix" json:"tag_prefix,omitempty"`
 }
 
 // defaultGitHubIssuer returns the zero-config GitHub Actions issuer seeded
@@ -172,6 +180,10 @@ type TagAuth struct {
 	// <prefix>issuer requirement in Authorize (no cross-issuer identity
 	// collision via tag-auth). Not serialized; always recomputed.
 	multiIssuer bool `mapstructure:"-" json:"-"`
+
+	// prefixByIssuer indexes the per-issuer TagPrefix overrides, rebuilt by
+	// Config.Validate(). Not serialized; always recomputed.
+	prefixByIssuer map[string]string `mapstructure:"-" json:"-"`
 }
 
 // CrossAccount is a policy gate for member-account role assumption: Enabled
@@ -786,6 +798,10 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("issuers[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", i, iss.Issuer, tagKey)
 			}
 		}
+
+		if iss.TagPrefix != "" && !tagPrefixPattern.MatchString(iss.TagPrefix) {
+			return fmt.Errorf("issuers[%d] (%s): tag_prefix %q is not a valid IAM tag key prefix (charset [A-Za-z0-9_.:/=+@-], max 64 chars); the trailing separator is part of the value, e.g. \"gh/\"", i, iss.Issuer, iss.TagPrefix)
+		}
 	}
 
 	if c.RoleSessionName == "" {
@@ -1070,9 +1086,13 @@ func (c *Config) Validate() error {
 		if c.TagAuth.DefaultOrg != "" && strings.ContainsAny(c.TagAuth.DefaultOrg, "/ \t\n\r") {
 			return fmt.Errorf("tag_auth.default_org %q must not contain '/' or whitespace", c.TagAuth.DefaultOrg)
 		}
+		if c.TagAuth.TagPrefix != "" && !tagPrefixPattern.MatchString(c.TagAuth.TagPrefix) {
+			return fmt.Errorf("tag_auth.tag_prefix %q is not a valid IAM tag key prefix (charset [A-Za-z0-9_.:/=+@-], max 64 chars); the trailing separator is part of the value, e.g. \"aow/\"", c.TagAuth.TagPrefix)
+		}
 		if c.TagAuth.Enabled && c.TagAuth.TagPrefix == "" {
 			c.TagAuth.TagPrefix = "aow/"
 		}
+		c.TagAuth.prefixByIssuer = issuerTagPrefixes(c.Issuers)
 	}
 
 	// Normalize cross-account transport defaults, mirroring the tag-auth block
@@ -1292,13 +1312,30 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			seen[role] = true
 			slog.Warn("tag_auth is enabled and this role is scoped in role_mappings; "+
 				"a tag-auth grant of the same role carries no session policy and no "+
-				"role_session_name override. Remove the role's aow/ tags, or accept "+
-				"that the tag-auth path is unscoped.",
+				"role_session_name override. Remove the role's tag-auth tags, or "+
+				"accept that the tag-auth path is unscoped.",
 				slog.String("role", role),
 				slog.String("scopedBy", scopedBy),
 				slog.String("subject", m.resolvedSubject))
 		}
 	}
+}
+
+// issuerTagPrefixes indexes the per-issuer tag_prefix overrides. An issuer
+// that declares none is absent, so TagAuth.prefixFor falls back to the global
+// tag_auth.tag_prefix.
+func issuerTagPrefixes(issuers []IssuerConfig) map[string]string {
+	var m map[string]string
+	for i := range issuers {
+		if issuers[i].TagPrefix == "" {
+			continue
+		}
+		if m == nil {
+			m = make(map[string]string, len(issuers))
+		}
+		m[issuers[i].Issuer] = issuers[i].TagPrefix
+	}
+	return m
 }
 
 // issuerConfig returns the configured spec for issuer, or nil when the issuer

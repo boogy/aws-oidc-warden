@@ -86,7 +86,7 @@ Every tag suffix is its claim name with underscores written as dashes, so a tag 
 
 ## Tag reference
 
-Tag keys use a configurable prefix (`tag_auth.tag_prefix`, default `aow/`).
+Tag keys use a configurable prefix (`tag_auth.tag_prefix`, default `aow/`). An issuer may override it with its own `issuers[].tag_prefix`, so each issuer gets its own tag namespace — see [Per-issuer tag prefixes](#per-issuer-tag-prefixes).
 
 | Tag (default prefix)     | Claim checked                    | Notes                                                              |
 | ------------------------ | -------------------------------- | ------------------------------------------------------------------ |
@@ -205,6 +205,44 @@ It also works for GitHub, for claims with no named suffix — e.g. `aow/claim.jo
 
 ---
 
+## Per-issuer tag prefixes
+
+`tag_auth.tag_prefix` is the default for every issuer. An issuer that sets `tag_prefix` reads its tags only under that prefix and stops reading the global one, giving each issuer an isolated tag namespace:
+
+```yaml
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+    tag_prefix: "gh/" # gh/issuer, gh/subject, gh/repo, gh/claim.<name>, …
+
+  - issuer: "https://gitlab.com"
+    audiences: ["aws-oidc-warden"]
+    claim_mappings:
+      subject: "project_path"
+    tag_prefix: "gl/" # gl/issuer, gl/subject, gl/claim.project_path, …
+
+  - issuer: "https://token.example.buildkite.com"
+    audiences: ["aws-oidc-warden"]
+    claim_mappings:
+      subject: "pipeline_slug"
+    # no tag_prefix -> falls back to tag_auth.tag_prefix
+
+tag_auth:
+  enabled: true
+  tag_prefix: "aow/" # default for issuers that declare none
+```
+
+With that config a role tagged `gh/subject` is reachable only by a GitHub token, and one tagged `aow/subject` only by the Buildkite token.
+
+- The trailing separator is part of the value: `tag_prefix: "gh"` produces `ghsubject`, not `gh/subject`. Charset `[A-Za-z0-9_.:/=+@-]`, max 64 chars; anything else is a boot-time error.
+- The dimension suffixes (`issuer`, `subject`, `repo`, `claim.<name>`, …) are fixed — only the prefix is configurable.
+- **The prefix is a namespace, not a trust boundary.** The `<prefix>issuer` tag is still required once more than one issuer is configured, even when every issuer has its own prefix.
+- Two issuers may share a prefix; the `<prefix>issuer` tag keeps them apart.
+- There is no per-issuer environment variable (`issuers` is file-only); `AOW_TAG_AUTH_TAG_PREFIX` still sets the global default.
+
+---
+
 ## Corner cases
 
 - **No identity tag → deny.** A role with none of `aow/subject`, `aow/repo`, or `aow/repo-owner` is never tag-authorized, even if other `aow/*` tags match.
@@ -214,7 +252,7 @@ It also works for GitHub, for claims with no named suffix — e.g. `aow/claim.jo
 - **`aow/claim.` names are case-sensitive.** IAM stores tag keys verbatim, so `aow/claim.isContractor` reads the claim `isContractor` exactly — unlike `conditions:` keys, which viper lower-cases on the way in and which therefore fall back to a case-folded lookup. Spell the claim the way the issuer mints it. A bare `aow/claim.` names no claim and denies.
 - **`aow/claim.<name>` on a list claim matches any element.** A claim holding `["platform","sre"]` satisfies `aow/claim.groups: sre`.
 - **The tag is compared to the claim VALUE, not its JSON type.** A scalar claim is rendered to its canonical text first — the same rendering conditions, audit records, and session tags use — so `aow/claim.email_verified = true` matches whether the issuer mints the bool `true` or the string `"true"`, and `aow/claim.seats = 42` matches the JSON number `42`. List elements are read the same way. A shape with no readable text — an object, `null`, or an absent claim — still never matches; since `aow/claim.*` can only narrow, that is fail-closed. Before v3.0.0 this form read strings only, so a tag naming a bool or numeric claim silently denied every caller instead of narrowing as written.
-- **Prefix collisions.** Only keys under `tag_prefix` are inspected; unrelated tags (cost-center, team, …) are ignored. Changing `tag_prefix` changes which keys are read — keep it consistent with how roles are tagged.
+- **Prefix collisions.** Only keys under the prefix in force for the verifying issuer are inspected; unrelated tags (cost-center, team, …) are ignored. Changing a prefix changes which keys are read — keep it consistent with how roles are tagged.
 - **Tag charset.** `*`, `(`, `)`, `[`, `]`, `|`, `^`, `$`, `\`, `?`, `,` are rejected by AWS in tag values. Lists are **space**-separated, not comma.
 - **`aow/branch` vs `aow/ref`.** `aow/branch` is forgiving (matches the full ref _or_ the short name); `aow/ref` is strict (full ref only). Prefer `aow/ref` when you need an exact ref including tags like `refs/tags/v1.2.3`.
 - **Caching.** Spoke credentials are cached until ~5 min before expiry; role tags are cached ~60 s. A tag change can take up to ~60 s to take effect.
@@ -444,7 +482,7 @@ Example spoke trust policy (external ID optional):
 ```yaml
 tag_auth:
   enabled: true
-  tag_prefix: "aow/"
+  tag_prefix: "aow/" # default prefix; an issuer may override it with issuers[].tag_prefix
   default_org: "" # if set, bare aow/repo tags (e.g. "api") expand to "<default_org>/api"
 
 # RECOMMENDED: top-level, independent of tag_auth — mark every session tag

@@ -20,6 +20,7 @@ Adding a provider requires no code changes — just an `issuers[]` entry.
 | `claim_mappings`  | github: no / generic: `subject` required | canonical field ← raw claim name; may not target `iss`/`aud`/`exp`/`nbf`/`iat`/`sub` |
 | `required_claims` | no                                       | raw claim names that must be present + non-empty                                     |
 | `session_tags`    | no                                       | STS tag key ← raw claim name (key charset `[A-Za-z0-9 _.:/=+@-]{1,128}`)             |
+| `tag_prefix`      | no                                       | tag-auth tag key prefix for this issuer; overrides `tag_auth.tag_prefix`             |
 
 Issuer and `jwks_uri` must be HTTPS (loopback `http://` only with `allow_insecure_issuers`, dev/test only).
 
@@ -83,6 +84,8 @@ With tag-based authorization ([TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATI
 > The requirement exists because otherwise a role scoped to one issuer's subjects would be reachable by another issuer's identically-shaped subject — a GitHub `owner/repo` colliding with a GitLab `group/project`.
 
 Beyond identity, every other named tag suffix (`aow/ref`, `aow/actor`, …) spells a GitHub Actions claim. A non-GitHub issuer narrows a tag-authorized role with `aow/claim.<name>`, which matches the raw verified claim — e.g. `aow/claim.project_path: acme/api`.
+
+An issuer may also carry its own tag namespace: set `tag_prefix: "gh/"` on the issuer and its roles are tagged `gh/issuer`, `gh/subject`, `gh/claim.<name>` instead of `aow/*`. The `<prefix>issuer` tag stays required — the prefix is a namespace, not a trust boundary. See [Per-issuer tag prefixes](TAG_BASED_AUTHORIZATION.md#per-issuer-tag-prefixes).
 
 ## Security notes
 

@@ -7,7 +7,8 @@ import (
 )
 
 // Authorize reports whether the role's IAM tags authorize claims for a
-// verified (issuer, subject) pair. Only keys under TagPrefix are read.
+// verified (issuer, subject) pair. Only keys under the issuer's prefix are
+// read (its own tag_prefix, else the global one).
 //
 // Requires at least one identity tag (`subject`, or legacy `repo`/
 // `repo-owner`) that matches; every other present dimension tag must also
@@ -27,7 +28,7 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, v
 	if t == nil || !t.Enabled {
 		return false
 	}
-	p := t.TagPrefix
+	p := t.prefixFor(verifiedIssuer)
 	get := func(suffix string) (string, bool) {
 		v, ok := roleTags[p+suffix]
 		return v, ok
@@ -125,6 +126,15 @@ func (t *TagAuth) Authorize(roleTags map[string]string, claims map[string]any, v
 		}
 	}
 	return true
+}
+
+// prefixFor returns the tag key prefix to read for verifiedIssuer: the
+// issuer's own tag_prefix when it declares one, else the global TagPrefix.
+func (t *TagAuth) prefixFor(verifiedIssuer string) string {
+	if p, ok := t.prefixByIssuer[verifiedIssuer]; ok {
+		return p
+	}
+	return t.TagPrefix
 }
 
 // valueInList reports whether claimVal exactly equals one of the

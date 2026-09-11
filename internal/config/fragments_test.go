@@ -378,6 +378,44 @@ func TestAudit_MultiIssuerGateSurvivesRefresh(t *testing.T) {
 		"cross-issuer tag-auth gate silently disabled after hot reload")
 }
 
+// TestAudit_PerIssuerTagPrefixSurvivesRefresh is the sibling of the gate test
+// above for issuers[].tag_prefix: the index Authorize resolves a prefix
+// through is transient state cloneConfig drops, so a refresh that failed to
+// rebuild it would fall every issuer back to the global prefix and deny every
+// role tagged in its own namespace.
+func TestAudit_PerIssuerTagPrefixSurvivesRefresh(t *testing.T) {
+	base := a2Base(t)
+	base.TagAuth = &TagAuth{Enabled: true, TagPrefix: "aow/"}
+	base.Issuers[0].TagPrefix = "gh/"
+	base.Issuers = append(base.Issuers, IssuerConfig{
+		Issuer: "https://second.example", Provider: "generic",
+		Audiences: []string{"aud"}, ClaimMappings: map[string]string{"subject": "sub"},
+	})
+	base.DefaultIssuer = base.Issuers[0].Issuer
+	require.NoError(t, base.Validate())
+
+	gh := base.Issuers[0].Issuer
+	claims := map[string]any{"repository": "o/r"}
+	ghTags := map[string]string{"gh/issuer": gh, "gh/subject": "o/r"}
+	require.True(t, base.TagAuth.Authorize(ghTags, claims, gh, "o/r"), "precondition")
+
+	dir := t.TempDir()
+	f := a2Write(t, dir, "f.yaml", "role_mappings:\n  - subject: \"o/r\"\n    roles: [\"arn:aws:iam::111111111111:role/x\"]\n")
+	base.ConfigFragments = []string{f}
+	require.NoError(t, base.Validate())
+
+	p := NewProvider(base, time.Minute, "yaml", nil)
+	require.NoError(t, p.Refresh(context.Background()))
+
+	got := p.Get()
+	require.NotNil(t, got.TagAuth)
+	assert.Equal(t, "gh/", got.Issuers[0].TagPrefix)
+	assert.True(t, got.TagAuth.Authorize(ghTags, claims, gh, "o/r"),
+		"per-issuer tag prefix silently reverted to the global one after hot reload")
+	assert.False(t, got.TagAuth.Authorize(map[string]string{"aow/issuer": gh, "aow/subject": "o/r"}, claims, gh, "o/r"),
+		"the overriding issuer must not start reading the global prefix after a reload")
+}
+
 // ---------------------------------------------------------------------------
 // C. Checksum pinning: is a pin enforced when the fragment is "unchanged"?
 // ---------------------------------------------------------------------------
