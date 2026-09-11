@@ -46,6 +46,15 @@ issuers:
       ref-type: "ref_type"
       actor: "actor"
       event-name: "event_name"
+    # tag_prefix (optional): the prefix tag_auth reads this issuer's IAM role
+    # tags under, overriding tag_auth.tag_prefix below. Uncomment and roles for
+    # GitHub tokens are tagged gh/issuer, gh/subject, gh/repo, gh/claim.<name>
+    # instead of aow/*; each issuer then has its own tag namespace. The
+    # trailing separator is part of the value ("gh" would yield "ghsubject"),
+    # charset [A-Za-z0-9_.:/=+@-] max 64 chars. The <prefix>issuer tag stays
+    # required with more than one issuer — the prefix is a namespace, not a
+    # trust boundary. See docs/TAG_BASED_AUTHORIZATION.md.
+    # tag_prefix: "gh/"
 
   # --- GitLab CI (generic provider) ---
   # A non-github provider is "generic": it has no native struct, so it MUST map
@@ -62,6 +71,7 @@ issuers:
       project: "project_path"
       ref: "ref"
       ref-type: "ref_type"
+    # tag_prefix: "gl/" # -> gl/issuer, gl/subject, gl/claim.project_path
 
 ## AWS role session name (identifies the session in CloudTrail). STS accepts
 ## 2-64 characters from [\w+=,.@-] ("/" is NOT allowed, so a GitHub
@@ -453,6 +463,8 @@ role_groups:
 # such roles aow/runner-environment — until then they simply stop matching.
 tag_auth:
   enabled: false
+  # Default prefix for every issuer; an issuer that sets its own tag_prefix
+  # (see issuers above) reads only its own and stops reading this one.
   tag_prefix: "aow/"
   default_org: "" # if set, bare aow/repo tokens (e.g. "api") expand to "<default_org>/api"
   # Deprecated: use the top-level session_tags_transitive instead (see

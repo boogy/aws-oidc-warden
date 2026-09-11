@@ -58,15 +58,16 @@ issuers:
 
 ### `issuers[]` fields
 
-| Config File Key   | Description                                                                                                                 | Default      |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| `issuer`          | Exact `iss` claim value trusted for this entry. No trailing-slash or case normalization — must match byte-for-byte.         | (required)   |
-| `provider`        | `"github"` (native `types.Claims` struct unmarshal) or `"generic"` (mapped-only via `claim_mappings`).                      | `"generic"`  |
-| `audiences`       | Accepted `aud` values for this issuer; ANY-match. At least one required.                                                    | (required)   |
-| `jwks_uri`        | Explicit JWKS URI; when set, skips OIDC discovery (`<issuer>/.well-known/openid-configuration`).                            | (discovered) |
-| `claim_mappings`  | Canonical field name → raw verified claim name (e.g. `subject: project_path`). `subject` is the only field read; see below. | (empty)      |
-| `required_claims` | Raw verified claim names that must be present and non-empty for a token from this issuer.                                   | (empty)      |
-| `session_tags`    | STS session tag key → raw verified claim name, applied at `AssumeRole` time.                                                | (empty)      |
+| Config File Key   | Description                                                                                                                                                                                | Default      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ |
+| `issuer`          | Exact `iss` claim value trusted for this entry. No trailing-slash or case normalization — must match byte-for-byte.                                                                        | (required)   |
+| `provider`        | `"github"` (native `types.Claims` struct unmarshal) or `"generic"` (mapped-only via `claim_mappings`).                                                                                     | `"generic"`  |
+| `audiences`       | Accepted `aud` values for this issuer; ANY-match. At least one required.                                                                                                                   | (required)   |
+| `jwks_uri`        | Explicit JWKS URI; when set, skips OIDC discovery (`<issuer>/.well-known/openid-configuration`).                                                                                           | (discovered) |
+| `claim_mappings`  | Canonical field name → raw verified claim name (e.g. `subject: project_path`). `subject` is the only field read; see below.                                                                | (empty)      |
+| `required_claims` | Raw verified claim names that must be present and non-empty for a token from this issuer.                                                                                                  | (empty)      |
+| `session_tags`    | STS session tag key → raw verified claim name, applied at `AssumeRole` time.                                                                                                               | (empty)      |
+| `tag_prefix`      | Tag-auth tag key prefix for this issuer, overriding `tag_auth.tag_prefix` (e.g. `"gh/"` → `gh/subject`). Charset `[A-Za-z0-9_.:/=+@-]{1,64}`; the trailing separator is part of the value. | (global)     |
 
 An entry's **key** is a canonical field name and its **value** is a raw claim name. `subject` is the only field the validator reads, and it is the only one `Validate()` constrains:
 
@@ -401,7 +402,7 @@ Optional, disabled by default. When enabled, a role may be assumed via its IAM t
 | Environment Variable                   | Config File Key                    | Description                                                                                                                                                                                                                    | Default |
 | -------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
 | `AOW_TAG_AUTH_ENABLED`                 | `tag_auth.enabled`                 | Enable tag-based authorization                                                                                                                                                                                                 | `false` |
-| `AOW_TAG_AUTH_TAG_PREFIX`              | `tag_auth.tag_prefix`              | Namespace prefix for authorization tag keys                                                                                                                                                                                    | `aow/`  |
+| `AOW_TAG_AUTH_TAG_PREFIX`              | `tag_auth.tag_prefix`              | Default namespace prefix for authorization tag keys (per-issuer `issuers[].tag_prefix` overrides it; file-only)                                                                                                                | `aow/`  |
 | `AOW_TAG_AUTH_DEFAULT_ORG`             | `tag_auth.default_org`             | Org prefix for bare `aow/repo` tokens (e.g. `"api"` → `"<org>/api"`); must not contain `/` or whitespace                                                                                                                       | (empty) |
 | `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` | `tag_auth.transitive_session_tags` | **Deprecated** — use the top-level `AOW_SESSION_TAGS_TRANSITIVE`/`session_tags_transitive` above instead; this key never had anything to do with tag-based authorization. Kept as a fallback so existing configs keep working. | `false` |
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -666,4 +667,187 @@ func TestTagAuth_GenericClaimDimensionCannotBypassEarlierGates(t *testing.T) {
 		}
 		assert.False(t, ta.Authorize(tags, claims, "https://gitlab.example.com", sub))
 	})
+}
+
+// TestTagAuth_PerIssuerTagPrefix pins that the tag keys inspected for a
+// request are namespaced by the issuer that verified the token: an issuer
+// declaring tag_prefix is read only under that prefix, and one declaring none
+// falls back to tag_auth.tag_prefix. Without this, a role tagged for one
+// issuer's namespace could authorize a token from another.
+func TestTagAuth_PerIssuerTagPrefix(t *testing.T) {
+	const (
+		gh = "https://token.actions.githubusercontent.com"
+		gl = "https://gitlab.com"
+		bk = "https://token.example.buildkite.com"
+	)
+	c := &Config{
+		RoleSessionName: "test",
+		Issuers: []IssuerConfig{
+			{Issuer: gh, Provider: "github", Audiences: []string{"sts.amazonaws.com"}, TagPrefix: "gh/"},
+			{Issuer: gl, Provider: "generic", Audiences: []string{"aud"}, ClaimMappings: map[string]string{"subject": "project_path"}, TagPrefix: "gl/"},
+			{Issuer: bk, Provider: "generic", Audiences: []string{"aud"}, ClaimMappings: map[string]string{"subject": "pipeline_slug"}},
+		},
+		TagAuth: &TagAuth{Enabled: true},
+	}
+	require.NoError(t, c.Validate())
+	ta := c.TagAuth
+	assert.Equal(t, "aow/", ta.TagPrefix, "global prefix must still default for issuers with no override")
+
+	ghClaims := map[string]any{"repository": "acme/api", "repository_owner": "acme"}
+	ghTags := map[string]string{"gh/issuer": gh, "gh/subject": "acme/api"}
+	assert.True(t, ta.Authorize(ghTags, ghClaims, gh, "acme/api"))
+	assert.False(t, ta.Authorize(ghTags, ghClaims, gl, "acme/api"), "gh/ tags must be invisible to the gitlab namespace")
+	assert.False(t, ta.Authorize(ghTags, ghClaims, bk, "acme/api"), "gh/ tags must be invisible to an issuer on the global prefix")
+	assert.False(t, ta.Authorize(map[string]string{"aow/issuer": gh, "aow/subject": "acme/api"}, ghClaims, gh, "acme/api"),
+		"an issuer that overrides the prefix must stop reading the global one")
+
+	// Named GitHub dimensions and default_org expansion follow the prefix too.
+	assert.True(t, ta.Authorize(map[string]string{"gh/issuer": gh, "gh/repo-owner": "acme", "gh/repo": "acme/api"}, ghClaims, gh, "acme/api"))
+	assert.False(t, ta.Authorize(map[string]string{"gh/issuer": gh, "gh/repo": "acme/api", "gh/actor": "someone-else"}, ghClaims, gh, "acme/api"))
+
+	// claim.<name> is namespaced as well.
+	glClaims := map[string]any{"project_path": "grp/proj"}
+	glTags := func(claimVal string) map[string]string {
+		return map[string]string{"gl/issuer": gl, "gl/subject": "grp/proj", "gl/claim.project_path": claimVal}
+	}
+	assert.True(t, ta.Authorize(glTags("grp/proj"), glClaims, gl, "grp/proj"))
+	assert.False(t, ta.Authorize(glTags("other/proj"), glClaims, gl, "grp/proj"))
+
+	// An issuer with no override keeps reading the global prefix.
+	bkClaims := map[string]any{"pipeline_slug": "deploy"}
+	assert.True(t, ta.Authorize(map[string]string{"aow/issuer": bk, "aow/subject": "deploy"}, bkClaims, bk, "deploy"))
+	assert.False(t, ta.Authorize(map[string]string{"gh/issuer": bk, "gh/subject": "deploy"}, bkClaims, bk, "deploy"))
+}
+
+// TestTagAuth_NestedTagPrefixesDoNotLeak covers the one prefix pair where
+// namespaces could bleed: one issuer's prefix is a textual prefix of another's
+// ("aow/" and "aow/gh/"). Tag lookups are exact-key, and claim.<name> is
+// matched against the full "<prefix>claim." string, so the nested issuer's
+// tags must be invisible to the outer one — including as a claim dimension,
+// which is the form that scans keys rather than looking one up.
+func TestTagAuth_NestedTagPrefixesDoNotLeak(t *testing.T) {
+	c := &Config{
+		RoleSessionName: "test",
+		Issuers: []IssuerConfig{
+			{Issuer: vIss, Provider: "github", Audiences: []string{"aud"}},
+			{Issuer: vIss2, Provider: "github", Audiences: []string{"aud"}, TagPrefix: "aow/gh/"},
+		},
+		TagAuth: &TagAuth{Enabled: true, TagPrefix: "aow/"},
+	}
+	require.NoError(t, c.Validate())
+	claims := map[string]any{"repository": "acme/api"}
+
+	nested := map[string]string{"aow/gh/issuer": vIss2, "aow/gh/subject": "acme/api", "aow/gh/claim.repository": "acme/api"}
+	assert.True(t, c.TagAuth.Authorize(nested, claims, vIss2, "acme/api"), "the nested issuer reads its own prefix")
+	assert.False(t, c.TagAuth.Authorize(nested, claims, vIss, "acme/api"),
+		"PREFIX LEAK: aow/gh/* tags must not authorize the issuer on aow/")
+
+	// The reverse direction: the outer issuer's tags are not the nested one's.
+	outer := map[string]string{"aow/issuer": vIss, "aow/subject": "acme/api"}
+	assert.True(t, c.TagAuth.Authorize(outer, claims, vIss, "acme/api"))
+	assert.False(t, c.TagAuth.Authorize(outer, claims, vIss2, "acme/api"))
+
+	// The case only exact-key lookup can refuse: the nested role names the
+	// OUTER issuer and a subject that caller really has, so the issuer and
+	// identity gates would both pass on the tag VALUES. Nothing but reading
+	// "aow/issuer"/"aow/subject" as literal keys — never "aow/" + something
+	// that ends in "issuer" — keeps this from granting.
+	trap := map[string]string{"aow/gh/issuer": vIss, "aow/gh/subject": "acme/api"}
+	assert.False(t, c.TagAuth.Authorize(trap, claims, vIss, "acme/api"),
+		"PREFIX LEAK: a nested-namespace tag whose value names the outer issuer must not authorize it")
+}
+
+// TestTagAuth_PerIssuerTagPrefixOverGlobalOverride pins the resolution order:
+// the issuer's prefix wins over an operator-set global prefix, which in turn
+// serves every issuer that declares none.
+func TestTagAuth_PerIssuerTagPrefixOverGlobalOverride(t *testing.T) {
+	c := &Config{
+		RoleSessionName: "test",
+		Issuers: []IssuerConfig{
+			{Issuer: vIss, Provider: "github", Audiences: []string{"aud"}, TagPrefix: "gh/"},
+			{Issuer: vIss2, Provider: "github", Audiences: []string{"aud"}},
+		},
+		TagAuth: &TagAuth{Enabled: true, TagPrefix: "corp:"},
+	}
+	require.NoError(t, c.Validate())
+	claims := map[string]any{"repository": "acme/api"}
+
+	assert.True(t, c.TagAuth.Authorize(map[string]string{"gh/issuer": vIss, "gh/subject": "acme/api"}, claims, vIss, "acme/api"))
+	assert.False(t, c.TagAuth.Authorize(map[string]string{"corp:issuer": vIss, "corp:subject": "acme/api"}, claims, vIss, "acme/api"))
+	assert.True(t, c.TagAuth.Authorize(map[string]string{"corp:issuer": vIss2, "corp:subject": "acme/api"}, claims, vIss2, "acme/api"))
+}
+
+// TestTagAuth_TagPrefixValidation pins boot-time rejection of a prefix that
+// cannot appear in an IAM tag key: a config that can never match any role is
+// an operator error, not a silent no-op at request time.
+func TestTagAuth_TagPrefixValidation(t *testing.T) {
+	cases := []struct {
+		name         string
+		issuerPrefix string
+		globalPrefix string
+		wantErr      string
+	}{
+		{name: "both unset"},
+		{name: "valid issuer prefix", issuerPrefix: "gh/"},
+		{name: "valid global prefix", globalPrefix: "corp:aow/"},
+		{name: "issuer prefix with space", issuerPrefix: "gh /", wantErr: "issuers[0]"},
+		{name: "issuer prefix with tab", issuerPrefix: "gh\t/", wantErr: "tag_prefix"},
+		{name: "issuer prefix too long", issuerPrefix: strings.Repeat("a", 65), wantErr: "tag_prefix"},
+		{name: "global prefix with space", globalPrefix: "aow /", wantErr: "tag_auth.tag_prefix"},
+		{name: "global prefix with invalid char", globalPrefix: "aow!/", wantErr: "tag_auth.tag_prefix"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{
+				RoleSessionName: "test",
+				Issuers:         []IssuerConfig{{Issuer: vIss, Provider: "github", Audiences: []string{"aud"}, TagPrefix: tc.issuerPrefix}},
+				TagAuth:         &TagAuth{Enabled: true, TagPrefix: tc.globalPrefix},
+			}
+			err := c.Validate()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestTagAuth_PerIssuerTagPrefixSurvivesRemoteReload pins that an issuer's
+// tag_prefix survives a remote-config reload. Provider.refresh and MergeBytes
+// both rebuild the config by JSON round-tripping it (cloneConfig), so a field
+// without a json tag is silently dropped and the issuer falls back to the
+// global prefix — every tag-authorized role for that issuer would stop
+// matching on the first S3 refresh, with nothing but a deny to show for it.
+func TestTagAuth_PerIssuerTagPrefixSurvivesRemoteReload(t *testing.T) {
+	c := &Config{
+		RoleSessionName: "test",
+		Cache:           &Cache{Type: "memory", TTL: time.Hour},
+		Issuers: []IssuerConfig{
+			{Issuer: vIss, Provider: "github", Audiences: []string{"aud"}, TagPrefix: "gh/"},
+			{Issuer: vIss2, Provider: "github", Audiences: []string{"aud"}},
+		},
+		TagAuth: &TagAuth{Enabled: true},
+	}
+	require.NoError(t, c.Validate())
+	claims := map[string]any{"repository": "acme/api"}
+	ghTags := map[string]string{"gh/issuer": vIss, "gh/subject": "acme/api"}
+	require.True(t, c.TagAuth.Authorize(ghTags, claims, vIss, "acme/api"), "precondition")
+
+	clone, err := cloneConfig(c)
+	require.NoError(t, err)
+	require.NoError(t, clone.Validate())
+	assert.Equal(t, "gh/", clone.Issuers[0].TagPrefix, "tag_prefix must survive the JSON clone")
+	assert.True(t, clone.TagAuth.Authorize(ghTags, claims, vIss, "acme/api"),
+		"the cloned config must still read the issuer's own prefix")
+
+	// The same through the overlay path, where the payload leaves issuers alone.
+	require.NoError(t, c.MergeBytes([]byte("tag_auth:\n  enabled: true\n"), "yaml"))
+	assert.Equal(t, "gh/", c.Issuers[0].TagPrefix)
+	assert.True(t, c.TagAuth.Authorize(ghTags, claims, vIss, "acme/api"))
+
+	// A cloned TagAuth is a fresh allocation, so rebuilding prefixByIssuer on
+	// one config cannot race a request reading it through another.
+	assert.NotSame(t, c.TagAuth, clone.TagAuth)
 }
