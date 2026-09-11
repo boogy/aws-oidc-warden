@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-09-11
+
+### Added
+
+- **`issuers[].tag_prefix` — per-issuer tag-auth tag namespaces.** Tag-based authorization read every issuer's IAM role tags under one global prefix (`tag_auth.tag_prefix`, default `aow/`). An issuer can now override it, so a GitHub issuer's roles are tagged `gh/issuer`/`gh/subject`/`gh/claim.<name>` while a GitLab issuer's use `gl/*` and an issuer that declares nothing keeps reading `aow/*`. Resolution is per request from the issuer that actually verified the token, so a role tagged for one issuer's namespace is invisible to every other one. Only the prefix is configurable — the dimension suffixes stay fixed, and the `<prefix>issuer` tag is still required once more than one issuer is configured: the prefix is a namespace, not a trust boundary.
+
+  The trailing separator is part of the value (`"gh"` produces `ghsubject`), and a prefix outside the IAM tag-key charset minus the space (`[A-Za-z0-9_.:/=+@-]{1,64}`) is now a boot-time error rather than a config that silently matches no role — a check the global `tag_auth.tag_prefix` never had either and now gets. `issuers` is file-only, so there is no per-issuer env var; `AOW_TAG_AUTH_TAG_PREFIX` still sets the global default. The boot warning for a role that `tag_auth` can grant unscoped no longer hardcodes `aow/` in its remediation text, since the prefix it should name is now per-issuer. Nothing changes for a config where no issuer sets `tag_prefix`. See [docs/TAG_BASED_AUTHORIZATION.md § Per-issuer tag prefixes](docs/TAG_BASED_AUTHORIZATION.md#per-issuer-tag-prefixes).
+
 ### Removed
 
 - **All infrastructure-as-code has left this repo.** `deploy/` (the OpenTofu module, the CloudFormation quick-start, `build.sh`, the deployment guide) and `docs/examples/cross-account/member-account-roles.yaml` are gone. This repo is now only the service: a Go application, its images, and its documentation. Deploying it is the operator's, with whichever tool their organization already uses — which is the point, since an IaC stack that ships with the app has to model everyone's landing zone and cannot.
@@ -767,7 +775,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.3.0...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.0...HEAD
+[3.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.0.2...v3.1.0
