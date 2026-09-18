@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Dependency updates.** `aws-lambda-go` 1.54.0 → 1.55.0; AWS SDK v2 minor bumps (`aws-sdk-go-v2` 1.43.7 → 1.47.0, `config` 1.32.38 → 1.33.5, `credentials` 1.19.37 → 1.20.5, `dynamodb` 1.63.4 → 1.69.0, `iam` 1.59.2 → 1.64.0, `s3` 1.107.3 → 1.113.1, `sts` 1.45.7 → 1.51.0, plus their internal modules) and `smithy-go` 1.28.0 → 1.28.1; `golang.org/x/sync` 0.22.0 → 0.23.0, `golang.org/x/sys` 0.47.0 → 0.48.0, `golang.org/x/text` 0.41.0 → 0.42.0. `govulncheck` reports no vulnerabilities and the full suite passes unchanged; no exported signature or behaviour the tests can see changed.
+
 ## [3.1.0] - 2026-08-31
 
 ### Fixed
