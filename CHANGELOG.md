@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.4.1] - 2026-09-18
+
+Maintenance release: dependency updates only. No code changes, so no behavior change and nothing to do on upgrade.
+
+### Changed
+
+- **Dependency updates.** `govulncheck` reports no vulnerabilities and the full suite passes unchanged; no exported signature or observable behaviour changed.
+
+  - `github.com/aws/aws-sdk-go-v2/config` 1.33.4 → 1.33.5
+  - `github.com/aws/aws-sdk-go-v2/credentials` 1.20.4 → 1.20.5
+  - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.66.0 → 1.69.0
+  - `github.com/aws/aws-sdk-go-v2/service/iam` 1.62.0 → 1.64.0
+  - `github.com/aws/aws-sdk-go-v2/service/s3` 1.110.0 → 1.113.1
+  - `github.com/aws/aws-sdk-go-v2/service/sts` 1.50.0 → 1.51.0
+  - `golang.org/x/sync` 0.22.0 → 0.23.0
+  - `golang.org/x/sys` 0.47.0 → 0.48.0 (indirect)
+  - `golang.org/x/text` 0.41.0 → 0.42.0 (indirect)
+  - Transitive AWS SDK modules: `service/internal/checksum` 1.11.1 → 1.11.3, `service/internal/endpoint-discovery` 1.13.1 → 1.13.3, `service/internal/s3shared` 1.20.1 → 1.20.3
+
 ## [3.4.0] - 2026-09-11
 
 ### Added
@@ -775,7 +794,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.0...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...HEAD
+[3.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.0...v3.4.1
 [3.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.1.0...v3.2.0
