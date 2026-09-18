@@ -10,7 +10,21 @@ Maintenance release: dependency updates only. No code changes, so no behavior ch
 
 ### Changed
 
-- **Dependency updates.** `aws-lambda-go` 1.54.0 → 1.55.0; AWS SDK v2 minor bumps (`aws-sdk-go-v2` 1.43.7 → 1.47.0, `config` 1.32.38 → 1.33.5, `credentials` 1.19.37 → 1.20.5, `dynamodb` 1.63.4 → 1.69.0, `iam` 1.59.2 → 1.64.0, `s3` 1.107.3 → 1.113.1, `sts` 1.45.7 → 1.51.0, plus their internal modules) and `smithy-go` 1.28.0 → 1.28.1; `golang.org/x/sync` 0.22.0 → 0.23.0, `golang.org/x/sys` 0.47.0 → 0.48.0, `golang.org/x/text` 0.41.0 → 0.42.0. `govulncheck` reports no vulnerabilities and the full suite passes unchanged; no exported signature or behaviour the tests can see changed.
+- **Dependency updates.** `govulncheck` reports no vulnerabilities and the full suite passes unchanged; no exported signature or behaviour the tests can see changed.
+
+  - `github.com/aws/aws-lambda-go` 1.54.0 → 1.55.0
+  - `github.com/aws/aws-sdk-go-v2` 1.43.7 → 1.47.0
+  - `github.com/aws/aws-sdk-go-v2/config` 1.32.38 → 1.33.5
+  - `github.com/aws/aws-sdk-go-v2/credentials` 1.19.37 → 1.20.5
+  - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.63.4 → 1.69.0
+  - `github.com/aws/aws-sdk-go-v2/service/iam` 1.59.2 → 1.64.0
+  - `github.com/aws/aws-sdk-go-v2/service/s3` 1.107.3 → 1.113.1
+  - `github.com/aws/aws-sdk-go-v2/service/sts` 1.45.7 → 1.51.0
+  - `github.com/aws/smithy-go` 1.28.0 → 1.28.1
+  - `golang.org/x/sync` 0.22.0 → 0.23.0
+  - `golang.org/x/sys` 0.47.0 → 0.48.0
+  - `golang.org/x/text` 0.41.0 → 0.42.0
+  - Transitive AWS SDK `internal/*` and `service/internal/*` modules, plus `feature/ec2/imds`, `service/signin`, `service/sso`, `service/ssooidc`
 
 ## [3.1.0] - 2026-08-31
 
