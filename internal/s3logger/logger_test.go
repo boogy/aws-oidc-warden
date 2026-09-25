@@ -159,9 +159,7 @@ func TestLoggerWithDisabledLogging(t *testing.T) {
 	mockClient := new(MockS3Client)
 	logger.SetS3Client(mockClient)
 
-	buf := bytes.Buffer{}
-	buf.WriteString("this log should not be sent to S3\n")
-	err := logger.WriteLogToS3(buf)
+	err := logger.BufferRecord([]byte("this log should not be sent to S3\n"))
 	assert.NoError(t, err)
 
 	err = logger.Flush()
@@ -191,9 +189,7 @@ func TestErrorHandling(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to write logs to S3")
 
 	logger.SetS3ConfigOption(s3logger.WithBatchSize(1))
-	buf := bytes.Buffer{}
-	buf.WriteString("batch test log\n")
-	err = logger.WriteLogToS3(buf)
+	err = logger.BufferRecord([]byte("batch test log\n"))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to write logs to S3")
 
@@ -230,8 +226,7 @@ func TestWriteEmptyLog(t *testing.T) {
 	mockClient := new(MockS3Client)
 	logger.SetS3Client(mockClient)
 
-	buf := bytes.Buffer{}
-	err := logger.WriteLogToS3(buf)
+	err := logger.BufferRecord(nil)
 	assert.NoError(t, err)
 
 	mockClient.AssertNotCalled(t, "PutObject")
@@ -294,17 +289,13 @@ func TestBatchProcessing(t *testing.T) {
 	})).Return(&s3.PutObjectOutput{}, nil).Once()
 
 	for i := 1; i <= 2; i++ {
-		buf := bytes.Buffer{}
-		fmt.Fprintf(&buf, "log message %d\n", i)
-		err := logger.WriteLogToS3(buf)
+		err := logger.BufferRecord([]byte(fmt.Sprintf("log message %d\n", i)))
 		assert.NoError(t, err)
 	}
 
 	mockClient.AssertNotCalled(t, "PutObject")
 
-	buf := bytes.Buffer{}
-	buf.WriteString("log message 3\n")
-	err := logger.WriteLogToS3(buf)
+	err := logger.BufferRecord([]byte("log message 3\n"))
 	assert.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
@@ -326,9 +317,7 @@ func TestFlushOnClose(t *testing.T) {
 		return true
 	})).Return(&s3.PutObjectOutput{}, nil).Once()
 
-	buf := bytes.Buffer{}
-	buf.WriteString("log to be flushed on close\n")
-	err := logger.WriteLogToS3(buf)
+	err := logger.BufferRecord([]byte("log to be flushed on close\n"))
 	assert.NoError(t, err)
 
 	mockClient.AssertNotCalled(t, "PutObject")
@@ -392,9 +381,7 @@ func TestLogBatchFlush(t *testing.T) {
 	mockClient.On("PutObject", mock.Anything, mock.Anything).
 		Return(&s3.PutObjectOutput{}, nil).Once()
 
-	buf := bytes.Buffer{}
-	buf.WriteString("log to be flushed manually\n")
-	err := logger.WriteLogToS3(buf)
+	err := logger.BufferRecord([]byte("log to be flushed manually\n"))
 	assert.NoError(t, err)
 
 	mockClient.AssertNotCalled(t, "PutObject")
@@ -419,9 +406,7 @@ func TestConcurrentLogWrites(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				buf := bytes.Buffer{}
-				fmt.Fprintf(&buf, "concurrent log %d-%d\n", id, j)
-				err := logger.WriteLogToS3(buf)
+				err := logger.BufferRecord([]byte(fmt.Sprintf("concurrent log %d-%d\n", id, j)))
 				assert.NoError(t, err)
 			}
 		}(i)

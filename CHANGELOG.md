@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.4.2] - 2026-09-25
+
+### Fixed
+
+- **Unbounded log buffer in warm Lambda containers.** `initializeLogger` teed every log line into an in-memory `bytes.Buffer` meant to be flushed to S3 by `Bootstrap.Cleanup()`, but `Cleanup()` is `defer`red after `lambda.Start`, which never returns for the life of the container — so the buffer grew without bound and its contents never reached S3. Logs now go to stdout (CloudWatch) only; S3 keeps carrying the per-decision audit record instead.
+
 ## [3.4.1] - 2026-09-18
 
 Maintenance release: dependency updates only. No code changes, so no behavior change and nothing to do on upgrade.
@@ -794,7 +800,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.2...HEAD
+[3.4.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...v3.4.2
 [3.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.0...v3.4.1
 [3.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.2.0...v3.3.0

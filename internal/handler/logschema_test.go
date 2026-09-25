@@ -184,8 +184,7 @@ func TestLogOutputIsJSON(t *testing.T) {
 // NewBootstrap path, which also loads AWS SDK config and the on-disk config
 // file — neither of which this test cares about.
 func TestBootstrapLoggerIsJSONHandler(t *testing.T) {
-	_, logger, err := initializeLogger()
-	require.NoError(t, err)
+	logger := initializeLogger()
 	_, ok := logger.Handler().(*slog.JSONHandler)
 	assert.True(t, ok, "bootstrap must install a JSON handler, never a text handler")
 }

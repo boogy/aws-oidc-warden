@@ -30,7 +30,6 @@ const (
 
 // LoggerInterface defines the methods that must be implemented by any logger.
 type LoggerInterface interface {
-	WriteLogToS3(data bytes.Buffer) error
 	WriteObject(s3Bucket, key string, body []byte) error
 	Flush() error
 	Close() error
@@ -237,9 +236,9 @@ func (l *S3Logger) onBatchTimer() {
 	l.batchTimer = time.AfterFunc(l.s3Config.MaxBatchAge, l.onBatchTimer)
 }
 
-// WriteLogToS3 batches data for S3. Best-effort: checked against the live
+// writeLogToS3 batches data for S3. Best-effort: checked against the live
 // config, not the boot snapshot, and no-ops (never errors) when disabled.
-func (l *S3Logger) WriteLogToS3(data bytes.Buffer) error {
+func (l *S3Logger) writeLogToS3(data bytes.Buffer) error {
 	defer data.Reset()
 
 	if c := l.liveConfig(); c == nil || !c.LogToS3 {
@@ -452,13 +451,13 @@ func (l *S3Logger) WriteRecord(ctx context.Context, record []byte) error {
 	return l.writeObject(ctx, l.targetBucket(), l.generateS3Key(), compressedData)
 }
 
-// BufferRecord appends a record to the batch buffer WriteLogToS3 flushes
+// BufferRecord appends a record to the batch buffer writeLogToS3 flushes
 // (BatchSize/MaxBatchAge or Close), for the best-effort path. No-ops when S3
 // logging is disabled.
 func (l *S3Logger) BufferRecord(record []byte) error {
 	var buf bytes.Buffer
 	buf.Write(record)
-	return l.WriteLogToS3(buf)
+	return l.writeLogToS3(buf)
 }
 
 // compressGzip compresses the given data using gzip.

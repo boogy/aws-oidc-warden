@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -53,17 +52,13 @@ type Bootstrap struct {
 	Cache     cache.Cache
 	S3Logger  *s3logger.S3Logger
 	Logger    *slog.Logger
-	LogBuffer *bytes.Buffer
 }
 
 // NewBootstrap initializes all common components needed by Lambda handlers
 func NewBootstrap() (*Bootstrap, error) {
 	versionInfo := version.Get()
 
-	logBuffer, logger, err := initializeLogger()
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize logger: %w", err)
-	}
+	logger := initializeLogger()
 
 	logger.Info(
 		fmt.Sprintf("Starting %s", versionInfo.BinName),
@@ -123,7 +118,6 @@ func NewBootstrap() (*Bootstrap, error) {
 		Cache:     jwksCache,
 		S3Logger:  s3log,
 		Logger:    logger,
-		LogBuffer: logBuffer,
 	}, nil
 }
 
@@ -210,19 +204,15 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 // maxRemoteConfigSize bounds the bytes read from the S3 config object.
 const maxRemoteConfigSize = 1024 * 1024 // 1MB
 
-// Cleanup flushes the S3 logger and writes buffered logs to S3.
+// Cleanup flushes the S3 logger's buffered audit records.
 func (b *Bootstrap) Cleanup() {
 	if err := b.S3Logger.Flush(); err != nil {
 		b.Logger.Error("Failed to flush logs to S3", slog.String("error", err.Error()))
 	}
-
-	if err := b.S3Logger.WriteLogToS3(*b.LogBuffer); err != nil {
-		b.Logger.Error("Failed to write logs to S3", slog.String("error", err.Error()))
-	}
 }
 
 // initializeLogger sets up the global logger with proper configuration
-func initializeLogger() (*bytes.Buffer, *slog.Logger, error) {
+func initializeLogger() *slog.Logger {
 	var programLevel = new(slog.LevelVar)
 	programLevel.Set(slog.LevelInfo)
 
@@ -235,16 +225,14 @@ func initializeLogger() (*bytes.Buffer, *slog.Logger, error) {
 		}
 	}
 
-	logBuffer := &bytes.Buffer{}
-
-	logHandler := slog.NewJSONHandler(io.MultiWriter(os.Stdout, logBuffer), &slog.HandlerOptions{
+	logHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: programLevel,
 	})
 
 	logger := slog.New(logHandler)
 	slog.SetDefault(logger)
 
-	return logBuffer, logger, nil
+	return logger
 }
 
 // validateAdapterMode panics at startup when the configured jwt_validation.mode
