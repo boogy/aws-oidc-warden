@@ -430,7 +430,7 @@ func TestBuildSessionTags(t *testing.T) {
 			"run":   "run_number",
 		}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		tagMap := make(map[string]string)
 		for _, tag := range tags {
 			tagMap[*tag.Key] = *tag.Value
@@ -445,8 +445,8 @@ func TestBuildSessionTags(t *testing.T) {
 	})
 
 	t.Run("nil/empty rawClaims or tagSpec produces no tags", func(t *testing.T) {
-		assert.Nil(t, BuildSessionTags(nil, map[string]string{"repo": "repository"}))
-		assert.Nil(t, BuildSessionTags(map[string]any{"repository": "owner/repo"}, nil))
+		assert.Nil(t, BuildSessionTags(context.Background(), nil, map[string]string{"repo": "repository"}))
+		assert.Nil(t, BuildSessionTags(context.Background(), map[string]any{"repository": "owner/repo"}, nil))
 	})
 
 	t.Run("missing or empty claim value is skipped, never mangled", func(t *testing.T) {
@@ -461,7 +461,7 @@ func TestBuildSessionTags(t *testing.T) {
 			"ref":   "ref",
 		}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		require.Len(t, tags, 1)
 		assert.Equal(t, "repo", *tags[0].Key)
 		assert.Equal(t, "owner/repo", *tags[0].Value)
@@ -477,7 +477,7 @@ func TestBuildSessionTags(t *testing.T) {
 			"actor": "actor",
 		}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		tagMap := make(map[string]string)
 		for _, tag := range tags {
 			tagMap[*tag.Key] = *tag.Value
@@ -493,7 +493,7 @@ func TestBuildSessionTags(t *testing.T) {
 		raw := map[string]any{"claim": "value"}
 		spec := map[string]string{"bad key!": "claim"}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		assert.Empty(t, tags)
 	})
 
@@ -501,7 +501,7 @@ func TestBuildSessionTags(t *testing.T) {
 		raw := map[string]any{"claim": strings.Repeat("a", maxSessionTagValLen+1)}
 		spec := map[string]string{"tag": "claim"}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		assert.Empty(t, tags)
 	})
 
@@ -514,7 +514,7 @@ func TestBuildSessionTags(t *testing.T) {
 			spec[fmt.Sprintf("tag%02d", i)] = claim
 		}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		assert.Len(t, tags, maxSessionTags)
 	})
 }

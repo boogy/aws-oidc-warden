@@ -139,8 +139,8 @@ func TestSelfDelegatedParity(t *testing.T) {
 
 	// Session-tag parity — same spec + same raw claims => byte-identical tags.
 	spec := issCfg.SessionTags
-	tagsSelf := awsconsumer.BuildSessionTags(fromSelf.Raw, spec)
-	tagsDelegated := awsconsumer.BuildSessionTags(fromDelegated.Raw, spec)
+	tagsSelf := awsconsumer.BuildSessionTags(context.Background(), fromSelf.Raw, spec)
+	tagsDelegated := awsconsumer.BuildSessionTags(context.Background(), fromDelegated.Raw, spec)
 	assert.Equal(t, tagMap(tagsSelf), tagMap(tagsDelegated), "session tags must match across modes")
 	assert.Equal(t, map[string]string{"repo": repository, "actor": "testuser", "ref": "refs/heads/main"}, tagMap(tagsSelf))
 }
@@ -272,8 +272,8 @@ func TestSelfDelegatedParityMultiIssuer(t *testing.T) {
 	assert.Equal(t, fromSelf.Ref, fromDelegated.Ref)
 
 	// Session-tag parity, using the MATCHED issuer's spec (index 1, not 0).
-	tagsSelf := awsconsumer.BuildSessionTags(fromSelf.Raw, issCfg.SessionTags)
-	tagsDelegated := awsconsumer.BuildSessionTags(fromDelegated.Raw, issCfg.SessionTags)
+	tagsSelf := awsconsumer.BuildSessionTags(context.Background(), fromSelf.Raw, issCfg.SessionTags)
+	tagsDelegated := awsconsumer.BuildSessionTags(context.Background(), fromDelegated.Raw, issCfg.SessionTags)
 	assert.Equal(t, tagMap(tagsSelf), tagMap(tagsDelegated), "session tags must match across modes")
 	assert.Equal(t, map[string]string{"repo": repository, "actor": "testuser", "ref": "refs/heads/main"}, tagMap(tagsSelf))
 }

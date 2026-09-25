@@ -362,8 +362,8 @@ func claimEmitted(rawClaims map[string]any, name string, include func(string) bo
 // resolvedSessionTags computes the STS session tag values for the audit
 // record's SessionTags field, reusing aws.BuildSessionTags (the function
 // AssumeRole itself uses). Only called when cfg.LogClaimValues is true.
-func resolvedSessionTags(rawClaims map[string]any, tagSpec map[string]string) map[string]string {
-	tags := aws.BuildSessionTags(rawClaims, tagSpec)
+func resolvedSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) map[string]string {
+	tags := aws.BuildSessionTags(ctx, rawClaims, tagSpec)
 	if len(tags) == 0 {
 		return nil
 	}

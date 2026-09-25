@@ -223,7 +223,7 @@ func TestBadSessionTagValuesSkipped(t *testing.T) {
 		"Good": "good", "BadChar": "badchar", "TooLong": "toolong",
 		"Empty": "empty", "NilClaim": "nilclaim", "Numeric": "numeric",
 	}
-	tags := BuildSessionTags(raw, spec)
+	tags := BuildSessionTags(context.Background(), raw, spec)
 	got := map[string]string{}
 	for _, tg := range tags {
 		got[*tg.Key] = *tg.Value
@@ -239,7 +239,7 @@ func TestBadSessionTagValuesSkipped(t *testing.T) {
 			t.Errorf("SANITIZATION BUG: tag %q should have been skipped, got %q (len %d)", k, v, len(v))
 		}
 	}
-	if tt := BuildSessionTags(map[string]any{"c": "v"}, map[string]string{"bad\nkey": "c"}); len(tt) != 0 {
+	if tt := BuildSessionTags(context.Background(), map[string]any{"c": "v"}, map[string]string{"bad\nkey": "c"}); len(tt) != 0 {
 		t.Errorf("invalid tag key not skipped: %v", tt)
 	}
 	bigRaw := map[string]any{}
@@ -249,7 +249,7 @@ func TestBadSessionTagValuesSkipped(t *testing.T) {
 		bigRaw[k] = "v"
 		bigSpec["T"+k] = k
 	}
-	if n := len(BuildSessionTags(bigRaw, bigSpec)); n > 50 {
+	if n := len(BuildSessionTags(context.Background(), bigRaw, bigSpec)); n > 50 {
 		t.Errorf("STS 50-tag cap exceeded: %d", n)
 	}
 }

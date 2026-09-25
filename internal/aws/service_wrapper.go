@@ -170,6 +170,15 @@ func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRol
 		return nil, err
 	}
 
+	attrs := []slog.Attr{
+		slog.String("roleArn", *input.RoleArn),
+		slog.Int64("durationMs", time.Since(start).Milliseconds()),
+	}
+	if u := output.AssumedRoleUser; u != nil && u.AssumedRoleId != nil {
+		attrs = append(attrs, slog.String("assumedRoleId", *u.AssumedRoleId))
+	}
+	logevent.Info(ctx, nil, logevent.STSAssumeRoleSuccess, "assumed role", attrs...)
+
 	return output, nil
 }
 

@@ -222,7 +222,7 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 	}
 
 	if claims != nil && claims.Raw != nil {
-		tags := BuildSessionTags(claims.Raw, sessionTags)
+		tags := BuildSessionTags(ctx, claims.Raw, sessionTags)
 		if len(tags) > 0 {
 			assumeRoleInput.Tags = tags
 		}
@@ -308,12 +308,10 @@ var sessionTagCharsetPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]*$`)
 // value (wrong charset, over the STS length limit) is skipped and logged,
 // never sanitized or truncated. Keys are processed in sorted order so
 // truncation at the 50-tag STS cap is deterministic.
-func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag {
+func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) []types.Tag {
 	if len(rawClaims) == 0 || len(tagSpec) == 0 {
 		return nil
 	}
-
-	ctx := context.Background()
 
 	var tags []types.Tag
 	for _, tagKey := range utils.SortedKeys(tagSpec) {

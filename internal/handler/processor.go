@@ -196,7 +196,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	rec.SessionName = sessionName
 	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
 	if cfg.LogClaimValues {
-		rec.SessionTags = resolvedSessionTags(claims.Raw, sessionTagSpec)
+		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, sessionTagSpec)
 	}
 	rec.SessionPolicyRef = policyRef
 	if account, _, aerr := aws.ParseRoleARN(requestedRole); aerr == nil {

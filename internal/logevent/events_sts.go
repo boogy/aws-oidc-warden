@@ -1,8 +1,5 @@
 package logevent
 
-// STSAssumeRoleStart is emitted before an AssumeRole call (Debug).
-var STSAssumeRoleStart = newEvent("sts.assume_role.start")
-
 // STSAssumeRoleSuccess is emitted when AssumeRole succeeds (Info).
 var STSAssumeRoleSuccess = newEvent("sts.assume_role.success")
 

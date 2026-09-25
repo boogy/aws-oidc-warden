@@ -5,8 +5,12 @@ package aws
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -691,4 +695,48 @@ func TestAudit_RoleTagHubAccountUnaffectedByCrossAccountRevocation(t *testing.T)
 	tags, err := c.GetRoleTags(context.Background(), "arn:aws:iam::111111111111:role/deploy")
 	require.NoError(t, err, "hub-account tag reads must work with cross-account disabled")
 	assert.Equal(t, "acme/hub", tags["aow/repo"])
+}
+
+type stubRoundTripper struct{ body string }
+
+func (s stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/xml"}},
+		Body:       io.NopCloser(strings.NewReader(s.body)),
+	}, nil
+}
+
+func TestAssumeRole_LogsSuccessWithoutCredentials(t *testing.T) {
+	const resp = `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult>
+<Credentials><AccessKeyId>ASIASECRETKEYID</AccessKeyId><SecretAccessKey>topsecret</SecretAccessKey><SessionToken>tok</SessionToken><Expiration>2030-01-01T00:00:00Z</Expiration></Credentials>
+<AssumedRoleUser><AssumedRoleId>AROAEXAMPLE:sess</AssumedRoleId><Arn>arn:aws:sts::111111111111:assumed-role/r/sess</Arn></AssumedRoleUser>
+</AssumeRoleResult></AssumeRoleResponse>`
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	w := &AwsServiceWrapper{
+		defaultTimeout: time.Second,
+		stsClient: sts.NewFromConfig(aws.Config{
+			Region:      "us-east-1",
+			Credentials: aws.AnonymousCredentials{},
+			HTTPClient:  &http.Client{Transport: stubRoundTripper{body: resp}},
+		}),
+	}
+	_, err := w.AssumeRole(context.Background(), &sts.AssumeRoleInput{
+		RoleArn:         aws.String("arn:aws:iam::111111111111:role/r"),
+		RoleSessionName: aws.String("sess"),
+	})
+	require.NoError(t, err)
+
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line))
+	assert.Equal(t, "sts.assume_role.success", line["eventType"])
+	assert.Equal(t, "INFO", line["level"])
+	assert.Equal(t, "AROAEXAMPLE:sess", line["assumedRoleId"])
+	assert.Contains(t, line, "durationMs")
+	assert.NotContains(t, buf.String(), "ASIASECRETKEYID")
+	assert.NotContains(t, buf.String(), "topsecret")
 }
