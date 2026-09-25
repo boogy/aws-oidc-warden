@@ -12,6 +12,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/golang-jwt/jwt/v5"
@@ -143,7 +144,7 @@ func TestALBHandler_MultiValueHeaderSelectsRoleOnlyParser(t *testing.T) {
 func TestALBHandler_MultiValueXFFPopulatesSourceIP(t *testing.T) {
 	var buf bytes.Buffer
 	prevDefault := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil))))
 	defer slog.SetDefault(prevDefault)
 
 	ex := &captureExtractor{}
@@ -208,7 +209,7 @@ func TestALBHandler_MultiValueWinsOverSingleValue(t *testing.T) {
 func TestALBHandler_NoXFF_OmitsEmptySourceIPKeys(t *testing.T) {
 	var buf bytes.Buffer
 	prevDefault := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil))))
 	defer slog.SetDefault(prevDefault)
 
 	ex := &stubExtractor{err: handler.ErrTokenValidationFailed}

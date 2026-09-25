@@ -10,6 +10,7 @@ import (
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
@@ -144,14 +145,9 @@ func (rec *auditRecord) matchedRole() string {
 	return rec.RequestedRole
 }
 
-// auditLogAttrs returns the standardized slog attribute set for one decision.
-// requestId/frontendRequestId/sourceIp/sourceIpFrom are deliberately excluded:
-// adapters already bind them via slog.With, and duplicating here would emit
-// duplicate keys in the same log line (the durable record still has them).
-// logClaimValues gates jwtSub/subject/audience/claims identically to
-// auditRecord.redact(), so a suppressed value is absent from the log stream too.
-func auditLogAttrs(rec *auditRecord, logClaimValues bool) []any {
-	attrs := []any{
+// auditLogAttrs builds the decision line's attrs; identity fields come from ctxHandler.
+func auditLogAttrs(rec *auditRecord, logClaimValues bool) []slog.Attr {
+	attrs := []slog.Attr{
 		slog.String("frontend", rec.Frontend),
 		slog.String("jwtMode", rec.JWTMode),
 		slog.String("decision", rec.Decision),
@@ -206,10 +202,11 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	rec.redact(cfg.LogClaimValues)
 
 	attrs := auditLogAttrs(rec, cfg.LogClaimValues)
+	decisionEvent := logevent.AuthzDecision.WithOutcome(rec.Decision)
 	if rec.Decision == "allow" {
-		log.Info("authorization decision", attrs...)
+		logevent.Info(ctx, log, decisionEvent, "authorization decision", attrs...)
 	} else {
-		log.Warn("authorization decision", attrs...)
+		logevent.Warn(ctx, log, decisionEvent, "authorization decision", attrs...)
 	}
 
 	if r.audit == nil {
@@ -222,7 +219,7 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 
 	data, err := json.Marshal(rec)
 	if err != nil {
-		log.Error("failed to marshal audit record", slog.String("error", err.Error()))
+		logevent.Error(ctx, log, logevent.AuditMarshalFailure, "failed to marshal audit record", slog.String("error", err.Error()))
 		if cfg.AuditEnforced() {
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, err)
 		}
@@ -231,14 +228,14 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 
 	if cfg.AuditEnforced() {
 		if werr := r.audit.WriteRecord(ctx, data); werr != nil {
-			log.Error("failed to write audit record", slog.String("error", werr.Error()))
+			logevent.Error(ctx, log, logevent.AuditWriteFailure, "failed to write audit record", slog.String("error", werr.Error()))
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, werr)
 		}
 		return nil
 	}
 
 	if werr := r.audit.BufferRecord(data); werr != nil {
-		log.Error("failed to buffer audit record", slog.String("error", werr.Error()))
+		logevent.Error(ctx, log, logevent.AuditBufferFailure, "failed to buffer audit record", slog.String("error", werr.Error()))
 	}
 	return nil
 }

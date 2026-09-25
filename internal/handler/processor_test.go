@@ -310,7 +310,7 @@ func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted), "want ErrRoleNotPermitted, got %v", err)
 	assert.Empty(t, fc.assumed, "FAIL-OPEN: credentials minted after the role-tag read failed")
-	assert.Contains(t, buf.String(), "could not read role tags", "the read failure must be visible in the log stream")
+	assert.Contains(t, buf.String(), `"eventType":"authz.tag_auth.lookup_failure"`, "the read failure must be visible in the log stream")
 	assert.Contains(t, buf.String(), "AccessDenied: iam:GetRole", "the underlying AWS error must be reported")
 }
 
@@ -347,7 +347,7 @@ func TestProcessRequest_TagAuthAuditRecordsMatchedVia(t *testing.T) {
 	assert.Equal(t, "tag-auth", rec["matchedVia"])
 	assert.Equal(t, "rid-tagauth", rec["requestId"])
 	assert.Equal(t, "arn:aws:iam::111111111111:role/app", rec["grantedRole"])
-	assert.True(t, strings.Contains(buf.String(), "Authorized via role tags"),
+	assert.True(t, strings.Contains(buf.String(), `"eventType":"authz.tag_auth.success"`),
 		"the tag-auth grant must be distinguishable in the log stream too")
 }
 

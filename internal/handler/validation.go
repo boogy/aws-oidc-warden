@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 )
 
@@ -38,10 +37,8 @@ func ValidateRequestData(token, role string) error {
 	return validateRole(role)
 }
 
-// decodeRequestBody bounds and decodes a JSON request body. onDecodeErr, when
-// non-nil, is called with the unmarshal error before it is translated to
-// ErrInvalidJSON.
-func decodeRequestBody(body string, onDecodeErr func(error)) (*RequestData, error) {
+// decodeRequestBody bounds and decodes a JSON body; returns ErrInvalidJSON on failure.
+func decodeRequestBody(body string) (*RequestData, error) {
 	if strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("request body is empty: %w", ErrInvalidJSON)
 	}
@@ -51,9 +48,6 @@ func decodeRequestBody(body string, onDecodeErr func(error)) (*RequestData, erro
 
 	var data RequestData
 	if err := json.Unmarshal([]byte(body), &data); err != nil {
-		if onDecodeErr != nil {
-			onDecodeErr(err)
-		}
 		return nil, fmt.Errorf("invalid JSON format: %w", ErrInvalidJSON)
 	}
 	return &data, nil
@@ -63,7 +57,7 @@ func decodeRequestBody(body string, onDecodeErr func(error)) (*RequestData, erro
 // In delegated mode the JWT is validated by an upstream service; only the role
 // ARN must be present in the request body.
 func ParseRoleOnlyRequestBody(body string) (*RequestData, error) {
-	data, err := decodeRequestBody(body, nil)
+	data, err := decodeRequestBody(body)
 	if err != nil {
 		return nil, err
 	}
@@ -75,12 +69,7 @@ func ParseRoleOnlyRequestBody(body string) (*RequestData, error) {
 
 // ParseRequestBody parses and validates JSON request body into RequestData
 func ParseRequestBody(body string) (*RequestData, error) {
-	data, err := decodeRequestBody(body, func(err error) {
-		// No body preview: a malformed body may still contain a (partial) bearer token.
-		slog.Error("Failed to unmarshal request body",
-			slog.String("error", err.Error()),
-			slog.Int("bodyBytes", len(body)))
-	})
+	data, err := decodeRequestBody(body)
 	if err != nil {
 		return nil, err
 	}

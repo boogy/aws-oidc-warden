@@ -11,6 +11,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	s3logger "github.com/boogy/aws-oidc-warden/internal/s3logger"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
@@ -52,30 +53,34 @@ type Bootstrap struct {
 	Cache     cache.Cache
 	S3Logger  *s3logger.S3Logger
 	Logger    *slog.Logger
+	Adapter   string
 }
 
-// NewBootstrap initializes all common components needed by Lambda handlers
-func NewBootstrap() (*Bootstrap, error) {
+// NewBootstrap initializes all common components needed by Lambda handlers.
+// adapter names the deploying binary and is stamped on every log line.
+func NewBootstrap(adapter string) (*Bootstrap, error) {
 	versionInfo := version.Get()
+	ctx := context.Background()
 
-	logger := initializeLogger()
+	logger := initializeLogger(adapter)
 
-	logger.Info(
-		fmt.Sprintf("Starting %s", versionInfo.BinName),
-		slog.String("version", versionInfo.Version),
+	logevent.Info(ctx, logger, logevent.AppStart, "starting service",
+		slog.String("binName", versionInfo.BinName),
 		slog.String("commit", versionInfo.Commit),
 		slog.String("date", versionInfo.Date),
 	)
 
 	cfg, err := config.NewConfig()
 	if err != nil {
-		logger.Error("Failed to load configuration", slog.String("error", err.Error()))
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
+			slog.String("component", "config"), slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
 	jwksCache, err := cache.NewCache(cfg)
 	if err != nil {
-		logger.Error("Failed to initialize cache", slog.String("error", err.Error()))
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
+			slog.String("component", "cache"), slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
@@ -83,7 +88,8 @@ func NewBootstrap() (*Bootstrap, error) {
 
 	provider, err := buildConfigProvider(cfg, consumer)
 	if err != nil {
-		logger.Error("Failed to load remote configuration", slog.String("error", err.Error()))
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
+			slog.String("component", "remote_config"), slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to load remote configuration: %w", err)
 	}
 
@@ -100,11 +106,12 @@ func NewBootstrap() (*Bootstrap, error) {
 	// change); delegated extractors still read live config per Extract() call.
 	extractor, err := newClaimsExtractor(provider, tokenValidator)
 	if err != nil {
-		logger.Error("Failed to create claims extractor", slog.String("error", err.Error()))
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
+			slog.String("component", "claims_extractor"), slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to create claims extractor: %w", err)
 	}
 	if cfg.JWTValidation.Mode != "self" {
-		logger.Warn("JWT validation delegated to upstream",
+		logevent.Warn(ctx, logger, logevent.ConfigJWTValidationDelegated, "jwt validation delegated to upstream",
 			slog.String("mode", cfg.JWTValidation.Mode))
 	}
 	warmJWKSCache(cfg.JWTValidation.Mode, tokenValidator)
@@ -118,6 +125,7 @@ func NewBootstrap() (*Bootstrap, error) {
 		Cache:     jwksCache,
 		S3Logger:  s3log,
 		Logger:    logger,
+		Adapter:   adapter,
 	}, nil
 }
 
@@ -179,7 +187,8 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 		}
 		defer func() {
 			if cerr := body.Close(); cerr != nil {
-				slog.Error("Failed to close S3 configuration object", slog.String("error", cerr.Error()))
+				logevent.Warn(ctx, nil, logevent.AppResourceCloseFailure, "failed to close resource",
+					slog.String("resource", "s3_config_object"), slog.String("error", cerr.Error()))
 			}
 		}()
 		return io.ReadAll(io.LimitReader(body, maxRemoteConfigSize))
@@ -192,8 +201,8 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 	}
 
 	if cfg.ConfigReloadInterval > 0 {
-		slog.Info("Configuration hot-reload enabled",
-			slog.Duration("interval", cfg.ConfigReloadInterval),
+		logevent.Info(context.Background(), nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled",
+			slog.Int64("intervalMs", cfg.ConfigReloadInterval.Milliseconds()),
 			slog.String("bucket", bucket),
 			slog.String("key", key))
 	}
@@ -204,33 +213,31 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 // maxRemoteConfigSize bounds the bytes read from the S3 config object.
 const maxRemoteConfigSize = 1024 * 1024 // 1MB
 
-// Cleanup stops the S3 logger's batch timer and flushes its buffered audit records.
+// Cleanup flushes buffered audit records and stops the S3 logger's batch timer.
 func (b *Bootstrap) Cleanup() {
+	ctx := context.Background()
 	if err := b.S3Logger.Close(); err != nil {
-		b.Logger.Error("Failed to flush audit records to S3", slog.String("error", err.Error()))
+		logevent.Error(ctx, b.Logger, logevent.AuditFlushFailure, "failed to flush audit records",
+			slog.String("error", err.Error()))
 	}
+	logevent.Info(ctx, b.Logger, logevent.AppStop, "service stopped")
 }
 
-// initializeLogger sets up the global logger with proper configuration
-func initializeLogger() *slog.Logger {
+// initializeLogger installs the adapter-stamped JSON logger as slog's default.
+func initializeLogger(adapter string) *slog.Logger {
 	var programLevel = new(slog.LevelVar)
 	programLevel.Set(slog.LevelInfo)
 
-	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel != "" {
+	logger := logevent.Setup(os.Stdout, programLevel, adapter)
+
+	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		if level, err := utils.ParseLogLevel(logLevel); err == nil {
 			programLevel.Set(level)
 		} else {
-			slog.Warn("invalid LOG_LEVEL, defaulting to Info", "level", logLevel, "error", err)
+			logevent.Warn(context.Background(), logger, logevent.ConfigEnvInvalid, "invalid LOG_LEVEL, defaulting to info",
+				slog.String("value", logLevel), slog.String("error", err.Error()))
 		}
 	}
-
-	logHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: programLevel,
-	})
-
-	logger := slog.New(logHandler)
-	slog.SetDefault(logger)
 
 	return logger
 }
@@ -238,7 +245,8 @@ func initializeLogger() *slog.Logger {
 // validateAdapterMode panics at startup when the configured jwt_validation.mode
 // is incompatible with the deployed adapter binary. Prevents silent per-request
 // failures caused by a mismatched extractor (e.g. mode=apigw deployed as apigateway).
-func validateAdapterMode(adapterName, mode string, allowed ...string) {
+func validateAdapterMode(bootstrap *Bootstrap, allowed ...string) {
+	mode := bootstrap.Config.JWTValidation.Mode
 	if mode == "" {
 		mode = "self"
 	}
@@ -249,30 +257,30 @@ func validateAdapterMode(adapterName, mode string, allowed ...string) {
 	}
 	panic(fmt.Sprintf(
 		"adapter %q requires jwt_validation.mode in %v, got %q; deploy the correct binary or update the config",
-		adapterName, allowed, mode,
+		bootstrap.Adapter, allowed, mode,
 	))
 }
 
 // NewAwsApiGatewayFromBootstrap creates a new API Gateway handler using bootstrap
 func NewAwsApiGatewayFromBootstrap(bootstrap *Bootstrap) *AwsApiGateway {
-	validateAdapterMode("apigateway", bootstrap.Config.JWTValidation.Mode, "self")
+	validateAdapterMode(bootstrap, "self")
 	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
 }
 
 // NewAwsLambdaUrlFromBootstrap creates a new Lambda URL handler using bootstrap
 func NewAwsLambdaUrlFromBootstrap(bootstrap *Bootstrap) *AwsLambdaUrl {
-	validateAdapterMode("lambdaurl", bootstrap.Config.JWTValidation.Mode, "self")
+	validateAdapterMode(bootstrap, "self")
 	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
 }
 
 // NewAwsApplicationLoadBalancerFromBootstrap creates a new ALB handler using bootstrap
 func NewAwsApplicationLoadBalancerFromBootstrap(bootstrap *Bootstrap) *AwsApplicationLoadBalancer {
-	validateAdapterMode("alb", bootstrap.Config.JWTValidation.Mode, "alb", "self")
+	validateAdapterMode(bootstrap, "alb", "self")
 	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
 }
 
 // NewAwsApiGatewayV2FromBootstrap creates a new HTTP API v2 handler using bootstrap
 func NewAwsApiGatewayV2FromBootstrap(bootstrap *Bootstrap) *AwsApiGatewayV2 {
-	validateAdapterMode("apigatewayv2", bootstrap.Config.JWTValidation.Mode, "apigw")
+	validateAdapterMode(bootstrap, "apigw")
 	return NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
 }

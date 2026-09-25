@@ -452,7 +452,7 @@ func TestProcessor_DurationsAreMilliseconds(t *testing.T) {
 
 	out := buf.String()
 	assert.Contains(t, out, `"validationMs":`)
-	assert.Contains(t, out, `"totalMs":`)
+	assert.Contains(t, out, `"processingMs":`)
 	assert.NotContains(t, out, `"validationTime":`, "nanosecond duration must be gone")
 	assert.NotContains(t, out, `"totalTime":`, "nanosecond duration must be gone")
 }
@@ -981,13 +981,12 @@ func TestAudit_GetSessionPolicyDebug_UsesRequestLoggerAndHonoursClaimGate(t *tes
 			require.NoError(t, err)
 
 			out := buf.String()
-			// Both debug sites must reach the captured request logger. If either
-			// regresses to the package-level slog these disappear from buf and
-			// the claim-value assertions below stop guarding anything.
-			assert.Contains(t, out, "getSessionPolicy operation completed",
-				"the deferred timing line must be emitted via the request logger")
-			assert.Contains(t, out, "Using inline session policy",
-				"the inline-policy line must be emitted via the request logger")
+			// Must hit the captured logger, or the claim-value assertions below guard nothing.
+			assert.Contains(t, out, `"eventType":"policy.session.loaded"`,
+				"the session-policy debug line must be emitted via the request logger")
+			assert.Contains(t, out, `"source":"inline"`,
+				"the inline-policy branch must be distinguishable from S3")
+			assert.Contains(t, out, `"durationMs":`, "the load timing must be carried on the outcome line")
 			assert.Contains(t, out, "req-policy-debug", "request-scoped logs must carry the requestId")
 
 			if tc.logClaimValues {

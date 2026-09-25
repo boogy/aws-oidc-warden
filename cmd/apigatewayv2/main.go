@@ -9,7 +9,7 @@ var bootstrap *handler.Bootstrap
 
 func init() {
 	var err error
-	bootstrap, err = handler.NewBootstrap()
+	bootstrap, err = handler.NewBootstrap("apigatewayv2")
 	if err != nil {
 		panic(err)
 	}

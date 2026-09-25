@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/google/uuid"
 )
 
@@ -88,26 +89,18 @@ func newRequestContext(ctx context.Context, frontendID, directIP string, headers
 	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
 	ctx = context.WithValue(ctx, UserAgentContextKey, userAgent)
 
+	// Carries request identity for logevent's ctx handler to inject.
+	ctx = logevent.WithRequest(ctx, logevent.Request{
+		ID:           requestID,
+		FrontendID:   frontendRequestID,
+		SourceIP:     sourceIP,
+		SourceIPFrom: sourceIPFrom,
+	})
+
 	return context.WithTimeout(ctx, DefaultTimeout)
 }
 
-// requestLogger appends the request-tracking attrs shared by every adapter to
-// the adapter's own event-specific attrs. Empty values are omitted rather than
-// bound empty.
-//
-// slog.With, not a struct field: no adapter has a logger field; all four build
-// from the default, which bootstrap points at the JSON handler.
-func requestLogger(ctx context.Context, attrs ...any) *slog.Logger {
-	if v, _ := ctx.Value(FrontendRequestIDContextKey).(string); v != "" {
-		attrs = append(attrs, slog.String("frontendRequestId", v))
-	}
-	if v, _ := ctx.Value(SourceIPContextKey).(string); v != "" {
-		attrs = append(attrs, slog.String("sourceIp", v))
-	}
-	// Only surfaced when not the platform-attested value, so an anomaly is
-	// visible without a constant "sourceIpFrom=frontend" on every line.
-	if v, _ := ctx.Value(SourceIPSourceContextKey).(string); v != "" && v != ipSourceFrontend {
-		attrs = append(attrs, slog.String("sourceIpFrom", v))
-	}
+// requestLogger binds adapter attrs; request identity comes from logevent's ctx handler.
+func requestLogger(attrs ...any) *slog.Logger {
 	return slog.With(attrs...)
 }
