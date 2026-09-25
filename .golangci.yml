@@ -8,7 +8,26 @@ linters:
   default: standard
   enable:
     - bodyclose
+    - forbidigo
     - misspell
+  settings:
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^slog\.(Debug|Info|Warn|Error)(Context)?$'
+          pkg: '^log/slog$'
+          msg: 'log through internal/logevent, not slog directly'
+        - pattern: '^slog\.Logger\.(Debug|Info|Warn|Error)(Context)?$'
+          pkg: '^log/slog$'
+          msg: 'log through internal/logevent, not slog directly'
+  exclusions:
+    rules:
+      - path: internal/logevent/
+        linters:
+          - forbidigo
+      - path: _test\.go
+        linters:
+          - forbidigo
 
 formatters:
   enable:

@@ -235,7 +235,7 @@ func initializeLogger(adapter string) *slog.Logger {
 			programLevel.Set(level)
 		} else {
 			logevent.Warn(context.Background(), logger, logevent.ConfigEnvInvalid, "invalid LOG_LEVEL, defaulting to info",
-				slog.String("value", logLevel), slog.String("error", err.Error()))
+				slog.String("key", "LOG_LEVEL"), slog.String("value", logLevel), slog.String("error", err.Error()))
 		}
 	}
 

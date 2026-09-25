@@ -298,10 +298,10 @@ type AwsConsumerInterface interface {
 
 **Session Tags Applied:**
 
-Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request:
+Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(ctx, rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request:
 
 ```go
-func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag
+func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) []types.Tag
 ```
 
 A typical GitHub `session_tags` spec (`repo: repository`, `actor: actor`, `ref: ref`, ...) produces the same shape of tags v1 hardcoded, but any issuer can define its own key set from its own raw claims (see [SESSION_TAGGING.md](SESSION_TAGGING.md)). Invalid keys/values are skipped and logged, never sanitized — a tag an ABAC policy sees always carries the exact verified claim value. The list is deterministic (sorted by key) and capped at 50 tags.
@@ -597,7 +597,7 @@ If your threat model requires hard replay prevention, put a short-lived, single-
 
 ### 1. Caching Performance
 
-JWKS documents change rarely (issuer key rotations), so with any backend and a sane `cache.ttl` nearly every request is served from cache; only cold starts and key rotations pay the upstream fetch. In `self` mode even the cold start is usually covered: `NewBootstrap()` warm-prefetches every configured issuer's JWKS during Lambda INIT (best-effort, 3s-bounded), so the first request normally finds the key already cached. A slow or unreachable issuer is abandoned at the timeout and fetched inline on first use. Relative cost per lookup:
+JWKS documents change rarely (issuer key rotations), so with any backend and a sane `cache.ttl` nearly every request is served from cache; only cold starts and key rotations pay the upstream fetch. In `self` mode even the cold start is usually covered: `NewBootstrap` warm-prefetches every configured issuer's JWKS during Lambda INIT (best-effort, 3s-bounded), so the first request normally finds the key already cached. A slow or unreachable issuer is abandoned at the timeout and fetched inline on first use. Relative cost per lookup:
 
 - Memory: in-process map access (fastest; lost on container recycle)
 - DynamoDB: one-digit-millisecond network hop, shared across containers

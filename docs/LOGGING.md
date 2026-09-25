@@ -1,8 +1,8 @@
 # Logging, audit & observability
 
-The service emits structured `slog` JSON to stdout (CloudWatch) and, when enabled, a durable per-decision audit trail to S3. **No path logs a raw JWT or credential.**
+The service emits structured JSON log events (`internal/logevent`, backed by `slog.NewJSONHandler`) to stdout (CloudWatch) and, when enabled, a durable per-decision audit trail to S3. **No path logs a raw JWT or credential.**
 
-**Every authorization decision — allow _and_ deny — is always logged** as one standardized `slog` line, emitted before and independently of any S3 write. In Lambda that stream lands in CloudWatch Logs, which is itself durable, so the decision trail is never off. `log_to_s3` and `audit_required` add a _second_, S3-based trail on top of that baseline; they do not switch decision logging on or off.
+**Every authorization decision — allow _and_ deny — is always logged** as one standardized `authz.decision` line, emitted before and independently of any S3 write. In Lambda that stream lands in CloudWatch Logs, which is itself durable, so the decision trail is never off. `log_to_s3` and `audit_required` add a _second_, S3-based trail on top of that baseline; they do not switch decision logging on or off.
 
 All output is JSON (`slog.NewJSONHandler` is the only handler constructed anywhere in the service, enforced by `TestLogOutputIsJSON` / `TestBootstrapLoggerIsJSONHandler`), so a downstream parser can rely on every line being valid JSON. Records are built with `encoding/json`, which escapes control characters — a claim value containing newlines cannot forge a log line or break the record.
 
@@ -10,13 +10,113 @@ All output is JSON (`slog.NewJSONHandler` is the only handler constructed anywhe
 
 | Section                                                                     | Contents                                             |
 | --------------------------------------------------------------------------- | ---------------------------------------------------- |
+| [Log schema](#log-schema)                                                   | Base keys, `outcome` rules, level policy             |
+| [Event catalog](#event-catalog)                                             | Every registered event: type, level, key attrs       |
 | [Knobs](#knobs)                                                             | The config keys, and the `log_level` trap            |
 | [Decision log & audit record fields](#decision-log--audit-record-fields)    | Exhaustive field reference for both surfaces         |
 | [What `claims` contains](#what-claims-contains)                             | Why `github` gets a full dump and others don't       |
 | [Source IP trust model](#source-ip-trust-model)                             | Per-frontend attestation; the ALB rules              |
 | [The durable trail & `audit_required`](#the-durable-trail--audit_required)  | Batched vs. fail-closed, and how enforcement engages |
 | [Production hardening recommendation](#production-hardening-recommendation) | What to set for a security-sensitive deployment      |
-| [SIEM signals & alerts](#security-signals-for-siem)                         | What to watch                                        |
+| [SIEM signals & alerts](#security-signals-for-siem)                         | What to watch, as Logs Insights queries              |
+
+## Log schema
+
+Every log line carries a base set of keys (from `internal/logevent.Setup` and the request context) plus the event's own attrs.
+
+| Key                                                        | Source                            | Notes                                                                                 |
+| ----------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------- |
+| `time`, `level`, `msg`                                     | `slog`                             | `msg` is a static string, never interpolated — look up detail in the event's attrs     |
+| `eventType`                                                | catalog event                      | dot-separated, e.g. `sts.assume_role.failure` — the stable field to query and alert on |
+| `eventCategory`                                             | catalog event                      | `eventType`'s first segment, e.g. `sts`                                               |
+| `outcome`                                                  | catalog event                      | `success`/`failure` when the event type ends in one of those; `allow`/`deny` on `authz.decision` only; absent otherwise |
+| `service`, `version`, `adapter`, `schemaVersion`           | `internal/logevent.Setup`          | `service="aws-oidc-warden"`; `adapter` is `apigateway`\|`apigatewayv2`\|`alb`\|`lambdaurl`\|`local`; `schemaVersion=1` |
+| `requestId`, `frontendRequestId`, `sourceIp`, `sourceIpFrom` | request context (`logevent.WithRequest`) | Present once a request context exists; see [Decision log & audit record fields](#decision-log--audit-record-fields) |
+
+**Level policy:**
+
+- **Error** — server-side fault needing operator action: STS/S3/IAM failures, JWKS fetch/discovery failure, invalid cache item, audit write/marshal/buffer failure, config reload failure, startup failure.
+- **Warn** — security-relevant or degraded-but-serving: `authz.decision` deny, `request.rejected`, JWKS refetch rate-limited/prefetch failure, config warnings, STS name/duration clamps and dropped session tags, oversized S3/cache objects.
+- **Info** — lifecycle and successful state changes: `authz.decision` allow, `app.start`, successful config reload/AssumeRole/client refresh.
+- **Debug** — per-step pipeline detail, cache traffic, `request.response`.
+
+**One terminal line per request.** Each request emits exactly one of `authz.decision` (the pipeline ran to a decision) or `request.rejected` (rejected before the pipeline, e.g. malformed body). `request.response` is a separate Debug line logged on every response in addition to the terminal line, never a substitute for it.
+
+## Event catalog
+
+Every registered event (`internal/logevent/events_*.go`), grouped by `eventCategory`. Attrs listed are in addition to the base keys above; `authz.decision`'s full attr set is detailed in [Decision log & audit record fields](#decision-log--audit-record-fields).
+
+| eventType | Level | Key attrs |
+| --- | --- | --- |
+| `app.start` | Info | binName, commit, date |
+| `app.stop` | Info | — |
+| `app.init.failure` | Error | component, error |
+| `app.resource_close.failure` | Warn | resource, error |
+| `audit.buffer.failure` | Error | error |
+| `audit.client.init` | Info | bucket |
+| `audit.client.init.failure` | Error | error |
+| `audit.client.unavailable` | Debug | error |
+| `audit.flush.failure` | Error | error |
+| `audit.flush.success` | Debug | bucket, key, bytes |
+| `audit.marshal.failure` | Error | error |
+| `audit.write.failure` | Error | error (s3logger: bucket, key) |
+| `audit.write.success` | Debug | bucket, key, bytes |
+| `authz.decision` | Info (allow) / Warn (deny) | frontend, jwtMode, decision, matchedRole, processingMs, issuer, provider, accountId, sessionName, stage, reason, jwtSub, subject, audience, claims |
+| `authz.stage.deny` | Debug | stage-specific |
+| `authz.tag_auth.lookup_failure` | Warn | error |
+| `authz.tag_auth.success` | Info | — |
+| `aws.clients.refresh.failure` | Error | error |
+| `aws.clients.refresh.start` | Debug | — |
+| `aws.clients.refresh.success` | Info | — |
+| `aws.iam.get_role.failure` | Error | roleName, error |
+| `aws.iam.get_role.success` | Debug | roleName |
+| `aws.s3.get.failure` | Error | bucket, key, error |
+| `aws.s3.get.success` | Debug | bucket, key, sizeBytes |
+| `aws.s3.object.oversize` | Warn | size, maxAllowed, bucket, key |
+| `cache.cleanup.failure` | Warn | backend, key, error |
+| `cache.evict` | Debug | backend, key, lastAccess |
+| `cache.expired` | Debug | backend, key |
+| `cache.hit` | Debug | backend, key |
+| `cache.item.invalid` | Error | backend, key, error |
+| `cache.item.oversize` | Warn | backend, key, maxAllowed, size (write path) |
+| `cache.miss` | Debug | backend, key |
+| `cache.read.failure` | Error | backend, key, error |
+| `cache.set` | Debug | backend, key, ttlMs, size (dynamodb, s3) |
+| `cache.write.failure` | Error | backend, key, error |
+| `config.env.invalid` | Warn | key, value, error |
+| `config.fragments.merged` | Info | fragmentCount, totalMappings |
+| `config.fragments.soft_cap` | Warn | totalMappings, softCap, fragmentCount |
+| `config.hot_reload.enabled` | Info | intervalMs, bucket, key |
+| `config.jwt_validation.delegated` | Warn | mode |
+| `config.reload.failure` | Error | error |
+| `config.reload.success` | Info | roleMappings, fragments |
+| `config.warning` | Warn | warning (stable code) + context, e.g. mappingCount/defaultIssuer/issuerCount |
+| `http.response.failure` | Error | error |
+| `http.response.write_failure` | Warn | error |
+| `http.server.failure` | Error | error |
+| `http.server.start` | Info | port, verifyEndpoint, healthEndpoint |
+| `jwks.alb_key.failure` | Error | kid, region, error |
+| `jwks.discovery.failure` | Error | issuer, error |
+| `jwks.fetch.failure` | Error | issuer, error |
+| `jwks.prefetch.failure` | Warn | issuer, error |
+| `jwks.refetch.forced` | Info | issuer, kid |
+| `jwks.refetch.rate_limited` | Warn | issuer, kid |
+| `policy.session.load.failure` | Error | bucket, key, error |
+| `policy.session.loaded` | Debug | subject, source, bucket, key, policySize, durationMs |
+| `request.rejected` | Warn | reason |
+| `request.response` | Debug (outcome=failure) | errorCode, status, processingMs |
+| `request.response` | Debug (outcome=success) | processingMs |
+| `sts.assume_role.failure` | Error | roleArn, stsErrorCode, error, durationMs |
+| `sts.assume_role.success` | Info | roleArn, durationMs, assumedRoleId |
+| `sts.caller_identity.failure` | Error | error |
+| `sts.duration.clamped` | Warn | requestedSeconds, clampReason |
+| `sts.external_id.suspicious` | Warn | externalIdLength, roleArn |
+| `sts.session_name.truncated` | Warn | original, originalLength |
+| `sts.session_tag.dropped` | Warn | tagKey, claim, dropReason |
+| `sts.spoke.assumed` | Info | roleArn, sessionName, expires |
+| `token.claims` | Debug | claims (gated by `log_claim_values`) |
+| `token.extract` | Debug | jwtMode |
+| `token.validated` | Debug | validationMs |
 
 ## Knobs
 
@@ -35,7 +135,7 @@ All output is JSON (`slog.NewJSONHandler` is the only handler constructed anywhe
 
 ## Decision log & audit record fields
 
-One record per authorization decision, allow **and** deny. The same redacted record backs both surfaces, so the _values_ can never disagree — but the _field sets_ differ:
+One record per authorization decision, allow **and** deny, logged as `eventType = "authz.decision"` (`outcome` is `allow`/`deny`, redundant with the record's own `decision` field). The same redacted record backs both surfaces, so the _values_ can never disagree — but the _field sets_ differ:
 
 - The **CloudWatch decision line** is a queryable subset, plus one synthesized field (`matchedRole`).
 - The **durable S3 record** is the complete record.
@@ -182,18 +282,26 @@ log_bucket: "your-audit-bucket" # object-lock / WORM + restrictive bucket policy
 audit_required: true # deny rather than issue credentials with no audit record
 ```
 
-A lost or unwritten record must fail the request — that is exactly what `audit_required: true` (the default) guarantees, **once a bucket is configured**. Point a CloudWatch alert at `errorCode=audit_write_failed` so a failing sink is paged rather than silently tolerated.
+A lost or unwritten record must fail the request — that is exactly what `audit_required: true` (the default) guarantees, **once a bucket is configured**. Alert on `eventType = "audit.write.failure"` or `"audit.buffer.failure"` so a failing sink is paged rather than silently tolerated.
 
 ## Security signals (for SIEM)
 
-Warn/error lines carry context (never secrets) for: unknown/unconfigured issuer, signature failure, algorithm/key-type mismatch, expired / `nbf` / max-age rejection, audience mismatch, condition failure (by claim name + match result), oversized token, forced JWKS refetch (and cooldown-suppressed storms), fragment-rejected keys, account-not-allowed, and assume-role failure.
+Warn/Error lines carry context (never secrets). Query these by `eventType` (see the [Event catalog](#event-catalog)):
+
+- Unknown/unconfigured issuer, signature failure, algorithm/key-type mismatch, expired/`nbf`/max-age rejection, audience mismatch, condition failure, account-not-allowed → `authz.decision` with `outcome = "deny"` (inspect `stage`/`reason`)
+- Oversized token or cache/JWKS object → `cache.item.oversize`, `aws.s3.object.oversize`
+- Forced JWKS refetch, and cooldown-suppressed storms → `jwks.refetch.forced`, `jwks.refetch.rate_limited`
+- Assume-role failure → `sts.assume_role.failure` (carries `stsErrorCode`)
 
 ## Suggested CloudWatch alerts
 
-| Alert on                                        | Why                                                                                                                                               |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Spike in `decision=deny` with `stage=authorize` | Misconfigured mappings, or an attack                                                                                                              |
-| Any `errorCode=audit_write_failed`              | Audit sink unavailable under `audit_required`                                                                                                     |
-| Any `errorCode=assume_role_denied`              | A target role's trust policy is refusing, or the execution role is missing `sts:AssumeRole`/`sts:TagSession`. The log line carries `stsErrorCode` |
-| Rising forced-JWKS-refetch rate                 | Possible bogus-`kid` flooding                                                                                                                     |
-| `matchedVia=tag-auth` where you expect none     | Credentials issued through the tag-auth fallback (S3 record only)                                                                                 |
+CloudWatch Logs Insights queries, filtered on `eventType` (and `outcome` where relevant). **Lambda must set `LoggingConfig.LogFormat = "JSON"`** so these become structured fields — the app already emits JSON either way, but without that setting Lambda re-wraps each line as a string field and the query below won't see `eventType` directly.
+
+| Query | Why |
+| --- | --- |
+| `filter eventType = "authz.decision" and outcome = "deny" and stage = "authorize"` | Misconfigured mappings, or an attack |
+| `filter eventType = "audit.write.failure" or eventType = "audit.buffer.failure"` | Audit sink unavailable under `audit_required` |
+| `filter eventType = "sts.assume_role.failure"` | A target role's trust policy is refusing, or the execution role is missing `sts:AssumeRole`/`sts:TagSession`. Carries `stsErrorCode` |
+| `filter eventType = "jwks.refetch.forced"` (rate of occurrence, rising) | Possible bogus-`kid` flooding |
+
+`matchedVia = "tag-auth"` (credentials issued through the tag-auth fallback) is S3-record-only — it is not on the CloudWatch decision line — so alert on it against the durable trail (e.g. Athena over the S3 objects), not Logs Insights.
