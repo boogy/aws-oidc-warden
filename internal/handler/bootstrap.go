@@ -204,10 +204,10 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 // maxRemoteConfigSize bounds the bytes read from the S3 config object.
 const maxRemoteConfigSize = 1024 * 1024 // 1MB
 
-// Cleanup flushes the S3 logger's buffered audit records.
+// Cleanup stops the S3 logger's batch timer and flushes its buffered audit records.
 func (b *Bootstrap) Cleanup() {
-	if err := b.S3Logger.Flush(); err != nil {
-		b.Logger.Error("Failed to flush logs to S3", slog.String("error", err.Error()))
+	if err := b.S3Logger.Close(); err != nil {
+		b.Logger.Error("Failed to flush audit records to S3", slog.String("error", err.Error()))
 	}
 }
 

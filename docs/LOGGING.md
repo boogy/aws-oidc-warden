@@ -154,12 +154,12 @@ Verifying the JWT does not make that header trustworthy: token verification auth
 
 Two modes, and the switch between them is **not** `audit_required` alone:
 
-|                  | `audit_required=false`                                                                              | `audit_required=true` _and_ `log_to_s3` + `log_bucket` set                          |
-| ---------------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Write path       | Appended to the amortized batch buffer (the one `BufferRecord` feeds)                               | Written **synchronously**, bypassing the buffer, **before** the credential response |
-| Flush trigger    | Size (`BatchSize`), age (`MaxBatchAge`), or `Cleanup()`                                             | n/a                                                                                 |
-| On write failure | Logged; request proceeds                                                                            | **Request is denied** (fail-closed)                                                 |
-| Durability       | **Records can be lost at container reclaim** — the flush timer is frozen between Lambda invocations | Guaranteed before credentials are issued                                            |
+|                  | `audit_required=false`                                                                                          | `audit_required=true` _and_ `log_to_s3` + `log_bucket` set                          |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Write path       | Appended to the amortized batch buffer (the one `BufferRecord` feeds)                                           | Written **synchronously**, bypassing the buffer, **before** the credential response |
+| Flush trigger    | Size (`BatchSize`), age (`MaxBatchAge`), or container shutdown (SIGTERM → `Cleanup()`)                          | n/a                                                                                 |
+| On write failure | Logged; request proceeds                                                                                        | **Request is denied** (fail-closed)                                                 |
+| Durability       | **Best-effort** — flushed on SIGTERM within Lambda's ~500 ms shutdown window; a crash or slow S3 PUT loses them | Guaranteed before credentials are issued                                            |
 
 Treat container-shutdown flushing as a best-effort backstop only.
 

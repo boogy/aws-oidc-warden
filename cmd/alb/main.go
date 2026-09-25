@@ -16,12 +16,9 @@ func init() {
 }
 
 func main() {
-	// Ensure cleanup happens when the function exits
-	defer bootstrap.Cleanup()
-
 	// Create the ALB handler
 	albHandler := handler.NewAwsApplicationLoadBalancerFromBootstrap(bootstrap)
 
 	// Start the Lambda function
-	lambda.Start(albHandler.Handler)
+	lambda.StartWithOptions(albHandler.Handler, lambda.WithEnableSIGTERM(bootstrap.Cleanup))
 }

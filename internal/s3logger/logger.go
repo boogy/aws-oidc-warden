@@ -65,8 +65,9 @@ type S3Logger struct {
 	// above is only the boot-time snapshot, which a hot reload can outdate.
 	configSource func() *gtvcfg.Config
 	s3Client     s3ClientInterface
-	// initMu guards s3Client and batchTimer. Never acquire mu while holding it.
+	// initMu guards s3Client, batchTimer and closed. Never acquire mu while holding it.
 	initMu sync.Mutex
+	closed bool
 	// clientFactory builds the S3 client; indirected so lazy init is testable
 	// without reaching AWS.
 	clientFactory func(context.Context) (s3ClientInterface, error)
@@ -219,7 +220,7 @@ func (l *S3Logger) ensureBestEffortClient() bool {
 // startBatchTimerLocked starts the batch-flush timer if not already running.
 // Caller must hold initMu.
 func (l *S3Logger) startBatchTimerLocked() {
-	if l.batchTimer != nil {
+	if l.batchTimer != nil || l.closed {
 		return
 	}
 	l.batchTimer = time.AfterFunc(l.s3Config.MaxBatchAge, l.onBatchTimer)
@@ -233,6 +234,9 @@ func (l *S3Logger) onBatchTimer() {
 	}
 	l.initMu.Lock()
 	defer l.initMu.Unlock()
+	if l.closed {
+		return
+	}
 	l.batchTimer = time.AfterFunc(l.s3Config.MaxBatchAge, l.onBatchTimer)
 }
 
@@ -401,8 +405,10 @@ func (l *S3Logger) writeObject(parent context.Context, s3Bucket, key string, bod
 // Close stops the batch timer and flushes any remaining logs.
 func (l *S3Logger) Close() error {
 	l.initMu.Lock()
+	l.closed = true
 	if l.batchTimer != nil {
 		l.batchTimer.Stop()
+		l.batchTimer = nil
 	}
 	l.initMu.Unlock()
 

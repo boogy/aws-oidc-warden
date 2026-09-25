@@ -23,7 +23,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 
 ## Conventions
 
-- Entry points construct via `NewBootstrap()` then the matching `New…FromBootstrap`; always `defer bootstrap.Cleanup()`.
+- Entry points construct via `NewBootstrap()` then the matching `New…FromBootstrap`; Lambda mains start with `lambda.StartWithOptions(h.Handler, lambda.WithEnableSIGTERM(bootstrap.Cleanup))` — `lambda.Start` never returns, so a deferred `Cleanup()` never runs.
 - `ClaimsExtractorInterface` is the only way claims enter `ProcessRequest` — never call `validator.Validate()` directly from adapters.
 - In delegated mode, if the upstream injects no claims, `Extract()` returns an error that wraps `ErrTokenValidationFailed` — the bypass-prevention guard.
 - `ParseRoleOnlyRequestBody` must be used by delegated adapters; `ParseRequestBody` requires a non-empty token.

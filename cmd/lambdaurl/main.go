@@ -16,12 +16,9 @@ func init() {
 }
 
 func main() {
-	// Ensure cleanup happens when the function exits
-	defer bootstrap.Cleanup()
-
 	// Create the Lambda URL handler
 	lambdaHandler := handler.NewAwsLambdaUrlFromBootstrap(bootstrap)
 
 	// Start the Lambda function
-	lambda.Start(lambdaHandler.Handler)
+	lambda.StartWithOptions(lambdaHandler.Handler, lambda.WithEnableSIGTERM(bootstrap.Cleanup))
 }

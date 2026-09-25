@@ -16,7 +16,6 @@ func init() {
 }
 
 func main() {
-	defer bootstrap.Cleanup()
 	h := handler.NewAwsApiGatewayV2FromBootstrap(bootstrap)
-	lambda.Start(h.Handler)
+	lambda.StartWithOptions(h.Handler, lambda.WithEnableSIGTERM(bootstrap.Cleanup))
 }

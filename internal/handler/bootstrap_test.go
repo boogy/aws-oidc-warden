@@ -4,12 +4,17 @@ package handler
 // the JWKS warm-up.
 import (
 	"context"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	s3logger "github.com/boogy/aws-oidc-warden/internal/s3logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -230,4 +235,24 @@ func TestWarmJWKSCache_NilValidatorIsSafe(t *testing.T) {
 	assert.NotPanics(t, func() {
 		assert.False(t, warmJWKSCache("self", nil))
 	})
+}
+
+type countingS3 struct{ puts atomic.Int32 }
+
+func (c *countingS3) PutObject(_ context.Context, _ *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+	c.puts.Add(1)
+	return &s3.PutObjectOutput{}, nil
+}
+
+func TestCleanup_FlushesBufferedAuditRecords(t *testing.T) {
+	l := s3logger.NewS3Logger(&config.Config{LogToS3: true, LogBucket: "audit-bucket"})
+	spy := &countingS3{}
+	l.SetS3Client(spy)
+	require.NoError(t, l.BufferRecord([]byte(`{"decision":"allow"}`)))
+	require.Zero(t, spy.puts.Load(), "record must still be buffered before Cleanup")
+
+	b := &Bootstrap{S3Logger: l, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	b.Cleanup()
+
+	assert.Equal(t, int32(1), spy.puts.Load())
 }

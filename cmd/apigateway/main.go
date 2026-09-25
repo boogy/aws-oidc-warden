@@ -16,12 +16,9 @@ func init() {
 }
 
 func main() {
-	// Ensure cleanup happens when the function exits
-	defer bootstrap.Cleanup()
-
 	// Create the API Gateway handler
 	apiHandler := handler.NewAwsApiGatewayFromBootstrap(bootstrap)
 
 	// Start the Lambda function
-	lambda.Start(apiHandler.Handler)
+	lambda.StartWithOptions(apiHandler.Handler, lambda.WithEnableSIGTERM(bootstrap.Cleanup))
 }

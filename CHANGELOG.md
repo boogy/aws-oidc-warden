@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Unbounded log buffer in warm Lambda containers.** `initializeLogger` teed every log line into an in-memory `bytes.Buffer` meant to be flushed to S3 by `Bootstrap.Cleanup()`, but `Cleanup()` is `defer`red after `lambda.Start`, which never returns for the life of the container — so the buffer grew without bound and its contents never reached S3. Logs now go to stdout (CloudWatch) only; S3 keeps carrying the per-decision audit record instead.
+- **Buffered audit records lost at container shutdown.** With `audit_required` off, decisions batched for S3 were flushed only by size or age — the age timer is frozen between invocations and `Cleanup()` never ran, so a reclaimed container dropped its pending batch. The Lambda mains now start with `lambda.WithEnableSIGTERM(bootstrap.Cleanup)`, which registers an internal extension so the platform sends SIGTERM before shutdown; `Cleanup()` stops the batch timer — which can no longer re-arm itself after `S3Logger.Close()` — and flushes. Still best-effort (~500 ms window); `audit_required` remains the durable path.
 
 ## [3.4.1] - 2026-09-18
 
