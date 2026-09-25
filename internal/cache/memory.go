@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -41,7 +42,7 @@ func NewMemoryCache(opts ...MemoryCacheOption) Cache {
 	return c
 }
 
-func (c *memoryCache) Get(key string) (*types.JWKS, bool) {
+func (c *memoryCache) Get(_ context.Context, key string) (*types.JWKS, bool) {
 	value, lookup := c.local.get(key)
 	switch lookup {
 	case localMiss:
@@ -56,7 +57,7 @@ func (c *memoryCache) Get(key string) (*types.JWKS, bool) {
 	return value, true
 }
 
-func (c *memoryCache) Set(key string, value *types.JWKS, ttl time.Duration) {
+func (c *memoryCache) Set(_ context.Context, key string, value *types.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = c.local.defaultTTL
 	}

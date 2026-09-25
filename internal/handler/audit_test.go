@@ -1088,7 +1088,7 @@ type leakyConsumer struct {
 	assumeErr error
 }
 
-func (l *leakyConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, _ *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
+func (l *leakyConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, _ *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
 	if l.assumeErr != nil {
 		return nil, l.assumeErr
 	}

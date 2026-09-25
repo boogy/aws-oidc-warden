@@ -86,7 +86,7 @@ The mode also changes **what the caller sends on the wire** — because it chang
 
 ## 3. The self-mode pipeline
 
-`Validate(tokenString)` runs these steps in order. Each is fail-closed.
+`Validate(ctx, tokenString)` runs these steps in order. Each is fail-closed.
 
 ```
 0. Length guard        reject tokens larger than max_token_bytes (default 8 KB) before ANY parsing

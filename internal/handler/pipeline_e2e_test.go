@@ -49,21 +49,22 @@ type vRecorder struct {
 	tagAuthCalled int
 }
 
-func (f *vRecorder) ReadS3Configuration() error { return nil }
-func (f *vRecorder) GetS3Object(string, string) (io.ReadCloser, error) {
+func (f *vRecorder) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	f.getS3Called++
 	if f.s3Err != nil {
 		return nil, f.s3Err
 	}
 	return io.NopCloser(stringReader(f.s3Body)), nil
 }
-func (f *vRecorder) GetRole(string) (*awsiam.GetRoleOutput, error) { return nil, nil }
-func (f *vRecorder) GetRoleTags(string) (map[string]string, error) {
+func (f *vRecorder) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) { return nil, nil }
+func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, error) {
 	f.tagAuthCalled++
 	return f.tags, f.tagsErr
 }
-func (f *vRecorder) IsTargetAccountAllowed(string) (bool, error) { return f.allowAccount, nil }
-func (f *vRecorder) AssumeRole(roleARN, _ string, policy *string, _ *int32, _ *types.Claims, spec map[string]string) (*ststypes.Credentials, error) {
+func (f *vRecorder) IsTargetAccountAllowed(context.Context, string) (bool, error) {
+	return f.allowAccount, nil
+}
+func (f *vRecorder) AssumeRole(_ context.Context, roleARN, _ string, policy *string, _ *int32, _ *types.Claims, spec map[string]string) (*ststypes.Credentials, error) {
 	f.assumeCalls++
 	f.assumedRole = roleARN
 	f.gotPolicy = policy

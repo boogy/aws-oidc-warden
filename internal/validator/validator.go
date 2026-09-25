@@ -57,7 +57,7 @@ var (
 // exported on the concrete *TokenValidator for tests and WarmPrefetch, but
 // are an unscoped, audience-less path, not a standalone validation entry point.
 type TokenValidatorInterface interface {
-	Validate(string) (*types.Claims, error)
+	Validate(ctx context.Context, tokenString string) (*types.Claims, error)
 }
 
 // issuerSpec is the immutable, per-issuer view of config.IssuerConfig used on
@@ -215,7 +215,7 @@ func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
 			return
 		default:
 		}
-		if _, err := t.fetchJWKS(spec, false); err != nil {
+		if _, err := t.fetchJWKS(ctx, spec, false); err != nil {
 			slog.Warn("JWKS warm-prefetch failed; will fetch on first request",
 				slog.String("issuer", spec.Issuer), slog.String("error", err.Error()))
 		}
@@ -223,8 +223,8 @@ func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
 }
 
 // Validate implements the self-mode verification flow.
-func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
-	return t.validateWith(t.currentConfig(), tokenString)
+func (t *TokenValidator) Validate(ctx context.Context, tokenString string) (*types.Claims, error) {
+	return t.validateWith(ctx, t.currentConfig(), tokenString)
 }
 
 // validateWith is Validate against an explicit config generation, so a caller
@@ -232,7 +232,7 @@ func (t *TokenValidator) Validate(tokenString string) (*types.Claims, error) {
 // that same generation rather than a second, possibly-reloaded provider read.
 // Unexported: an internal seam for SelfExtractor, not a second public entry
 // point, so every existing mock of TokenValidatorInterface stays valid.
-func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*types.Claims, error) {
+func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, tokenString string) (*types.Claims, error) {
 	maxTokenBytes := cfg.MaxTokenBytes
 	if maxTokenBytes <= 0 {
 		maxTokenBytes = defaultMaxTokenBytes
@@ -278,7 +278,7 @@ func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*
 	)
 
 	// Step 4: verify signature against this issuer's cached JWKS.
-	jwks, err := t.fetchJWKS(spec, false)
+	jwks, err := t.fetchJWKS(ctx, spec, false)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func (t *TokenValidator) validateWith(cfg *config.Config, tokenString string) (*
 		if t.refetch.allow(spec.Issuer, kid) {
 			slog.Info("signing key not found in cached JWKS; refetching",
 				slog.String("issuer", spec.Issuer), slog.String("kid", kid))
-			if jwks, err = t.fetchJWKS(spec, true); err != nil {
+			if jwks, err = t.fetchJWKS(ctx, spec, true); err != nil {
 				return nil, err
 			}
 			raw = jwt.MapClaims{}

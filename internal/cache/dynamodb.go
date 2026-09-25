@@ -83,7 +83,7 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 }
 
 // Get retrieves an item from the DynamoDB cache
-func (c *dynamoDBCache) Get(key string) (*gTypes.JWKS, bool) {
+func (c *dynamoDBCache) Get(ctx context.Context, key string) (*gTypes.JWKS, bool) {
 	// Try to get from local memory cache first
 	if jwks, found := c.getFromLocalCache(key); found {
 		slog.Debug("Local memory cache hit", "key", key)
@@ -91,7 +91,7 @@ func (c *dynamoDBCache) Get(key string) (*gTypes.JWKS, bool) {
 	}
 
 	// Not in local cache, try DynamoDB
-	jwks, expiration, found := c.getFromDynamoDB(key)
+	jwks, expiration, found := c.getFromDynamoDB(ctx, key)
 	if found {
 		// Store in local cache with the item's real expiration
 		c.storeInLocalCache(key, jwks, expiration)
@@ -109,8 +109,8 @@ func (c *dynamoDBCache) getFromLocalCache(key string) (*gTypes.JWKS, bool) {
 
 // getFromDynamoDB retrieves an item from DynamoDB, returning the cached JWKS
 // and its expiration time
-func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, time.Time, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+func (c *dynamoDBCache) getFromDynamoDB(ctx context.Context, key string) (*gTypes.JWKS, time.Time, bool) {
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	input := &dynamodb.GetItemInput{
@@ -197,7 +197,7 @@ func parseExpiration(attr types.AttributeValue) (time.Time, error) {
 // Set stores an item in the DynamoDB cache with the given TTL.
 // The DynamoDB write is synchronous: in Lambda the execution environment is
 // frozen when the handler returns, so a background write could be lost.
-func (c *dynamoDBCache) Set(key string, value *gTypes.JWKS, ttl time.Duration) {
+func (c *dynamoDBCache) Set(ctx context.Context, key string, value *gTypes.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = c.local.defaultTTL
 	}
@@ -206,7 +206,7 @@ func (c *dynamoDBCache) Set(key string, value *gTypes.JWKS, ttl time.Duration) {
 	c.storeInLocalCache(key, value, time.Now().Add(ttl))
 
 	// Then store in DynamoDB for persistence
-	c.storeInDynamoDB(key, value, ttl)
+	c.storeInDynamoDB(ctx, key, value, ttl)
 }
 
 // storeInLocalCache adds or updates an item in the local memory cache
@@ -215,7 +215,7 @@ func (c *dynamoDBCache) storeInLocalCache(key string, value *gTypes.JWKS, expira
 }
 
 // storeInDynamoDB persists an item to DynamoDB
-func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time.Duration) {
+func (c *dynamoDBCache) storeInDynamoDB(ctx context.Context, key string, value *gTypes.JWKS, ttl time.Duration) {
 	// Marshal JWKS to JSON string
 	valueJSON, err := json.Marshal(value)
 	if err != nil {
@@ -238,7 +238,7 @@ func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time
 	// Calculate TTL timestamp for DynamoDB native TTL
 	ttlTimestamp := time.Now().Add(ttl).Unix()
 
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	input := &dynamodb.PutItemInput{

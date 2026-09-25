@@ -1,6 +1,7 @@
 package validator_test
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -160,7 +161,7 @@ func TestFetchJWKS_DiscoveryIssuerMismatchRejected(t *testing.T) {
 	cfg := &config.Config{Cache: &config.Cache{TTL: time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, cache.NewMemoryCache())
 
-	_, err := v.FetchJWKS(server.URL)
+	_, err := v.FetchJWKS(context.Background(), server.URL)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match configured issuer")
 }
@@ -188,10 +189,10 @@ func TestFetchJWKS_ZeroKeyJWKSNeverCached(t *testing.T) {
 	cfg := &config.Config{Cache: &config.Cache{TTL: time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, realCache)
 
-	_, err := v.FetchJWKS(server.URL)
+	_, err := v.FetchJWKS(context.Background(), server.URL)
 	require.Error(t, err)
 
-	_, found := realCache.Get(server.URL)
+	_, found := realCache.Get(context.Background(), server.URL)
 	assert.False(t, found, "an empty JWKS must never be cached")
 }
 
@@ -239,7 +240,7 @@ func TestFetchJWKS_SingleflightCollapsesConcurrentFetches(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func() {
 			defer wg.Done()
-			_, err := v.Validate(token)
+			_, err := v.Validate(context.Background(), token)
 			assert.NoError(t, err)
 		}()
 	}
@@ -353,7 +354,7 @@ func TestTokenValidationFlow(t *testing.T) {
 	tokenValidator := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
 
 	// Validate the token
-	resultClaims, err := tokenValidator.Validate(tokenString)
+	resultClaims, err := tokenValidator.Validate(context.Background(), tokenString)
 	require.NoError(t, err)
 	require.NotNil(t, resultClaims)
 	assert.Equal(t, repository, resultClaims.Repository)
@@ -456,7 +457,7 @@ func TestValidate_RejectsAlgorithmsOutsideTheAllowlist(t *testing.T) {
 		signed, err := tok.SignedString(privateKey)
 		require.NoError(t, err)
 
-		claims, err := v.Validate(signed)
+		claims, err := v.Validate(context.Background(), signed)
 		require.NoError(t, err)
 		require.NotNil(t, claims)
 		assert.Equal(t, "owner/repo", claims.Repository)
@@ -472,7 +473,7 @@ func TestValidate_RejectsAlgorithmsOutsideTheAllowlist(t *testing.T) {
 		signed, err := tok.SignedString(privateKey)
 		require.NoError(t, err)
 
-		claims, err := v.Validate(signed)
+		claims, err := v.Validate(context.Background(), signed)
 		require.Error(t, err, "PS256 is not on the allowlist and must be refused")
 		assert.Nil(t, claims)
 	})
@@ -485,7 +486,7 @@ func TestValidate_RejectsAlgorithmsOutsideTheAllowlist(t *testing.T) {
 		signed, err := tok.SignedString(jwt.UnsafeAllowNoneSignatureType)
 		require.NoError(t, err)
 
-		claims, err := v.Validate(signed)
+		claims, err := v.Validate(context.Background(), signed)
 		require.Error(t, err)
 		assert.Nil(t, claims)
 	})
@@ -496,7 +497,7 @@ func TestValidate_RejectsAlgorithmsOutsideTheAllowlist(t *testing.T) {
 		signed, err := tok.SignedString(pub.N.Bytes())
 		require.NoError(t, err)
 
-		claims, err := v.Validate(signed)
+		claims, err := v.Validate(context.Background(), signed)
 		require.Error(t, err)
 		assert.Nil(t, claims)
 	})

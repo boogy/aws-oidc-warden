@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -21,17 +22,13 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
-// maxConfigSize bounds how many bytes are read from a remote (S3) config object.
-const maxConfigSize = 1024 * 1024 // 1MB
-
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
 type AwsConsumerInterface interface {
-	ReadS3Configuration() error
-	AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
-	GetS3Object(bucket, key string) (io.ReadCloser, error)
-	GetRole(role string) (*iam.GetRoleOutput, error)
-	GetRoleTags(roleARN string) (map[string]string, error)
-	IsTargetAccountAllowed(roleArn string) (bool, error)
+	AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
+	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+	GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
+	GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
+	IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
 
 // cachedCreds holds spoke credentials for an account until shortly before expiry.
@@ -112,12 +109,12 @@ func (a *AwsConsumer) SessionName(name string) string {
 // account is the hub's own (callers then use the default hub clients).
 // Otherwise it assumes the convention-named spoke role and caches the result
 // until shortly before expiry.
-func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, error) {
+func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.CredentialsProvider, error) {
 	cfg := a.cfg()
 	if cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
 		return nil, nil
 	}
-	hub, err := a.AWS.GetCallerAccount()
+	hub, err := a.AWS.GetCallerAccount(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve hub account: %w", err)
 	}
@@ -156,7 +153,7 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 	if ca.ExternalID != "" {
 		input.ExternalId = &ca.ExternalID
 	}
-	out, err := a.AWS.AssumeRole(input)
+	out, err := a.AWS.AssumeRole(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("assume spoke role %s: %w", spokeArn, err)
 	}
@@ -185,7 +182,7 @@ func (a *AwsConsumer) spokeCredsFor(account string) (aws.CredentialsProvider, er
 // sessionTags is the issuer's configured session_tags spec (STS tag key -> raw
 // claim name, see config.Config.IssuerSessionTags); it drives which of the
 // verified token's raw claims get attached as STS session tags.
-func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error) {
+func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error) {
 	if roleArn == "" {
 		return nil, errors.New("roleArn cannot be empty")
 	}
@@ -250,7 +247,7 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		return nil, err
 	}
 
-	hub, isRoleSession, err := a.AWS.GetCallerIdentityInfo()
+	hub, isRoleSession, err := a.AWS.GetCallerIdentityInfo(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve caller identity: %w", err)
 	}
@@ -274,7 +271,7 @@ func (a *AwsConsumer) AssumeRole(roleArn, sessionName string, sessionPolicy *str
 		assumeRoleInput.DurationSeconds = &durationSeconds
 	}
 
-	result, err := a.AWS.AssumeRole(&assumeRoleInput)
+	result, err := a.AWS.AssumeRole(ctx, &assumeRoleInput)
 	if err != nil {
 		return nil, fmt.Errorf("unable to perform sts.AssumeRole: %w", classifyAssumeRoleError(err))
 	}
@@ -378,12 +375,12 @@ func (a *AwsConsumer) accountAllowed(account, hub string) bool {
 // disabled, only the hub account is allowed (there is no spoke path to reach
 // any other account); otherwise the account must be the hub or in the
 // allow-list (empty allow-list permits any account).
-func (a *AwsConsumer) IsTargetAccountAllowed(roleArn string) (bool, error) {
+func (a *AwsConsumer) IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error) {
 	account, _, err := ParseRoleARN(roleArn)
 	if err != nil {
 		return false, err
 	}
-	hub, err := a.AWS.GetCallerAccount()
+	hub, err := a.AWS.GetCallerAccount(ctx)
 	if err != nil {
 		return false, fmt.Errorf("resolve hub account: %w", err)
 	}
@@ -393,45 +390,13 @@ func (a *AwsConsumer) IsTargetAccountAllowed(roleArn string) (bool, error) {
 	return a.accountAllowed(account, hub), nil
 }
 
-// ReadS3Configuration reads the configured S3 Bucket and returns Config
-func (a *AwsConsumer) ReadS3Configuration() error {
-	if a.Config.S3ConfigBucket == "" || a.Config.S3ConfigPath == "" {
-		return errors.New("S3ConfigBucket and S3ConfigPath options must be set")
-	}
-
-	content, err := a.AWS.GetS3Object(a.Config.S3ConfigBucket, a.Config.S3ConfigPath)
-	if err != nil {
-		return fmt.Errorf("failed to get S3 configuration object: %w", err)
-	}
-	defer func() {
-		if cerr := content.Close(); cerr != nil {
-			slog.Error("Error closing S3 configuration object", "error", cerr)
-		}
-	}()
-
-	// Bound the read to guard against an oversized object.
-	data, err := io.ReadAll(io.LimitReader(content, maxConfigSize))
-	if err != nil {
-		return fmt.Errorf("unable to read configuration from S3: %w", err)
-	}
-
-	// Overlay using the documented snake_case schema (same as the YAML config)
-	// and re-validate so role_mappings regex patterns get compiled.
-	if err := a.Config.MergeBytes(data, gtvcfg.FormatFromPath(a.Config.S3ConfigPath)); err != nil {
-		return fmt.Errorf("unable to decode configuration from S3: %w", err)
-	}
-
-	slog.Debug("Successfully imported config", slog.String("config", fmt.Sprintf("%+v", a.Config)))
-	return nil
-}
-
 // GetRole retrieves information about the specified AWS IAM role
-func (a *AwsConsumer) GetRole(role string) (*iam.GetRoleOutput, error) {
+func (a *AwsConsumer) GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error) {
 	if role == "" {
 		return nil, errors.New("role name cannot be empty")
 	}
 
-	return a.AWS.GetRole(&iam.GetRoleInput{
+	return a.AWS.GetRole(ctx, &iam.GetRoleInput{
 		RoleName: aws.String(role),
 	})
 }
@@ -443,10 +408,10 @@ const roleTagCacheTTL = 60 * time.Second
 // GetRoleTags returns the IAM tags of the role identified by roleARN as a
 // key→value map. When the role lives in a different account than the warden,
 // the read is performed with spoke credentials assumed in that account.
-func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
+func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error) {
 	// Deliberately checked against the LIVE config BEFORE the cache: a cached
 	// entry must never outlive a revoked account's authorization.
-	allowed, err := a.IsTargetAccountAllowed(roleARN)
+	allowed, err := a.IsTargetAccountAllowed(ctx, roleARN)
 	if err != nil {
 		return nil, err
 	}
@@ -468,12 +433,12 @@ func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	creds, err := a.spokeCredsFor(account)
+	creds, err := a.spokeCredsFor(ctx, account)
 	if err != nil {
 		return nil, err
 	}
 	if creds == nil {
-		hub, herr := a.AWS.GetCallerAccount()
+		hub, herr := a.AWS.GetCallerAccount(ctx)
 		if herr != nil {
 			return nil, herr
 		}
@@ -485,9 +450,9 @@ func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 	input := &iam.GetRoleInput{RoleName: aws.String(roleName)}
 	var out *iam.GetRoleOutput
 	if creds == nil {
-		out, err = a.AWS.GetRole(input)
+		out, err = a.AWS.GetRole(ctx, input)
 	} else {
-		out, err = a.AWS.GetRoleAs(input, creds)
+		out, err = a.AWS.GetRoleAs(ctx, input, creds)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get role %s: %w", roleName, err)
@@ -513,7 +478,7 @@ func (a *AwsConsumer) GetRoleTags(roleARN string) (map[string]string, error) {
 }
 
 // GetS3Object retrieves an object from S3
-func (a *AwsConsumer) GetS3Object(bucket, key string) (io.ReadCloser, error) {
+func (a *AwsConsumer) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
 	if bucket == "" {
 		return nil, errors.New("bucket name cannot be empty")
 	}
@@ -522,5 +487,5 @@ func (a *AwsConsumer) GetS3Object(bucket, key string) (io.ReadCloser, error) {
 		return nil, errors.New("object key cannot be empty")
 	}
 
-	return a.AWS.GetS3Object(bucket, key)
+	return a.AWS.GetS3Object(ctx, bucket, key)
 }

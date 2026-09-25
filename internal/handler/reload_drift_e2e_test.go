@@ -114,14 +114,19 @@ type driftConsumer struct {
 	calls []driftCall
 }
 
-func (c *driftConsumer) ReadS3Configuration() error { return nil }
-func (c *driftConsumer) GetS3Object(string, string) (io.ReadCloser, error) {
+func (c *driftConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("unused")
 }
-func (c *driftConsumer) GetRole(string) (*awsiam.GetRoleOutput, error) { return nil, nil }
-func (c *driftConsumer) GetRoleTags(string) (map[string]string, error) { return nil, nil }
-func (c *driftConsumer) IsTargetAccountAllowed(string) (bool, error)   { return true, nil }
-func (c *driftConsumer) AssumeRole(roleARN, _ string, _ *string, _ *int32, claims *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
+func (c *driftConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
+	return nil, nil
+}
+func (c *driftConsumer) GetRoleTags(context.Context, string) (map[string]string, error) {
+	return nil, nil
+}
+func (c *driftConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
+	return true, nil
+}
+func (c *driftConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, claims *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
 	aud := ""
 	if len(claims.Audience) > 0 {
 		aud = claims.Audience[0]
@@ -144,7 +149,7 @@ type delayedValidator struct {
 	*validator.TokenValidator
 }
 
-func (d *delayedValidator) Validate(token string) (*types.Claims, error) {
+func (d *delayedValidator) Validate(ctx context.Context, token string) (*types.Claims, error) {
 	// DO NOT REMOVE THIS SLEEP. It is load-bearing, and its removal is silent:
 	// with the fix reverted and this sleep deleted, the test still PASSES (3/3
 	// runs measured), because the gap it widens is a few hundred nanoseconds of
@@ -154,7 +159,7 @@ func (d *delayedValidator) Validate(token string) (*types.Claims, error) {
 	// removed => PASS. A future reader tidying away an "unnecessary" sleep would
 	// leave a test that can no longer fail.
 	time.Sleep(2 * time.Millisecond)
-	return d.TokenValidator.Validate(token)
+	return d.TokenValidator.Validate(ctx, token)
 }
 
 // driftGenA is the pristine base: audience aud-v1, role mapping present.

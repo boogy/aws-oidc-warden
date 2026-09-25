@@ -108,7 +108,7 @@ func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error)
 }
 
 // Get retrieves an item from the S3 cache
-func (c *s3Cache) Get(key string) (*types.JWKS, bool) {
+func (c *s3Cache) Get(ctx context.Context, key string) (*types.JWKS, bool) {
 	// Try to get from local memory cache first
 	if jwks, found := c.getFromLocalCache(key); found {
 		slog.Debug("Local memory cache hit", "key", key)
@@ -116,7 +116,7 @@ func (c *s3Cache) Get(key string) (*types.JWKS, bool) {
 	}
 
 	// Not in local cache, try S3
-	jwks, expiration, found := c.getFromS3(key)
+	jwks, expiration, found := c.getFromS3(ctx, key)
 	if found {
 		// Store in local cache with the item's real expiration
 		c.storeInLocalCache(key, jwks, expiration)
@@ -134,10 +134,10 @@ func (c *s3Cache) getFromLocalCache(key string) (*types.JWKS, bool) {
 
 // getFromS3 retrieves an item from S3, returning the cached JWKS and its
 // expiration time
-func (c *s3Cache) getFromS3(key string) (*types.JWKS, time.Time, bool) {
+func (c *s3Cache) getFromS3(ctx context.Context, key string) (*types.JWKS, time.Time, bool) {
 	objectKey := c.formatKey(key)
 
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	resp, err := c.client.GetObject(ctx, &s3.GetObjectInput{
@@ -186,7 +186,7 @@ func (c *s3Cache) getFromS3(key string) (*types.JWKS, time.Time, bool) {
 	if time.Now().After(item.Expiration) {
 		slog.Debug("S3 cache entry expired", "key", key)
 		if c.cleanup {
-			c.deleteObject(objectKey)
+			c.deleteObject(ctx, objectKey)
 		}
 		return nil, time.Time{}, false
 	}
@@ -198,7 +198,7 @@ func (c *s3Cache) getFromS3(key string) (*types.JWKS, time.Time, bool) {
 // Set stores an item in the S3 cache with the given TTL.
 // The S3 write is synchronous: in Lambda the execution environment is frozen
 // when the handler returns, so a background write could be lost.
-func (c *s3Cache) Set(key string, value *types.JWKS, ttl time.Duration) {
+func (c *s3Cache) Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = c.local.defaultTTL
 	}
@@ -207,7 +207,7 @@ func (c *s3Cache) Set(key string, value *types.JWKS, ttl time.Duration) {
 	c.storeInLocalCache(key, value, time.Now().Add(ttl))
 
 	// Then store in S3 for persistence
-	c.storeInS3(key, value, ttl)
+	c.storeInS3(ctx, key, value, ttl)
 }
 
 // storeInLocalCache adds or updates an item in the local memory cache
@@ -216,7 +216,7 @@ func (c *s3Cache) storeInLocalCache(key string, value *types.JWKS, expiration ti
 }
 
 // storeInS3 persists an item to S3
-func (c *s3Cache) storeInS3(key string, value *types.JWKS, ttl time.Duration) {
+func (c *s3Cache) storeInS3(ctx context.Context, key string, value *types.JWKS, ttl time.Duration) {
 	objectKey := c.formatKey(key)
 
 	item := s3CacheItem{
@@ -240,7 +240,7 @@ func (c *s3Cache) storeInS3(key string, value *types.JWKS, ttl time.Duration) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	_, err = c.client.PutObject(ctx, &s3.PutObjectInput{
@@ -273,8 +273,8 @@ func (c *s3Cache) formatKey(key string) string {
 }
 
 // deleteObject removes an expired object from S3
-func (c *s3Cache) deleteObject(key string) {
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+func (c *s3Cache) deleteObject(ctx context.Context, key string) {
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{

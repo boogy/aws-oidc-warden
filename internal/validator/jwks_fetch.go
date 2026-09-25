@@ -17,8 +17,8 @@ import (
 // available. Exposed standalone (no jwks_uri override) for testing and
 // warm-prefetch; Validate uses the issuer's registered spec instead, which
 // may carry a jwks_uri override.
-func (t *TokenValidator) FetchJWKS(issuer string) (*types.JWKS, error) {
-	return t.fetchJWKS(&issuerSpec{Issuer: issuer}, false)
+func (t *TokenValidator) FetchJWKS(ctx context.Context, issuer string) (*types.JWKS, error) {
+	return t.fetchJWKS(ctx, &issuerSpec{Issuer: issuer}, false)
 }
 
 // fetchJWKS fetches (or serves from cache) the JWKS for spec.Issuer. When
@@ -26,15 +26,17 @@ func (t *TokenValidator) FetchJWKS(issuer string) (*types.JWKS, error) {
 // directly (still required to be a secure URL). When force is true the cache
 // is bypassed — used to recover from signing-key rotation. Concurrent cold
 // fetches for the same issuer are deduplicated via a per-issuer singleflight.
-func (t *TokenValidator) fetchJWKS(spec *issuerSpec, force bool) (*types.JWKS, error) {
+func (t *TokenValidator) fetchJWKS(ctx context.Context, spec *issuerSpec, force bool) (*types.JWKS, error) {
 	if !force {
-		if cachedJWKS, found := t.cache.Get(spec.Issuer); found && cachedJWKS != nil {
+		if cachedJWKS, found := t.cache.Get(ctx, spec.Issuer); found && cachedJWKS != nil {
 			return cachedJWKS, nil
 		}
 	}
 
+	// A cancelled initiator must not abort the fetch its singleflight waiters share.
+	fetchCtx := context.WithoutCancel(ctx)
 	v, err, _ := t.sfGroup.Do(spec.Issuer, func() (any, error) {
-		return t.fetchAndCacheJWKS(spec)
+		return t.fetchAndCacheJWKS(fetchCtx, spec)
 	})
 	if err != nil {
 		return nil, err
@@ -46,7 +48,7 @@ func (t *TokenValidator) fetchJWKS(spec *issuerSpec, force bool) (*types.JWKS, e
 // JWKS URI (explicit override, memoized discovery, or a fresh discovery
 // call), fetch + validate the JWKS, and cache it. Runs inside the
 // singleflight group, so it executes at most once per issuer per in-flight fetch.
-func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error) {
+func (t *TokenValidator) fetchAndCacheJWKS(ctx context.Context, spec *issuerSpec) (*types.JWKS, error) {
 	jwksURI := spec.JWKSURI
 	// Only a discovery-resolved URI (no per-issuer override) is eligible for
 	// the "re-discover once on 404" recovery below and gets memoized.
@@ -56,7 +58,7 @@ func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error
 			jwksURI = cached.(string)
 		} else {
 			var err error
-			jwksURI, err = t.discoverJWKSURI(spec)
+			jwksURI, err = t.discoverJWKSURI(ctx, spec)
 			if err != nil {
 				return nil, err
 			}
@@ -67,14 +69,14 @@ func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error
 		return nil, fmt.Errorf("invalid jwks_uri: %w", err)
 	}
 
-	jwks, status, err := t.getJWKS(jwksURI)
+	jwks, status, err := t.getJWKS(ctx, jwksURI)
 	if discoveryDriven && status == http.StatusNotFound {
 		// The memoized/discovered jwks_uri may be stale; re-discover once and
 		// retry before giving up.
 		t.jwksURICache.Delete(spec.Issuer)
-		if newURI, derr := t.discoverJWKSURI(spec); derr == nil {
+		if newURI, derr := t.discoverJWKSURI(ctx, spec); derr == nil {
 			if serr := requireSecureURL(newURI, t.allowInsecureIssuers); serr == nil {
-				jwks, _, err = t.getJWKS(newURI)
+				jwks, _, err = t.getJWKS(ctx, newURI)
 				jwksURI = newURI
 			}
 		}
@@ -87,7 +89,7 @@ func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error
 		t.jwksURICache.Store(spec.Issuer, jwksURI)
 	}
 
-	t.cache.Set(spec.Issuer, jwks, cache.GetConfiguredTTL(t.currentConfig()))
+	t.cache.Set(ctx, spec.Issuer, jwks, cache.GetConfiguredTTL(t.currentConfig()))
 	return jwks, nil
 }
 
@@ -96,12 +98,12 @@ func (t *TokenValidator) fetchAndCacheJWKS(spec *issuerSpec) (*types.JWKS, error
 // document's own "issuer" matches spec.Issuer (RFC 8414 S8, so a compromised
 // or misconfigured discovery endpoint can't redirect trust to a different
 // issuer), and returns its jwks_uri.
-func (t *TokenValidator) discoverJWKSURI(spec *issuerSpec) (string, error) {
+func (t *TokenValidator) discoverJWKSURI(ctx context.Context, spec *issuerSpec) (string, error) {
 	if err := requireSecureURL(spec.Issuer, t.allowInsecureIssuers); err != nil {
 		return "", fmt.Errorf("invalid issuer URL: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		spec.Issuer+"/.well-known/openid-configuration", nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to build discovery request: %w", err)
@@ -141,8 +143,8 @@ func (t *TokenValidator) discoverJWKSURI(spec *issuerSpec) (string, error) {
 // status code lets callers distinguish a 404 (candidate for one
 // re-discovery retry) from other failures. A zero-key or oversized JWKS is
 // rejected and, since the caller only caches on a nil error, is never cached.
-func (t *TokenValidator) getJWKS(jwksURI string) (*types.JWKS, int, error) {
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, jwksURI, nil)
+func (t *TokenValidator) getJWKS(ctx context.Context, jwksURI string) (*types.JWKS, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURI, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to build JWKS request: %w", err)
 	}

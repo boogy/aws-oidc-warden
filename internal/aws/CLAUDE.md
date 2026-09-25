@@ -6,12 +6,11 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). STS/S3/IAM via AWS SDK v2. `consumer
 
 ```go
 type AwsConsumerInterface interface {
-    ReadS3Configuration() error
-    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *types.Claims, sessionTags map[string]string) (*types.Credentials, error)
-    GetS3Object(bucket, key string) (io.ReadCloser, error)
-    GetRole(role string) (*iam.GetRoleOutput, error)
-    GetRoleTags(roleARN string) (map[string]string, error)
-    IsTargetAccountAllowed(roleArn string) (bool, error)
+    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *types.Claims, sessionTags map[string]string) (*types.Credentials, error)
+    GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+    GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
+    GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
+    IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
 ```
 

@@ -106,7 +106,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	// IsTargetAccountAllowed encodes disabled-means-hub-only (fail closed).
-	ok, aerr := r.consumer.IsTargetAccountAllowed(requestedRole)
+	ok, aerr := r.consumer.IsTargetAccountAllowed(ctx, requestedRole)
 	if aerr != nil {
 		rec.setErrorReason("account_check", aerr)
 		return nil, deny("Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
@@ -140,7 +140,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		rec.MatchedVia = "explicit"
 	}
 	if !allowed && cfg.TagAuth != nil && cfg.TagAuth.Enabled {
-		roleTags, terr := r.consumer.GetRoleTags(requestedRole)
+		roleTags, terr := r.consumer.GetRoleTags(ctx, requestedRole)
 		if terr != nil {
 			log.Warn("Tag-based authorization: could not read role tags",
 				slog.String("error", terr.Error()))
@@ -161,7 +161,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, deny("Role not allowed for this subject or its conditions are not met", ErrRoleNotPermitted, denyAttrs...)
 	}
 
-	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, log, claims.Subject, decision)
+	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, decision)
 	if err != nil {
 		rec.setErrorReason("session_policy", err)
 		return nil, deny("Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
@@ -180,7 +180,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		slog.String("sessionName", sessionName))
 
 	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, decision)
-	credentials, err := r.consumer.AssumeRole(requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
+	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
 		// A trust-policy/IAM refusal is the caller's answer (403); anything else
@@ -227,7 +227,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 // getSessionPolicy retrieves the session policy for an (issuer, subject) pair
 // (config inline or S3 file), plus a policyRef label ("inline", the S3 key,
 // or "") for the audit record's SessionPolicyRef field.
-func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger, subject string, decision config.Decision) (sessionPolicyString *string, policyRef string, err error) {
+func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Config, log *slog.Logger, subject string, decision config.Decision) (sessionPolicyString *string, policyRef string, err error) {
 	opStart := time.Now()
 	defer func() {
 		log.Debug("getSessionPolicy operation completed",
@@ -247,7 +247,7 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger
 				slog.String("error", err.Error()))
 		}
 
-		sessionPolicyData, err := r.consumer.GetS3Object(cfg.S3SessionPolicyBucket, *sessionPolicyFile)
+		sessionPolicyData, err := r.consumer.GetS3Object(ctx, cfg.S3SessionPolicyBucket, *sessionPolicyFile)
 		if err != nil {
 			logPolicyErr("Failed to read session policy file", err)
 			return nil, "", fmt.Errorf("failed to read session policy file: %w", ErrSessionPolicyAccess)

@@ -6,7 +6,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Multi-issuer JWT parsing + JWKS veri
 
 ```go
 type TokenValidatorInterface interface {
-    Validate(string) (*types.Claims, error)
+    Validate(ctx context.Context, tokenString string) (*types.Claims, error)
 }
 ```
 

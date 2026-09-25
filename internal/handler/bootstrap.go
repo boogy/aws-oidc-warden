@@ -173,7 +173,7 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 
 	bucket, key := cfg.S3ConfigBucket, cfg.S3ConfigPath
 	fetch := func(ctx context.Context) ([]byte, error) {
-		body, err := consumer.GetS3Object(bucket, key)
+		body, err := consumer.GetS3Object(ctx, bucket, key)
 		if err != nil {
 			return nil, err
 		}

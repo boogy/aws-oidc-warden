@@ -71,7 +71,7 @@ func TestDynamoDBCacheLocalHitSkipsDynamoDB(t *testing.T) {
 
 	c.storeInLocalCache("key1", testJWKS("kid1"), time.Now().Add(time.Minute))
 
-	got, found := c.Get("key1")
+	got, found := c.Get(context.Background(), "key1")
 	if !found || got.Keys[0].KeyID != "kid1" {
 		t.Fatal("expected local cache hit")
 	}
@@ -90,7 +90,7 @@ func TestDynamoDBCacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 	}
 	c := newTestDynamoDBCache(mock)
 
-	got, found := c.Get("key1")
+	got, found := c.Get(context.Background(), "key1")
 	if !found || got.Keys[0].KeyID != "kid1" {
 		t.Fatal("expected DynamoDB cache hit")
 	}
@@ -107,7 +107,7 @@ func TestDynamoDBCacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 		t.Fatalf("local expiration = %v, want %v", entry.expiration, wantExpiration)
 	}
 
-	if _, found := c.Get("key1"); !found {
+	if _, found := c.Get(context.Background(), "key1"); !found {
 		t.Fatal("expected local hit on second Get")
 	}
 	if mock.getCalls != 1 {
@@ -139,7 +139,7 @@ func TestDynamoDBCacheExpirationHandling(t *testing.T) {
 			}
 			c := newTestDynamoDBCache(mock)
 
-			if _, found := c.Get("key1"); found {
+			if _, found := c.Get(context.Background(), "key1"); found {
 				t.Fatal("expected miss (fail closed)")
 			}
 		})
@@ -178,7 +178,7 @@ func TestDynamoDBCacheMissAndErrors(t *testing.T) {
 			mock := &mockDynamoDB{getFn: tt.getFn}
 			c := newTestDynamoDBCache(mock)
 
-			if _, found := c.Get("key1"); found {
+			if _, found := c.Get(context.Background(), "key1"); found {
 				t.Fatal("expected miss")
 			}
 		})
@@ -189,7 +189,7 @@ func TestDynamoDBCacheSetIsSynchronous(t *testing.T) {
 	mock := &mockDynamoDB{}
 	c := newTestDynamoDBCache(mock)
 
-	c.Set("key1", testJWKS("kid1"), time.Minute)
+	c.Set(context.Background(), "key1", testJWKS("kid1"), time.Minute)
 
 	if mock.putCalls != 1 {
 		t.Fatalf("PutItem called %d times before Set returned, want 1", mock.putCalls)
@@ -198,7 +198,7 @@ func TestDynamoDBCacheSetIsSynchronous(t *testing.T) {
 		t.Fatalf("PutItem key = %q, want key1", got)
 	}
 
-	if _, found := c.Get("key1"); !found {
+	if _, found := c.Get(context.Background(), "key1"); !found {
 		t.Fatal("expected local hit after Set")
 	}
 	if mock.getCalls != 0 {
@@ -214,7 +214,7 @@ func TestDynamoDBCacheSetRejectsOversizedItem(t *testing.T) {
 		KeyID: "kid1",
 		N:     strings.Repeat("a", int(Defaults.DynamoDBMaxItemSize)+1),
 	}}}
-	c.Set("key1", big, time.Minute)
+	c.Set(context.Background(), "key1", big, time.Minute)
 
 	if mock.putCalls != 0 {
 		t.Fatalf("oversized item must not be written, PutItem called %d times", mock.putCalls)

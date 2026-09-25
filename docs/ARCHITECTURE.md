@@ -135,7 +135,7 @@ sequenceDiagram
     Client->>Handler: POST /verify {token, role}
     Handler->>Processor: ProcessRequest()
 
-    Processor->>Validator: Validate(token)
+    Processor->>Validator: Validate(ctx, token)
     Validator->>Validator: Peek unverified iss (routing only)
     Validator->>Validator: Registry lookup: spec = registry[iss]
     Note over Validator: unknown issuer -> deny, no fetch
@@ -280,8 +280,7 @@ The AWS consumer abstracts all AWS service interactions:
 
 ```go
 type AwsConsumerInterface interface {
-    ReadS3Configuration() error
-    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
+    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
     GetS3Object(bucket, key string) (io.ReadCloser, error)
     GetRole(role string) (*iam.GetRoleOutput, error)
     GetRoleTags(roleARN string) (map[string]string, error)
@@ -313,8 +312,8 @@ The caching system provides multiple storage backends for JWKS data:
 
 ```go
 type Cache interface {
-    Get(key string) (*types.JWKS, bool)
-    Set(key string, value *types.JWKS, ttl time.Duration)
+    Get(ctx context.Context, key string) (*types.JWKS, bool)
+    Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration)
 }
 ```
 

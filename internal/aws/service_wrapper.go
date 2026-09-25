@@ -19,12 +19,12 @@ import (
 
 // AwsServiceWrapperInterface allows to test AWS specific code based on the AWS services
 type AwsServiceWrapperInterface interface {
-	GetS3Object(bucket, key string) (io.ReadCloser, error)
-	AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
-	GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
-	GetCallerAccount() (string, error)
-	GetCallerIdentityInfo() (account string, isRoleSession bool, err error)
-	GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
+	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+	AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
+	GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
+	GetCallerAccount(ctx context.Context) (string, error)
+	GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error)
+	GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
 	RefreshClients()
 }
 
@@ -97,8 +97,8 @@ func (s *AwsServiceWrapper) RefreshClients() {
 	slog.Info("AWS clients successfully refreshed")
 }
 
-func (s *AwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 
 	slog.Debug("Fetching S3 object",
@@ -136,8 +136,8 @@ func (s *AwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, erro
 	return result.Body, nil
 }
 
-func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 
 	// No slog.Info here: processor.go already logs "Assuming role" with
@@ -185,8 +185,8 @@ func validateRoleNameLength(roleName string) error {
 	return nil
 }
 
-func (s *AwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+func (s *AwsServiceWrapper) GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 
 	slog.Debug("Getting IAM role", "roleName", *input.RoleName)
@@ -211,7 +211,7 @@ func (s *AwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput
 // GetCallerIdentityInfo returns the account ID and role-session status of the
 // warden's own (hub) identity, fetched via STS GetCallerIdentity and cached
 // (a failed lookup is not cached, so a later call retries).
-func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSession bool, err error) {
+func (s *AwsServiceWrapper) GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error) {
 	s.callerMu.Lock()
 	defer s.callerMu.Unlock()
 
@@ -219,7 +219,7 @@ func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSessi
 		return s.callerAccount, strings.Contains(s.callerArn, ":assumed-role/"), nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 
 	fetch := s.getCallerIdentityFn
@@ -244,20 +244,20 @@ func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSessi
 }
 
 // GetCallerAccount returns the account ID of the warden's own (hub) identity.
-func (s *AwsServiceWrapper) GetCallerAccount() (string, error) {
-	account, _, err := s.GetCallerIdentityInfo()
+func (s *AwsServiceWrapper) GetCallerAccount(ctx context.Context) (string, error) {
+	account, _, err := s.GetCallerIdentityInfo(ctx)
 	return account, err
 }
 
 // GetRoleAs performs iam:GetRole using the supplied credentials provider.
-func (s *AwsServiceWrapper) GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
+func (s *AwsServiceWrapper) GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
 	// A nil provider would silently fall back to hub credentials and read a
 	// same-named role in the wrong (hub) account — a confused-deputy risk.
 	if creds == nil {
 		return nil, errors.New("GetRoleAs requires explicit credentials; refusing to fall back to hub credentials")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 	client := iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
 	return client.GetRole(ctx, input)

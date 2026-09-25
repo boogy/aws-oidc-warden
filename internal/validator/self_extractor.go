@@ -24,18 +24,18 @@ func NewSelfExtractor(v TokenValidatorInterface) *SelfExtractor {
 // satisfies it; an external mock of TokenValidatorInterface takes the
 // Validate path below unchanged.
 type pinnedValidator interface {
-	validateWith(cfg *config.Config, tokenString string) (*types.Claims, error)
+	validateWith(ctx context.Context, cfg *config.Config, tokenString string) (*types.Claims, error)
 }
 
 // Extract validates the JWT in input.Token and returns the verified claims.
 // When the caller pinned a config (ExtractionInput.Config), the token is
 // validated against that same generation rather than a fresh provider read.
-func (s *SelfExtractor) Extract(_ context.Context, input ExtractionInput) (*types.Claims, error) {
+func (s *SelfExtractor) Extract(ctx context.Context, input ExtractionInput) (*types.Claims, error) {
 	if input.Token == "" {
 		return nil, fmt.Errorf("token is required in self-validation mode")
 	}
 	if pv, ok := s.v.(pinnedValidator); ok && input.Config != nil {
-		return pv.validateWith(input.Config, input.Token)
+		return pv.validateWith(ctx, input.Config, input.Token)
 	}
-	return s.v.Validate(input.Token)
+	return s.v.Validate(ctx, input.Token)
 }

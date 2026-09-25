@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -16,14 +17,14 @@ func testJWKS(kid string) *types.JWKS {
 func TestMemoryCacheRoundtrip(t *testing.T) {
 	c := NewMemoryCache()
 
-	if _, found := c.Get("missing"); found {
+	if _, found := c.Get(context.Background(), "missing"); found {
 		t.Fatal("expected miss for unknown key")
 	}
 
 	want := testJWKS("kid1")
-	c.Set("key1", want, time.Minute)
+	c.Set(context.Background(), "key1", want, time.Minute)
 
-	got, found := c.Get("key1")
+	got, found := c.Get(context.Background(), "key1")
 	if !found {
 		t.Fatal("expected hit after Set")
 	}
@@ -35,10 +36,10 @@ func TestMemoryCacheRoundtrip(t *testing.T) {
 func TestMemoryCacheTTLExpiry(t *testing.T) {
 	c := NewMemoryCache().(*memoryCache)
 
-	c.Set("key1", testJWKS("kid1"), time.Nanosecond)
+	c.Set(context.Background(), "key1", testJWKS("kid1"), time.Nanosecond)
 	time.Sleep(2 * time.Millisecond)
 
-	if _, found := c.Get("key1"); found {
+	if _, found := c.Get(context.Background(), "key1"); found {
 		t.Fatal("expected miss for expired entry")
 	}
 
@@ -53,7 +54,7 @@ func TestMemoryCacheTTLExpiry(t *testing.T) {
 func TestMemoryCacheDefaultTTL(t *testing.T) {
 	c := NewMemoryCache(WithMemoryDefaultTTL(time.Hour)).(*memoryCache)
 
-	c.Set("key1", testJWKS("kid1"), 0) // no TTL -> default
+	c.Set(context.Background(), "key1", testJWKS("kid1"), 0) // no TTL -> default
 
 	c.local.mu.Lock()
 	item := c.local.entries["key1"]
@@ -80,26 +81,26 @@ func TestMemoryCacheOptionsHonored(t *testing.T) {
 func TestMemoryCacheLRUEviction(t *testing.T) {
 	c := NewMemoryCache(WithMemoryMaxSize(2))
 
-	c.Set("a", testJWKS("a"), time.Minute)
+	c.Set(context.Background(), "a", testJWKS("a"), time.Minute)
 	time.Sleep(time.Millisecond)
-	c.Set("b", testJWKS("b"), time.Minute)
+	c.Set(context.Background(), "b", testJWKS("b"), time.Minute)
 	time.Sleep(time.Millisecond)
 
 	// Touch "a" so "b" becomes least recently used
-	if _, found := c.Get("a"); !found {
+	if _, found := c.Get(context.Background(), "a"); !found {
 		t.Fatal("expected hit for a")
 	}
 	time.Sleep(time.Millisecond)
 
-	c.Set("c", testJWKS("c"), time.Minute)
+	c.Set(context.Background(), "c", testJWKS("c"), time.Minute)
 
-	if _, found := c.Get("b"); found {
+	if _, found := c.Get(context.Background(), "b"); found {
 		t.Fatal("expected b to be evicted as LRU")
 	}
-	if _, found := c.Get("a"); !found {
+	if _, found := c.Get(context.Background(), "a"); !found {
 		t.Fatal("a should survive eviction")
 	}
-	if _, found := c.Get("c"); !found {
+	if _, found := c.Get(context.Background(), "c"); !found {
 		t.Fatal("c should be present")
 	}
 }
@@ -107,15 +108,15 @@ func TestMemoryCacheLRUEviction(t *testing.T) {
 func TestMemoryCacheNoEvictionOnOverwrite(t *testing.T) {
 	c := NewMemoryCache(WithMemoryMaxSize(2))
 
-	c.Set("a", testJWKS("a1"), time.Minute)
-	c.Set("b", testJWKS("b"), time.Minute)
+	c.Set(context.Background(), "a", testJWKS("a1"), time.Minute)
+	c.Set(context.Background(), "b", testJWKS("b"), time.Minute)
 
-	c.Set("a", testJWKS("a2"), time.Minute)
+	c.Set(context.Background(), "a", testJWKS("a2"), time.Minute)
 
-	if _, found := c.Get("b"); !found {
+	if _, found := c.Get(context.Background(), "b"); !found {
 		t.Fatal("b should not be evicted by overwrite of a")
 	}
-	got, found := c.Get("a")
+	got, found := c.Get(context.Background(), "a")
 	if !found || got.Keys[0].KeyID != "a2" {
 		t.Fatal("a should hold the overwritten value")
 	}
@@ -131,13 +132,13 @@ func TestMemoryCacheConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 100 {
-				c.Set(key, testJWKS(key), time.Millisecond)
+				c.Set(context.Background(), key, testJWKS(key), time.Millisecond)
 			}
 		}()
 		go func() {
 			defer wg.Done()
 			for range 100 {
-				c.Get(key)
+				c.Get(context.Background(), key)
 			}
 		}()
 	}

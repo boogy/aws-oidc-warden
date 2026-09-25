@@ -77,7 +77,7 @@ func TestS3CacheLocalHitSkipsS3(t *testing.T) {
 
 	c.storeInLocalCache("key1", testJWKS("kid1"), time.Now().Add(time.Minute))
 
-	got, found := c.Get("key1")
+	got, found := c.Get(context.Background(), "key1")
 	if !found || got.Keys[0].KeyID != "kid1" {
 		t.Fatal("expected local cache hit")
 	}
@@ -94,7 +94,7 @@ func TestS3CacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 	}
 	c := newTestS3Cache(mock)
 
-	got, found := c.Get("key1")
+	got, found := c.Get(context.Background(), "key1")
 	if !found || got.Keys[0].KeyID != "kid1" {
 		t.Fatal("expected S3 cache hit")
 	}
@@ -111,7 +111,7 @@ func TestS3CacheHitRepopulatesLocalWithRealExpiration(t *testing.T) {
 		t.Fatalf("local expiration = %v, want %v", entry.expiration, wantExpiration)
 	}
 
-	if _, found := c.Get("key1"); !found {
+	if _, found := c.Get(context.Background(), "key1"); !found {
 		t.Fatal("expected local hit on second Get")
 	}
 	if mock.getCalls != 1 {
@@ -144,7 +144,7 @@ func TestS3CacheMissAndErrors(t *testing.T) {
 			mock := &mockS3{getFn: tt.getFn}
 			c := newTestS3Cache(mock)
 
-			if _, found := c.Get("key1"); found {
+			if _, found := c.Get(context.Background(), "key1"); found {
 				t.Fatal("expected miss")
 			}
 		})
@@ -172,7 +172,7 @@ func TestS3CacheExpiredObjectCleanup(t *testing.T) {
 			c := newTestS3Cache(mock)
 			c.cleanup = tt.cleanup
 
-			if _, found := c.Get("key1"); found {
+			if _, found := c.Get(context.Background(), "key1"); found {
 				t.Fatal("expected miss for expired object")
 			}
 			// Deletion is synchronous, so no waiting is needed
@@ -190,7 +190,7 @@ func TestS3CacheSetIsSynchronous(t *testing.T) {
 	mock := &mockS3{}
 	c := newTestS3Cache(mock)
 
-	c.Set("key1", testJWKS("kid1"), time.Minute)
+	c.Set(context.Background(), "key1", testJWKS("kid1"), time.Minute)
 
 	if mock.putCalls != 1 {
 		t.Fatalf("PutObject called %d times before Set returned, want 1", mock.putCalls)
@@ -199,7 +199,7 @@ func TestS3CacheSetIsSynchronous(t *testing.T) {
 		t.Fatalf("PutObject key = %q, want jwks/key1", mock.lastPutKey)
 	}
 
-	if _, found := c.Get("key1"); !found {
+	if _, found := c.Get(context.Background(), "key1"); !found {
 		t.Fatal("expected local hit after Set")
 	}
 	if mock.getCalls != 0 {
@@ -217,7 +217,7 @@ func TestS3CacheWriteReadSizeLimitsAgree(t *testing.T) {
 		KeyID: "kid1",
 		N:     strings.Repeat("a", int(Defaults.MaxItemSize)+1),
 	}}}
-	c.Set("too-big", over, time.Minute)
+	c.Set(context.Background(), "too-big", over, time.Minute)
 	if mock.putCalls != 0 {
 		t.Fatalf("oversized item must not be written, PutObject called %d times", mock.putCalls)
 	}
@@ -231,13 +231,13 @@ func TestS3CacheWriteReadSizeLimitsAgree(t *testing.T) {
 	mock.getFn = func(*s3.GetObjectInput) (*s3.GetObjectOutput, error) {
 		return &s3.GetObjectOutput{Body: s3ObjectBody(t, fits, expiration)}, nil
 	}
-	c.Set("fits", fits, time.Minute)
+	c.Set(context.Background(), "fits", fits, time.Minute)
 	if mock.putCalls != 1 {
 		t.Fatalf("just-fitting item must be written, PutObject called %d times", mock.putCalls)
 	}
 
 	fresh := newTestS3Cache(mock) // empty local tier forces the S3 read path
-	if _, found := fresh.Get("fits"); !found {
+	if _, found := fresh.Get(context.Background(), "fits"); !found {
 		t.Fatal("item accepted by the write path must be readable")
 	}
 }

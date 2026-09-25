@@ -3,6 +3,7 @@ package cache
 // Covers the Cache interface, NewCache backend selection, and the
 // cross-issuer isolation property every backend must hold.
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -96,12 +97,12 @@ func TestMemoryCacheConcurrentAccessRace(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := "issuer-" + string(rune('a'+i%10))
-			c.Set(key, testJWKS("kid"), time.Minute)
+			c.Set(context.Background(), key, testJWKS("kid"), time.Minute)
 		}(i)
 		go func(i int) {
 			defer wg.Done()
 			key := "issuer-" + string(rune('a'+i%10))
-			c.Get(key)
+			c.Get(context.Background(), key)
 		}(i)
 	}
 	wg.Wait()
@@ -171,16 +172,16 @@ func TestCacheKeyIsolationAcrossIssuers(t *testing.T) {
 	for name, c := range backends {
 		t.Run(name, func(t *testing.T) {
 			jwksA := testJWKS("kid-A")
-			c.Set(issuerA, jwksA, time.Minute)
+			c.Set(context.Background(), issuerA, jwksA, time.Minute)
 
-			if got, found := c.Get(issuerB); found {
+			if got, found := c.Get(context.Background(), issuerB); found {
 				t.Fatalf("issuer with trailing slash resolved to another issuer's cached JWKS: %+v", got)
 			}
-			if got, found := c.Get(issuerC); found {
+			if got, found := c.Get(context.Background(), issuerC); found {
 				t.Fatalf("unrelated issuer resolved to another issuer's cached JWKS: %+v", got)
 			}
 
-			got, found := c.Get(issuerA)
+			got, found := c.Get(context.Background(), issuerA)
 			if !found || got.Keys[0].KeyID != "kid-A" {
 				t.Fatalf("expected issuer A to hit its own entry, got found=%v val=%+v", found, got)
 			}

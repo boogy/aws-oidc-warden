@@ -26,24 +26,24 @@ type MockAwsServiceWrapper struct {
 	mock.Mock
 }
 
-func (m *MockAwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, error) {
-	args := m.Called(bucket, key)
+func (m *MockAwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	args := m.Called(ctx, bucket, key)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(io.ReadCloser), args.Error(1)
 }
 
-func (m *MockAwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
-	args := m.Called(input)
+func (m *MockAwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
+	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*sts.AssumeRoleOutput), args.Error(1)
 }
 
-func (m *MockAwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
-	args := m.Called(input)
+func (m *MockAwsServiceWrapper) GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
+	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -54,18 +54,18 @@ func (m *MockAwsServiceWrapper) RefreshClients() {
 	m.Called()
 }
 
-func (m *MockAwsServiceWrapper) GetCallerAccount() (string, error) {
-	args := m.Called()
+func (m *MockAwsServiceWrapper) GetCallerAccount(ctx context.Context) (string, error) {
+	args := m.Called(ctx)
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockAwsServiceWrapper) GetCallerIdentityInfo() (string, bool, error) {
-	args := m.Called()
+func (m *MockAwsServiceWrapper) GetCallerIdentityInfo(ctx context.Context) (string, bool, error) {
+	args := m.Called(ctx)
 	return args.String(0), args.Bool(1), args.Error(2)
 }
 
-func (m *MockAwsServiceWrapper) GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
-	args := m.Called(input, creds)
+func (m *MockAwsServiceWrapper) GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
+	args := m.Called(ctx, input, creds)
 	if out, ok := args.Get(0).(*iam.GetRoleOutput); ok {
 		return out, args.Error(1)
 	}
@@ -98,11 +98,11 @@ func TestMockAwsServiceWrapper_GetS3Object(t *testing.T) {
 	key := "test-key"
 	content := "test content"
 
-	mockWrapper.On("GetS3Object", bucket, key).Return(
+	mockWrapper.On("GetS3Object", mock.Anything, bucket, key).Return(
 		NewMockReadCloser(content), nil,
 	).Once()
 
-	reader, err := mockWrapper.GetS3Object(bucket, key)
+	reader, err := mockWrapper.GetS3Object(context.Background(), bucket, key)
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
@@ -132,9 +132,9 @@ func TestMockAwsServiceWrapper_AssumeRole(t *testing.T) {
 		},
 	}
 
-	mockWrapper.On("AssumeRole", input).Return(output, nil).Once()
+	mockWrapper.On("AssumeRole", mock.Anything, input).Return(output, nil).Once()
 
-	result, err := mockWrapper.AssumeRole(input)
+	result, err := mockWrapper.AssumeRole(context.Background(), input)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "AKIATEST", *result.Credentials.AccessKeyId)
@@ -160,9 +160,9 @@ func TestMockAwsServiceWrapper_GetRole(t *testing.T) {
 		},
 	}
 
-	mockWrapper.On("GetRole", input).Return(output, nil).Once()
+	mockWrapper.On("GetRole", mock.Anything, input).Return(output, nil).Once()
 
-	result, err := mockWrapper.GetRole(input)
+	result, err := mockWrapper.GetRole(context.Background(), input)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, roleName, *result.Role.RoleName)
@@ -185,9 +185,9 @@ func TestGetS3ObjectErrorCase(t *testing.T) {
 	key := "error-key"
 	expectedErr := errors.New("access denied")
 
-	mockWrapper.On("GetS3Object", bucket, key).Return(nil, expectedErr).Once()
+	mockWrapper.On("GetS3Object", mock.Anything, bucket, key).Return(nil, expectedErr).Once()
 
-	reader, err := mockWrapper.GetS3Object(bucket, key)
+	reader, err := mockWrapper.GetS3Object(context.Background(), bucket, key)
 	assert.Error(t, err)
 	assert.Nil(t, reader)
 	assert.Equal(t, expectedErr, err)
@@ -215,20 +215,20 @@ func TestGetCallerIdentityInfo_RetryAfterFailure(t *testing.T) {
 		},
 	}
 
-	account, isRoleSession, err := w.GetCallerIdentityInfo()
+	account, isRoleSession, err := w.GetCallerIdentityInfo(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 	assert.Empty(t, account)
 	assert.False(t, isRoleSession)
 
-	account, isRoleSession, err = w.GetCallerIdentityInfo()
+	account, isRoleSession, err = w.GetCallerIdentityInfo(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, "111111111111", account)
 	assert.True(t, isRoleSession)
 	assert.Equal(t, 2, callCount)
 
 	// Subsequent calls use the cache, not the injected fetch function.
-	account, isRoleSession, err = w.GetCallerIdentityInfo()
+	account, isRoleSession, err = w.GetCallerIdentityInfo(context.Background())
 	assert.NoError(t, err)
 	assert.Equal(t, "111111111111", account)
 	assert.True(t, isRoleSession)
@@ -266,7 +266,7 @@ func TestGetCallerIdentityInfo_ArnDetection(t *testing.T) {
 				},
 			}
 
-			account, isRoleSession, err := w.GetCallerIdentityInfo()
+			account, isRoleSession, err := w.GetCallerIdentityInfo(context.Background())
 			assert.NoError(t, err)
 			assert.Equal(t, "111111111111", account)
 			assert.Equal(t, tt.wantRoleSession, isRoleSession)
@@ -292,7 +292,7 @@ func TestServiceWrapperImplementation(t *testing.T) {
 		bucket := "non-existent-bucket-name-123456789012"
 		key := "non-existent-key"
 
-		reader, err := wrapper.GetS3Object(bucket, key)
+		reader, err := wrapper.GetS3Object(context.Background(), bucket, key)
 		assert.Error(t, err)
 		assert.Nil(t, reader)
 	})
@@ -312,7 +312,7 @@ func TestServiceWrapperImplementation(t *testing.T) {
 			DurationSeconds: aws.Int32(900), // 15 minutes
 		}
 
-		output, err := wrapper.AssumeRole(input)
+		output, err := wrapper.AssumeRole(context.Background(), input)
 		if err != nil {
 			t.Logf("AssumeRole error (expected if no permissions): %v", err)
 			return
@@ -341,7 +341,7 @@ func TestServiceWrapperImplementation(t *testing.T) {
 			RoleName: aws.String(roleName),
 		}
 
-		output, err := wrapper.GetRole(input)
+		output, err := wrapper.GetRole(context.Background(), input)
 		if err != nil {
 			t.Logf("GetRole error (expected if no permissions): %v", err)
 			return
@@ -367,10 +367,10 @@ func TestServiceWrapperImplementation(t *testing.T) {
 // the hub role's tags would authorize assumption of the member-account role.
 func TestAudit_RoleTagCacheNoCrossAccountCollision(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 
 	// Hub read: same-account path -> GetRole with hub clients.
-	m.On("GetRole", mock.MatchedBy(func(in *iam.GetRoleInput) bool {
+	m.On("GetRole", mock.Anything, mock.MatchedBy(func(in *iam.GetRoleInput) bool {
 		return *in.RoleName == "deploy"
 	})).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{{Key: aws.String("aow/repo"), Value: aws.String("acme/hub")}},
@@ -378,13 +378,13 @@ func TestAudit_RoleTagCacheNoCrossAccountCollision(t *testing.T) {
 
 	// Spoke assume for 222 + cross-account read.
 	exp := time.Now().Add(time.Hour)
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
 		SessionToken: aws.String("ST"), Expiration: &exp,
 	}}, nil).Once()
-	m.On("GetRoleAs", mock.MatchedBy(func(in *iam.GetRoleInput) bool {
+	m.On("GetRoleAs", mock.Anything, mock.MatchedBy(func(in *iam.GetRoleInput) bool {
 		return *in.RoleName == "deploy"
 	}), mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{{Key: aws.String("aow/repo"), Value: aws.String("acme/member")}},
@@ -392,11 +392,11 @@ func TestAudit_RoleTagCacheNoCrossAccountCollision(t *testing.T) {
 
 	c := newTagAuthConsumer(m)
 
-	hubTags, err := c.GetRoleTags("arn:aws:iam::111111111111:role/deploy")
+	hubTags, err := c.GetRoleTags(context.Background(), "arn:aws:iam::111111111111:role/deploy")
 	require.NoError(t, err)
 	assert.Equal(t, "acme/hub", hubTags["aow/repo"])
 
-	memberTags, err := c.GetRoleTags("arn:aws:iam::222222222222:role/deploy")
+	memberTags, err := c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/deploy")
 	require.NoError(t, err)
 	assert.Equal(t, "acme/member", memberTags["aow/repo"],
 		"member-account role must NOT be served the hub role's cached tags")
@@ -417,13 +417,13 @@ func TestAudit_RoleTagCacheNoCrossAccountCollision(t *testing.T) {
 // and the new (revoked) tag set is what the caller sees.
 func TestAudit_RoleTagCacheExpiryEnforcedOnRead(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 
 	call := 0
-	m.On("GetRole", mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+	m.On("GetRole", mock.Anything, mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{{Key: aws.String("aow/repo"), Value: aws.String("acme/api")}},
 	}}, nil).Run(func(mock.Arguments) { call++ }).Once()
-	m.On("GetRole", mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+	m.On("GetRole", mock.Anything, mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: nil, // tags revoked
 	}}, nil).Run(func(mock.Arguments) { call++ }).Once()
 
@@ -432,20 +432,20 @@ func TestAudit_RoleTagCacheExpiryEnforcedOnRead(t *testing.T) {
 	clock := base
 	c.now = func() time.Time { return clock }
 
-	tags, err := c.GetRoleTags("arn:aws:iam::111111111111:role/app")
+	tags, err := c.GetRoleTags(context.Background(), "arn:aws:iam::111111111111:role/app")
 	require.NoError(t, err)
 	require.Equal(t, "acme/api", tags["aow/repo"])
 
 	// Still inside the TTL -> cached.
 	clock = base.Add(roleTagCacheTTL - time.Second)
-	tags, err = c.GetRoleTags("arn:aws:iam::111111111111:role/app")
+	tags, err = c.GetRoleTags(context.Background(), "arn:aws:iam::111111111111:role/app")
 	require.NoError(t, err)
 	assert.Equal(t, "acme/api", tags["aow/repo"])
 	assert.Equal(t, 1, call, "within TTL must be served from cache")
 
 	// Past the TTL -> re-read, revoked tags observed.
 	clock = base.Add(roleTagCacheTTL + time.Second)
-	tags, err = c.GetRoleTags("arn:aws:iam::111111111111:role/app")
+	tags, err = c.GetRoleTags(context.Background(), "arn:aws:iam::111111111111:role/app")
 	require.NoError(t, err)
 	assert.Empty(t, tags, "revoked tags must be observed once the TTL lapses")
 	assert.Equal(t, 2, call)
@@ -457,7 +457,7 @@ func TestAudit_RoleTagCacheExpiryEnforcedOnRead(t *testing.T) {
 // account's spoke assume targets that account's own spoke role ARN.
 func TestAudit_SpokeCacheNoCrossAccountReuse(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 
 	exp := time.Now().Add(time.Hour)
 	var seenArns []string
@@ -465,13 +465,13 @@ func TestAudit_SpokeCacheNoCrossAccountReuse(t *testing.T) {
 	// distinguishable; one expectation per account ARN.
 	for _, acct := range []string{"222222222222", "333333333333"} {
 		arn := "arn:aws:iam::" + acct + ":role/aow-spoke"
-		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 			return *in.RoleArn == arn
 		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 			AccessKeyId: aws.String("AK-" + acct), SecretAccessKey: aws.String("SK"),
 			SessionToken: aws.String("ST"), Expiration: &exp,
 		}}, nil).Run(func(args mock.Arguments) {
-			seenArns = append(seenArns, *args.Get(0).(*sts.AssumeRoleInput).RoleArn)
+			seenArns = append(seenArns, *args.Get(1).(*sts.AssumeRoleInput).RoleArn)
 		}).Once()
 	}
 
@@ -484,9 +484,9 @@ func TestAudit_SpokeCacheNoCrossAccountReuse(t *testing.T) {
 	})
 	c.AWS = m
 
-	p222, err := c.spokeCredsFor("222222222222")
+	p222, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
-	p333, err := c.spokeCredsFor("333333333333")
+	p333, err := c.spokeCredsFor(context.Background(), "333333333333")
 	require.NoError(t, err)
 
 	cr222, err := p222.Retrieve(t.Context())
@@ -508,10 +508,10 @@ func TestAudit_SpokeCacheNoCrossAccountReuse(t *testing.T) {
 // attached to the hub->spoke assume and the session is bounded.
 func TestAudit_SpokeExternalIDAndDuration(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
 	var captured *sts.AssumeRoleInput
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		captured = in
 		return true
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -528,7 +528,7 @@ func TestAudit_SpokeExternalIDAndDuration(t *testing.T) {
 	})
 	c.AWS = m
 
-	_, err := c.spokeCredsFor("222222222222")
+	_, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	require.NotNil(t, captured.ExternalId)
@@ -540,7 +540,7 @@ func TestAudit_SpokeExternalIDAndDuration(t *testing.T) {
 // reused past its refresh margin (Expiration - 5m).
 func TestAudit_SpokeCredsExpiryEnforced(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 
 	base := time.Now()
 	clock := base
@@ -550,7 +550,7 @@ func TestAudit_SpokeCredsExpiryEnforced(t *testing.T) {
 	e1 := base.Add(15 * time.Minute)
 	e2 := base.Add(11*time.Minute + 15*time.Minute)
 	for _, e := range []time.Time{e1, e2} {
-		m.On("AssumeRole", mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		m.On("AssumeRole", mock.Anything, mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 			AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
 			SessionToken: aws.String("ST"), Expiration: &e,
 		}}, nil).Run(func(mock.Arguments) { n++ }).Once()
@@ -565,17 +565,17 @@ func TestAudit_SpokeCredsExpiryEnforced(t *testing.T) {
 	c.AWS = m
 	c.now = func() time.Time { return clock }
 
-	_, err := c.spokeCredsFor("222222222222")
+	_, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 
 	clock = base.Add(9 * time.Minute) // inside margin (expires at base+10m)
-	_, err = c.spokeCredsFor("222222222222")
+	_, err = c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "still cached inside the refresh margin")
 
 	clock = base.Add(11 * time.Minute) // past margin, before real expiry
-	_, err = c.spokeCredsFor("222222222222")
+	_, err = c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	assert.Equal(t, 2, n, "must re-assume once the refresh margin lapses")
 }
@@ -586,9 +586,9 @@ func TestAudit_SpokeCredsExpiryEnforced(t *testing.T) {
 // the cache lookup).
 func TestAudit_SpokeCacheHitStillRevalidatesAllowList(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
-	m.On("AssumeRole", mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+	m.On("AssumeRole", mock.Anything, mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
 		SessionToken: aws.String("ST"), Expiration: &exp,
 	}}, nil).Once()
@@ -604,7 +604,7 @@ func TestAudit_SpokeCacheHitStillRevalidatesAllowList(t *testing.T) {
 	c.SetConfigSource(func() *gtvcfg.Config { return live })
 
 	c.AWS = m
-	_, err := c.spokeCredsFor("222222222222")
+	_, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	require.NotEmpty(t, c.spokeCache, "credentials are warm in the cache")
 
@@ -616,7 +616,7 @@ func TestAudit_SpokeCacheHitStillRevalidatesAllowList(t *testing.T) {
 			AllowedAccounts:      []string{"333333333333"},
 		},
 	}
-	_, err = c.spokeCredsFor("222222222222")
+	_, err = c.spokeCredsFor(context.Background(), "222222222222")
 	require.Error(t, err, "warm cache must not bypass the allow-list re-check")
 }
 
@@ -628,13 +628,13 @@ func TestAudit_SpokeCacheHitStillRevalidatesAllowList(t *testing.T) {
 // processor happening to call IsTargetAccountAllowed earlier in the pipeline.
 func TestAudit_RoleTagCacheRevocationIsImmediate(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
-	m.On("AssumeRole", mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+	m.On("AssumeRole", mock.Anything, mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
 		SessionToken: aws.String("ST"), Expiration: &exp,
 	}}, nil).Once()
-	m.On("GetRoleAs", mock.Anything, mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+	m.On("GetRoleAs", mock.Anything, mock.Anything, mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{{Key: aws.String("aow/repo"), Value: aws.String("acme/api")}},
 	}}, nil).Once()
 
@@ -654,7 +654,7 @@ func TestAudit_RoleTagCacheRevocationIsImmediate(t *testing.T) {
 	clock := base
 	c.now = func() time.Time { return clock }
 
-	_, err := c.GetRoleTags("arn:aws:iam::222222222222:role/app")
+	_, err := c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
 	require.NoError(t, err)
 
 	// Revoke the account entirely (cross-account off).
@@ -662,13 +662,13 @@ func TestAudit_RoleTagCacheRevocationIsImmediate(t *testing.T) {
 
 	// The cache is still warm and well inside its TTL, so only the account
 	// re-check can reject this.
-	_, err = c.GetRoleTags("arn:aws:iam::222222222222:role/app")
+	_, err = c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
 	require.Error(t, err, "a revoked account must not be served from a warm cache entry")
 	assert.Contains(t, err.Error(), "target account is not allowed")
 
 	// Still rejected after the TTL, i.e. the entry never becomes serveable again.
 	clock = base.Add(roleTagCacheTTL + time.Second)
-	_, err = c.GetRoleTags("arn:aws:iam::222222222222:role/app")
+	_, err = c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
 	require.Error(t, err, "revoked account must stay rejected past the TTL")
 }
 
@@ -676,8 +676,8 @@ func TestAudit_RoleTagCacheRevocationIsImmediate(t *testing.T) {
 // IsTargetAccountAllowed permits the hub whether or not cross-account is on.
 func TestAudit_RoleTagHubAccountUnaffectedByCrossAccountRevocation(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
-	m.On("GetRole", mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
+	m.On("GetRole", mock.Anything, mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{{Key: aws.String("aow/repo"), Value: aws.String("acme/hub")}},
 	}}, nil).Once()
 
@@ -688,7 +688,7 @@ func TestAudit_RoleTagHubAccountUnaffectedByCrossAccountRevocation(t *testing.T)
 	c.AWS = m
 	c.now = time.Now
 
-	tags, err := c.GetRoleTags("arn:aws:iam::111111111111:role/deploy")
+	tags, err := c.GetRoleTags(context.Background(), "arn:aws:iam::111111111111:role/deploy")
 	require.NoError(t, err, "hub-account tag reads must work with cross-account disabled")
 	assert.Equal(t, "acme/hub", tags["aow/repo"])
 }
