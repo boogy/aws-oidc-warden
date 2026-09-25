@@ -40,12 +40,11 @@ func logEvent(ctx context.Context, l *slog.Logger, level slog.Level, e Event, ms
 	runtime.Callers(3, pcs[:]) // skip [Callers, logEvent, Debug/Info/Warn/Error]
 	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
 
-	base := make([]slog.Attr, 0, len(attrs)+3)
-	base = append(base, slog.String(keyEventType, e.typ), slog.String(keyEventCategory, e.Category()))
+	r.AddAttrs(slog.String(keyEventType, e.typ), slog.String(keyEventCategory, e.Category()))
 	if e.outcome != "" {
-		base = append(base, slog.String(keyOutcome, e.outcome))
+		r.AddAttrs(slog.String(keyOutcome, e.outcome))
 	}
-	r.AddAttrs(append(base, attrs...)...)
+	r.AddAttrs(attrs...)
 
 	_ = l.Handler().Handle(ctx, r)
 }
