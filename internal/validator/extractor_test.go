@@ -44,11 +44,11 @@ type mockTokenValidator struct {
 	err    error
 }
 
-func (m *mockTokenValidator) Validate(token string) (*types.Claims, error) {
+func (m *mockTokenValidator) Validate(context.Context, string) (*types.Claims, error) {
 	return m.claims, m.err
 }
-func (m *mockTokenValidator) FetchJWKS(issuer string) (*types.JWKS, error) { return nil, nil }
-func (m *mockTokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc      { return nil }
+func (m *mockTokenValidator) FetchJWKS(context.Context, string) (*types.JWKS, error) { return nil, nil }
+func (m *mockTokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc                { return nil }
 
 func TestSelfExtractor_Extract(t *testing.T) {
 	want := &types.Claims{Repository: "org/repo"}

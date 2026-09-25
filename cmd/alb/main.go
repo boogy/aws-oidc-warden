@@ -9,19 +9,16 @@ var bootstrap *handler.Bootstrap
 
 func init() {
 	var err error
-	bootstrap, err = handler.NewBootstrap()
+	bootstrap, err = handler.NewBootstrap("alb")
 	if err != nil {
 		panic(err)
 	}
 }
 
 func main() {
-	// Ensure cleanup happens when the function exits
-	defer bootstrap.Cleanup()
-
 	// Create the ALB handler
 	albHandler := handler.NewAwsApplicationLoadBalancerFromBootstrap(bootstrap)
 
 	// Start the Lambda function
-	lambda.Start(albHandler.Handler)
+	lambda.StartWithOptions(albHandler.Handler, lambda.WithEnableSIGTERM(bootstrap.Cleanup))
 }

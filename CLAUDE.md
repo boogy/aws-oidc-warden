@@ -8,7 +8,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 ## Package guide
 
-- **`internal/handler/`** → [CLAUDE.md](internal/handler/CLAUDE.md) — core request pipeline shared by every deployment. `NewBootstrap()` wires DI (config, validator, cache, AWS consumer); `ProcessRequest()` runs the pipeline; `RequestData` + sentinel errors live in `types.go`; the per-frontend adapters (`apigateway.go` / `apigatewayv2.go` / `alb.go` / `lambdaurl.go`) differ only in event parse/serialize. _Go here when_ changing request flow, adding a frontend, or touching error→HTTP mapping.
+- **`internal/handler/`** → [CLAUDE.md](internal/handler/CLAUDE.md) — core request pipeline shared by every deployment. `NewBootstrap(adapter)` wires DI (config, validator, cache, AWS consumer); `ProcessRequest()` runs the pipeline; `RequestData` + sentinel errors live in `types.go`; the per-frontend adapters (`apigateway.go` / `apigatewayv2.go` / `alb.go` / `lambdaurl.go`) differ only in event parse/serialize. _Go here when_ changing request flow, adding a frontend, or touching error→HTTP mapping.
 
 - **`internal/validator/`** → [CLAUDE.md](internal/validator/CLAUDE.md) — multi-issuer JWT parse + JWKS signature/claims verification (`TokenValidatorInterface`). Routes on the unverified `iss` to a per-issuer registry spec, then verifies signature → re-asserted issuer → audience (ANY-match) → time bounds → required*claims → canonical-subject normalization. Allowed algorithms only (ES/RS 256–512, never `none`). Delegated `apigw`/`alb` share the same claim-check path. \_Go here when* touching token verification, JWKS fetching, or audience handling.
 
@@ -16,7 +16,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 - **`internal/cache/`** → [CLAUDE.md](internal/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects). _Go here when_ changing cache backends, TTL handling, or eviction.
 
-- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-resolved `sessionTags` (built by `BuildSessionTags(rawClaims, tagSpec)` from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
+- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-resolved `sessionTags` (built by `BuildSessionTags(ctx, rawClaims, tagSpec)` from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
 
 ## Other folders (no CLAUDE.md of their own)
 
@@ -35,7 +35,7 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 
 ## Conventions
 
-- Follow effective-Go idioms; structured logging with `log/slog` (never `fmt.Print`).
+- Follow effective-Go idioms; log through `internal/logevent` with a catalog event (static `msg`, camelCase `slog.Attr` attrs) — never `log/slog` directly or `fmt.Print`. A new event needs a `docs/LOGGING.md` catalog row.
 - Comments are short and rare: one line, only for a constraint the code cannot state itself. No paragraphs, no narration of what the code does, no rationale essays — that belongs in `CHANGELOG.md`, the PR, or `docs/`. Trim over-long comments in any file you touch.
 - Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
 - Sentinel errors in `internal/handler/types.go`, mapped to HTTP status in the frontend adapters.

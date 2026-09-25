@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,7 +59,7 @@ func TestRefetch_LimiterFloodCannotPinStaleKeySetAfterRotation(t *testing.T) {
 	v, _ := clockedValidator(cfg, cache.NewMemoryCache())
 
 	// Warm the cache with the pre-rotation key set.
-	_, err = v.Validate(signToken(t, oldKey, "k-old", srv.URL, "aud"))
+	_, err = v.Validate(context.Background(), signToken(t, oldKey, "k-old", srv.URL, "aud"))
 	require.NoError(t, err, "pre-rotation token must validate")
 
 	// Real key rotation: the old key is REVOKED, only the new one is served.
@@ -66,12 +67,12 @@ func TestRefetch_LimiterFloodCannotPinStaleKeySetAfterRotation(t *testing.T) {
 
 	// Attacker exhausts the limiter with distinct never-before-seen kids.
 	for i := 0; i < 50; i++ {
-		_, aerr := v.Validate(signToken(t, oldKey, fmt.Sprintf("bogus-%d", i), srv.URL, "aud"))
+		_, aerr := v.Validate(context.Background(), signToken(t, oldKey, fmt.Sprintf("bogus-%d", i), srv.URL, "aud"))
 		require.Error(t, aerr, "bogus kid %d must never validate", i)
 	}
 
 	// The legitimate rotated token now arrives.
-	claims, err := v.Validate(signToken(t, newKey, "k-new", srv.URL, "aud"))
+	claims, err := v.Validate(context.Background(), signToken(t, newKey, "k-new", srv.URL, "aud"))
 	require.NoError(t, err,
 		"FINDING: attacker flood pinned a stale key set - legitimate post-rotation token rejected")
 	assert.Equal(t, "owner/repo", claims.Subject)
@@ -97,12 +98,12 @@ func TestRefetch_LimiterDenialAfterRotationIsTransientNotPinned(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 	v, advance := clockedValidator(cfg, cache.NewMemoryCache())
 
-	_, err = v.Validate(signToken(t, oldKey, "k-old", srv.URL, "aud"))
+	_, err = v.Validate(context.Background(), signToken(t, oldKey, "k-old", srv.URL, "aud"))
 	require.NoError(t, err)
 
 	// Attacker burns the per-issuer slot BEFORE rotation, so the refetch it
 	// triggers re-caches the still-old key set.
-	_, err = v.Validate(signToken(t, oldKey, "bogus-preroll", srv.URL, "aud"))
+	_, err = v.Validate(context.Background(), signToken(t, oldKey, "bogus-preroll", srv.URL, "aud"))
 	require.Error(t, err)
 
 	// Rotation lands now, with the slot already spent and the cache stale.
@@ -111,13 +112,13 @@ func TestRefetch_LimiterDenialAfterRotationIsTransientNotPinned(t *testing.T) {
 	rotated := signToken(t, newKey, "k-new", srv.URL, "aud")
 
 	// Within the 2s backstop the refetch is denied, so this fails closed.
-	_, err = v.Validate(rotated)
+	_, err = v.Validate(context.Background(), rotated)
 	require.Error(t, err, "expected the spent per-issuer slot to deny this refetch")
 
 	// Once the backstop elapses the very same token validates: the denial was
 	// a bounded window, not a pin.
 	advance(3 * time.Second)
-	claims, err := v.Validate(signToken(t, newKey, "k-new", srv.URL, "aud"))
+	claims, err := v.Validate(context.Background(), signToken(t, newKey, "k-new", srv.URL, "aud"))
 	require.NoError(t, err,
 		"FINDING: denial persisted past the per-issuer backstop - stale key set is pinned")
 	assert.Equal(t, "owner/repo", claims.Subject)
@@ -141,14 +142,14 @@ func TestRefetch_DeniedRefetchNeverAcceptsAgainstStaleKeySet(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 	v, advance := clockedValidator(cfg, cache.NewMemoryCache())
 
-	_, err = v.Validate(signToken(t, oldKey, "k-old", srv.URL, "aud"))
+	_, err = v.Validate(context.Background(), signToken(t, oldKey, "k-old", srv.URL, "aud"))
 	require.NoError(t, err)
 
 	// Revoke the old key upstream and force the cache to catch up via a
 	// legitimate new-kid refetch.
 	served = &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k-new", &newKey.PublicKey)}}
 	advance(3 * time.Second)
-	_, err = v.Validate(signToken(t, newKey, "k-new", srv.URL, "aud"))
+	_, err = v.Validate(context.Background(), signToken(t, newKey, "k-new", srv.URL, "aud"))
 	require.NoError(t, err)
 
 	// A token signed by the REVOKED key must now fail, and must keep failing
@@ -156,7 +157,7 @@ func TestRefetch_DeniedRefetchNeverAcceptsAgainstStaleKeySet(t *testing.T) {
 	revoked := signToken(t, oldKey, "k-old", srv.URL, "aud")
 	for i := 0; i < 5; i++ {
 		advance(90 * time.Second) // clear both cooldown windows each round
-		_, rerr := v.Validate(revoked)
+		_, rerr := v.Validate(context.Background(), revoked)
 		require.Error(t, rerr, "revoked key must never validate (attempt %d)", i)
 	}
 }
@@ -254,7 +255,7 @@ func TestValidate_NonFirstAudience(t *testing.T) {
 
 	// Token carries only the THIRD configured audience.
 	token := signToken(t, key, "k1", srv.URL, "third-aud")
-	claims, err := v.Validate(token)
+	claims, err := v.Validate(context.Background(), token)
 	require.NoError(t, err)
 	assert.Equal(t, "owner/repo", claims.Repository)
 }
@@ -274,7 +275,7 @@ func TestValidate_WrongAudienceRejected(t *testing.T) {
 	v := staticValidator(cfg, cache.NewMemoryCache())
 
 	token := signToken(t, key, "k1", srv.URL, "attacker-aud")
-	_, err = v.Validate(token)
+	_, err = v.Validate(context.Background(), token)
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, validator.ErrInvalidAudience))
 }
@@ -303,7 +304,7 @@ func TestValidate_KeyRotationRefetch(t *testing.T) {
 	v := staticValidator(cfg, cache.NewMemoryCache())
 
 	// Prime the cache with the old JWKS.
-	_, err = v.Validate(signToken(t, oldKey, "old-kid", srv.URL, "aud"))
+	_, err = v.Validate(context.Background(), signToken(t, oldKey, "old-kid", srv.URL, "aud"))
 	require.NoError(t, err)
 
 	// Rotate: server now serves only the new key.
@@ -313,7 +314,7 @@ func TestValidate_KeyRotationRefetch(t *testing.T) {
 
 	// A token signed with the new key has a kid absent from the cached JWKS;
 	// it must still validate after a forced refetch.
-	claims, err := v.Validate(signToken(t, newKey, "new-kid", srv.URL, "aud"))
+	claims, err := v.Validate(context.Background(), signToken(t, newKey, "new-kid", srv.URL, "aud"))
 	require.NoError(t, err)
 	assert.Equal(t, "owner/repo", claims.Repository)
 }
@@ -327,7 +328,7 @@ func TestFetchJWKS_RejectsInsecureIssuer(t *testing.T) {
 
 	v := staticValidator(cfg, cache.NewMemoryCache())
 
-	_, err := v.FetchJWKS("http://token.example.com")
+	_, err := v.FetchJWKS(context.Background(), "http://token.example.com")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "issuer")
 }
@@ -389,7 +390,7 @@ func TestValidate_ECKey_ES256(t *testing.T) {
 
 	v := staticValidator(cfg, cache.NewMemoryCache())
 	token := signTokenEC(t, key, "ec-k1", srv.URL, "aud")
-	claims, err := v.Validate(token)
+	claims, err := v.Validate(context.Background(), token)
 	require.NoError(t, err)
 	assert.Equal(t, "owner/repo", claims.Repository)
 }
@@ -445,8 +446,8 @@ func TestValidate_ConcurrentHotSwap_Race(t *testing.T) {
 				// Results are intentionally not asserted per-iteration: which
 				// config a given call observes is a race by construction.
 				// -race is what proves the swap itself is safe.
-				_, _ = v.Validate(tokenV1)
-				_, _ = v.Validate(tokenV2)
+				_, _ = v.Validate(context.Background(), tokenV1)
+				_, _ = v.Validate(context.Background(), tokenV2)
 			}
 		}()
 	}
@@ -458,11 +459,11 @@ func TestValidate_ConcurrentHotSwap_Race(t *testing.T) {
 
 	// No-stale-read check: once Refresh has returned, every subsequent call
 	// must observe the new configuration deterministically.
-	_, err = v.Validate(tokenV1)
+	_, err = v.Validate(context.Background(), tokenV1)
 	assert.Error(t, err, "aud-v1 must be rejected after hot-reload removed it")
 	assert.True(t, errors.Is(err, validator.ErrInvalidAudience))
 
-	claims, err := v.Validate(tokenV2)
+	claims, err := v.Validate(context.Background(), tokenV2)
 	require.NoError(t, err, "aud-v2 must be accepted after hot-reload")
 	assert.Equal(t, "owner/repo", claims.Repository)
 }
@@ -485,4 +486,81 @@ func TestGenKeyFunc_ECKey_MissingCoords(t *testing.T) {
 	_, err := keyFunc(token)
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, validator.ErrKeyNotFound))
+}
+
+// TestFetchJWKS_InitiatorCancellationDoesNotAbortSharedFetch proves the
+// singleflight-shared upstream fetch is decoupled from whichever caller
+// happened to trigger it: the initiator's ctx is cancelled while the fetch is
+// still blocked upstream, and concurrent waiters on the same issuer (holding
+// their own live ctx) must still see the fetch complete successfully, with
+// exactly one upstream JWKS request made.
+func TestFetchJWKS_InitiatorCancellationDoesNotAbortSharedFetch(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	jwks := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k1", &key.PublicKey)}}
+
+	var jwksHits int32
+	release := make(chan struct{})
+	requestStarted := make(chan struct{}, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(struct {
+				Issuer  string `json:"issuer"`
+				JwksURI string `json:"jwks_uri"`
+			}{Issuer: "http://" + r.Host, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
+		case "/jwks":
+			atomic.AddInt32(&jwksHits, 1)
+			select {
+			case requestStarted <- struct{}{}:
+			default:
+			}
+			<-release
+			_ = json.NewEncoder(w).Encode(jwks)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := githubIssuer(srv.URL, "aud")
+	require.NoError(t, cfg.Validate())
+	v := staticValidator(cfg, cache.NewMemoryCache())
+
+	initCtx, initCancel := context.WithCancel(context.Background())
+	initiatorDone := make(chan struct{})
+	go func() {
+		defer close(initiatorDone)
+		_, _ = v.FetchJWKS(initCtx, srv.URL)
+	}()
+
+	<-requestStarted // initiator's request is now blocked upstream
+	initCancel()     // cancel the initiator before the shared fetch completes
+
+	const n = 5
+	type result struct {
+		jwks *types.JWKS
+		err  error
+	}
+	results := make(chan result, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			j, err := v.FetchJWKS(context.Background(), srv.URL)
+			results <- result{j, err}
+		}()
+	}
+	time.Sleep(20 * time.Millisecond) // let the waiters join the in-flight singleflight call
+	close(release)
+
+	for i := 0; i < n; i++ {
+		r := <-results
+		require.NoError(t, r.err, "a waiter with a live ctx must not see the initiator's cancellation")
+		require.NotNil(t, r.jwks)
+		assert.Len(t, r.jwks.Keys, 1)
+	}
+	<-initiatorDone
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&jwksHits),
+		"exactly one upstream JWKS fetch must occur despite N+1 concurrent callers")
 }

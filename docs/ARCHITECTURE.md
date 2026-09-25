@@ -135,7 +135,7 @@ sequenceDiagram
     Client->>Handler: POST /verify {token, role}
     Handler->>Processor: ProcessRequest()
 
-    Processor->>Validator: Validate(token)
+    Processor->>Validator: Validate(ctx, token)
     Validator->>Validator: Peek unverified iss (routing only)
     Validator->>Validator: Registry lookup: spec = registry[iss]
     Note over Validator: unknown issuer -> deny, no fetch
@@ -280,12 +280,11 @@ The AWS consumer abstracts all AWS service interactions:
 
 ```go
 type AwsConsumerInterface interface {
-    ReadS3Configuration() error
-    AssumeRole(roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
-    GetS3Object(bucket, key string) (io.ReadCloser, error)
-    GetRole(role string) (*iam.GetRoleOutput, error)
-    GetRoleTags(roleARN string) (map[string]string, error)
-    IsTargetAccountAllowed(roleArn string) (bool, error)
+    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
+    GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+    GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
+    GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
+    IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
 ```
 
@@ -299,10 +298,10 @@ type AwsConsumerInterface interface {
 
 **Session Tags Applied:**
 
-Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request:
+Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(ctx, rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request:
 
 ```go
-func BuildSessionTags(rawClaims map[string]any, tagSpec map[string]string) []types.Tag
+func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) []types.Tag
 ```
 
 A typical GitHub `session_tags` spec (`repo: repository`, `actor: actor`, `ref: ref`, ...) produces the same shape of tags v1 hardcoded, but any issuer can define its own key set from its own raw claims (see [SESSION_TAGGING.md](SESSION_TAGGING.md)). Invalid keys/values are skipped and logged, never sanitized — a tag an ABAC policy sees always carries the exact verified claim value. The list is deterministic (sorted by key) and capped at 50 tags.
@@ -313,8 +312,8 @@ The caching system provides multiple storage backends for JWKS data:
 
 ```go
 type Cache interface {
-    Get(key string) (*types.JWKS, bool)
-    Set(key string, value *types.JWKS, ttl time.Duration)
+    Get(ctx context.Context, key string) (*types.JWKS, bool)
+    Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration)
 }
 ```
 
@@ -598,7 +597,7 @@ If your threat model requires hard replay prevention, put a short-lived, single-
 
 ### 1. Caching Performance
 
-JWKS documents change rarely (issuer key rotations), so with any backend and a sane `cache.ttl` nearly every request is served from cache; only cold starts and key rotations pay the upstream fetch. In `self` mode even the cold start is usually covered: `NewBootstrap()` warm-prefetches every configured issuer's JWKS during Lambda INIT (best-effort, 3s-bounded), so the first request normally finds the key already cached. A slow or unreachable issuer is abandoned at the timeout and fetched inline on first use. Relative cost per lookup:
+JWKS documents change rarely (issuer key rotations), so with any backend and a sane `cache.ttl` nearly every request is served from cache; only cold starts and key rotations pay the upstream fetch. In `self` mode even the cold start is usually covered: `NewBootstrap` warm-prefetches every configured issuer's JWKS during Lambda INIT (best-effort, 3s-bounded), so the first request normally finds the key already cached. A slow or unreachable issuer is abandoned at the timeout and fetched inline on first use. Relative cost per lookup:
 
 - Memory: in-process map access (fastest; lost on container recycle)
 - DynamoDB: one-digit-millisecond network hop, shared across containers
@@ -666,6 +665,7 @@ Version-pinned tags (`apigatewayv2-v3.3.0`) are published alongside; a prereleas
 | Config         | Either bake `config.yaml` into the package (`CONFIG_NAME`/`CONFIG_PATH`) or serve it from S3 with `AOW_S3_CONFIG_BUCKET` + `AOW_S3_CONFIG_PATH`, which the provider re-reads on its refresh interval so policy changes need no redeploy. Every setting also has an `AOW_*` override (`AOW_JWT_VALIDATION_MODE`, `LOG_LEVEL`, …).                                                |
 | Execution role | The policy in [Required IAM Permissions](#required-iam-permissions), narrowed to the buckets, table, and target roles you actually enable.                                                                                                                                                                                                                                      |
 | Resources      | Only what the config turns on: the config bucket, a DynamoDB cache table (**with a TTL attribute configured**, or entries never expire), an S3 cache bucket, the audit bucket (`audit_required` needs one, or the fail-closed guarantee silently degrades to a no-op), and a session-policy bucket.                                                                             |
+| Raw logs       | Optional. The service writes operational logs to stdout (CloudWatch Logs) only — it does not ship them to S3 itself. To archive raw logs in S3, add a CloudWatch Logs subscription filter → Kinesis Data Firehose → S3 in your own IaC.                                                                                                                                       |
 | Front-end      | `apigw` mode needs one HTTP API JWT Authorizer + route per issuer (max 10 per API); WAF attaches to REST APIs only. In `apigw` mode, grant `lambda:InvokeFunction` to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — see [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).          |
 
 Cross-account target and spoke roles: [examples/cross-account/](examples/cross-account/README.md).

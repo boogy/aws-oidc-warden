@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -56,7 +57,7 @@ type failingFake struct {
 	err error
 }
 
-func (f *failingFake) AssumeRole(*sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
+func (f *failingFake) AssumeRole(context.Context, *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
 	f.assumeCalls++
 	return nil, f.err
 }
@@ -65,7 +66,7 @@ func assumeWithSTSError(t *testing.T, stsErr error) error {
 	t.Helper()
 	c := NewAwsConsumer(vbaseCfg())
 	c.AWS = &failingFake{vFake: &vFake{}, err: stsErr}
-	_, err := c.AssumeRole("arn:aws:iam::"+hubAcct+":role/Target", "aow", nil, nil, nil, nil)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/Target", "aow", nil, nil, nil, nil)
 	require.Error(t, err)
 	return err
 }

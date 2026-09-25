@@ -150,16 +150,19 @@ type fakeConsumer struct {
 	assumeErr       error
 }
 
-func (f *fakeConsumer) ReadS3Configuration() error { return nil }
-func (f *fakeConsumer) GetS3Object(string, string) (io.ReadCloser, error) {
+func (f *fakeConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("not used")
 }
-func (f *fakeConsumer) GetRole(string) (*awsiam.GetRoleOutput, error) { return nil, nil }
-func (f *fakeConsumer) GetRoleTags(string) (map[string]string, error) { return f.tags, f.tagsErr }
-func (f *fakeConsumer) IsTargetAccountAllowed(string) (bool, error) {
+func (f *fakeConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
+	return nil, nil
+}
+func (f *fakeConsumer) GetRoleTags(context.Context, string) (map[string]string, error) {
+	return f.tags, f.tagsErr
+}
+func (f *fakeConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return f.allowAccount, f.allowAccountErr
 }
-func (f *fakeConsumer) AssumeRole(roleARN, sessionName string, _ *string, _ *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
+func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, _ *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
 	f.assumed = roleARN
 	f.gotSessionName = sessionName
 	f.gotClaims = claims
@@ -307,7 +310,7 @@ func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted), "want ErrRoleNotPermitted, got %v", err)
 	assert.Empty(t, fc.assumed, "FAIL-OPEN: credentials minted after the role-tag read failed")
-	assert.Contains(t, buf.String(), "could not read role tags", "the read failure must be visible in the log stream")
+	assert.Contains(t, buf.String(), `"eventType":"authz.tag_auth.lookup_failure"`, "the read failure must be visible in the log stream")
 	assert.Contains(t, buf.String(), "AccessDenied: iam:GetRole", "the underlying AWS error must be reported")
 }
 
@@ -344,7 +347,7 @@ func TestProcessRequest_TagAuthAuditRecordsMatchedVia(t *testing.T) {
 	assert.Equal(t, "tag-auth", rec["matchedVia"])
 	assert.Equal(t, "rid-tagauth", rec["requestId"])
 	assert.Equal(t, "arn:aws:iam::111111111111:role/app", rec["grantedRole"])
-	assert.True(t, strings.Contains(buf.String(), "Authorized via role tags"),
+	assert.True(t, strings.Contains(buf.String(), `"eventType":"authz.tag_auth.success"`),
 		"the tag-auth grant must be distinguishable in the log stream too")
 }
 

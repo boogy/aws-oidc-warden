@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
 
@@ -40,8 +41,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
 
-	log := requestLogger(ctx,
-		slog.String("requestId", requestID),
+	log := requestLogger(
 		slog.String("path", event.Path),
 		slog.String("method", event.HTTPMethod),
 		slog.String("targetGroupArn", event.RequestContext.ELB.TargetGroupArn),
@@ -53,11 +53,14 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 
 	// Bound before body parsing to reject oversized ALB OIDC headers early.
 	if len(oidcData) > MaxTokenLength {
-		return h.respondError(ctx, fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size"), http.StatusBadRequest)
+		err := fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size")
+		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
+		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 
 	requestData, err := h.unmarshalRequestData(event.Body, oidcData)
 	if err != nil {
+		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 

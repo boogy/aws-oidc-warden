@@ -4,6 +4,7 @@ package validator_test
 // issuer, audience ANY-match across one or many audiences, time bounds, and
 // required_claims.
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -33,16 +34,16 @@ type MockCache struct {
 	mock.Mock
 }
 
-func (m *MockCache) Get(key string) (*types.JWKS, bool) {
-	args := m.Called(key)
+func (m *MockCache) Get(ctx context.Context, key string) (*types.JWKS, bool) {
+	args := m.Called(ctx, key)
 	if args.Get(0) == nil {
 		return nil, args.Bool(1)
 	}
 	return args.Get(0).(*types.JWKS), args.Bool(1)
 }
 
-func (m *MockCache) Set(key string, value *types.JWKS, ttl time.Duration) {
-	m.Called(key, value, ttl)
+func (m *MockCache) Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration) {
+	m.Called(ctx, key, value, ttl)
 }
 
 // staticValidator builds a TokenValidator from a config that never hot-reloads,
@@ -139,7 +140,7 @@ func TestNewTokenValidator_UnknownIssuerDenied(t *testing.T) {
 	token, err := createGithubToken(privateKey, "kid", "https://untrusted.example.com", "aud", "owner/repo")
 	require.NoError(t, err)
 
-	_, err = v.Validate(token)
+	_, err = v.Validate(context.Background(), token)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, validator.ErrUnknownIssuer))
 }
@@ -159,7 +160,7 @@ func TestValidate_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", issuer).Return(jwks, true)
+	mockCache.On("Get", mock.Anything, issuer).Return(jwks, true)
 
 	cfg := &config.Config{
 		Issuers: []config.IssuerConfig{
@@ -172,7 +173,7 @@ func TestValidate_Success(t *testing.T) {
 
 	v := staticValidator(cfg, mockCache)
 
-	claims, err := v.Validate(token)
+	claims, err := v.Validate(context.Background(), token)
 	require.NoError(t, err)
 	require.NotNil(t, claims)
 	assert.Equal(t, repository, claims.Repository)
@@ -207,7 +208,7 @@ func TestValidate_UnknownIssuer_JWKSNeverFetched(t *testing.T) {
 	require.NoError(t, err)
 	token := signToken(t, key, "k1", srv.URL, "aud")
 
-	_, err = v.Validate(token)
+	_, err = v.Validate(context.Background(), token)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, validator.ErrUnknownIssuer))
 	assert.Equal(t, int32(0), atomic.LoadInt32(&fetchCount), "discovery/JWKS endpoint must never be hit for an unknown issuer")
@@ -229,7 +230,7 @@ func TestValidate_InvalidAudience(t *testing.T) {
 	require.NoError(t, err)
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", issuer).Return(jwks, true)
+	mockCache.On("Get", mock.Anything, issuer).Return(jwks, true)
 
 	cfg := &config.Config{
 		Issuers: []config.IssuerConfig{
@@ -242,7 +243,7 @@ func TestValidate_InvalidAudience(t *testing.T) {
 
 	v := staticValidator(cfg, mockCache)
 
-	claims, err := v.Validate(token)
+	claims, err := v.Validate(context.Background(), token)
 	require.Error(t, err)
 	assert.Nil(t, claims)
 	assert.True(t, errors.Is(err, validator.ErrInvalidAudience))
@@ -275,7 +276,7 @@ func TestValidate_TwoIssuerAudienceIsolation(t *testing.T) {
 
 	// Issuer A accepts its own audience.
 	tokenAOK := signToken(t, keyA, "ka", srvA.URL, "aud-a")
-	claims, err := v.Validate(tokenAOK)
+	claims, err := v.Validate(context.Background(), tokenAOK)
 	require.NoError(t, err)
 	assert.Equal(t, "owner/repo", claims.Repository)
 
@@ -283,13 +284,13 @@ func TestValidate_TwoIssuerAudienceIsolation(t *testing.T) {
 	// acceptance just because the string matches — each issuer's audience
 	// set is isolated.
 	tokenAWrongAud := signToken(t, keyA, "ka", srvA.URL, "aud-b")
-	_, err = v.Validate(tokenAWrongAud)
+	_, err = v.Validate(context.Background(), tokenAWrongAud)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, validator.ErrInvalidAudience))
 
 	// Issuer B accepts its own audience via its own JWKS/key.
 	tokenBOK := signToken(t, keyB, "kb", srvB.URL, "aud-b")
-	claims, err = v.Validate(tokenBOK)
+	claims, err = v.Validate(context.Background(), tokenBOK)
 	require.NoError(t, err)
 	assert.Equal(t, "owner/repo", claims.Repository)
 }
@@ -309,7 +310,7 @@ func TestValidate_MissingRequiredClaims(t *testing.T) {
 	require.NoError(t, err)
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", issuer).Return(jwks, true)
+	mockCache.On("Get", mock.Anything, issuer).Return(jwks, true)
 
 	cfg := &config.Config{
 		Issuers: []config.IssuerConfig{
@@ -322,7 +323,7 @@ func TestValidate_MissingRequiredClaims(t *testing.T) {
 
 	v := staticValidator(cfg, mockCache)
 
-	claims, err := v.Validate(token)
+	claims, err := v.Validate(context.Background(), token)
 	require.Error(t, err)
 	assert.Nil(t, claims)
 	assert.True(t, errors.Is(err, validator.ErrMissingRequiredClaim))
@@ -363,7 +364,7 @@ func TestValidate_GenericProvider_SubjectMappingIgnoresRogueClaim(t *testing.T) 
 		"repository":   "attacker/repo", // rogue claim; must never become the canonical subject
 	})
 
-	claims, err := v.Validate(token)
+	claims, err := v.Validate(context.Background(), token)
 	require.NoError(t, err)
 	assert.Equal(t, "group/project", claims.Subject, "canonical subject must come from claim_mappings.subject, not a same-named GitHub claim")
 	assert.Empty(t, claims.Repository, "generic provider must not populate GitHub-specific struct fields")
@@ -383,7 +384,7 @@ func TestValidate_TokenTooLarge(t *testing.T) {
 
 	v := staticValidator(cfg, new(MockCache))
 
-	_, err := v.Validate(strings.Repeat("a", 100))
+	_, err := v.Validate(context.Background(), strings.Repeat("a", 100))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, validator.ErrTokenTooLarge))
 }
@@ -407,7 +408,7 @@ func TestValidate_SignatureInvalid(t *testing.T) {
 	_ = signingKey
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", issuer).Return(jwks, true)
+	mockCache.On("Get", mock.Anything, issuer).Return(jwks, true)
 
 	cfg := &config.Config{
 		Issuers: []config.IssuerConfig{
@@ -420,7 +421,7 @@ func TestValidate_SignatureInvalid(t *testing.T) {
 
 	v := staticValidator(cfg, mockCache)
 
-	claims, err := v.Validate(token)
+	claims, err := v.Validate(context.Background(), token)
 	require.Error(t, err)
 	assert.Nil(t, claims)
 	assert.Contains(t, err.Error(), "jwt parse error")
@@ -436,12 +437,12 @@ func TestFetchJWKS_CacheHit(t *testing.T) {
 	jwks := createJWKS("test-key-id", publicKey)
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", issuer).Return(jwks, true)
+	mockCache.On("Get", mock.Anything, issuer).Return(jwks, true)
 
 	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}}
 	v := staticValidator(cfg, mockCache)
 
-	result, err := v.FetchJWKS(issuer)
+	result, err := v.FetchJWKS(context.Background(), issuer)
 	require.NoError(t, err)
 	assert.Equal(t, jwks, result)
 
@@ -486,13 +487,13 @@ func TestFetchJWKS_CacheMiss(t *testing.T) {
 	srvURL = server.URL
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", server.URL).Return(nil, false)
-	mockCache.On("Set", server.URL, mock.AnythingOfType("*types.JWKS"), mock.AnythingOfType("time.Duration")).Return()
+	mockCache.On("Get", mock.Anything, server.URL).Return(nil, false)
+	mockCache.On("Set", mock.Anything, server.URL, mock.AnythingOfType("*types.JWKS"), mock.AnythingOfType("time.Duration")).Return()
 
 	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
-	result, err := v.FetchJWKS(server.URL)
+	result, err := v.FetchJWKS(context.Background(), server.URL)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Len(t, result.Keys, 1)
@@ -517,12 +518,12 @@ func TestFetchJWKS_EmptyJWKSRejected(t *testing.T) {
 	srvURL = server.URL
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", server.URL).Return(nil, false)
+	mockCache.On("Get", mock.Anything, server.URL).Return(nil, false)
 
 	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
-	_, err := v.FetchJWKS(server.URL)
+	_, err := v.FetchJWKS(context.Background(), server.URL)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no keys")
 
@@ -557,12 +558,12 @@ func TestFetchJWKS_TooManyKeysRejected(t *testing.T) {
 	srvURL = server.URL
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", server.URL).Return(nil, false)
+	mockCache.On("Get", mock.Anything, server.URL).Return(nil, false)
 
 	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
-	_, err = v.FetchJWKS(server.URL)
+	_, err = v.FetchJWKS(context.Background(), server.URL)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "too many keys")
 
@@ -585,12 +586,12 @@ func TestFetchJWKS_LargeOIDCDiscoveryRejected(t *testing.T) {
 	defer server.Close()
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", server.URL).Return(nil, false)
+	mockCache.On("Get", mock.Anything, server.URL).Return(nil, false)
 
 	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
-	_, err := v.FetchJWKS(server.URL)
+	_, err := v.FetchJWKS(context.Background(), server.URL)
 	assert.Error(t, err)
 }
 
@@ -620,12 +621,12 @@ func TestFetchJWKS_LargeJWKSRejected(t *testing.T) {
 	srvURL = server.URL
 
 	mockCache := new(MockCache)
-	mockCache.On("Get", server.URL).Return(nil, false)
+	mockCache.On("Get", mock.Anything, server.URL).Return(nil, false)
 
 	cfg := &config.Config{Cache: &config.Cache{TTL: 10 * time.Minute}, AllowInsecureIssuers: true}
 	v := staticValidator(cfg, mockCache)
 
-	_, err := v.FetchJWKS(server.URL)
+	_, err := v.FetchJWKS(context.Background(), server.URL)
 	assert.Error(t, err)
 }
 
@@ -779,7 +780,7 @@ func TestValidate_AudienceMatchTableDriven(t *testing.T) {
 			v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
 
 			token := signToken(t, key, "k1", srv.URL, tt.tokenAudience)
-			claims, err := v.Validate(token)
+			claims, err := v.Validate(context.Background(), token)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -818,6 +819,6 @@ func TestValidate_EmptyAudiencesConfiguredDeniesEverything(t *testing.T) {
 	v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
 
 	token := signToken(t, key, "k1", srv.URL, "sts.amazonaws.com")
-	_, err = v.Validate(token)
+	_, err = v.Validate(context.Background(), token)
 	assert.Error(t, err)
 }

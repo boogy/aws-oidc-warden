@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-09-25
+
+### Added
+
+- **Structured, typed log events (`internal/logevent`) replace ad hoc `slog` calls everywhere.** Every log line now carries a schema v1: a catalog `eventType` (e.g. `sts.assume_role.failure`), its `eventCategory` (the type's first segment), and an `outcome` (`success`/`failure` derived from the type, or `allow`/`deny` on `authz.decision`). See [docs/LOGGING.md § Log schema](docs/LOGGING.md#log-schema) and the new [Event catalog](docs/LOGGING.md#event-catalog).
+
+  - `service`, `version`, `adapter`, `schemaVersion` are stamped once on the base logger by `logevent.Setup` and appear on every line.
+  - Request context — `requestId`, `frontendRequestId`, `sourceIp`, `sourceIpFrom` — is now injected via a context-aware `slog.Handler` and reaches every log line for a request, including ones emitted from `internal/validator`, `internal/cache`, and `internal/aws`, not only `internal/handler`.
+  - A new `sts.assume_role.success` line (Info) logs `roleArn`, `durationMs`, and `assumedRoleId` on every successful `AssumeRole`, closing the gap where only failures were logged.
+  - `docs/LOGGING.md` gained the Log schema and Event catalog sections, plus a `docs_sync_test.go` in `internal/logevent` that fails CI if a registered event has no catalog row.
+  - `forbidigo` (golangci-lint) now bans calling `slog.(Debug|Info|Warn|Error)(Context)?` or `(*slog.Logger).(Debug|Info|Warn|Error)(Context)?` directly outside `internal/logevent` and tests, so new code is forced through the catalog.
+
+### Changed
+
+- **Client-caused denials now log at Warn, never Error.** `authz.decision` with `outcome = "deny"` and `request.rejected` are both Warn — Error is reserved for server-side faults (STS/S3/IAM failures, JWKS fetch failure, audit write failure), never for a caller's bad or unauthorized token.
+- **Exactly one terminal log line per request.** Every request now emits precisely one of `authz.decision` (pipeline ran) or `request.rejected` (rejected before the pipeline); `request.response` is a separate Debug line and never a substitute for either.
+- **`msg` text changed on every migrated log line and is no longer a stable query key.** Query on `eventType` instead — see [docs/LOGGING.md § Event catalog](docs/LOGGING.md#event-catalog).
+- **Role ARNs are logged as `roleArn`, never `role`.** Affects the pipeline's `request` group and the `unscoped_mapping_outranks_scoped` / `tag_auth_bypasses_mapping_scoping` config warnings.
+- **`handler.NewBootstrap(adapter string)`** now takes the frontend adapter name, stamped into every log line as `adapter`.
+- **`aws.BuildSessionTags(ctx, rawClaims, tagSpec)`** now takes a `context.Context` as its first argument, so session-tag construction can log with request context attached.
+- Cache (`internal/cache`), validator (`internal/validator`), AWS (`internal/aws`), and `internal/s3logger` I/O paths are now context-aware throughout, so their log lines carry the request context.
+
+### Fixed
+
+- **Unbounded log buffer in warm Lambda containers.** `initializeLogger` teed every log line into an in-memory `bytes.Buffer` meant to be flushed to S3 by `Bootstrap.Cleanup()`, but `Cleanup()` is `defer`red after `lambda.Start`, which never returns for the life of the container — so the buffer grew without bound and its contents never reached S3. Logs now go to stdout (CloudWatch) only; S3 keeps carrying the per-decision audit record instead.
+- **Buffered audit records lost at container shutdown.** With `audit_required` off, decisions batched for S3 were flushed only by size or age — the age timer is frozen between invocations and `Cleanup()` never ran, so a reclaimed container dropped its pending batch. The Lambda mains now start with `lambda.WithEnableSIGTERM(bootstrap.Cleanup)`, which registers an internal extension so the platform sends SIGTERM before shutdown; `Cleanup()` stops the batch timer — which can no longer re-arm itself after `S3Logger.Close()` — and flushes. Still best-effort (~500 ms window); `audit_required` remains the durable path.
+
 ## [3.4.1] - 2026-09-18
 
 Maintenance release: dependency updates only. No code changes, so no behavior change and nothing to do on upgrade.
@@ -794,7 +821,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.0...HEAD
+[3.5.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...v3.5.0
 [3.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.0...v3.4.1
 [3.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.3.0...v3.4.0
 [3.3.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.2.0...v3.3.0

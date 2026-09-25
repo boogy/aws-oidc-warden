@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,8 +19,11 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/boogy/aws-oidc-warden/internal/version"
+	"github.com/google/uuid"
 )
 
 // Settings for the local server
@@ -31,12 +35,17 @@ type ServerSettings struct {
 }
 
 func main() {
-	settings := parseCliFlags()
-	setupLogging(settings.LogLevel)
+	ctx := context.Background()
+	settings, cliErr := parseCliFlags()
+	logger := setupLogging(settings.LogLevel)
+	if cliErr != nil {
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to set CONFIG_PATH environment variable",
+			slog.String("component", "config"), slog.String("error", cliErr.Error()))
+	}
 
 	// Log version information
 	versionInfo := version.Get()
-	slog.Info("Starting AWS OIDC Warden Local Server",
+	logevent.Info(ctx, logger, logevent.AppStart, "starting AWS OIDC Warden local server",
 		slog.String("version", versionInfo.Version),
 		slog.String("commit", versionInfo.Commit),
 		slog.String("date", versionInfo.Date),
@@ -45,14 +54,16 @@ func main() {
 	// Load configuration
 	cfg, err := config.NewConfig()
 	if err != nil {
-		slog.Error("Failed to load config", slog.String("error", err.Error()))
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to load config",
+			slog.String("component", "config"), slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	// Initialize the cache
 	jwksCache, err := cache.NewCache(cfg)
 	if err != nil {
-		slog.Error("Failed to initialize cache", slog.String("error", err.Error()))
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to initialize cache",
+			slog.String("component", "cache"), slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
@@ -65,8 +76,9 @@ func main() {
 	var provider *config.Provider
 	if len(cfg.ConfigFragments) > 0 {
 		provider = config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil)
-		if err := provider.Refresh(context.Background()); err != nil {
-			slog.Error("Failed to merge config fragments", slog.String("error", err.Error()))
+		if err := provider.Refresh(ctx); err != nil {
+			logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to merge config fragments",
+				slog.String("component", "remote_config"), slog.String("error", err.Error()))
 			os.Exit(1)
 		}
 	} else {
@@ -86,6 +98,10 @@ func main() {
 
 	// Set up HTTP server
 	http.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
+		requestID := uuid.New().String()
+		sourceIP := remoteIP(r.RemoteAddr)
+		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: requestID, SourceIP: sourceIP})
+
 		// Simulate network latency if configured
 		if settings.SimulateLatency > 0 {
 			time.Sleep(settings.SimulateLatency)
@@ -93,6 +109,8 @@ func main() {
 
 		// Only accept POST requests
 		if r.Method != http.MethodPost {
+			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
+				slog.String("reason", "method not allowed"), slog.String("method", r.Method))
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -100,12 +118,15 @@ func main() {
 		// Read the request body
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
+				slog.String("reason", "body read failed"), slog.String("error", err.Error()))
 			http.Error(w, "Error reading request body", http.StatusBadRequest)
 			return
 		}
 		defer func() {
 			if err := r.Body.Close(); err != nil {
-				slog.Error("Error closing request body", "error", err)
+				logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error closing request body",
+					slog.String("error", err.Error()))
 			}
 		}()
 
@@ -117,6 +138,10 @@ func main() {
 			Headers:               make(map[string]string),
 			QueryStringParameters: make(map[string]string),
 			PathParameters:        make(map[string]string),
+			RequestContext: events.APIGatewayProxyRequestContext{
+				RequestID: requestID,
+				Identity:  events.APIGatewayRequestIdentity{SourceIP: sourceIP},
+			},
 		}
 
 		// Copy headers
@@ -134,9 +159,10 @@ func main() {
 		}
 
 		// Call the Lambda handler function
-		response, err := handlerFunc(r.Context(), apiGatewayEvent)
+		response, err := handlerFunc(reqCtx, apiGatewayEvent)
 		if err != nil {
-			slog.Error("Handler error", slog.String("error", err.Error()))
+			logevent.Error(reqCtx, logger, logevent.HTTPResponseFailure, "handler error",
+				slog.String("error", err.Error()))
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -151,16 +177,19 @@ func main() {
 
 		// Write response body
 		if _, err := w.Write([]byte(response.Body)); err != nil {
-			slog.Error("Error writing response", "error", err)
+			logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error writing response",
+				slog.String("error", err.Error()))
 		}
 	})
 
 	// Add a health check endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: uuid.New().String(), SourceIP: remoteIP(r.RemoteAddr)})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
-			slog.Error("Error encoding health check response", "error", err)
+			logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error encoding health check response",
+				slog.String("error", err.Error()))
 		}
 	})
 
@@ -177,29 +206,40 @@ func main() {
 		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 		<-stop
 
-		slog.Info("Shutting down server...")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := server.Shutdown(ctx); err != nil {
-			slog.Error("Server shutdown error", slog.String("error", err.Error()))
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server shutdown error",
+				slog.String("error", err.Error()))
 		}
 	}()
 
-	slog.Info("Starting local development server",
+	logevent.Info(ctx, logger, logevent.HTTPServerStart, "starting local development server",
 		slog.Int("port", settings.Port),
 		slog.String("verifyEndpoint", fmt.Sprintf("http://localhost:%d/verify", settings.Port)),
 		slog.String("healthEndpoint", fmt.Sprintf("http://localhost:%d/health", settings.Port)))
 
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		slog.Error("Server error", slog.String("error", err.Error()))
+		logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server error",
+			slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	slog.Info("Server stopped")
+	logevent.Info(ctx, logger, logevent.AppStop, "server stopped")
 }
 
-func parseCliFlags() ServerSettings {
+// remoteIP strips the port from RemoteAddr, returning it unchanged if it has none.
+func remoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
+}
+
+// parseCliFlags runs before logging is set up, so it returns errors instead of logging them.
+func parseCliFlags() (ServerSettings, error) {
 	settings := ServerSettings{}
 
 	flag.IntVar(&settings.Port, "port", 8080, "Port to listen on")
@@ -209,35 +249,20 @@ func parseCliFlags() ServerSettings {
 
 	flag.Parse()
 
-	// Set config path as environment variable if provided
 	if settings.ConfigPath != "" {
 		if err := os.Setenv("CONFIG_PATH", settings.ConfigPath); err != nil {
-			slog.Error("Error setting CONFIG_PATH environment variable", "error", err)
+			return settings, err
 		}
 	}
 
-	return settings
+	return settings, nil
 }
 
-func setupLogging(level string) {
-	var logLevel slog.Level
-	switch level {
-	case "debug":
-		logLevel = slog.LevelDebug
-	case "info":
-		logLevel = slog.LevelInfo
-	case "warn":
-		logLevel = slog.LevelWarn
-	case "error":
-		logLevel = slog.LevelError
-	default:
+// setupLogging installs the base JSON logger for the local adapter.
+func setupLogging(level string) *slog.Logger {
+	logLevel, err := utils.ParseLogLevel(level)
+	if err != nil {
 		logLevel = slog.LevelInfo
 	}
-
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
-	})
-
-	logger := slog.New(handler)
-	slog.SetDefault(logger)
+	return logevent.Setup(os.Stdout, logLevel, "local")
 }

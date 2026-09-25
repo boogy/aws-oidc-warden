@@ -9,14 +9,13 @@ var bootstrap *handler.Bootstrap
 
 func init() {
 	var err error
-	bootstrap, err = handler.NewBootstrap()
+	bootstrap, err = handler.NewBootstrap("apigatewayv2")
 	if err != nil {
 		panic(err)
 	}
 }
 
 func main() {
-	defer bootstrap.Cleanup()
 	h := handler.NewAwsApiGatewayV2FromBootstrap(bootstrap)
-	lambda.Start(h.Handler)
+	lambda.StartWithOptions(h.Handler, lambda.WithEnableSIGTERM(bootstrap.Cleanup))
 }

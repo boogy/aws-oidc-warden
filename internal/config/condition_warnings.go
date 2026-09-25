@@ -1,12 +1,14 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"maps"
 	"reflect"
 	"strings"
 
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
@@ -108,12 +110,15 @@ func warnConditionKeysAt(cond *Condition, path, where string, known map[string]b
 // warnUnknownClaims flags a claim name the issuer does not issue.
 func warnUnknownClaims(claims map[string]Patterns, prefix, where string, known map[string]bool, underNoneOf bool) {
 	msg := "condition references a claim this issuer does not issue; it can never match — check the spelling"
+	code := "condition_unknown_claim"
 	if underNoneOf {
 		msg = "none_of references a claim this issuer does not issue; it can never match, so this member can never veto and the mapping authorizes what it was meant to refuse — check the spelling"
+		code = "condition_none_of_unknown_claim"
 	}
 	for _, claim := range utils.SortedKeys(claims) {
 		if !known[claim] {
-			slog.Warn(msg,
+			logevent.Warn(context.Background(), nil, logevent.ConfigWarning, msg,
+				slog.String("warning", code),
 				slog.String("mapping", where),
 				slog.String("key", prefix+"."+claim))
 		}

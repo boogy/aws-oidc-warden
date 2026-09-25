@@ -6,8 +6,8 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Caches JWKS to avoid re-fetching fro
 
 ```go
 type Cache interface {
-    Get(key string) (*types.JWKS, bool)
-    Set(key string, value *types.JWKS, ttl time.Duration)
+    Get(ctx context.Context, key string) (*types.JWKS, bool)
+    Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration)
 }
 ```
 

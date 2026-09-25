@@ -2,6 +2,7 @@ package aws
 
 // AssumeRole: adversarial verification of session tags, role-name length, and confused-deputy protections.
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -33,8 +34,10 @@ type vFake struct {
 	getRoleAsUsed bool
 }
 
-func (f *vFake) GetS3Object(string, string) (io.ReadCloser, error) { return nil, errors.New("nope") }
-func (f *vFake) AssumeRole(in *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
+func (f *vFake) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
+	return nil, errors.New("nope")
+}
+func (f *vFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
 	f.lastAssume = in
 	f.assumeCalls++
 	return &sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -43,15 +46,15 @@ func (f *vFake) AssumeRole(in *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, erro
 		SessionToken:    aws.String("token"),
 	}}, nil
 }
-func (f *vFake) GetRole(*iam.GetRoleInput) (*iam.GetRoleOutput, error) {
+func (f *vFake) GetRole(context.Context, *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
 	return &iam.GetRoleOutput{Role: &iamtypes.Role{Tags: f.roleTags}}, nil
 }
-func (f *vFake) GetRoleAs(*iam.GetRoleInput, aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
+func (f *vFake) GetRoleAs(context.Context, *iam.GetRoleInput, aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
 	f.getRoleAsUsed = true
 	return &iam.GetRoleOutput{Role: &iamtypes.Role{Tags: f.roleTags}}, nil
 }
-func (f *vFake) GetCallerAccount() (string, error) { return hubAcct, nil }
-func (f *vFake) GetCallerIdentityInfo() (string, bool, error) {
+func (f *vFake) GetCallerAccount(context.Context) (string, error) { return hubAcct, nil }
+func (f *vFake) GetCallerIdentityInfo(context.Context) (string, bool, error) {
 	return hubAcct, f.isRoleSession, nil
 }
 func (f *vFake) RefreshClients() {}
@@ -74,16 +77,16 @@ func TestCrossAccountDisabledFailsClosed(t *testing.T) {
 	c, f := vconsumer(t, vbaseCfg()) // CrossAccount nil == disabled
 	memberRole := "arn:aws:iam::" + memberAcct + ":role/Target"
 
-	if ok, err := c.IsTargetAccountAllowed(memberRole); err != nil || ok {
+	if ok, err := c.IsTargetAccountAllowed(context.Background(), memberRole); err != nil || ok {
 		t.Errorf("GUARD BYPASS: member account allowed with cross-account disabled (ok=%v err=%v)", ok, err)
 	}
-	if _, err := c.AssumeRole(memberRole, "aow", nil, nil, nil, nil); err == nil {
+	if _, err := c.AssumeRole(context.Background(), memberRole, "aow", nil, nil, nil, nil); err == nil {
 		t.Error("FAIL-OPEN: assumed a member-account role with cross-account disabled")
 	}
 	if f.assumeCalls != 0 {
 		t.Errorf("STS was called %d times despite the guard denying", f.assumeCalls)
 	}
-	if ok, err := c.IsTargetAccountAllowed("arn:aws:iam::" + hubAcct + ":role/Target"); err != nil || !ok {
+	if ok, err := c.IsTargetAccountAllowed(context.Background(), "arn:aws:iam::"+hubAcct+":role/Target"); err != nil || !ok {
 		t.Errorf("hub account should be allowed: ok=%v err=%v", ok, err)
 	}
 }
@@ -94,20 +97,20 @@ func TestCrossAccountAllowListEnforced(t *testing.T) {
 	c, f := vconsumer(t, cfg)
 
 	notAllowed := "arn:aws:iam::" + memberAcct + ":role/Target"
-	if ok, _ := c.IsTargetAccountAllowed(notAllowed); ok {
+	if ok, _ := c.IsTargetAccountAllowed(context.Background(), notAllowed); ok {
 		t.Error("ALLOW-LIST BYPASS: account outside allowed_accounts permitted")
 	}
-	if _, err := c.AssumeRole(notAllowed, "aow", nil, nil, nil, nil); err == nil {
+	if _, err := c.AssumeRole(context.Background(), notAllowed, "aow", nil, nil, nil, nil); err == nil {
 		t.Error("FAIL-OPEN: assumed a role outside allowed_accounts")
 	}
 	if f.assumeCalls != 0 {
 		t.Error("STS called despite allow-list denial")
 	}
 	allowed := "arn:aws:iam::333333333333:role/Target"
-	if ok, _ := c.IsTargetAccountAllowed(allowed); !ok {
+	if ok, _ := c.IsTargetAccountAllowed(context.Background(), allowed); !ok {
 		t.Error("allow-listed account should be permitted")
 	}
-	if _, err := c.AssumeRole(allowed, "aow", nil, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), allowed, "aow", nil, nil, nil, nil); err != nil {
 		t.Errorf("allow-listed assume failed: %v", err)
 	}
 }
@@ -123,10 +126,10 @@ func TestMalformedARNFailsClosed(t *testing.T) {
 		"arn:aws:iam:::role/Target", // no account
 		"arn:aws:s3:::bucket/key",
 	} {
-		if ok, err := c.IsTargetAccountAllowed(bad); ok && err == nil {
+		if ok, err := c.IsTargetAccountAllowed(context.Background(), bad); ok && err == nil {
 			t.Errorf("GUARD BYPASS: malformed ARN %q passed the account check", bad)
 		}
-		if _, err := c.AssumeRole(bad, "aow", nil, nil, nil, nil); err == nil {
+		if _, err := c.AssumeRole(context.Background(), bad, "aow", nil, nil, nil, nil); err == nil {
 			t.Errorf("FAIL-OPEN: assumed malformed ARN %q", bad)
 		}
 	}
@@ -138,7 +141,7 @@ func TestMalformedARNFailsClosed(t *testing.T) {
 func TestGetRoleTagsCrossAccountFailsClosed(t *testing.T) {
 	c, f := vconsumer(t, vbaseCfg())
 	f.roleTags = []iamtypes.Tag{{Key: aws.String("aow/subject"), Value: aws.String("myorg/repo")}}
-	if _, err := c.GetRoleTags("arn:aws:iam::" + memberAcct + ":role/Target"); err == nil {
+	if _, err := c.GetRoleTags(context.Background(), "arn:aws:iam::"+memberAcct+":role/Target"); err == nil {
 		t.Error("CONFUSED DEPUTY: read tags for a member-account role with cross-account disabled")
 	}
 	if f.getRoleAsUsed {
@@ -153,7 +156,7 @@ func TestSessionPolicyReachesSTSVerbatim(t *testing.T) {
 	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`
 	role := "arn:aws:iam::" + hubAcct + ":role/Target"
 
-	if _, err := c.AssumeRole(role, "aow", &policy, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", &policy, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if f.lastAssume.Policy == nil || *f.lastAssume.Policy != policy {
@@ -161,14 +164,14 @@ func TestSessionPolicyReachesSTSVerbatim(t *testing.T) {
 	}
 
 	// A nil policy must not become an empty string (STS would reject empty).
-	if _, err := c.AssumeRole(role, "aow", nil, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if f.lastAssume.Policy != nil {
 		t.Errorf("nil policy became %q", *f.lastAssume.Policy)
 	}
 	empty := ""
-	if _, err := c.AssumeRole(role, "aow", &empty, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", &empty, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if f.lastAssume.Policy != nil {
@@ -188,7 +191,7 @@ func TestSessionTagsOnlyFromIssuerSpec(t *testing.T) {
 	}}
 	spec := map[string]string{"repo": "repository"}
 
-	if _, err := c.AssumeRole("arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, claims, spec); err != nil {
+	if _, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, claims, spec); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.lastAssume.Tags) != 1 {
@@ -197,7 +200,7 @@ func TestSessionTagsOnlyFromIssuerSpec(t *testing.T) {
 	if *f.lastAssume.Tags[0].Key != "repo" || *f.lastAssume.Tags[0].Value != "myorg/repo" {
 		t.Fatalf("wrong tag: %s=%s", *f.lastAssume.Tags[0].Key, *f.lastAssume.Tags[0].Value)
 	}
-	if _, err := c.AssumeRole("arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, claims, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, claims, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.lastAssume.Tags) != 0 {
@@ -220,7 +223,7 @@ func TestBadSessionTagValuesSkipped(t *testing.T) {
 		"Good": "good", "BadChar": "badchar", "TooLong": "toolong",
 		"Empty": "empty", "NilClaim": "nilclaim", "Numeric": "numeric",
 	}
-	tags := BuildSessionTags(raw, spec)
+	tags := BuildSessionTags(context.Background(), raw, spec)
 	got := map[string]string{}
 	for _, tg := range tags {
 		got[*tg.Key] = *tg.Value
@@ -236,7 +239,7 @@ func TestBadSessionTagValuesSkipped(t *testing.T) {
 			t.Errorf("SANITIZATION BUG: tag %q should have been skipped, got %q (len %d)", k, v, len(v))
 		}
 	}
-	if tt := BuildSessionTags(map[string]any{"c": "v"}, map[string]string{"bad\nkey": "c"}); len(tt) != 0 {
+	if tt := BuildSessionTags(context.Background(), map[string]any{"c": "v"}, map[string]string{"bad\nkey": "c"}); len(tt) != 0 {
 		t.Errorf("invalid tag key not skipped: %v", tt)
 	}
 	bigRaw := map[string]any{}
@@ -246,7 +249,7 @@ func TestBadSessionTagValuesSkipped(t *testing.T) {
 		bigRaw[k] = "v"
 		bigSpec["T"+k] = k
 	}
-	if n := len(BuildSessionTags(bigRaw, bigSpec)); n > 50 {
+	if n := len(BuildSessionTags(context.Background(), bigRaw, bigSpec)); n > 50 {
 		t.Errorf("STS 50-tag cap exceeded: %d", n)
 	}
 }
@@ -257,7 +260,7 @@ func TestTransitiveTagsOptIn(t *testing.T) {
 	role := "arn:aws:iam::" + hubAcct + ":role/T"
 
 	c, f := vconsumer(t, vbaseCfg())
-	if _, err := c.AssumeRole(role, "aow", nil, nil, claims, spec); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, nil, claims, spec); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.lastAssume.TransitiveTagKeys) != 0 {
@@ -267,7 +270,7 @@ func TestTransitiveTagsOptIn(t *testing.T) {
 	cfg := vbaseCfg()
 	cfg.SessionTagsTransitive = true
 	c2, f2 := vconsumer(t, cfg)
-	if _, err := c2.AssumeRole(role, "aow", nil, nil, claims, spec); err != nil {
+	if _, err := c2.AssumeRole(context.Background(), role, "aow", nil, nil, claims, spec); err != nil {
 		t.Fatal(err)
 	}
 	if len(f2.lastAssume.TransitiveTagKeys) != 1 || f2.lastAssume.TransitiveTagKeys[0] != "repo" {
@@ -282,7 +285,7 @@ func TestDurationClampedForRoleSession(t *testing.T) {
 	f.isRoleSession = true // always true on Lambda
 	role := "arn:aws:iam::" + hubAcct + ":role/T"
 	twelveH := int32(43200)
-	if _, err := c.AssumeRole(role, "aow", nil, &twelveH, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, &twelveH, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if *f.lastAssume.DurationSeconds != 3600 {
@@ -290,7 +293,7 @@ func TestDurationClampedForRoleSession(t *testing.T) {
 	}
 	// Below the STS minimum is raised to 900, never sent as-is.
 	tiny := int32(60)
-	if _, err := c.AssumeRole(role, "aow", nil, &tiny, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, &tiny, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if *f.lastAssume.DurationSeconds != 900 {
@@ -301,14 +304,14 @@ func TestDurationClampedForRoleSession(t *testing.T) {
 func TestSessionNameSanitized(t *testing.T) {
 	c, f := vconsumer(t, vbaseCfg())
 	role := "arn:aws:iam::" + hubAcct + ":role/T"
-	if _, err := c.AssumeRole(role, "bad name/with*chars", nil, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "bad name/with*chars", nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := *f.lastAssume.RoleSessionName
 	if strings.ContainsAny(got, " /*") {
 		t.Errorf("session name not sanitized: %q", got)
 	}
-	if _, err := c.AssumeRole(role, strings.Repeat("x", 200), nil, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, strings.Repeat("x", 200), nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(*f.lastAssume.RoleSessionName) > 64 {
@@ -320,8 +323,8 @@ func TestSessionNameSanitized(t *testing.T) {
 
 func TestGetRoleTags_SameAccount(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
-	m.On("GetRole", mock.MatchedBy(func(in *iam.GetRoleInput) bool {
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
+	m.On("GetRole", mock.Anything, mock.MatchedBy(func(in *iam.GetRoleInput) bool {
 		return *in.RoleName == "app"
 	})).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{
@@ -331,34 +334,34 @@ func TestGetRoleTags_SameAccount(t *testing.T) {
 	}}, nil).Once()
 
 	c := newTagAuthConsumer(m) // helper from consumer_spoke_test.go
-	tags, err := c.GetRoleTags("arn:aws:iam::111111111111:role/app")
+	tags, err := c.GetRoleTags(context.Background(), "arn:aws:iam::111111111111:role/app")
 	require.NoError(t, err)
 	assert.Equal(t, "acme/api", tags["aow/repo"])
 	assert.Equal(t, "platform", tags["Team"])
 	// cached second call → GetRole still Once
-	_, err = c.GetRoleTags("arn:aws:iam::111111111111:role/app")
+	_, err = c.GetRoleTags(context.Background(), "arn:aws:iam::111111111111:role/app")
 	require.NoError(t, err)
 	m.AssertExpectations(t)
 }
 
 func TestGetRoleTags_CrossAccount_UsesSpokeCreds(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
 		SessionToken: aws.String("ST"), Expiration: &exp,
 	}}, nil).Once()
-	m.On("GetRoleAs", mock.MatchedBy(func(in *iam.GetRoleInput) bool {
+	m.On("GetRoleAs", mock.Anything, mock.MatchedBy(func(in *iam.GetRoleInput) bool {
 		return *in.RoleName == "app"
 	}), mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{{Key: aws.String("aow/repo"), Value: aws.String("acme/api")}},
 	}}, nil).Once()
 
 	c := newTagAuthConsumer(m)
-	tags, err := c.GetRoleTags("arn:aws:iam::222222222222:role/app")
+	tags, err := c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
 	require.NoError(t, err)
 	assert.Equal(t, "acme/api", tags["aow/repo"])
 	m.AssertExpectations(t)
@@ -421,7 +424,7 @@ func TestGetRoleAs_RejectsNilCredentials(t *testing.T) {
 	s := &AwsServiceWrapper{defaultTimeout: time.Second}
 
 	// A nil iamClient would panic if reached, proving the guard returns before any client use.
-	out, err := s.GetRoleAs(&iam.GetRoleInput{RoleName: aws.String("deploy")}, nil)
+	out, err := s.GetRoleAs(context.Background(), &iam.GetRoleInput{RoleName: aws.String("deploy")}, nil)
 
 	require.Error(t, err, "nil credentials must be refused")
 	assert.Nil(t, out)
@@ -431,9 +434,9 @@ func TestGetRoleAs_RejectsNilCredentials(t *testing.T) {
 // GetRoleTags must return a COPY; returning the cached map lets a caller's mutation poison later authorization decisions.
 func TestGetRoleTags_CachedMapIsNotAliased(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	// .Once(): a second IAM read would mean the cache was missed.
-	m.On("GetRole", mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
+	m.On("GetRole", mock.Anything, mock.Anything).Return(&iam.GetRoleOutput{Role: &iamtypes.Role{
 		Tags: []iamtypes.Tag{{Key: aws.String("aow/subject"), Value: aws.String("acme/app")}},
 	}}, nil).Once()
 
@@ -445,7 +448,7 @@ func TestGetRoleTags_CachedMapIsNotAliased(t *testing.T) {
 
 	const arn = "arn:aws:iam::111111111111:role/app"
 
-	first, err := c.GetRoleTags(arn)
+	first, err := c.GetRoleTags(context.Background(), arn)
 	require.NoError(t, err)
 	require.Equal(t, "acme/app", first["aow/subject"])
 
@@ -455,7 +458,7 @@ func TestGetRoleTags_CachedMapIsNotAliased(t *testing.T) {
 	first["aow/issuer"] = "https://evil.example"
 
 	// The next read is a cache hit and must be unaffected.
-	second, err := c.GetRoleTags(arn)
+	second, err := c.GetRoleTags(context.Background(), arn)
 	require.NoError(t, err)
 	assert.Equal(t, "acme/app", second["aow/subject"],
 		"mutating a returned map corrupted the cached tags")

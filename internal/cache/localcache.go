@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
 
@@ -29,21 +30,21 @@ const (
 	localHit
 )
 
-// localCache is the in-process LRU tier every backend keeps in front of its
-// remote store (and the whole of the memory backend). Every method takes mu
-// itself; callers hold no lock.
+// localCache is the in-process LRU tier in front of every backend; methods take mu themselves.
 type localCache struct {
 	mu         sync.Mutex
 	entries    map[string]*localEntry
 	maxSize    int
 	defaultTTL time.Duration
+	backend    string
 }
 
-func newLocalCache(maxSize int, defaultTTL time.Duration) *localCache {
+func newLocalCache(maxSize int, defaultTTL time.Duration, backend string) *localCache {
 	return &localCache{
 		entries:    make(map[string]*localEntry),
 		maxSize:    maxSize,
 		defaultTTL: defaultTTL,
+		backend:    backend,
 	}
 }
 
@@ -69,7 +70,7 @@ func (c *localCache) get(key string) (*types.JWKS, localLookup) {
 // put stores value under key until expiration, evicting the least recently
 // used entry first if a new key would exceed maxSize. A zero expiration means
 // defaultTTL from now.
-func (c *localCache) put(key string, value *types.JWKS, expiration time.Time) {
+func (c *localCache) put(ctx context.Context, key string, value *types.JWKS, expiration time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -79,7 +80,7 @@ func (c *localCache) put(key string, value *types.JWKS, expiration time.Time) {
 
 	// Evict only when adding a new key at capacity; overwrites don't grow the map
 	if _, exists := c.entries[key]; !exists && len(c.entries) >= c.maxSize {
-		c.evictLRU()
+		c.evictLRU(ctx)
 	}
 
 	c.entries[key] = &localEntry{
@@ -90,7 +91,7 @@ func (c *localCache) put(key string, value *types.JWKS, expiration time.Time) {
 }
 
 // evictLRU removes the least recently used entry. Caller must hold c.mu.
-func (c *localCache) evictLRU() {
+func (c *localCache) evictLRU(ctx context.Context) {
 	var oldestKey string
 	var oldestTime time.Time
 
@@ -102,22 +103,24 @@ func (c *localCache) evictLRU() {
 	}
 
 	if oldestKey != "" {
-		slog.Debug("Evicting LRU cache item", "key", oldestKey, "lastAccess", oldestTime)
+		logevent.Debug(ctx, nil, logevent.CacheEvict, "evicting LRU cache entry",
+			cacheAttrs(c.backend, oldestKey, slog.Time("lastAccess", oldestTime))...)
 		delete(c.entries, oldestKey)
 	}
 }
 
 // resolveAWSConfig returns the caller-supplied AWS config, or loads the
-// default one. label names the backend in the error log.
-func resolveAWSConfig(supplied aws.Config, label string) (aws.Config, error) {
+// default one. backend labels the cache backend in the error log.
+func resolveAWSConfig(ctx context.Context, supplied aws.Config, backend string) (aws.Config, error) {
 	if supplied.Credentials != nil {
 		return supplied, nil
 	}
-	cfg, err := config.LoadDefaultConfig(context.Background(),
+	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRetryMaxAttempts(Defaults.MaxRetries),
 	)
 	if err != nil {
-		slog.Error("Failed to load AWS config for "+label, "error", err.Error())
+		logevent.Error(ctx, nil, logevent.AppInitFailure, "failed to load AWS config",
+			slog.String("component", "aws_config"), backendAttr(backend), slog.String("error", err.Error()))
 		return aws.Config{}, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 	return cfg, nil

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
 
 // fallbackErrorBody is returned if marshaling the Response itself fails.
@@ -33,10 +34,8 @@ func buildErrorResponse(ctx context.Context, err error, statusCode int) (Respons
 	requestID, processingMS := requestMeta(ctx)
 	errCode, errMsg := classifyError(err, &statusCode)
 
-	slog.Error("Request error",
-		slog.String("requestId", requestID),
+	logevent.Debug(ctx, nil, logevent.RequestResponse.WithOutcome("failure"), "response sent",
 		slog.String("errorCode", errCode),
-		slog.String("error", err.Error()),
 		slog.Int("status", statusCode),
 		slog.Int64("processingMs", processingMS))
 
@@ -57,8 +56,7 @@ func buildErrorResponse(ctx context.Context, err error, statusCode int) (Respons
 func buildSuccessResponse(ctx context.Context, credentials *ststypes.Credentials) Response {
 	requestID, processingMS := requestMeta(ctx)
 
-	slog.Debug("Response successful",
-		slog.String("requestId", requestID),
+	logevent.Debug(ctx, nil, logevent.RequestResponse.WithOutcome("success"), "response sent",
 		slog.Int64("processingMs", processingMS))
 
 	return Response{

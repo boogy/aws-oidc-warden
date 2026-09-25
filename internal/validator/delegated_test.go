@@ -4,6 +4,7 @@ package validator_test
 // identical to self mode, and the trust boundary must hold — a delegated
 // front-end may assert claims, never widen them.
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -109,7 +110,7 @@ func TestSelfDelegatedParity(t *testing.T) {
 	require.NoError(t, err)
 
 	v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
-	fromSelf, err := v.Validate(signed)
+	fromSelf, err := v.Validate(context.Background(), signed)
 	require.NoError(t, err)
 
 	// --- delegated apigw mode: same claims as the authorizer's string map ---
@@ -138,8 +139,8 @@ func TestSelfDelegatedParity(t *testing.T) {
 
 	// Session-tag parity — same spec + same raw claims => byte-identical tags.
 	spec := issCfg.SessionTags
-	tagsSelf := awsconsumer.BuildSessionTags(fromSelf.Raw, spec)
-	tagsDelegated := awsconsumer.BuildSessionTags(fromDelegated.Raw, spec)
+	tagsSelf := awsconsumer.BuildSessionTags(context.Background(), fromSelf.Raw, spec)
+	tagsDelegated := awsconsumer.BuildSessionTags(context.Background(), fromDelegated.Raw, spec)
 	assert.Equal(t, tagMap(tagsSelf), tagMap(tagsDelegated), "session tags must match across modes")
 	assert.Equal(t, map[string]string{"repo": repository, "actor": "testuser", "ref": "refs/heads/main"}, tagMap(tagsSelf))
 }
@@ -243,7 +244,7 @@ func TestSelfDelegatedParityMultiIssuer(t *testing.T) {
 	require.NoError(t, err)
 
 	v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
-	fromSelf, err := v.Validate(signed)
+	fromSelf, err := v.Validate(context.Background(), signed)
 	require.NoError(t, err)
 
 	// --- delegated apigw mode: same claims as the authorizer's string map ---
@@ -271,8 +272,8 @@ func TestSelfDelegatedParityMultiIssuer(t *testing.T) {
 	assert.Equal(t, fromSelf.Ref, fromDelegated.Ref)
 
 	// Session-tag parity, using the MATCHED issuer's spec (index 1, not 0).
-	tagsSelf := awsconsumer.BuildSessionTags(fromSelf.Raw, issCfg.SessionTags)
-	tagsDelegated := awsconsumer.BuildSessionTags(fromDelegated.Raw, issCfg.SessionTags)
+	tagsSelf := awsconsumer.BuildSessionTags(context.Background(), fromSelf.Raw, issCfg.SessionTags)
+	tagsDelegated := awsconsumer.BuildSessionTags(context.Background(), fromDelegated.Raw, issCfg.SessionTags)
 	assert.Equal(t, tagMap(tagsSelf), tagMap(tagsDelegated), "session tags must match across modes")
 	assert.Equal(t, map[string]string{"repo": repository, "actor": "testuser", "ref": "refs/heads/main"}, tagMap(tagsSelf))
 }
@@ -367,25 +368,25 @@ func TestCrossIssuerKeyConfusion(t *testing.T) {
 	})
 
 	// Sanity: each issuer's own token validates.
-	if _, err := v.Validate(a.sign(t, vclaims(a.url, "aud-a", "repo:myorg/repo:ref:refs/heads/main"))); err != nil {
+	if _, err := v.Validate(context.Background(), a.sign(t, vclaims(a.url, "aud-a", "repo:myorg/repo:ref:refs/heads/main"))); err != nil {
 		t.Fatalf("legitimate issuer-A token rejected: %v", err)
 	}
-	if _, err := v.Validate(b.sign(t, vclaims(b.url, "aud-b", "repo:myorg/repo:ref:refs/heads/main"))); err != nil {
+	if _, err := v.Validate(context.Background(), b.sign(t, vclaims(b.url, "aud-b", "repo:myorg/repo:ref:refs/heads/main"))); err != nil {
 		t.Fatalf("legitimate issuer-B token rejected: %v", err)
 	}
 
 	// Attack: sign with A's key but claim to be B.
 	forged := a.sign(t, vclaims(b.url, "aud-b", "repo:myorg/repo:ref:refs/heads/main"))
-	if _, err := v.Validate(forged); err == nil {
+	if _, err := v.Validate(context.Background(), forged); err == nil {
 		t.Error("CROSS-ISSUER KEY CONFUSION: issuer A's key validated a token claiming issuer B")
 	}
 
 	// Attack: A's token presenting B's audience.
-	if _, err := v.Validate(a.sign(t, vclaims(a.url, "aud-b", "s"))); err == nil {
+	if _, err := v.Validate(context.Background(), a.sign(t, vclaims(a.url, "aud-b", "s"))); err == nil {
 		t.Error("AUDIENCE LEAK: issuer A accepted issuer B's audience")
 	}
 	// Attack: B's token presenting A's audience.
-	if _, err := v.Validate(b.sign(t, vclaims(b.url, "aud-a", "s"))); err == nil {
+	if _, err := v.Validate(context.Background(), b.sign(t, vclaims(b.url, "aud-a", "s"))); err == nil {
 		t.Error("AUDIENCE LEAK: issuer B accepted issuer A's audience")
 	}
 }
@@ -399,7 +400,7 @@ func TestUnknownIssuerNoNetworkFetch(t *testing.T) {
 		{Issuer: a.url, Provider: "github", Audiences: []string{"aud-a"}},
 	})
 	before := atomic.LoadInt32(rogue.hits)
-	if _, err := v.Validate(rogue.sign(t, vclaims(rogue.url, "aud-a", "s"))); err == nil {
+	if _, err := v.Validate(context.Background(), rogue.sign(t, vclaims(rogue.url, "aud-a", "s"))); err == nil {
 		t.Fatal("FAIL-OPEN: unconfigured issuer accepted")
 	}
 	if got := atomic.LoadInt32(rogue.hits) - before; got != 0 {
@@ -422,7 +423,7 @@ func TestAlgNoneAndTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.Validate(s); err == nil {
+	if _, err := v.Validate(context.Background(), s); err == nil {
 		t.Error("CRITICAL: alg=none token accepted")
 	}
 
@@ -433,7 +434,7 @@ func TestAlgNoneAndTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.Validate(hsTok); err == nil {
+	if _, err := v.Validate(context.Background(), hsTok); err == nil {
 		t.Error("CRITICAL: HS256/RSA algorithm-confusion token accepted")
 	}
 
@@ -442,7 +443,7 @@ func TestAlgNoneAndTampering(t *testing.T) {
 	evil := a.sign(t, vclaims(a.url, "aud-a", "repo:evil/repo"))
 	gp, ep := strings.Split(good, "."), strings.Split(evil, ".")
 	spliced := gp[0] + "." + ep[1] + "." + gp[2]
-	if _, err := v.Validate(spliced); err == nil {
+	if _, err := v.Validate(context.Background(), spliced); err == nil {
 		t.Error("CRITICAL: payload-tampered token accepted")
 	}
 
@@ -453,7 +454,7 @@ func TestAlgNoneAndTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.Validate(uTok); err == nil {
+	if _, err := v.Validate(context.Background(), uTok); err == nil {
 		t.Error("unknown kid accepted")
 	}
 }
@@ -486,7 +487,7 @@ func TestTimeBounds(t *testing.T) {
 			"iat": now.Unix(), "exp": now.Add(10 * time.Minute).Unix()},
 	}
 	for name, c := range cases {
-		if _, err := v.Validate(a.sign(t, c)); err == nil {
+		if _, err := v.Validate(context.Background(), a.sign(t, c)); err == nil {
 			t.Errorf("FAIL-OPEN: %q token accepted", name)
 		}
 	}
@@ -508,28 +509,28 @@ func TestRequiredClaimsAndSubject(t *testing.T) {
 	// Missing required claim.
 	c := base()
 	c["repository"] = "myorg/repo"
-	if _, err := v.Validate(a.sign(t, c)); err == nil {
+	if _, err := v.Validate(context.Background(), a.sign(t, c)); err == nil {
 		t.Error("FAIL-OPEN: missing required claim accepted")
 	}
 	// Empty-string required claim.
 	c = base()
 	c["repository"] = "myorg/repo"
 	c["environment"] = ""
-	if _, err := v.Validate(a.sign(t, c)); err == nil {
+	if _, err := v.Validate(context.Background(), a.sign(t, c)); err == nil {
 		t.Error("FAIL-OPEN: empty required claim accepted")
 	}
 	// JSON null required claim.
 	c = base()
 	c["repository"] = "myorg/repo"
 	c["environment"] = nil
-	if _, err := v.Validate(a.sign(t, c)); err == nil {
+	if _, err := v.Validate(context.Background(), a.sign(t, c)); err == nil {
 		t.Error("FAIL-OPEN: null required claim accepted")
 	}
 	// All present -> canonical subject is the repository claim, NOT the raw sub.
 	c = base()
 	c["repository"] = "myorg/repo"
 	c["environment"] = "prod"
-	got, err := v.Validate(a.sign(t, c))
+	got, err := v.Validate(context.Background(), a.sign(t, c))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +552,7 @@ func TestSelfAssertedSubjectIgnored(t *testing.T) {
 	c := vclaims(a.url, "aud-a", "s")
 	c["subject"] = "privileged/repo"
 	c["Subject"] = "privileged/repo"
-	got, err := v.Validate(a.sign(t, c))
+	got, err := v.Validate(context.Background(), a.sign(t, c))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +574,7 @@ func TestTokenSizeCap(t *testing.T) {
 	}
 	ch, _ := cache.NewCache(cfg)
 	v := validator.NewTokenValidator(config.NewStaticProvider(cfg), ch)
-	if _, err := v.Validate(a.sign(t, vclaims(a.url, "aud-a", "s"))); err == nil {
+	if _, err := v.Validate(context.Background(), a.sign(t, vclaims(a.url, "aud-a", "s"))); err == nil {
 		t.Error("oversized token accepted")
 	} else if !strings.Contains(err.Error(), "maximum allowed size") {
 		t.Errorf("wrong rejection reason: %v", err)
@@ -677,7 +678,7 @@ func TestApigwNoneOfDenyListOpaqueClaimParity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			signed := signOpaqueParityToken(t, pk, kid, issuer, tc.groups)
 			v := validator.NewTokenValidator(config.NewStaticProvider(cfg), cache.NewMemoryCache())
-			selfClaims, err := v.Validate(signed)
+			selfClaims, err := v.Validate(context.Background(), signed)
 			require.NoError(t, err, "self mode must accept the token itself (the deny-list is an authorization concern, not a validation one)")
 			selfAuthorized, selfRoles := cfg.AuthorizeRoles(selfClaims.Issuer, selfClaims.Subject, selfClaims.Raw)
 			assert.False(t, selfAuthorized, "self mode: none_of on a real %s must veto and deny", tc.name)

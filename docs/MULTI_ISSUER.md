@@ -69,7 +69,7 @@ role_mappings:
 
 ## `alb` mode is single-issuer only
 
-`jwt_validation.mode: alb` trusts an upstream (ALB OIDC) that verified the token against a **single** issuer — the ALB has exactly one OIDC IdP configured, and cannot tell this service _which_ issuer it checked. It therefore requires **exactly one** entry in `issuers[]`; `NewBootstrap()` fails at cold start otherwise (`jwt_validation.mode %q supports exactly one configured issuer, got %d`).
+`jwt_validation.mode: alb` trusts an upstream (ALB OIDC) that verified the token against a **single** issuer — the ALB has exactly one OIDC IdP configured, and cannot tell this service _which_ issuer it checked. It therefore requires **exactly one** entry in `issuers[]`; `NewBootstrap` fails at cold start otherwise (`jwt_validation.mode %q supports exactly one configured issuer, got %d`).
 
 `jwt_validation.mode: apigw` has no such restriction: `issuers[]` may hold any number of entries (API Gateway allows at most 10 JWT Authorizers per HTTP API). Each entry gets its own route and JWT Authorizer, which pins that route to its issuer and forwards the upstream-verified `iss` claim; the service resolves the matching `issuers[]` entry per request from that claim, the same way `self` mode resolves it from the token's own verified issuer.
 

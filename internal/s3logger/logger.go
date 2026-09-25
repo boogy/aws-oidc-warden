@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/google/uuid"
 )
 
@@ -30,7 +31,6 @@ const (
 
 // LoggerInterface defines the methods that must be implemented by any logger.
 type LoggerInterface interface {
-	WriteLogToS3(data bytes.Buffer) error
 	WriteObject(s3Bucket, key string, body []byte) error
 	Flush() error
 	Close() error
@@ -66,8 +66,9 @@ type S3Logger struct {
 	// above is only the boot-time snapshot, which a hot reload can outdate.
 	configSource func() *gtvcfg.Config
 	s3Client     s3ClientInterface
-	// initMu guards s3Client and batchTimer. Never acquire mu while holding it.
+	// initMu guards s3Client, batchTimer and closed. Never acquire mu while holding it.
 	initMu sync.Mutex
+	closed bool
 	// clientFactory builds the S3 client; indirected so lazy init is testable
 	// without reaching AWS.
 	clientFactory func(context.Context) (s3ClientInterface, error)
@@ -157,21 +158,16 @@ func (l *S3Logger) loadS3Client(ctx context.Context) (s3ClientInterface, error) 
 // is not fatal: ensureDurableClient retries for the enforced audit path, and
 // the best-effort paths already tolerate a nil client.
 func (l *S3Logger) initS3Client() {
-	if err := l.ensureDurableClient(); err != nil {
-		slog.Error("Failed to initialize S3 client for logging",
+	if err := l.ensureDurableClient(l.ctx); err != nil {
+		logevent.Error(l.ctx, nil, logevent.AuditClientInitFailure, "failed to initialize S3 client for logging",
 			slog.String("error", err.Error()))
-		return
 	}
-
-	slog.Debug("S3 client initialized for logging",
-		slog.String("bucket", l.s3Config.Bucket),
-		slog.String("prefix", l.s3Config.Prefix))
 }
 
 // ensureDurableClient lazily builds the S3 client used by the enforced audit
 // path from the live config. A nil client must remain an error, never a
 // silent no-op, since callers hand out credentials only if this succeeds.
-func (l *S3Logger) ensureDurableClient() error {
+func (l *S3Logger) ensureDurableClient(ctx context.Context) error {
 	l.initMu.Lock()
 	defer l.initMu.Unlock()
 
@@ -184,6 +180,7 @@ func (l *S3Logger) ensureDurableClient() error {
 		return errors.New("s3 audit logger: S3 client not initialized and the live config does not enable S3 audit logging")
 	}
 
+	// Shared under initMu: a caller's cancelled ctx must not fail construction for everyone.
 	client, err := l.clientFactory(l.ctx)
 	if err != nil {
 		return fmt.Errorf("s3 audit logger: %w", err)
@@ -193,7 +190,7 @@ func (l *S3Logger) ensureDurableClient() error {
 	// also starts flushing records buffered since boot.
 	l.startBatchTimerLocked()
 
-	slog.Info("S3 audit client initialized",
+	logevent.Info(ctx, nil, logevent.AuditClientInit, "S3 audit client initialized",
 		slog.String("bucket", c.LogBucket))
 	return nil
 }
@@ -209,8 +206,8 @@ func (l *S3Logger) client() s3ClientInterface {
 // ensureBestEffortClient is ensureDurableClient for the batched, non-enforced
 // paths, which no-op rather than propagate a failure.
 func (l *S3Logger) ensureBestEffortClient() bool {
-	if err := l.ensureDurableClient(); err != nil {
-		slog.Debug("S3 audit client unavailable for best-effort write",
+	if err := l.ensureDurableClient(l.ctx); err != nil {
+		logevent.Debug(l.ctx, nil, logevent.AuditClientUnavailable, "S3 audit client unavailable for best-effort write",
 			slog.String("error", err.Error()))
 		return false
 	}
@@ -220,7 +217,7 @@ func (l *S3Logger) ensureBestEffortClient() bool {
 // startBatchTimerLocked starts the batch-flush timer if not already running.
 // Caller must hold initMu.
 func (l *S3Logger) startBatchTimerLocked() {
-	if l.batchTimer != nil {
+	if l.batchTimer != nil || l.closed {
 		return
 	}
 	l.batchTimer = time.AfterFunc(l.s3Config.MaxBatchAge, l.onBatchTimer)
@@ -229,17 +226,20 @@ func (l *S3Logger) startBatchTimerLocked() {
 // onBatchTimer flushes the batch and rearms the timer.
 func (l *S3Logger) onBatchTimer() {
 	if err := l.Flush(); err != nil {
-		slog.Error("Failed to flush log batch on timer",
+		logevent.Error(l.ctx, nil, logevent.AuditFlushFailure, "failed to flush log batch on timer",
 			slog.String("error", err.Error()))
 	}
 	l.initMu.Lock()
 	defer l.initMu.Unlock()
+	if l.closed {
+		return
+	}
 	l.batchTimer = time.AfterFunc(l.s3Config.MaxBatchAge, l.onBatchTimer)
 }
 
-// WriteLogToS3 batches data for S3. Best-effort: checked against the live
+// writeLogToS3 batches data for S3. Best-effort: checked against the live
 // config, not the boot snapshot, and no-ops (never errors) when disabled.
-func (l *S3Logger) WriteLogToS3(data bytes.Buffer) error {
+func (l *S3Logger) writeLogToS3(data bytes.Buffer) error {
 	defer data.Reset()
 
 	if c := l.liveConfig(); c == nil || !c.LogToS3 {
@@ -334,17 +334,13 @@ func (l *S3Logger) generateS3Key() string {
 	return strings.Join(parts, "/")
 }
 
-// WriteObject writes data to S3 with retries, on the logger's own background
-// context. Batched/best-effort callers use this since no request deadline
-// applies to them.
+// WriteObject writes a batch flush to S3 with retries on the logger's background context.
 func (l *S3Logger) WriteObject(s3Bucket, key string, body []byte) error {
-	return l.writeObject(l.ctx, s3Bucket, key, body)
+	return l.writeObject(l.ctx, s3Bucket, key, body, logevent.AuditFlushSuccess)
 }
 
-// writeObject is WriteObject with an explicit parent context. The enforced
-// audit path passes the request context so credential issuance inherits its
-// deadline; WithTimeout still caps a caller with no deadline of its own.
-func (l *S3Logger) writeObject(parent context.Context, s3Bucket, key string, body []byte) error {
+// writeObject writes under parent's deadline, capped by the write timeout, and logs successEvent.
+func (l *S3Logger) writeObject(parent context.Context, s3Bucket, key string, body []byte, successEvent logevent.Event) error {
 	client := l.client()
 	if client == nil {
 		return errors.New("S3 client not initialized")
@@ -384,14 +380,14 @@ func (l *S3Logger) writeObject(parent context.Context, s3Bucket, key string, bod
 	})
 
 	if err != nil {
-		slog.Error("Failed to write logs to S3",
+		logevent.Error(ctx, nil, logevent.AuditWriteFailure, "failed to write logs to S3",
 			slog.String("bucket", s3Bucket),
 			slog.String("key", key),
 			slog.String("error", err.Error()))
 		return fmt.Errorf("failed to write logs to S3: %w", err)
 	}
 
-	slog.Debug("Successfully wrote logs to S3",
+	logevent.Debug(ctx, nil, successEvent, "successfully wrote logs to S3",
 		slog.String("bucket", s3Bucket),
 		slog.String("key", key),
 		slog.Int("bytes", len(body)))
@@ -402,8 +398,10 @@ func (l *S3Logger) writeObject(parent context.Context, s3Bucket, key string, bod
 // Close stops the batch timer and flushes any remaining logs.
 func (l *S3Logger) Close() error {
 	l.initMu.Lock()
+	l.closed = true
 	if l.batchTimer != nil {
 		l.batchTimer.Stop()
+		l.batchTimer = nil
 	}
 	l.initMu.Unlock()
 
@@ -428,7 +426,7 @@ func (l *S3Logger) WriteSingleLog(logData []byte) error {
 	}
 
 	key := l.generateS3Key()
-	return l.WriteObject(l.targetBucket(), key, compressedData)
+	return l.writeObject(l.ctx, l.targetBucket(), key, compressedData, logevent.AuditWriteSuccess)
 }
 
 // WriteRecord implements handler.AuditSink (duck-typed). It persists a single
@@ -440,7 +438,7 @@ func (l *S3Logger) WriteSingleLog(logData []byte) error {
 // hot-reload that turns audit_required+log_to_s3 on can't silently skip the
 // audit write while still releasing credentials.
 func (l *S3Logger) WriteRecord(ctx context.Context, record []byte) error {
-	if err := l.ensureDurableClient(); err != nil {
+	if err := l.ensureDurableClient(ctx); err != nil {
 		return err
 	}
 
@@ -449,16 +447,16 @@ func (l *S3Logger) WriteRecord(ctx context.Context, record []byte) error {
 		return fmt.Errorf("failed to compress audit record: %w", err)
 	}
 
-	return l.writeObject(ctx, l.targetBucket(), l.generateS3Key(), compressedData)
+	return l.writeObject(ctx, l.targetBucket(), l.generateS3Key(), compressedData, logevent.AuditWriteSuccess)
 }
 
-// BufferRecord appends a record to the batch buffer WriteLogToS3 flushes
+// BufferRecord appends a record to the batch buffer writeLogToS3 flushes
 // (BatchSize/MaxBatchAge or Close), for the best-effort path. No-ops when S3
 // logging is disabled.
 func (l *S3Logger) BufferRecord(record []byte) error {
 	var buf bytes.Buffer
 	buf.Write(record)
-	return l.WriteLogToS3(buf)
+	return l.writeLogToS3(buf)
 }
 
 // compressGzip compresses the given data using gzip.

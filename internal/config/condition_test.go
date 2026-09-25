@@ -865,7 +865,7 @@ func TestValidate_WarnsOnUnknownGitHubClaim(t *testing.T) {
 		}, github)
 		logs := captureWarnings(t, func() { require.NoError(t, cfg.Validate()) })
 		require.Contains(t, logs, "conditions.none_of[0].runner_env")
-		require.Contains(t, logs, "can never veto")
+		require.True(t, hasWarningCode(t, logs, "condition_none_of_unknown_claim"))
 	})
 
 	t.Run("nested groups are walked", func(t *testing.T) {
@@ -886,7 +886,8 @@ func TestValidate_WarnsOnUnknownGitHubClaim(t *testing.T) {
 			"custom_required_claim": {"yes"},
 		}}, declared)
 		logs := captureWarnings(t, func() { require.NoError(t, cfg.Validate()) })
-		require.NotContains(t, logs, "check the spelling")
+		require.False(t, hasWarningCode(t, logs, "condition_unknown_claim"))
+		require.False(t, hasWarningCode(t, logs, "condition_none_of_unknown_claim"))
 	})
 
 	t.Run("generic issuers are never warned about", func(t *testing.T) {
@@ -898,7 +899,8 @@ func TestValidate_WarnsOnUnknownGitHubClaim(t *testing.T) {
 		}
 		cfg := build(&Condition{Claims: map[string]Patterns{"project_path": {"grp/prj"}, "groups": {"sre"}}}, generic)
 		logs := captureWarnings(t, func() { require.NoError(t, cfg.Validate()) })
-		require.NotContains(t, logs, "check the spelling")
+		require.False(t, hasWarningCode(t, logs, "condition_unknown_claim"))
+		require.False(t, hasWarningCode(t, logs, "condition_none_of_unknown_claim"))
 	})
 }
 

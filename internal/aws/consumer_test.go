@@ -2,6 +2,7 @@ package aws
 
 // The AWS consumer: construction, config source, cross-account spoke hop, transitive session tags.
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -48,7 +49,7 @@ func TestAwsConsumer_SessionName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := consumer.SessionName(tt.inputName)
+			result := consumer.SessionName(context.Background(), tt.inputName)
 			assert.Equal(t, tt.expectedOut, result)
 		})
 	}
@@ -66,9 +67,9 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 	testPolicy := aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:ListBucket","Resource":"*"}]}`)
 	testDuration := int32(3600)
 
-	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
+	mockAWS.On("GetCallerIdentityInfo", mock.Anything).Return("123456789012", false, nil)
 
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && *input.RoleSessionName == testSessionName
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: &ststypes.Credentials{
@@ -79,24 +80,24 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, nil, nil)
+	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST", *creds.AccessKeyId)
 
-	creds, err = consumer.AssumeRole("", testSessionName, nil, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), "", testSessionName, nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "roleArn cannot be empty")
 
 	// Test case: Empty session name
-	creds, err = consumer.AssumeRole(testRoleArn, "", nil, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, "", nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "sessionName cannot be empty")
 
 	// Test case: With session policy
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && *input.Policy == *testPolicy
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: &ststypes.Credentials{
@@ -107,14 +108,14 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, testPolicy, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, testPolicy, &testDuration, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST2", *creds.AccessKeyId)
 
 	// Test case: Short duration (less than minimum)
 	shortDuration := int32(500) // Less than minimum 900
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.DurationSeconds == 900 // Should be adjusted to minimum
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: &ststypes.Credentials{
@@ -125,13 +126,13 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &shortDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &shortDuration, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
 	// Test case: Long duration (more than maximum)
 	longDuration := int32(50000) // More than maximum 43200 (12 hours)
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.DurationSeconds == 43200 // Should be adjusted to maximum
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: &ststypes.Credentials{
@@ -142,28 +143,28 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &longDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &longDuration, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
 	// Test case: AWS service error
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == "arn:aws:iam::123456789012:role/nonexistent"
 	})).Return(nil, errors.New("access denied")).Once()
 
-	creds, err = consumer.AssumeRole("arn:aws:iam::123456789012:role/nonexistent", testSessionName, nil, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), "arn:aws:iam::123456789012:role/nonexistent", testSessionName, nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "access denied")
 
 	// Test case: No credentials returned
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == "arn:aws:iam::123456789012:role/empty-creds"
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: nil,
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole("arn:aws:iam::123456789012:role/empty-creds", testSessionName, nil, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), "arn:aws:iam::123456789012:role/empty-creds", testSessionName, nil, &testDuration, nil, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "no credentials returned")
@@ -199,10 +200,10 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		"ref":   "ref",
 	}
 
-	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
+	mockAWS.On("GetCallerIdentityInfo", mock.Anything).Return("123456789012", false, nil)
 
 	// With claims + a session_tags spec, verify the expected tags are attached.
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		if *input.RoleArn != testRoleArn || *input.RoleSessionName != testSessionName {
 			return false
 		}
@@ -224,13 +225,13 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST", *creds.AccessKeyId)
 
 	// Nil claims: no tags attached even though a spec is passed.
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return input.Tags == nil && *input.RoleArn == testRoleArn
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: &ststypes.Credentials{
@@ -241,7 +242,7 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, nil, testSpec)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, nil, testSpec)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST2", *creds.AccessKeyId)
@@ -277,9 +278,9 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 		"project": "project_id",
 	}
 
-	mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
+	mockAWS.On("GetCallerIdentityInfo", mock.Anything).Return("123456789012", false, nil)
 
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn &&
 			len(input.TransitiveTagKeys) == 2 &&
 			assert.ElementsMatch(t, []string{"repo", "project"}, input.TransitiveTagKeys)
@@ -292,13 +293,13 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err := consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
 	// TransitiveSessionTags off: no transitive keys are set, even with tags present.
 	consumer.Config.SessionTagsTransitive = false
-	mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && input.TransitiveTagKeys == nil && len(input.Tags) == 2
 	})).Return(&sts.AssumeRoleOutput{
 		Credentials: &ststypes.Credentials{
@@ -309,7 +310,7 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
@@ -349,10 +350,10 @@ func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
 					TagAuth:               tc.tagAuth,
 				},
 			}
-			mockAWS.On("GetCallerIdentityInfo").Return("123456789012", false, nil)
+			mockAWS.On("GetCallerIdentityInfo", mock.Anything).Return("123456789012", false, nil)
 
 			var captured *sts.AssumeRoleInput
-			mockAWS.On("AssumeRole", mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+			mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 				captured = input
 				return *input.RoleArn == testRoleArn
 			})).Return(&sts.AssumeRoleOutput{
@@ -363,7 +364,7 @@ func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
 				},
 			}, nil).Once()
 
-			_, err := consumer.AssumeRole(testRoleArn, "test-session", nil, &testDuration, testClaims, testSpec)
+			_, err := consumer.AssumeRole(context.Background(), testRoleArn, "test-session", nil, &testDuration, testClaims, testSpec)
 			require.NoError(t, err)
 
 			if tc.wantTransitive {
@@ -429,7 +430,7 @@ func TestBuildSessionTags(t *testing.T) {
 			"run":   "run_number",
 		}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		tagMap := make(map[string]string)
 		for _, tag := range tags {
 			tagMap[*tag.Key] = *tag.Value
@@ -444,8 +445,8 @@ func TestBuildSessionTags(t *testing.T) {
 	})
 
 	t.Run("nil/empty rawClaims or tagSpec produces no tags", func(t *testing.T) {
-		assert.Nil(t, BuildSessionTags(nil, map[string]string{"repo": "repository"}))
-		assert.Nil(t, BuildSessionTags(map[string]any{"repository": "owner/repo"}, nil))
+		assert.Nil(t, BuildSessionTags(context.Background(), nil, map[string]string{"repo": "repository"}))
+		assert.Nil(t, BuildSessionTags(context.Background(), map[string]any{"repository": "owner/repo"}, nil))
 	})
 
 	t.Run("missing or empty claim value is skipped, never mangled", func(t *testing.T) {
@@ -460,7 +461,7 @@ func TestBuildSessionTags(t *testing.T) {
 			"ref":   "ref",
 		}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		require.Len(t, tags, 1)
 		assert.Equal(t, "repo", *tags[0].Key)
 		assert.Equal(t, "owner/repo", *tags[0].Value)
@@ -476,7 +477,7 @@ func TestBuildSessionTags(t *testing.T) {
 			"actor": "actor",
 		}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		tagMap := make(map[string]string)
 		for _, tag := range tags {
 			tagMap[*tag.Key] = *tag.Value
@@ -492,7 +493,7 @@ func TestBuildSessionTags(t *testing.T) {
 		raw := map[string]any{"claim": "value"}
 		spec := map[string]string{"bad key!": "claim"}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		assert.Empty(t, tags)
 	})
 
@@ -500,7 +501,7 @@ func TestBuildSessionTags(t *testing.T) {
 		raw := map[string]any{"claim": strings.Repeat("a", maxSessionTagValLen+1)}
 		spec := map[string]string{"tag": "claim"}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		assert.Empty(t, tags)
 	})
 
@@ -513,120 +514,8 @@ func TestBuildSessionTags(t *testing.T) {
 			spec[fmt.Sprintf("tag%02d", i)] = claim
 		}
 
-		tags := BuildSessionTags(raw, spec)
+		tags := BuildSessionTags(context.Background(), raw, spec)
 		assert.Len(t, tags, maxSessionTags)
-	})
-}
-
-func TestAwsConsumer_ReadS3Configuration(t *testing.T) {
-	// Test the error cases first
-	t.Run("Missing config parameters", func(t *testing.T) {
-		mockAWS := new(MockAwsServiceWrapper)
-
-		// Test missing S3ConfigBucket
-		consumer1 := &AwsConsumer{
-			AWS: mockAWS,
-			Config: &gtvcfg.Config{
-				S3ConfigPath: "test/config.json",
-			},
-		}
-
-		err := consumer1.ReadS3Configuration()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "S3ConfigBucket and S3ConfigPath options must be set")
-
-		// Test missing S3ConfigPath
-		consumer2 := &AwsConsumer{
-			AWS: mockAWS,
-			Config: &gtvcfg.Config{
-				S3ConfigBucket: "test-bucket",
-			},
-		}
-
-		err = consumer2.ReadS3Configuration()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "S3ConfigBucket and S3ConfigPath options must be set")
-	})
-
-	t.Run("S3 GetObject error", func(t *testing.T) {
-		mockAWS := new(MockAwsServiceWrapper)
-		mockAWS.On("GetS3Object", "test-bucket", "test/config.json").Return(
-			nil, errors.New("access denied"),
-		).Once()
-
-		consumer := &AwsConsumer{
-			AWS: mockAWS,
-			Config: &gtvcfg.Config{
-				S3ConfigBucket: "test-bucket",
-				S3ConfigPath:   "test/config.json",
-			},
-		}
-
-		err := consumer.ReadS3Configuration()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to get S3 configuration object")
-
-		mockAWS.AssertExpectations(t)
-	})
-
-	t.Run("Invalid JSON in S3 config", func(t *testing.T) {
-		mockAWS := new(MockAwsServiceWrapper)
-		mockAWS.On("GetS3Object", "test-bucket", "test/config.json").Return(
-			NewMockReadCloser("{invalid json}"), nil,
-		).Once()
-
-		consumer := &AwsConsumer{
-			AWS: mockAWS,
-			Config: &gtvcfg.Config{
-				S3ConfigBucket: "test-bucket",
-				S3ConfigPath:   "test/config.json",
-			},
-		}
-
-		err := consumer.ReadS3Configuration()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "unable to decode configuration from S3")
-
-		mockAWS.AssertExpectations(t)
-	})
-
-	t.Run("Success case", func(t *testing.T) {
-		mockAWS := new(MockAwsServiceWrapper)
-
-		// Valid configuration JSON for S3 (v2 issuers[] schema)
-		validConfigJSON := `{
-			"issuers": [
-				{
-					"issuer": "https://test-issuer.com",
-					"provider": "generic",
-					"audiences": ["test-audience"],
-					"claim_mappings": {"subject": "sub"}
-				}
-			]
-		}`
-
-		mockAWS.On("GetS3Object", "test-bucket", "test/config.json").Return(
-			NewMockReadCloser(validConfigJSON), nil,
-		).Once()
-
-		consumer := &AwsConsumer{
-			AWS: mockAWS,
-			Config: &gtvcfg.Config{
-				// RoleSessionName is normally present from defaults before the
-				// S3 overlay; include it so Validate() passes.
-				RoleSessionName: "aws-oidc-warden",
-				S3ConfigBucket:  "test-bucket",
-				S3ConfigPath:    "test/config.json",
-			},
-		}
-
-		err := consumer.ReadS3Configuration()
-		assert.NoError(t, err)
-		require.Len(t, consumer.Config.Issuers, 1)
-		assert.Equal(t, "https://test-issuer.com", consumer.Config.Issuers[0].Issuer)
-		assert.Equal(t, []string{"test-audience"}, consumer.Config.Issuers[0].Audiences)
-
-		mockAWS.AssertExpectations(t)
 	})
 }
 
@@ -641,7 +530,7 @@ func TestAwsConsumer_GetRole(t *testing.T) {
 	roleArn := "arn:aws:iam::123456789012:role/test-role"
 
 	// Success case
-	mockAWS.On("GetRole", &iam.GetRoleInput{
+	mockAWS.On("GetRole", mock.Anything, &iam.GetRoleInput{
 		RoleName: aws.String(roleName),
 	}).Return(&iam.GetRoleOutput{
 		Role: &iamtypes.Role{
@@ -650,24 +539,24 @@ func TestAwsConsumer_GetRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	role, err := consumer.GetRole(roleName)
+	role, err := consumer.GetRole(context.Background(), roleName)
 	assert.NoError(t, err)
 	assert.NotNil(t, role)
 	assert.Equal(t, roleName, *role.Role.RoleName)
 	assert.Equal(t, roleArn, *role.Role.Arn)
 
 	// Error case - empty role name
-	role, err = consumer.GetRole("")
+	role, err = consumer.GetRole(context.Background(), "")
 	assert.Error(t, err)
 	assert.Nil(t, role)
 	assert.Contains(t, err.Error(), "role name cannot be empty")
 
 	// Error case - AWS error
-	mockAWS.On("GetRole", &iam.GetRoleInput{
+	mockAWS.On("GetRole", mock.Anything, &iam.GetRoleInput{
 		RoleName: aws.String("nonexistent-role"),
 	}).Return(nil, errors.New("role not found")).Once()
 
-	role, err = consumer.GetRole("nonexistent-role")
+	role, err = consumer.GetRole(context.Background(), "nonexistent-role")
 	assert.Error(t, err)
 	assert.Nil(t, role)
 	assert.Contains(t, err.Error(), "role not found")
@@ -687,11 +576,11 @@ func TestAwsConsumer_GetS3Object(t *testing.T) {
 	content := "test content"
 
 	// Success case
-	mockAWS.On("GetS3Object", bucket, key).Return(
+	mockAWS.On("GetS3Object", mock.Anything, bucket, key).Return(
 		NewMockReadCloser(content), nil,
 	).Once()
 
-	reader, err := consumer.GetS3Object(bucket, key)
+	reader, err := consumer.GetS3Object(context.Background(), bucket, key)
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
@@ -700,23 +589,23 @@ func TestAwsConsumer_GetS3Object(t *testing.T) {
 	assert.Equal(t, content, string(data))
 
 	// Error case - empty bucket
-	reader, err = consumer.GetS3Object("", key)
+	reader, err = consumer.GetS3Object(context.Background(), "", key)
 	assert.Error(t, err)
 	assert.Nil(t, reader)
 	assert.Contains(t, err.Error(), "bucket name cannot be empty")
 
 	// Error case - empty key
-	reader, err = consumer.GetS3Object(bucket, "")
+	reader, err = consumer.GetS3Object(context.Background(), bucket, "")
 	assert.Error(t, err)
 	assert.Nil(t, reader)
 	assert.Contains(t, err.Error(), "object key cannot be empty")
 
 	// Error case - AWS error
-	mockAWS.On("GetS3Object", bucket, "error-key").Return(
+	mockAWS.On("GetS3Object", mock.Anything, bucket, "error-key").Return(
 		nil, errors.New("access denied"),
 	).Once()
 
-	reader, err = consumer.GetS3Object(bucket, "error-key")
+	reader, err = consumer.GetS3Object(context.Background(), bucket, "error-key")
 	assert.Error(t, err)
 	assert.Nil(t, reader)
 	assert.Contains(t, err.Error(), "access denied")
@@ -746,20 +635,20 @@ func TestConfigSource_ReflectsLiveConfig(t *testing.T) {
 	}}
 
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 
 	c := NewAwsConsumer(base)
 	c.AWS = m
 
 	// Before wiring a source, the base config governs: member allowed.
-	ok, err := c.IsTargetAccountAllowed(member)
+	ok, err := c.IsTargetAccountAllowed(context.Background(), member)
 	require.NoError(t, err)
 	assert.True(t, ok, "base config should allow the member account")
 
 	// Wire a live-config getter that returns the reloaded (tighter) config.
 	c.SetConfigSource(func() *gtvcfg.Config { return live })
 
-	ok, err = c.IsTargetAccountAllowed(member)
+	ok, err = c.IsTargetAccountAllowed(context.Background(), member)
 	require.NoError(t, err)
 	assert.False(t, ok, "live config removed the member account; must be rejected")
 }
@@ -776,7 +665,7 @@ func TestConfigSource_ToggleEnabled(t *testing.T) {
 	}}
 
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 
 	current := disabled
 	c := NewAwsConsumer(&gtvcfg.Config{})
@@ -785,13 +674,13 @@ func TestConfigSource_ToggleEnabled(t *testing.T) {
 
 	// Disabled: no cross-account path exists, so a member-account target is
 	// rejected (fail closed; only the hub account is reachable).
-	ok, err := c.IsTargetAccountAllowed(member)
+	ok, err := c.IsTargetAccountAllowed(context.Background(), member)
 	require.NoError(t, err)
 	assert.False(t, ok)
 
 	// Reload enables cross-account with an allow-list excluding the member.
 	current = enabled
-	ok, err = c.IsTargetAccountAllowed(member)
+	ok, err = c.IsTargetAccountAllowed(context.Background(), member)
 	require.NoError(t, err)
 	assert.False(t, ok, "after enabling cross-account, member not in allow-list must be rejected")
 }
@@ -800,11 +689,11 @@ func TestConfigSource_ToggleEnabled(t *testing.T) {
 // consumer behaves exactly as before (uses the construction-time Config).
 func TestConfigSource_FallsBackToConfig(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 
 	c := consumerWithAllowed(m, []string{"333333333333"})
 	// nil configSource → fall back to a.Config.
-	ok, err := c.IsTargetAccountAllowed("arn:aws:iam::222222222222:role/app")
+	ok, err := c.IsTargetAccountAllowed(context.Background(), "arn:aws:iam::222222222222:role/app")
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
@@ -836,9 +725,9 @@ func TestIsTargetAccountAllowed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := new(MockAwsServiceWrapper)
-			m.On("GetCallerAccount").Return("111111111111", nil)
+			m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 			c := consumerWithAllowed(m, tc.allowed)
-			ok, err := c.IsTargetAccountAllowed(tc.arn)
+			ok, err := c.IsTargetAccountAllowed(context.Background(), tc.arn)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, ok)
 		})
@@ -852,9 +741,9 @@ func TestIsTargetAccountAllowed(t *testing.T) {
 // silently flip this.
 func TestIsTargetAccountAllowed_EmptyListFailsOpen(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	c := consumerWithAllowed(m, nil) // enabled, empty allow-list
-	ok, err := c.IsTargetAccountAllowed("arn:aws:iam::222222222222:role/anything")
+	ok, err := c.IsTargetAccountAllowed(context.Background(), "arn:aws:iam::222222222222:role/anything")
 	require.NoError(t, err)
 	assert.True(t, ok, "empty allowed_accounts must fail open (any account allowed)")
 }
@@ -864,15 +753,15 @@ func TestIsTargetAccountAllowed_EmptyListFailsOpen(t *testing.T) {
 // (there is no spoke path to reach any other account).
 func TestIsTargetAccountAllowedDisabled(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	c := NewAwsConsumer(&gtvcfg.Config{}) // CrossAccount nil
 	c.AWS = m
 
-	ok, err := c.IsTargetAccountAllowed("arn:aws:iam::111111111111:role/app")
+	ok, err := c.IsTargetAccountAllowed(context.Background(), "arn:aws:iam::111111111111:role/app")
 	require.NoError(t, err)
 	assert.True(t, ok, "hub account must be allowed even when cross-account is disabled")
 
-	ok, err = c.IsTargetAccountAllowed("arn:aws:iam::222222222222:role/app")
+	ok, err = c.IsTargetAccountAllowed(context.Background(), "arn:aws:iam::222222222222:role/app")
 	require.NoError(t, err)
 	assert.False(t, ok, "member account must be disallowed when cross-account is disabled")
 }
@@ -880,7 +769,7 @@ func TestIsTargetAccountAllowedDisabled(t *testing.T) {
 func TestIsTargetAccountAllowed_BadARN(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
 	c := consumerWithAllowed(m, []string{"222222222222"})
-	ok, err := c.IsTargetAccountAllowed("not-an-arn")
+	ok, err := c.IsTargetAccountAllowed(context.Background(), "not-an-arn")
 	require.Error(t, err) // ParseRoleARN error propagated
 	assert.False(t, ok)
 }
@@ -893,27 +782,27 @@ func TestSpokeCredsFor_BlockedAccount(t *testing.T) {
 
 	// Hub account is always allowed → (nil, nil), no spoke assume.
 	mHub := new(MockAwsServiceWrapper)
-	mHub.On("GetCallerAccount").Return("111111111111", nil)
+	mHub.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	cHub := NewAwsConsumer(cfg)
 	cHub.AWS = mHub
-	creds, err := cHub.spokeCredsFor("111111111111")
+	creds, err := cHub.spokeCredsFor(context.Background(), "111111111111")
 	require.NoError(t, err)
 	assert.Nil(t, creds)
 
 	// Non-hub account not in the allow-list → defense-in-depth guard errors.
 	mBlocked := new(MockAwsServiceWrapper)
-	mBlocked.On("GetCallerAccount").Return("111111111111", nil)
+	mBlocked.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	cBlocked := NewAwsConsumer(cfg)
 	cBlocked.AWS = mBlocked
-	creds, err = cBlocked.spokeCredsFor("222222222222")
+	creds, err = cBlocked.spokeCredsFor(context.Background(), "222222222222")
 	require.Error(t, err)
 	assert.Nil(t, creds)
 
 	// Allowed member proceeds to assume the spoke role.
 	mAllowed := new(MockAwsServiceWrapper)
-	mAllowed.On("GetCallerAccount").Return("111111111111", nil)
+	mAllowed.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
-	mAllowed.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	mAllowed.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		return *in.RoleArn == "arn:aws:iam::333333333333:role/aow-spoke"
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
@@ -921,7 +810,7 @@ func TestSpokeCredsFor_BlockedAccount(t *testing.T) {
 	}}, nil).Once()
 	cAllowed := NewAwsConsumer(cfg)
 	cAllowed.AWS = mAllowed
-	creds, err = cAllowed.spokeCredsFor("333333333333")
+	creds, err = cAllowed.spokeCredsFor(context.Background(), "333333333333")
 	require.NoError(t, err)
 	require.NotNil(t, creds)
 	mAllowed.AssertExpectations(t)
@@ -944,18 +833,18 @@ func newTagAuthConsumer(m *MockAwsServiceWrapper) *AwsConsumer {
 
 func TestSpokeCredsFor_SameAccount_ReturnsNil(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	c := newTagAuthConsumer(m)
-	creds, err := c.spokeCredsFor("111111111111")
+	creds, err := c.spokeCredsFor(context.Background(), "111111111111")
 	require.NoError(t, err)
 	assert.Nil(t, creds)
 }
 
 func TestSpokeCredsFor_CrossAccount_AssumesSpokeAndCaches(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
@@ -963,11 +852,11 @@ func TestSpokeCredsFor_CrossAccount_AssumesSpokeAndCaches(t *testing.T) {
 	}}, nil).Once()
 
 	c := newTagAuthConsumer(m)
-	creds1, err := c.spokeCredsFor("222222222222")
+	creds1, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	require.NotNil(t, creds1)
 	// Second call served from cache → AssumeRole still called Once.
-	creds2, err := c.spokeCredsFor("222222222222")
+	creds2, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	require.NotNil(t, creds2)
 	m.AssertExpectations(t)
@@ -977,7 +866,7 @@ func TestSpokeCredsFor_Disabled_ReturnsNil(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
 	c := NewAwsConsumer(&gtvcfg.Config{}) // CrossAccount nil
 	c.AWS = m
-	creds, err := c.spokeCredsFor("222222222222")
+	creds, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	assert.Nil(t, creds)
 }
@@ -986,9 +875,9 @@ func TestSpokeCredsFor_CrossAccountOnly_TagAuthDisabled(t *testing.T) {
 	// The spoke transport must work with tag-auth off: explicit role_mappings
 	// can target member accounts without enabling the tag-auth fallback.
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
 		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
@@ -1002,7 +891,7 @@ func TestSpokeCredsFor_CrossAccountOnly_TagAuthDisabled(t *testing.T) {
 		},
 	})
 	c.AWS = m
-	creds, err := c.spokeCredsFor("222222222222")
+	creds, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	require.NotNil(t, creds)
 	m.AssertExpectations(t)
@@ -1014,11 +903,11 @@ func TestSpokeCredsFor_CrossAccountOnly_TagAuthDisabled(t *testing.T) {
 // AssumeRole, only in GetRoleTags reads.
 func TestAssumeRole_CrossAccount_DirectTransport(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
+	m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", false, nil)
 
 	var captured *sts.AssumeRoleInput
 	targetExp := time.Now().Add(time.Hour)
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		captured = in
 		return *in.RoleArn == "arn:aws:iam::222222222222:role/app"
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1027,7 +916,7 @@ func TestAssumeRole_CrossAccount_DirectTransport(t *testing.T) {
 	}}, nil).Once()
 
 	c := newTagAuthConsumer(m)
-	creds, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
+	creds, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "AK2", *creds.AccessKeyId)
 	require.NotNil(t, captured)
@@ -1045,11 +934,11 @@ func TestAssumeRoleCrossAccountDisabledFailsClosed(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := new(MockAwsServiceWrapper)
-			m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
+			m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", false, nil)
 			c := NewAwsConsumer(cfg)
 			c.AWS = m
 
-			_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
+			_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
 			require.Error(t, err)
 			m.AssertNotCalled(t, "AssumeRole", mock.Anything)
 		})
@@ -1063,7 +952,7 @@ func TestAssumeRoleUnparseableARNFailsClosed(t *testing.T) {
 	c := NewAwsConsumer(&gtvcfg.Config{})
 	c.AWS = m
 
-	_, err := c.AssumeRole("not-an-arn", "sess", nil, nil, nil, nil)
+	_, err := c.AssumeRole(context.Background(), "not-an-arn", "sess", nil, nil, nil, nil)
 	require.Error(t, err)
 	m.AssertNotCalled(t, "AssumeRole", mock.Anything)
 	m.AssertNotCalled(t, "GetCallerIdentityInfo")
@@ -1075,10 +964,10 @@ func TestAssumeRoleUnparseableARNFailsClosed(t *testing.T) {
 // cross-account tag-auth.
 func TestSpokeCredsFor_ClampsDurationOver1h(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	exp := time.Now().Add(time.Hour)
 	var captured *sts.AssumeRoleInput
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		captured = in
 		return *in.RoleArn == "arn:aws:iam::222222222222:role/aow-spoke"
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1093,7 +982,7 @@ func TestSpokeCredsFor_ClampsDurationOver1h(t *testing.T) {
 		},
 	})
 	c.AWS = m
-	_, err := c.spokeCredsFor("222222222222")
+	_, err := c.spokeCredsFor(context.Background(), "222222222222")
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.Equal(t, int32(3600), *captured.DurationSeconds)
@@ -1105,7 +994,7 @@ func TestSpokeCredsFor_ClampsDurationOver1h(t *testing.T) {
 // though the processor guards the same condition upstream.
 func TestAssumeRoleCrossAccountNotAllowedFailsClosed(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerIdentityInfo").Return("111111111111", true, nil)
+	m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", true, nil)
 	c := NewAwsConsumer(&gtvcfg.Config{
 		CrossAccount: &gtvcfg.CrossAccount{
 			Enabled: true, SpokeRoleName: "aow-spoke",
@@ -1115,7 +1004,7 @@ func TestAssumeRoleCrossAccountNotAllowedFailsClosed(t *testing.T) {
 	})
 	c.AWS = m
 
-	_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
 	require.Error(t, err)
 	m.AssertNotCalled(t, "AssumeRole", mock.Anything)
 }
@@ -1132,10 +1021,10 @@ func TestAssumeRoleClampBoundary(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := new(MockAwsServiceWrapper)
-			m.On("GetCallerIdentityInfo").Return("111111111111", true, nil)
+			m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", true, nil)
 			exp := time.Now().Add(time.Hour)
 			var captured *sts.AssumeRoleInput
-			m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+			m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 				captured = in
 				return true
 			})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1146,7 +1035,7 @@ func TestAssumeRoleClampBoundary(t *testing.T) {
 			c := NewAwsConsumer(&gtvcfg.Config{})
 			c.AWS = m
 			dur := tc.requested
-			_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, &dur, nil, nil)
+			_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &dur, nil, nil)
 			require.NoError(t, err)
 			require.NotNil(t, captured)
 			assert.Equal(t, tc.want, *captured.DurationSeconds)
@@ -1161,13 +1050,13 @@ func TestAssumeRoleClampBoundary(t *testing.T) {
 // confirming nothing was cached on the failure path.
 func TestGetRoleTagsCrossAccountDisabledFailsClosed(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerAccount").Return("111111111111", nil)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
 	c := NewAwsConsumer(&gtvcfg.Config{}) // CrossAccount nil
 	c.AWS = m
 
-	_, err := c.GetRoleTags("arn:aws:iam::222222222222:role/app")
+	_, err := c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
 	require.Error(t, err)
-	_, err = c.GetRoleTags("arn:aws:iam::222222222222:role/app")
+	_, err = c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
 	require.Error(t, err)
 
 	m.AssertNotCalled(t, "GetRole", mock.Anything)
@@ -1178,9 +1067,9 @@ func TestGetRoleTagsCrossAccountDisabledFailsClosed(t *testing.T) {
 
 func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
+	m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", false, nil)
 	var captured *sts.AssumeRoleInput
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		captured = in
 		return true
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1195,7 +1084,7 @@ func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 		Raw: map[string]any{"repository": "acme/api", "actor": "deploy-bot", "ref": "refs/heads/main", "event_name": "push"},
 	}
 
-	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	// All configured session tags are marked transitive, not just repo/ref/actor:
@@ -1218,9 +1107,9 @@ var defaultGitHubSessionTagsForTest = map[string]string{
 
 func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
-	m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
+	m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", false, nil)
 	var captured *sts.AssumeRoleInput
-	m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+	m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 		captured = in
 		return true
 	})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1235,7 +1124,7 @@ func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
 		Raw: map[string]any{"repository": "acme/api", "actor": "deploy-bot", "ref": "refs/heads/main"},
 	}
 
-	_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.Empty(t, captured.TransitiveTagKeys)
@@ -1250,9 +1139,9 @@ func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
 func TestAssumeRoleClampRoleSession(t *testing.T) {
 	t.Run("same account", func(t *testing.T) {
 		m := new(MockAwsServiceWrapper)
-		m.On("GetCallerIdentityInfo").Return("111111111111", true, nil)
+		m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", true, nil)
 		var captured *sts.AssumeRoleInput
-		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 			captured = in
 			return true
 		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1264,7 +1153,7 @@ func TestAssumeRoleClampRoleSession(t *testing.T) {
 		c.AWS = m
 
 		var requested int32 = 7200
-		_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
+		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
 		require.NoError(t, err)
 		require.NotNil(t, captured)
 		require.NotNil(t, captured.DurationSeconds)
@@ -1273,9 +1162,9 @@ func TestAssumeRoleClampRoleSession(t *testing.T) {
 
 	t.Run("cross account", func(t *testing.T) {
 		m := new(MockAwsServiceWrapper)
-		m.On("GetCallerIdentityInfo").Return("111111111111", true, nil)
+		m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", true, nil)
 		var captured *sts.AssumeRoleInput
-		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 			captured = in
 			return *in.RoleArn == "arn:aws:iam::222222222222:role/app"
 		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1293,7 +1182,7 @@ func TestAssumeRoleClampRoleSession(t *testing.T) {
 		c.AWS = m
 
 		var requested int32 = 7200 // > 1h; must be clamped
-		_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
+		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
 		require.NoError(t, err)
 		require.NotNil(t, captured)
 		require.NotNil(t, captured.DurationSeconds)
@@ -1308,9 +1197,9 @@ func TestAssumeRoleClampRoleSession(t *testing.T) {
 func TestAssumeRoleNoClampIAMUser(t *testing.T) {
 	t.Run("same account", func(t *testing.T) {
 		m := new(MockAwsServiceWrapper)
-		m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
+		m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", false, nil)
 		var captured *sts.AssumeRoleInput
-		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 			captured = in
 			return true
 		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1322,7 +1211,7 @@ func TestAssumeRoleNoClampIAMUser(t *testing.T) {
 		c.AWS = m
 
 		var requested int32 = 7200
-		_, err := c.AssumeRole("arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
+		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
 		require.NoError(t, err)
 		require.NotNil(t, captured)
 		require.NotNil(t, captured.DurationSeconds)
@@ -1331,9 +1220,9 @@ func TestAssumeRoleNoClampIAMUser(t *testing.T) {
 
 	t.Run("cross account", func(t *testing.T) {
 		m := new(MockAwsServiceWrapper)
-		m.On("GetCallerIdentityInfo").Return("111111111111", false, nil)
+		m.On("GetCallerIdentityInfo", mock.Anything).Return("111111111111", false, nil)
 		var captured *sts.AssumeRoleInput
-		m.On("AssumeRole", mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
+		m.On("AssumeRole", mock.Anything, mock.MatchedBy(func(in *sts.AssumeRoleInput) bool {
 			captured = in
 			return *in.RoleArn == "arn:aws:iam::222222222222:role/app"
 		})).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
@@ -1351,7 +1240,7 @@ func TestAssumeRoleNoClampIAMUser(t *testing.T) {
 		c.AWS = m
 
 		var requested int32 = 7200
-		_, err := c.AssumeRole("arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
+		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
 		require.NoError(t, err)
 		require.NotNil(t, captured)
 		require.NotNil(t, captured.DurationSeconds)

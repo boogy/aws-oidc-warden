@@ -1,12 +1,33 @@
 package cache
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
+
+// Cache backend labels for the shared "backend" log attr.
+const (
+	backendMemory   = "memory"
+	backendDynamoDB = "dynamodb"
+	backendS3       = "s3"
+	backendLocal    = "local"
+)
+
+func backendAttr(backend string) slog.Attr {
+	return slog.String("backend", backend)
+}
+
+// cacheAttrs returns the backend and key attrs every cache log line carries.
+func cacheAttrs(backend, key string, extra ...slog.Attr) []slog.Attr {
+	attrs := make([]slog.Attr, 0, len(extra)+2)
+	attrs = append(attrs, backendAttr(backend), slog.String("key", key))
+	return append(attrs, extra...)
+}
 
 // CacheDefaults holds all default configuration values for cache implementations
 // These constants are centralized here to ensure consistency across different cache types
@@ -36,8 +57,8 @@ var Defaults = CacheDefaults{
 
 // Cache interface defines the methods that all cache implementations must provide
 type Cache interface {
-	Get(key string) (*types.JWKS, bool)
-	Set(key string, value *types.JWKS, ttl time.Duration)
+	Get(ctx context.Context, key string) (*types.JWKS, bool)
+	Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration)
 }
 
 // GetConfiguredTTL returns the TTL from config or the default if not specified

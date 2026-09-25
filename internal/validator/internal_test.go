@@ -488,7 +488,7 @@ func TestSSRFGuard_DiscoveryJWKSURIMayHostSwap(t *testing.T) {
 	issuerURL = issuerSrv.URL
 
 	v := ssrfTestValidator(true)
-	if _, err := v.FetchJWKS(issuerURL); err != nil {
+	if _, err := v.FetchJWKS(context.Background(), issuerURL); err != nil {
 		t.Fatalf("FetchJWKS: %v", err)
 	}
 	select {
@@ -577,14 +577,14 @@ type stubPinnedValidator struct {
 	sawCfg   func(*config.Config)
 }
 
-func (s *stubPinnedValidator) Validate(string) (*types.Claims, error) {
+func (s *stubPinnedValidator) Validate(context.Context, string) (*types.Claims, error) {
 	// The unpinned path: a second, independent read of the provider — exactly
 	// what every extractor did before ExtractionInput.Config existed.
 	s.sawCfg(s.provider.Get())
 	return &types.Claims{}, nil
 }
 
-func (s *stubPinnedValidator) validateWith(cfg *config.Config, _ string) (*types.Claims, error) {
+func (s *stubPinnedValidator) validateWith(_ context.Context, cfg *config.Config, _ string) (*types.Claims, error) {
 	s.sawCfg(cfg)
 	return &types.Claims{}, nil
 }

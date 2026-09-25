@@ -170,7 +170,7 @@ func TestWriteRecord_AppliesOwnTimeoutWhenCallerHasNoDeadline(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(DefaultTimeout), spy.deadlines[0], 2*time.Second)
 }
 
-func TestWriteLogToS3_UsesLiveConfigAfterReload(t *testing.T) {
+func TestBufferedWriteUsesLiveConfigAfterReload(t *testing.T) {
 	l := NewS3Logger(&gtvcfg.Config{LogToS3: false})
 	require.Nil(t, l.s3Client, "no client should exist while the boot config disables S3")
 
@@ -182,14 +182,14 @@ func TestWriteLogToS3_UsesLiveConfigAfterReload(t *testing.T) {
 
 	var buf bytes.Buffer
 	buf.WriteString(`{"decision":"allow"}`)
-	require.NoError(t, l.WriteLogToS3(buf))
+	require.NoError(t, l.writeLogToS3(buf))
 	require.NoError(t, l.Flush())
 
 	require.Equal(t, []string{"reloaded-bucket"}, spy.buckets,
 		"best-effort record was dropped instead of written to the reloaded bucket")
 }
 
-func TestWriteLogToS3_NoOpWhenLiveConfigDisablesS3(t *testing.T) {
+func TestBufferedWriteNoOpWhenLiveConfigDisablesS3(t *testing.T) {
 	l := NewS3Logger(&gtvcfg.Config{LogToS3: true, LogBucket: "boot-bucket"})
 	live := &gtvcfg.Config{LogToS3: false}
 	l.SetConfigSource(func() *gtvcfg.Config { return live })
@@ -199,7 +199,7 @@ func TestWriteLogToS3_NoOpWhenLiveConfigDisablesS3(t *testing.T) {
 
 	var buf bytes.Buffer
 	buf.WriteString(`{"decision":"allow"}`)
-	require.NoError(t, l.WriteLogToS3(buf))
+	require.NoError(t, l.writeLogToS3(buf))
 	require.NoError(t, l.Flush())
 
 	assert.Empty(t, spy.buckets, "wrote to S3 while the live config disables S3 logging")
@@ -216,6 +216,30 @@ func TestWriteSingleLog_UsesLiveConfigAfterReload(t *testing.T) {
 
 	require.NoError(t, l.WriteSingleLog([]byte(`{"decision":"allow"}`)))
 	require.Equal(t, []string{"reloaded-bucket"}, spy.buckets)
+}
+
+func TestWriteRecord_ClientConstructionIgnoresCancelledCallerCtx(t *testing.T) {
+	l := NewS3Logger(&gtvcfg.Config{LogToS3: false})
+	require.Nil(t, l.s3Client, "no client should exist while the boot config disables S3")
+
+	live := &gtvcfg.Config{LogToS3: true, LogBucket: "audit-bucket"}
+	l.SetConfigSource(func() *gtvcfg.Config { return live })
+
+	spy := &bucketCapturingS3{}
+	l.clientFactory = func(ctx context.Context) (s3ClientInterface, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return spy, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate a request whose ctx is already cancelled by the time WriteRecord runs
+
+	err := l.WriteRecord(ctx, []byte(`{"decision":"allow"}`))
+	require.NoError(t, err,
+		"client construction is shared under initMu across every caller and must use the logger's own background ctx, not a cancelled request ctx")
+	require.Equal(t, []string{"audit-bucket"}, spy.buckets)
 }
 
 func TestWriteObject_TaggingIsURLEncoded(t *testing.T) {

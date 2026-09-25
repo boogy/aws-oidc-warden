@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gTypes "github.com/boogy/aws-oidc-warden/internal/types"
 )
 
@@ -70,7 +71,7 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 		opt(options)
 	}
 
-	cfg, err := resolveAWSConfig(options.awsConfig, "DynamoDB cache")
+	cfg, err := resolveAWSConfig(context.Background(), options.awsConfig, backendDynamoDB)
 	if err != nil {
 		return nil, err
 	}
@@ -78,23 +79,23 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 	return &dynamoDBCache{
 		client:    dynamodb.NewFromConfig(cfg),
 		tableName: tableName,
-		local:     newLocalCache(options.maxLocalSize, options.defaultTTL),
+		local:     newLocalCache(options.maxLocalSize, options.defaultTTL, backendLocal),
 	}, nil
 }
 
 // Get retrieves an item from the DynamoDB cache
-func (c *dynamoDBCache) Get(key string) (*gTypes.JWKS, bool) {
+func (c *dynamoDBCache) Get(ctx context.Context, key string) (*gTypes.JWKS, bool) {
 	// Try to get from local memory cache first
 	if jwks, found := c.getFromLocalCache(key); found {
-		slog.Debug("Local memory cache hit", "key", key)
+		logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
 		return jwks, true
 	}
 
 	// Not in local cache, try DynamoDB
-	jwks, expiration, found := c.getFromDynamoDB(key)
+	jwks, expiration, found := c.getFromDynamoDB(ctx, key)
 	if found {
 		// Store in local cache with the item's real expiration
-		c.storeInLocalCache(key, jwks, expiration)
+		c.storeInLocalCache(ctx, key, jwks, expiration)
 		return jwks, true
 	}
 
@@ -109,8 +110,8 @@ func (c *dynamoDBCache) getFromLocalCache(key string) (*gTypes.JWKS, bool) {
 
 // getFromDynamoDB retrieves an item from DynamoDB, returning the cached JWKS
 // and its expiration time
-func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, time.Time, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+func (c *dynamoDBCache) getFromDynamoDB(ctx context.Context, key string) (*gTypes.JWKS, time.Time, bool) {
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	input := &dynamodb.GetItemInput{
@@ -122,36 +123,36 @@ func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, time.Time, bo
 
 	result, err := c.client.GetItem(ctx, input)
 	if err != nil {
-		slog.Error("Failed to get item from DynamoDB",
-			"key", key,
-			"error", err.Error(),
-			"table", c.tableName)
+		logevent.Error(ctx, nil, logevent.CacheReadFailure, "failed to get item from DynamoDB",
+			cacheAttrs(backendDynamoDB, key, slog.String("error", err.Error()), slog.String("table", c.tableName))...)
 		return nil, time.Time{}, false
 	}
 
 	if result.Item == nil {
-		slog.Debug("Cache miss in DynamoDB", "key", key)
+		logevent.Debug(ctx, nil, logevent.CacheMiss, "cache miss", cacheAttrs(backendDynamoDB, key)...)
 		return nil, time.Time{}, false
 	}
 
 	valueAttr, ok := result.Item["Value"]
 	if !ok {
-		slog.Error("Invalid item format in DynamoDB - missing Value attribute", "key", key)
+		logevent.Error(ctx, nil, logevent.CacheItemInvalid, "cache item missing Value attribute",
+			cacheAttrs(backendDynamoDB, key)...)
 		return nil, time.Time{}, false
 	}
 
 	valueStr, ok := valueAttr.(*types.AttributeValueMemberS)
 	if !ok {
-		slog.Error("Value is not a string in DynamoDB", "key", key)
+		logevent.Error(ctx, nil, logevent.CacheItemInvalid, "cache item Value attribute is not a string",
+			cacheAttrs(backendDynamoDB, key)...)
 		return nil, time.Time{}, false
 	}
 
 	// Check size for security
 	if len(valueStr.Value) > int(Defaults.MaxItemSize) {
-		slog.Warn("DynamoDB cache item exceeds maximum allowed size",
-			"key", key,
-			"size", len(valueStr.Value),
-			"maxAllowed", Defaults.MaxItemSize)
+		logevent.Warn(ctx, nil, logevent.CacheItemOversize, "cache item exceeds maximum allowed size",
+			cacheAttrs(backendDynamoDB, key,
+				slog.Int("size", len(valueStr.Value)),
+				slog.Int64("maxAllowed", Defaults.MaxItemSize))...)
 		return nil, time.Time{}, false
 	}
 
@@ -159,26 +160,24 @@ func (c *dynamoDBCache) getFromDynamoDB(key string) (*gTypes.JWKS, time.Time, bo
 	// (fail closed) so such items cannot be served forever
 	expiration, err := parseExpiration(result.Item["Expiration"])
 	if err != nil {
-		slog.Warn("Invalid Expiration attribute in DynamoDB cache item, treating as expired",
-			"key", key,
-			"error", err.Error())
+		logevent.Error(ctx, nil, logevent.CacheItemInvalid, "invalid Expiration attribute, treating item as expired",
+			cacheAttrs(backendDynamoDB, key, slog.String("error", err.Error()))...)
 		return nil, time.Time{}, false
 	}
 	if time.Now().After(expiration) {
-		slog.Debug("DynamoDB cache entry expired", "key", key)
+		logevent.Debug(ctx, nil, logevent.CacheExpired, "cache entry expired", cacheAttrs(backendDynamoDB, key)...)
 		return nil, time.Time{}, false
 	}
 
 	// Unmarshal JSON string back to JWKS struct
 	var jwks gTypes.JWKS
 	if err := json.Unmarshal([]byte(valueStr.Value), &jwks); err != nil {
-		slog.Error("Failed to unmarshal JWKS from DynamoDB",
-			"key", key,
-			"error", err.Error())
+		logevent.Error(ctx, nil, logevent.CacheItemInvalid, "failed to unmarshal JWKS from DynamoDB",
+			cacheAttrs(backendDynamoDB, key, slog.String("error", err.Error()))...)
 		return nil, time.Time{}, false
 	}
 
-	slog.Debug("DynamoDB cache hit", "key", key)
+	logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendDynamoDB, key)...)
 	return &jwks, expiration, true
 }
 
@@ -197,29 +196,30 @@ func parseExpiration(attr types.AttributeValue) (time.Time, error) {
 // Set stores an item in the DynamoDB cache with the given TTL.
 // The DynamoDB write is synchronous: in Lambda the execution environment is
 // frozen when the handler returns, so a background write could be lost.
-func (c *dynamoDBCache) Set(key string, value *gTypes.JWKS, ttl time.Duration) {
+func (c *dynamoDBCache) Set(ctx context.Context, key string, value *gTypes.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = c.local.defaultTTL
 	}
 
 	// Store in local cache first for fast access
-	c.storeInLocalCache(key, value, time.Now().Add(ttl))
+	c.storeInLocalCache(ctx, key, value, time.Now().Add(ttl))
 
 	// Then store in DynamoDB for persistence
-	c.storeInDynamoDB(key, value, ttl)
+	c.storeInDynamoDB(ctx, key, value, ttl)
 }
 
 // storeInLocalCache adds or updates an item in the local memory cache
-func (c *dynamoDBCache) storeInLocalCache(key string, value *gTypes.JWKS, expiration time.Time) {
-	c.local.put(key, value, expiration)
+func (c *dynamoDBCache) storeInLocalCache(ctx context.Context, key string, value *gTypes.JWKS, expiration time.Time) {
+	c.local.put(ctx, key, value, expiration)
 }
 
 // storeInDynamoDB persists an item to DynamoDB
-func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time.Duration) {
+func (c *dynamoDBCache) storeInDynamoDB(ctx context.Context, key string, value *gTypes.JWKS, ttl time.Duration) {
 	// Marshal JWKS to JSON string
 	valueJSON, err := json.Marshal(value)
 	if err != nil {
-		slog.Error("Failed to marshal JWKS", "key", key, "error", err.Error())
+		logevent.Error(ctx, nil, logevent.CacheWriteFailure, "failed to marshal JWKS",
+			cacheAttrs(backendDynamoDB, key, slog.String("error", err.Error()))...)
 		return
 	}
 
@@ -227,10 +227,10 @@ func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time
 	// DynamoDB's hard item-size limit is 400KB; oversized entries are dropped
 	// rather than written, since the PutItem would fail anyway.
 	if len(valueJSON) > int(Defaults.DynamoDBMaxItemSize) {
-		slog.Error("Cache item too large to store in DynamoDB",
-			"key", key,
-			"size", len(valueJSON),
-			"maxAllowed", Defaults.DynamoDBMaxItemSize)
+		logevent.Warn(ctx, nil, logevent.CacheItemOversize, "cache item too large to store in DynamoDB",
+			cacheAttrs(backendDynamoDB, key,
+				slog.Int("size", len(valueJSON)),
+				slog.Int64("maxAllowed", Defaults.DynamoDBMaxItemSize))...)
 		return
 	}
 
@@ -238,7 +238,7 @@ func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time
 	// Calculate TTL timestamp for DynamoDB native TTL
 	ttlTimestamp := time.Now().Add(ttl).Unix()
 
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	input := &dynamodb.PutItemInput{
@@ -255,12 +255,11 @@ func (c *dynamoDBCache) storeInDynamoDB(key string, value *gTypes.JWKS, ttl time
 
 	_, err = c.client.PutItem(ctx, input)
 	if err != nil {
-		slog.Error("Failed to set item in DynamoDB",
-			"key", key,
-			"error", err.Error(),
-			"table", c.tableName)
+		logevent.Error(ctx, nil, logevent.CacheWriteFailure, "failed to set item in DynamoDB",
+			cacheAttrs(backendDynamoDB, key, slog.String("error", err.Error()), slog.String("table", c.tableName))...)
 		return
 	}
 
-	slog.Debug("Cached value in DynamoDB", "key", key, "ttl", ttl, "size", len(valueJSON))
+	logevent.Debug(ctx, nil, logevent.CacheSet, "cache entry set",
+		cacheAttrs(backendDynamoDB, key, slog.Int64("ttlMs", ttl.Milliseconds()), slog.Int("size", len(valueJSON)))...)
 }

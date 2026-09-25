@@ -7,131 +7,108 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // TestDecisionLine_NoDuplicateKeys is the permanent regression guard for the
-// bug class fixed by this task: a request-scoped logger built via slog.With
-// (as every adapter builds it) plus the attrs auditLogAttrs adds to the
-// decision line must never both write the same key. json.Unmarshal is
-// deliberately NOT used here — encoding/json's last-wins behavior on
-// duplicate object keys is exactly what let the earlier bug survive
-// TestLogOutputIsJSON undetected; a raw substring count is the only way to
-// see the duplicate that a parsed map hides.
+// Substring count, not json.Unmarshal: last-wins decoding hides duplicate keys.
 func TestDecisionLine_NoDuplicateKeys(t *testing.T) {
 	keys := []string{"requestId", "frontendRequestId", "sourceIp", "sourceIpFrom", "sessionName", "decision"}
 
 	for _, tc := range []struct {
 		name string
 		log  func(buf *bytes.Buffer) *slog.Logger
+		req  logevent.Request
 		rec  *auditRecord
 	}{
 		{
 			name: "apigateway",
 			log: func(buf *bytes.Buffer) *slog.Logger {
-				base := slog.New(slog.NewJSONHandler(buf, nil))
-				log := base.With(
-					slog.String("requestId", "req-1"),
+				return slog.New(logevent.NewHandler(slog.NewJSONHandler(buf, nil))).With(
 					slog.String("path", "/assume-role"),
 					slog.String("method", "POST"),
 					slog.String("userAgent", "curl"),
 					slog.String("requestTime", "01/Jan/2026"),
 					slog.String("domainName", "api.example.com"),
 				)
-				log = log.With(slog.String("frontendRequestId", "apigw-id-1"))
-				log = log.With(slog.String("sourceIp", "198.51.100.5"))
-				return log
 			},
-			// rec carries the same values the adapter would have put in
-			// context (frontendRequestId/sourceIp come from the same
-			// resolveRequestID/clientIP call as the logger binding above), so
-			// a reintroduced appendIf in auditLogAttrs actually collides.
+			req: logevent.Request{ID: "req-1", FrontendID: "apigw-id-1", SourceIP: "198.51.100.5"},
 			rec: &auditRecord{FrontendRequestID: "apigw-id-1", SourceIP: "198.51.100.5"},
 		},
 		{
 			name: "apigatewayv2",
 			log: func(buf *bytes.Buffer) *slog.Logger {
-				base := slog.New(slog.NewJSONHandler(buf, nil))
-				log := base.With(
-					slog.String("requestId", "req-2"),
+				return slog.New(logevent.NewHandler(slog.NewJSONHandler(buf, nil))).With(
 					slog.String("path", "/assume-role"),
 					slog.String("method", "POST"),
 					slog.String("userAgent", "curl"),
 				)
-				log = log.With(slog.String("frontendRequestId", "apigwv2-id-1"))
-				log = log.With(slog.String("sourceIp", "198.51.100.5"))
-				return log
 			},
+			req: logevent.Request{ID: "req-2", FrontendID: "apigwv2-id-1", SourceIP: "198.51.100.5"},
 			rec: &auditRecord{FrontendRequestID: "apigwv2-id-1", SourceIP: "198.51.100.5"},
 		},
 		{
 			name: "lambdaurl",
 			log: func(buf *bytes.Buffer) *slog.Logger {
-				base := slog.New(slog.NewJSONHandler(buf, nil))
-				log := base.With(
-					slog.String("requestId", "req-3"),
+				return slog.New(logevent.NewHandler(slog.NewJSONHandler(buf, nil))).With(
 					slog.String("path", "/assume-role"),
 					slog.String("method", "POST"),
 					slog.String("userAgent", "curl"),
 					slog.String("requestTime", "01/Jan/2026"),
 					slog.String("domainName", "fn.lambda-url.aws"),
 				)
-				log = log.With(slog.String("frontendRequestId", "lambdaurl-id-1"))
-				log = log.With(slog.String("sourceIp", "198.51.100.5"))
-				return log
 			},
+			req: logevent.Request{ID: "req-3", FrontendID: "lambdaurl-id-1", SourceIP: "198.51.100.5"},
 			rec: &auditRecord{FrontendRequestID: "lambdaurl-id-1", SourceIP: "198.51.100.5"},
 		},
 		{
 			name: "alb-with-xff",
 			log: func(buf *bytes.Buffer) *slog.Logger {
-				base := slog.New(slog.NewJSONHandler(buf, nil))
-				log := base.With(
-					slog.String("requestId", "req-4"),
+				return slog.New(logevent.NewHandler(slog.NewJSONHandler(buf, nil))).With(
 					slog.String("path", "/assume-role"),
 					slog.String("method", "POST"),
 					slog.String("targetGroupArn", "arn:aws:elasticloadbalancing:..."),
 					slog.String("userAgent", "curl"),
 				)
-				log = log.With(slog.String("sourceIp", "203.0.113.7"))
-				log = log.With(slog.String("sourceIpFrom", "x-forwarded-for"))
-				return log
 			},
+			req: logevent.Request{ID: "req-4", SourceIP: "203.0.113.7", SourceIPFrom: "x-forwarded-for"},
 			rec: &auditRecord{SourceIP: "203.0.113.7", SourceIPFrom: "x-forwarded-for"},
 		},
 		{
 			// ALB with no X-Forwarded-For header: clientIP("", …) returns
-			// ("", ""), so no sourceIp/sourceIpFrom binding must occur at all.
+			// ("", ""), so no sourceIp/sourceIpFrom attr must be injected at all.
 			name: "alb-without-xff",
 			log: func(buf *bytes.Buffer) *slog.Logger {
-				base := slog.New(slog.NewJSONHandler(buf, nil))
-				return base.With(
-					slog.String("requestId", "req-5"),
+				return slog.New(logevent.NewHandler(slog.NewJSONHandler(buf, nil))).With(
 					slog.String("path", "/assume-role"),
 					slog.String("method", "POST"),
 					slog.String("targetGroupArn", "arn:aws:elasticloadbalancing:..."),
 					slog.String("userAgent", "curl"),
 				)
 			},
+			req: logevent.Request{ID: "req-5"},
 			rec: &auditRecord{},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			log := tc.log(&buf)
+			ctx := logevent.WithRequest(context.Background(), tc.req)
 
 			rec := tc.rec
 			rec.Frontend = "test"
 			rec.JWTMode = "self"
 			rec.SessionName = "test-session"
 			r := &RequestProcessor{}
-			if err := r.recordDecision(context.Background(), log, &config.Config{}, rec); err != nil {
+			if err := r.recordDecision(ctx, log, &config.Config{}, rec); err != nil {
 				t.Fatalf("recordDecision: %v", err)
 			}
 
@@ -177,17 +154,25 @@ func TestLogOutputIsJSON(t *testing.T) {
 	}
 }
 
-// TestBootstrapLoggerIsJSONHandler pins that the bootstrap-installed logger is
-// always a JSON handler, never a text handler, so a future change can't
-// quietly switch the production log format. White-box (package handler) so it
-// can call initializeLogger directly rather than exercising the full
-// NewBootstrap path, which also loads AWS SDK config and the on-disk config
-// file — neither of which this test cares about.
+// initializeLogger writes to os.Stdout, so stdout is piped to capture its output.
 func TestBootstrapLoggerIsJSONHandler(t *testing.T) {
-	_, logger, err := initializeLogger()
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
 	require.NoError(t, err)
-	_, ok := logger.Handler().(*slog.JSONHandler)
-	assert.True(t, ok, "bootstrap must install a JSON handler, never a text handler")
+	os.Stdout = w
+
+	logger := initializeLogger("test")
+	logger.Info("test message")
+
+	require.NoError(t, w.Close())
+	os.Stdout = origStdout
+
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(r)
+	require.NoError(t, err)
+
+	var payload map[string]any
+	assert.NoError(t, json.Unmarshal(buf.Bytes(), &payload), "bootstrap must install a JSON handler, never a text handler")
 }
 
 // ---------- request context ----------

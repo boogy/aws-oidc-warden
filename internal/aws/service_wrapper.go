@@ -15,16 +15,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
 
 // AwsServiceWrapperInterface allows to test AWS specific code based on the AWS services
 type AwsServiceWrapperInterface interface {
-	GetS3Object(bucket, key string) (io.ReadCloser, error)
-	AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
-	GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
-	GetCallerAccount() (string, error)
-	GetCallerIdentityInfo() (account string, isRoleSession bool, err error)
-	GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
+	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+	AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
+	GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
+	GetCallerAccount(ctx context.Context) (string, error)
+	GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error)
+	GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
 	RefreshClients()
 }
 
@@ -60,7 +61,9 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 			config.WithRetryMaxAttempts(3),
 		)
 		if err != nil {
-			slog.Error("Failed to load AWS config", "error", err)
+			logevent.Error(context.Background(), nil, logevent.AppInitFailure, "failed to load AWS config",
+				slog.String("component", "aws_config"),
+				slog.String("error", err.Error()))
 			panic(err)
 		}
 
@@ -80,12 +83,13 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 // RefreshClients recreates AWS service clients, useful for long-running Lambda environments
 // where clients might need refreshing periodically
 func (s *AwsServiceWrapper) RefreshClients() {
-	slog.Info("Refreshing AWS clients")
+	logevent.Debug(context.Background(), nil, logevent.AWSClientsRefreshStart, "refreshing AWS clients")
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRetryMaxAttempts(3),
 	)
 	if err != nil {
-		slog.Error("Failed to refresh AWS config, keeping existing clients", slog.String("error", err.Error()))
+		logevent.Error(context.Background(), nil, logevent.AWSClientsRefreshFailure, "failed to refresh AWS config, keeping existing clients",
+			slog.String("error", err.Error()))
 		return
 	}
 
@@ -94,17 +98,12 @@ func (s *AwsServiceWrapper) RefreshClients() {
 	s.stsClient = sts.NewFromConfig(cfg)
 	s.iamClient = iam.NewFromConfig(cfg)
 
-	slog.Info("AWS clients successfully refreshed")
+	logevent.Info(context.Background(), nil, logevent.AWSClientsRefreshSuccess, "AWS clients successfully refreshed")
 }
 
-func (s *AwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
-
-	slog.Debug("Fetching S3 object",
-		"bucket", bucket,
-		"key", key,
-	)
 
 	input := &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -115,7 +114,7 @@ func (s *AwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, erro
 
 	result, err := s.s3Client.GetObject(ctx, input)
 	if err != nil {
-		slog.Error("Error fetching S3 object",
+		logevent.Error(ctx, nil, logevent.AWSS3GetFailure, "error fetching S3 object",
 			slog.String("bucket", bucket),
 			slog.String("key", key),
 			slog.String("error", err.Error()),
@@ -124,7 +123,7 @@ func (s *AwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, erro
 	}
 
 	if result.ContentLength != nil && *result.ContentLength > s.maxS3ObjectSize {
-		slog.Warn("S3 object exceeds maximum allowed size",
+		logevent.Warn(ctx, nil, logevent.AWSS3ObjectOversize, "S3 object exceeds maximum allowed size",
 			slog.Int64("size", *result.ContentLength),
 			slog.Int64("maxAllowed", s.maxS3ObjectSize),
 			slog.String("bucket", bucket),
@@ -133,15 +132,18 @@ func (s *AwsServiceWrapper) GetS3Object(bucket, key string) (io.ReadCloser, erro
 		// Returned anyway; the Range header above already truncated it.
 	}
 
+	successAttrs := []slog.Attr{slog.String("bucket", bucket), slog.String("key", key)}
+	if result.ContentLength != nil {
+		successAttrs = append(successAttrs, slog.Int64("sizeBytes", *result.ContentLength))
+	}
+	logevent.Debug(ctx, nil, logevent.AWSS3GetSuccess, "successfully fetched S3 object", successAttrs...)
+
 	return result.Body, nil
 }
 
-func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
-
-	// No slog.Info here: processor.go already logs "Assuming role" with
-	// requestId correlation before calling this method.
 
 	if input.DurationSeconds == nil || *input.DurationSeconds == 0 {
 		defaultDuration := int32(3600)
@@ -150,23 +152,33 @@ func (s *AwsServiceWrapper) AssumeRole(input *sts.AssumeRoleInput) (*sts.AssumeR
 
 	if input.ExternalId != nil && len(*input.ExternalId) < 2 {
 		// Log the length, never the value: ExternalId is a shared secret.
-		slog.Warn("Suspicious short external ID provided",
+		logevent.Warn(ctx, nil, logevent.STSExternalIDSuspicious, "suspicious short external ID provided",
 			slog.Int("externalIdLength", len(*input.ExternalId)),
 			slog.String("roleArn", *input.RoleArn))
 		return nil, fmt.Errorf("invalid external ID length")
 	}
 
+	start := time.Now()
 	output, err := s.stsClient.AssumeRole(ctx, input)
 	if err != nil {
-		slog.Error("Error assuming role",
+		logevent.Error(ctx, nil, logevent.STSAssumeRoleFailure, "error assuming role",
 			slog.String("roleArn", *input.RoleArn),
 			slog.String("stsErrorCode", stsErrorCode(err)),
 			slog.String("error", err.Error()),
+			slog.Int64("durationMs", time.Since(start).Milliseconds()),
 		)
 		return nil, err
 	}
 
-	// No slog.Info here: processor.go already logs the success with full context.
+	attrs := []slog.Attr{
+		slog.String("roleArn", *input.RoleArn),
+		slog.Int64("durationMs", time.Since(start).Milliseconds()),
+	}
+	if u := output.AssumedRoleUser; u != nil && u.AssumedRoleId != nil {
+		attrs = append(attrs, slog.String("assumedRoleId", *u.AssumedRoleId))
+	}
+	logevent.Info(ctx, nil, logevent.STSAssumeRoleSuccess, "assumed role", attrs...)
+
 	return output, nil
 }
 
@@ -185,11 +197,9 @@ func validateRoleNameLength(roleName string) error {
 	return nil
 }
 
-func (s *AwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+func (s *AwsServiceWrapper) GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
-
-	slog.Debug("Getting IAM role", "roleName", *input.RoleName)
 
 	if err := validateRoleNameLength(*input.RoleName); err != nil {
 		return nil, err
@@ -197,21 +207,21 @@ func (s *AwsServiceWrapper) GetRole(input *iam.GetRoleInput) (*iam.GetRoleOutput
 
 	output, err := s.iamClient.GetRole(ctx, input)
 	if err != nil {
-		slog.Error("Error getting IAM role",
-			"roleName", *input.RoleName,
-			"error", err,
+		logevent.Error(ctx, nil, logevent.AWSIAMGetRoleFailure, "error getting IAM role",
+			slog.String("roleName", *input.RoleName),
+			slog.String("error", err.Error()),
 		)
 		return nil, err
 	}
 
-	slog.Debug("Successfully retrieved role", "roleName", *input.RoleName)
+	logevent.Debug(ctx, nil, logevent.AWSIAMGetRoleSuccess, "successfully retrieved role", slog.String("roleName", *input.RoleName))
 	return output, nil
 }
 
 // GetCallerIdentityInfo returns the account ID and role-session status of the
 // warden's own (hub) identity, fetched via STS GetCallerIdentity and cached
 // (a failed lookup is not cached, so a later call retries).
-func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSession bool, err error) {
+func (s *AwsServiceWrapper) GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error) {
 	s.callerMu.Lock()
 	defer s.callerMu.Unlock()
 
@@ -219,7 +229,7 @@ func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSessi
 		return s.callerAccount, strings.Contains(s.callerArn, ":assumed-role/"), nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 
 	fetch := s.getCallerIdentityFn
@@ -231,7 +241,7 @@ func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSessi
 
 	out, ferr := fetch(ctx)
 	if ferr != nil {
-		slog.Error("Error getting caller identity", slog.String("error", ferr.Error()))
+		logevent.Error(ctx, nil, logevent.STSCallerIdentityFailure, "error getting caller identity", slog.String("error", ferr.Error()))
 		return "", false, ferr
 	}
 	if out.Account == nil || out.Arn == nil {
@@ -244,20 +254,20 @@ func (s *AwsServiceWrapper) GetCallerIdentityInfo() (account string, isRoleSessi
 }
 
 // GetCallerAccount returns the account ID of the warden's own (hub) identity.
-func (s *AwsServiceWrapper) GetCallerAccount() (string, error) {
-	account, _, err := s.GetCallerIdentityInfo()
+func (s *AwsServiceWrapper) GetCallerAccount(ctx context.Context) (string, error) {
+	account, _, err := s.GetCallerIdentityInfo(ctx)
 	return account, err
 }
 
 // GetRoleAs performs iam:GetRole using the supplied credentials provider.
-func (s *AwsServiceWrapper) GetRoleAs(input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
+func (s *AwsServiceWrapper) GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
 	// A nil provider would silently fall back to hub credentials and read a
 	// same-named role in the wrong (hub) account — a confused-deputy risk.
 	if creds == nil {
 		return nil, errors.New("GetRoleAs requires explicit credentials; refusing to fall back to hub credentials")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), s.defaultTimeout)
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 	client := iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
 	return client.GetRole(ctx, input)

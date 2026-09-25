@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
 
@@ -33,8 +34,7 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 	defer cancel()
 	requestID, _ := ctx.Value(RequestIDContextKey).(string)
 
-	log := requestLogger(ctx,
-		slog.String("requestId", requestID),
+	log := requestLogger(
 		slog.String("path", event.RawPath),
 		slog.String("method", event.RequestContext.HTTP.Method),
 		slog.String("userAgent", event.RequestContext.HTTP.UserAgent),
@@ -44,6 +44,7 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 
 	requestData, err := h.unmarshalRequestData(event)
 	if err != nil {
+		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
 

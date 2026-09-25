@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
 
@@ -93,7 +94,7 @@ func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error)
 		opt(options)
 	}
 
-	cfg, err := resolveAWSConfig(options.awsConfig, "S3 cache")
+	cfg, err := resolveAWSConfig(context.Background(), options.awsConfig, backendS3)
 	if err != nil {
 		return nil, err
 	}
@@ -103,23 +104,23 @@ func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error)
 		bucketName: bucketName,
 		prefix:     prefix,
 		cleanup:    options.cleanup,
-		local:      newLocalCache(options.maxLocalSize, options.defaultTTL),
+		local:      newLocalCache(options.maxLocalSize, options.defaultTTL, backendLocal),
 	}, nil
 }
 
 // Get retrieves an item from the S3 cache
-func (c *s3Cache) Get(key string) (*types.JWKS, bool) {
+func (c *s3Cache) Get(ctx context.Context, key string) (*types.JWKS, bool) {
 	// Try to get from local memory cache first
 	if jwks, found := c.getFromLocalCache(key); found {
-		slog.Debug("Local memory cache hit", "key", key)
+		logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
 		return jwks, true
 	}
 
 	// Not in local cache, try S3
-	jwks, expiration, found := c.getFromS3(key)
+	jwks, expiration, found := c.getFromS3(ctx, key)
 	if found {
 		// Store in local cache with the item's real expiration
-		c.storeInLocalCache(key, jwks, expiration)
+		c.storeInLocalCache(ctx, key, jwks, expiration)
 		return jwks, true
 	}
 
@@ -134,10 +135,10 @@ func (c *s3Cache) getFromLocalCache(key string) (*types.JWKS, bool) {
 
 // getFromS3 retrieves an item from S3, returning the cached JWKS and its
 // expiration time
-func (c *s3Cache) getFromS3(key string) (*types.JWKS, time.Time, bool) {
+func (c *s3Cache) getFromS3(ctx context.Context, key string) (*types.JWKS, time.Time, bool) {
 	objectKey := c.formatKey(key)
 
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	resp, err := c.client.GetObject(ctx, &s3.GetObjectInput{
@@ -150,73 +151,76 @@ func (c *s3Cache) getFromS3(key string) (*types.JWKS, time.Time, bool) {
 	if err != nil {
 		var noSuchKey *s3types.NoSuchKey
 		if errors.As(err, &noSuchKey) {
-			slog.Debug("Cache miss in S3", "key", key)
+			logevent.Debug(ctx, nil, logevent.CacheMiss, "cache miss", cacheAttrs(backendS3, key)...)
 			return nil, time.Time{}, false
 		}
 
-		slog.Error("Failed to get object from S3", "key", key, "error", err)
+		logevent.Error(ctx, nil, logevent.CacheReadFailure, "failed to get object from S3",
+			cacheAttrs(backendS3, key, slog.String("error", err.Error()))...)
 		return nil, time.Time{}, false
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			slog.Error("Error closing S3 response body", "error", err)
+			logevent.Error(ctx, nil, logevent.CacheReadFailure, "failed to close S3 response body",
+				cacheAttrs(backendS3, key, slog.String("error", err.Error()))...)
 		}
 	}()
 
 	// Read at most one byte over the limit so truncation is detectable
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, Defaults.MaxItemSize+1))
 	if err != nil {
-		slog.Error("Failed to read S3 object body", "key", key, "error", err)
+		logevent.Error(ctx, nil, logevent.CacheReadFailure, "failed to read S3 object body",
+			cacheAttrs(backendS3, key, slog.String("error", err.Error()))...)
 		return nil, time.Time{}, false
 	}
 
 	if int64(len(bodyBytes)) > Defaults.MaxItemSize {
-		slog.Warn("S3 cache item exceeds maximum allowed size",
-			"key", key,
-			"maxAllowed", Defaults.MaxItemSize)
+		logevent.Warn(ctx, nil, logevent.CacheItemOversize, "cache item exceeds maximum allowed size",
+			cacheAttrs(backendS3, key, slog.Int64("maxAllowed", Defaults.MaxItemSize))...)
 		return nil, time.Time{}, false
 	}
 
 	var item s3CacheItem
 	if err := json.Unmarshal(bodyBytes, &item); err != nil {
-		slog.Error("Failed to decode S3 cache item", "key", key, "error", err)
+		logevent.Error(ctx, nil, logevent.CacheItemInvalid, "failed to decode S3 cache item",
+			cacheAttrs(backendS3, key, slog.String("error", err.Error()))...)
 		return nil, time.Time{}, false
 	}
 
 	if time.Now().After(item.Expiration) {
-		slog.Debug("S3 cache entry expired", "key", key)
+		logevent.Debug(ctx, nil, logevent.CacheExpired, "cache entry expired", cacheAttrs(backendS3, key)...)
 		if c.cleanup {
-			c.deleteObject(objectKey)
+			c.deleteObject(ctx, objectKey)
 		}
 		return nil, time.Time{}, false
 	}
 
-	slog.Debug("S3 cache hit", "key", key)
+	logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendS3, key)...)
 	return item.Value, item.Expiration, true
 }
 
 // Set stores an item in the S3 cache with the given TTL.
 // The S3 write is synchronous: in Lambda the execution environment is frozen
 // when the handler returns, so a background write could be lost.
-func (c *s3Cache) Set(key string, value *types.JWKS, ttl time.Duration) {
+func (c *s3Cache) Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = c.local.defaultTTL
 	}
 
 	// Store in local cache first for fast access
-	c.storeInLocalCache(key, value, time.Now().Add(ttl))
+	c.storeInLocalCache(ctx, key, value, time.Now().Add(ttl))
 
 	// Then store in S3 for persistence
-	c.storeInS3(key, value, ttl)
+	c.storeInS3(ctx, key, value, ttl)
 }
 
 // storeInLocalCache adds or updates an item in the local memory cache
-func (c *s3Cache) storeInLocalCache(key string, value *types.JWKS, expiration time.Time) {
-	c.local.put(key, value, expiration)
+func (c *s3Cache) storeInLocalCache(ctx context.Context, key string, value *types.JWKS, expiration time.Time) {
+	c.local.put(ctx, key, value, expiration)
 }
 
 // storeInS3 persists an item to S3
-func (c *s3Cache) storeInS3(key string, value *types.JWKS, ttl time.Duration) {
+func (c *s3Cache) storeInS3(ctx context.Context, key string, value *types.JWKS, ttl time.Duration) {
 	objectKey := c.formatKey(key)
 
 	item := s3CacheItem{
@@ -227,20 +231,19 @@ func (c *s3Cache) storeInS3(key string, value *types.JWKS, ttl time.Duration) {
 
 	data, err := json.Marshal(item)
 	if err != nil {
-		slog.Error("Failed to marshal cache item", "key", key, "error", err)
+		logevent.Error(ctx, nil, logevent.CacheWriteFailure, "failed to marshal cache item",
+			cacheAttrs(backendS3, key, slog.String("error", err.Error()))...)
 		return
 	}
 
 	// Reject items the read path would refuse, so writes and reads agree
 	if int64(len(data)) > Defaults.MaxItemSize {
-		slog.Error("Cache item too large to store in S3",
-			"key", key,
-			"size", len(data),
-			"maxAllowed", Defaults.MaxItemSize)
+		logevent.Warn(ctx, nil, logevent.CacheItemOversize, "cache item too large to store in S3",
+			cacheAttrs(backendS3, key, slog.Int("size", len(data)), slog.Int64("maxAllowed", Defaults.MaxItemSize))...)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	_, err = c.client.PutObject(ctx, &s3.PutObjectInput{
@@ -257,11 +260,13 @@ func (c *s3Cache) storeInS3(key string, value *types.JWKS, ttl time.Duration) {
 	})
 
 	if err != nil {
-		slog.Error("Failed to put object in S3", "key", key, "error", err)
+		logevent.Error(ctx, nil, logevent.CacheWriteFailure, "failed to put object in S3",
+			cacheAttrs(backendS3, key, slog.String("error", err.Error()))...)
 		return
 	}
 
-	slog.Debug("Cached value in S3", "key", key, "ttl", ttl, "size", len(data))
+	logevent.Debug(ctx, nil, logevent.CacheSet, "cache entry set",
+		cacheAttrs(backendS3, key, slog.Int64("ttlMs", ttl.Milliseconds()), slog.Int("size", len(data)))...)
 }
 
 // formatKey creates a consistent S3 object key from the cache key
@@ -273,8 +278,8 @@ func (c *s3Cache) formatKey(key string) string {
 }
 
 // deleteObject removes an expired object from S3
-func (c *s3Cache) deleteObject(key string) {
-	ctx, cancel := context.WithTimeout(context.Background(), Defaults.Timeout)
+func (c *s3Cache) deleteObject(ctx context.Context, key string) {
+	ctx, cancel := context.WithTimeout(ctx, Defaults.Timeout)
 	defer cancel()
 
 	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
@@ -283,8 +288,9 @@ func (c *s3Cache) deleteObject(key string) {
 	})
 
 	if err != nil {
-		slog.Error("Failed to delete expired object from S3", "key", key, "error", err)
+		logevent.Warn(ctx, nil, logevent.CacheCleanupFailure, "failed to delete expired object from S3",
+			cacheAttrs(backendS3, key, slog.String("error", err.Error()))...)
 	} else {
-		slog.Debug("Deleted expired object from S3", "key", key)
+		logevent.Debug(ctx, nil, logevent.CacheEvict, "deleted expired object from S3", cacheAttrs(backendS3, key)...)
 	}
 }

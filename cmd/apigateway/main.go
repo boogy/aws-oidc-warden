@@ -9,19 +9,16 @@ var bootstrap *handler.Bootstrap
 
 func init() {
 	var err error
-	bootstrap, err = handler.NewBootstrap()
+	bootstrap, err = handler.NewBootstrap("apigateway")
 	if err != nil {
 		panic(err)
 	}
 }
 
 func main() {
-	// Ensure cleanup happens when the function exits
-	defer bootstrap.Cleanup()
-
 	// Create the API Gateway handler
 	apiHandler := handler.NewAwsApiGatewayFromBootstrap(bootstrap)
 
 	// Start the Lambda function
-	lambda.Start(apiHandler.Handler)
+	lambda.StartWithOptions(apiHandler.Handler, lambda.WithEnableSIGTERM(bootstrap.Cleanup))
 }

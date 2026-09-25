@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
@@ -51,7 +52,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	input.Config = cfg
 
 	jwtMode := inputMode(input)
-	log.Debug("Extracting claims", slog.String("jwtMode", jwtMode))
+	logevent.Debug(ctx, log, logevent.TokenExtract, "extracting claims", slog.String("jwtMode", jwtMode))
 
 	rec := &auditRecord{
 		RequestID:     requestID,
@@ -73,9 +74,10 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 
 	// deny finishes a rejected request. rec.Stage and rec.Reason must already
 	// be set; log is read at call time, so it picks up the enriched logger.
-	deny := func(msg string, ret error, attrs ...any) error {
+	deny := func(msg string, ret error, attrs ...slog.Attr) error {
 		rec.ProcessingMS = elapsed()
-		log.Error(msg, append([]any{slog.String("stage", rec.Stage)}, attrs...)...)
+		sattrs := append([]slog.Attr{slog.String("stage", rec.Stage)}, attrs...)
+		logevent.Debug(ctx, log, logevent.AuthzStageDeny, msg, sattrs...)
 		return r.finalizeDeny(ctx, log, cfg, rec, ret)
 	}
 
@@ -99,14 +101,17 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	if cfg.LogClaimValues {
-		log = log.With(slog.Group("request",
-			append([]any{slog.String("role", requestedRole)}, identityAttrs(claims)...)...))
+		reqAttrs := []any{slog.String("roleArn", requestedRole)}
+		for _, a := range identityAttrs(claims) {
+			reqAttrs = append(reqAttrs, a)
+		}
+		log = log.With(slog.Group("request", reqAttrs...))
 	} else {
-		log = log.With(slog.Group("request", slog.String("role", requestedRole)))
+		log = log.With(slog.Group("request", slog.String("roleArn", requestedRole)))
 	}
 
 	// IsTargetAccountAllowed encodes disabled-means-hub-only (fail closed).
-	ok, aerr := r.consumer.IsTargetAccountAllowed(requestedRole)
+	ok, aerr := r.consumer.IsTargetAccountAllowed(ctx, requestedRole)
 	if aerr != nil {
 		rec.setErrorReason("account_check", aerr)
 		return nil, deny("Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
@@ -124,11 +129,11 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		claimsMap = map[string]any{}
 	}
 
-	log.Info("Token validation successful",
+	logevent.Debug(ctx, log, logevent.TokenValidated, "token validated",
 		slog.Int64("validationMs", elapsed()),
 	)
 	if cfg.LogClaimValues {
-		log.Debug("Validated claims", slog.Any("claims", claims))
+		logevent.Debug(ctx, log, logevent.TokenClaims, "validated claims", slog.Any("claims", claims))
 	}
 
 	decision := cfg.Authorize(claims.Issuer, claims.Subject, requestedRole, claimsMap)
@@ -140,28 +145,28 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		rec.MatchedVia = "explicit"
 	}
 	if !allowed && cfg.TagAuth != nil && cfg.TagAuth.Enabled {
-		roleTags, terr := r.consumer.GetRoleTags(requestedRole)
+		roleTags, terr := r.consumer.GetRoleTags(ctx, requestedRole)
 		if terr != nil {
-			log.Warn("Tag-based authorization: could not read role tags",
+			logevent.Warn(ctx, log, logevent.AuthzTagAuthLookupFailure, "role tag lookup failed",
 				slog.String("error", terr.Error()))
 		} else if cfg.TagAuth.Authorize(roleTags, claimsMap, claims.Issuer, claims.Subject) {
 			allowed = true
 			rec.MatchedVia = "tag-auth"
-			log.Info("Authorized via role tags")
+			logevent.Info(ctx, log, logevent.AuthzTagAuthSuccess, "authorized via role tags")
 		}
 	}
 
 	if !allowed {
 		rec.Stage = "authorize"
 		rec.Reason = "role not allowed for this subject or its conditions are not met"
-		denyAttrs := []any{slog.Any("allowedRoles", roles)}
+		denyAttrs := []slog.Attr{slog.Any("allowedRoles", roles)}
 		if cfg.LogClaimValues {
 			denyAttrs = append(denyAttrs, identityAttrs(claims)...)
 		}
 		return nil, deny("Role not allowed for this subject or its conditions are not met", ErrRoleNotPermitted, denyAttrs...)
 	}
 
-	sessionPolicy, policyRef, err := r.getSessionPolicy(cfg, log, claims.Subject, decision)
+	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, decision)
 	if err != nil {
 		rec.setErrorReason("session_policy", err)
 		return nil, deny("Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
@@ -174,13 +179,8 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		sessionName = override
 	}
 
-	// Info, not Debug: last line before a privileged credential is minted.
-	log.Info("Assuming role",
-		slog.Bool("hasSessionPolicy", sessionPolicy != nil),
-		slog.String("sessionName", sessionName))
-
 	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, decision)
-	credentials, err := r.consumer.AssumeRole(requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
+	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
 		// A trust-policy/IAM refusal is the caller's answer (403); anything else
@@ -192,25 +192,11 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, deny("Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	// Guard the derefs so a pathological STS response can't panic the handler.
-	accessKeyID := ""
-	if credentials.AccessKeyId != nil {
-		accessKeyID = *credentials.AccessKeyId
-	}
-	var credExpiration time.Time
-	if credentials.Expiration != nil {
-		credExpiration = *credentials.Expiration
-	}
-	log.Info("Successfully assumed role",
-		slog.String("accessKeyId", accessKeyID),
-		slog.Time("expiration", credExpiration),
-		slog.Int64("totalMs", elapsed()))
-
 	rec.GrantedRole = requestedRole
 	rec.SessionName = sessionName
 	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
 	if cfg.LogClaimValues {
-		rec.SessionTags = resolvedSessionTags(claims.Raw, sessionTagSpec)
+		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, sessionTagSpec)
 	}
 	rec.SessionPolicyRef = policyRef
 	if account, _, aerr := aws.ParseRoleARN(requestedRole); aerr == nil {
@@ -227,13 +213,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 // getSessionPolicy retrieves the session policy for an (issuer, subject) pair
 // (config inline or S3 file), plus a policyRef label ("inline", the S3 key,
 // or "") for the audit record's SessionPolicyRef field.
-func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger, subject string, decision config.Decision) (sessionPolicyString *string, policyRef string, err error) {
+func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Config, log *slog.Logger, subject string, decision config.Decision) (sessionPolicyString *string, policyRef string, err error) {
 	opStart := time.Now()
-	defer func() {
-		log.Debug("getSessionPolicy operation completed",
-			subjectAttr(cfg, subject),
-			slog.Int64("durationMs", time.Since(opStart).Milliseconds()))
-	}()
+	durationMs := func() int64 { return time.Since(opStart).Milliseconds() }
 
 	sessionPolicy, sessionPolicyFile := decision.SessionPolicy()
 
@@ -241,53 +223,58 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger
 		policyRef = *sessionPolicyFile
 
 		logPolicyErr := func(msg string, err error) {
-			log.Error(msg,
+			logevent.Error(ctx, log, logevent.PolicySessionLoadFailure, msg,
 				slog.String("bucket", cfg.S3SessionPolicyBucket),
 				slog.String("key", *sessionPolicyFile),
 				slog.String("error", err.Error()))
 		}
 
-		sessionPolicyData, err := r.consumer.GetS3Object(cfg.S3SessionPolicyBucket, *sessionPolicyFile)
+		sessionPolicyData, err := r.consumer.GetS3Object(ctx, cfg.S3SessionPolicyBucket, *sessionPolicyFile)
 		if err != nil {
-			logPolicyErr("Failed to read session policy file", err)
+			logPolicyErr("failed to read session policy file", err)
 			return nil, "", fmt.Errorf("failed to read session policy file: %w", ErrSessionPolicyAccess)
 		}
 
 		defer func() {
-			if err := sessionPolicyData.Close(); err != nil {
-				log.Error("Failed to close session policy data reader", "error", err)
+			if cerr := sessionPolicyData.Close(); cerr != nil {
+				logevent.Warn(ctx, log, logevent.AppResourceCloseFailure, "failed to close resource",
+					slog.String("resource", "session_policy_s3_object"), slog.String("error", cerr.Error()))
 			}
 		}()
 
 		policyBytes, err := io.ReadAll(io.LimitReader(sessionPolicyData, 1024*1024)) // 1MB limit
 		if err != nil {
-			logPolicyErr("Failed to read session policy data", err)
+			logPolicyErr("failed to read session policy data", err)
 			return nil, "", fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
 		}
 
 		var jsonCheck any
 		if err := json.Unmarshal(policyBytes, &jsonCheck); err != nil {
-			logPolicyErr("Invalid JSON in session policy file", err)
+			logPolicyErr("invalid JSON in session policy file", err)
 			return nil, "", fmt.Errorf("invalid JSON in session policy file: %w", ErrSessionPolicyAccess)
 		}
 
 		policy := string(policyBytes)
 		sessionPolicyString = &policy
 
-		log.Debug("Session policy loaded from S3",
+		logevent.Debug(ctx, log, logevent.PolicySessionLoaded, "session policy loaded",
 			subjectAttr(cfg, subject),
+			slog.String("source", "s3"),
 			slog.String("bucket", cfg.S3SessionPolicyBucket),
 			slog.String("key", *sessionPolicyFile),
-			slog.Int("policySize", len(policy)))
+			slog.Int("policySize", len(policy)),
+			slog.Int64("durationMs", durationMs()))
 	}
 
 	// Inline overrides the S3 file if both are set.
 	if sessionPolicy != nil {
 		sessionPolicyString = sessionPolicy
 		policyRef = "inline"
-		log.Debug("Using inline session policy",
+		logevent.Debug(ctx, log, logevent.PolicySessionLoaded, "session policy loaded",
 			subjectAttr(cfg, subject),
-			slog.Int("policySize", len(*sessionPolicy)))
+			slog.String("source", "inline"),
+			slog.Int("policySize", len(*sessionPolicy)),
+			slog.Int64("durationMs", durationMs()))
 	}
 
 	return sessionPolicyString, policyRef, nil
@@ -296,11 +283,11 @@ func (r *RequestProcessor) getSessionPolicy(cfg *config.Config, log *slog.Logger
 // identityAttrs builds "who made this request" log attributes for a verified
 // token. repository/ref/actor are GitHub-native and omitted (not emitted
 // empty) for other providers. Callers must gate on cfg.LogClaimValues.
-func identityAttrs(claims *gtypes.Claims) []any {
+func identityAttrs(claims *gtypes.Claims) []slog.Attr {
 	if claims == nil {
 		return nil
 	}
-	attrs := []any{slog.String("subject", claims.Subject)}
+	attrs := []slog.Attr{slog.String("subject", claims.Subject)}
 	if claims.Repository != "" {
 		attrs = append(attrs, slog.String("repository", claims.Repository))
 	}
