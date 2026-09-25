@@ -218,6 +218,30 @@ func TestWriteSingleLog_UsesLiveConfigAfterReload(t *testing.T) {
 	require.Equal(t, []string{"reloaded-bucket"}, spy.buckets)
 }
 
+func TestWriteRecord_ClientConstructionIgnoresCancelledCallerCtx(t *testing.T) {
+	l := NewS3Logger(&gtvcfg.Config{LogToS3: false})
+	require.Nil(t, l.s3Client, "no client should exist while the boot config disables S3")
+
+	live := &gtvcfg.Config{LogToS3: true, LogBucket: "audit-bucket"}
+	l.SetConfigSource(func() *gtvcfg.Config { return live })
+
+	spy := &bucketCapturingS3{}
+	l.clientFactory = func(ctx context.Context) (s3ClientInterface, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return spy, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // simulate a request whose ctx is already cancelled by the time WriteRecord runs
+
+	err := l.WriteRecord(ctx, []byte(`{"decision":"allow"}`))
+	require.NoError(t, err,
+		"client construction is shared under initMu across every caller and must use the logger's own background ctx, not a cancelled request ctx")
+	require.Equal(t, []string{"audit-bucket"}, spy.buckets)
+}
+
 func TestWriteObject_TaggingIsURLEncoded(t *testing.T) {
 	l := NewS3Logger(&gtvcfg.Config{LogToS3: true, LogBucket: "audit-bucket"})
 	spy := &ctxCapturingS3{}

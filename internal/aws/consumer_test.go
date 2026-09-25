@@ -49,7 +49,7 @@ func TestAwsConsumer_SessionName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := consumer.SessionName(tt.inputName)
+			result := consumer.SessionName(context.Background(), tt.inputName)
 			assert.Equal(t, tt.expectedOut, result)
 		})
 	}
