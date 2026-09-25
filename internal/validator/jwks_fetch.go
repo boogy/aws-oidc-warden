@@ -10,8 +10,17 @@ import (
 	"net/http"
 
 	"github.com/boogy/aws-oidc-warden/internal/cache"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
+
+// issuerAttrs returns the issuer attr, plus any extras, shared by every JWKS
+// fetch/discovery log line.
+func issuerAttrs(issuer string, extra ...slog.Attr) []slog.Attr {
+	attrs := make([]slog.Attr, 0, len(extra)+1)
+	attrs = append(attrs, slog.String("issuer", issuer))
+	return append(attrs, extra...)
+}
 
 // FetchJWKS fetches the JWKS for the given issuer, using the cache when
 // available. Exposed standalone (no jwks_uri override) for testing and
@@ -69,14 +78,14 @@ func (t *TokenValidator) fetchAndCacheJWKS(ctx context.Context, spec *issuerSpec
 		return nil, fmt.Errorf("invalid jwks_uri: %w", err)
 	}
 
-	jwks, status, err := t.getJWKS(ctx, jwksURI)
+	jwks, status, err := t.getJWKS(ctx, spec.Issuer, jwksURI)
 	if discoveryDriven && status == http.StatusNotFound {
 		// The memoized/discovered jwks_uri may be stale; re-discover once and
 		// retry before giving up.
 		t.jwksURICache.Delete(spec.Issuer)
 		if newURI, derr := t.discoverJWKSURI(ctx, spec); derr == nil {
 			if serr := requireSecureURL(newURI, t.allowInsecureIssuers); serr == nil {
-				jwks, _, err = t.getJWKS(ctx, newURI)
+				jwks, _, err = t.getJWKS(ctx, spec.Issuer, newURI)
 				jwksURI = newURI
 			}
 		}
@@ -111,17 +120,20 @@ func (t *TokenValidator) discoverJWKSURI(ctx context.Context, spec *issuerSpec) 
 
 	resp, err := t.httpc.Do(req)
 	if err != nil {
-		slog.Error("Failed to fetch OIDC configuration", "error", err)
+		logevent.Error(ctx, nil, logevent.JWKSDiscoveryFailure, "failed to fetch OIDC configuration",
+			issuerAttrs(spec.Issuer, slog.String("error", err.Error()))...)
 		return "", fmt.Errorf("failed to fetch OIDC configuration: %w", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			slog.Error("Failed to close OIDC configuration response body", "error", err)
+			logevent.Error(ctx, nil, logevent.JWKSDiscoveryFailure, "failed to close OIDC configuration response body",
+				issuerAttrs(spec.Issuer, slog.String("error", err.Error()))...)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Error("Received non-200 status code when fetching OIDC configuration", "status", resp.StatusCode)
+		logevent.Error(ctx, nil, logevent.JWKSDiscoveryFailure, "received non-200 status code fetching OIDC configuration",
+			issuerAttrs(spec.Issuer, slog.Int("status", resp.StatusCode))...)
 		return "", fmt.Errorf("received non-200 status code when fetching OIDC configuration: %d", resp.StatusCode)
 	}
 
@@ -130,7 +142,8 @@ func (t *TokenValidator) discoverJWKSURI(ctx context.Context, spec *issuerSpec) 
 		JwksURI string `json:"jwks_uri"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&discovery); err != nil {
-		slog.Error("Failed to parse OIDC configuration", "error", err)
+		logevent.Error(ctx, nil, logevent.JWKSDiscoveryFailure, "failed to parse OIDC configuration",
+			issuerAttrs(spec.Issuer, slog.String("error", err.Error()))...)
 		return "", fmt.Errorf("failed to parse OIDC configuration: %w", err)
 	}
 	if discovery.Issuer != spec.Issuer {
@@ -143,7 +156,7 @@ func (t *TokenValidator) discoverJWKSURI(ctx context.Context, spec *issuerSpec) 
 // status code lets callers distinguish a 404 (candidate for one
 // re-discovery retry) from other failures. A zero-key or oversized JWKS is
 // rejected and, since the caller only caches on a nil error, is never cached.
-func (t *TokenValidator) getJWKS(ctx context.Context, jwksURI string) (*types.JWKS, int, error) {
+func (t *TokenValidator) getJWKS(ctx context.Context, issuer, jwksURI string) (*types.JWKS, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURI, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to build JWKS request: %w", err)
@@ -151,23 +164,27 @@ func (t *TokenValidator) getJWKS(ctx context.Context, jwksURI string) (*types.JW
 
 	resp, err := t.httpc.Do(req)
 	if err != nil {
-		slog.Error("Failed to fetch JWKS", "error", err)
+		logevent.Error(ctx, nil, logevent.JWKSFetchFailure, "failed to fetch JWKS",
+			issuerAttrs(issuer, slog.String("error", err.Error()))...)
 		return nil, 0, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			slog.Error("Failed to close JWKS response body", "error", err)
+			logevent.Error(ctx, nil, logevent.JWKSFetchFailure, "failed to close JWKS response body",
+				issuerAttrs(issuer, slog.String("error", err.Error()))...)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		slog.Error("Received non-200 status code when fetching JWKS", "status", resp.StatusCode)
+		logevent.Error(ctx, nil, logevent.JWKSFetchFailure, "received non-200 status code fetching JWKS",
+			issuerAttrs(issuer, slog.Int("status", resp.StatusCode))...)
 		return nil, resp.StatusCode, fmt.Errorf("received non-200 status code when fetching JWKS: %d", resp.StatusCode)
 	}
 
 	var jwks types.JWKS
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&jwks); err != nil {
-		slog.Error("Failed to parse JWKS", "error", err)
+		logevent.Error(ctx, nil, logevent.JWKSFetchFailure, "failed to parse JWKS",
+			issuerAttrs(issuer, slog.String("error", err.Error()))...)
 		return nil, resp.StatusCode, fmt.Errorf("failed to parse JWKS: %w", err)
 	}
 	if len(jwks.Keys) == 0 {

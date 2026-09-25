@@ -58,7 +58,7 @@ func newTestS3Cache(mock *mockS3) *s3Cache {
 		client:     mock,
 		bucketName: "test-bucket",
 		prefix:     "jwks",
-		local:      newLocalCache(10, time.Minute),
+		local:      newLocalCache(10, time.Minute, backendLocal),
 	}
 }
 
@@ -75,7 +75,7 @@ func TestS3CacheLocalHitSkipsS3(t *testing.T) {
 	mock := &mockS3{}
 	c := newTestS3Cache(mock)
 
-	c.storeInLocalCache("key1", testJWKS("kid1"), time.Now().Add(time.Minute))
+	c.storeInLocalCache(context.Background(), "key1", testJWKS("kid1"), time.Now().Add(time.Minute))
 
 	got, found := c.Get(context.Background(), "key1")
 	if !found || got.Keys[0].KeyID != "kid1" {

@@ -120,7 +120,7 @@ func TestDynamoDBCacheConcurrentLocalTierRace(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := "issuer-" + string(rune('a'+i%10))
-			c.storeInLocalCache(key, testJWKS("kid"), time.Now().Add(time.Minute))
+			c.storeInLocalCache(context.Background(), key, testJWKS("kid"), time.Now().Add(time.Minute))
 		}(i)
 		go func(i int) {
 			defer wg.Done()
@@ -143,7 +143,7 @@ func TestS3CacheConcurrentLocalTierRace(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			key := "issuer-" + string(rune('a'+i%10))
-			c.storeInLocalCache(key, testJWKS("kid"), time.Now().Add(time.Minute))
+			c.storeInLocalCache(context.Background(), key, testJWKS("kid"), time.Now().Add(time.Minute))
 		}(i)
 		go func(i int) {
 			defer wg.Done()

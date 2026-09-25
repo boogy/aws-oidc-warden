@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -221,7 +222,8 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	}
 	defer func() {
 		if cerr := resp.Body.Close(); cerr != nil {
-			slog.Error("failed to close ALB key endpoint response body", "error", cerr)
+			logevent.Error(ctx, nil, logevent.JWKSALBKeyFailure, "failed to close ALB key endpoint response body",
+				slog.String("kid", kid), slog.String("region", region), slog.String("error", cerr.Error()))
 		}
 	}()
 

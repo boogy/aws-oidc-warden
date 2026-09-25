@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
 
@@ -35,33 +36,34 @@ func WithMemoryDefaultTTL(ttl time.Duration) MemoryCacheOption {
 }
 
 func NewMemoryCache(opts ...MemoryCacheOption) Cache {
-	c := &memoryCache{local: newLocalCache(Defaults.MaxLocalSize, Defaults.TTL)}
+	c := &memoryCache{local: newLocalCache(Defaults.MaxLocalSize, Defaults.TTL, backendMemory)}
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c
 }
 
-func (c *memoryCache) Get(_ context.Context, key string) (*types.JWKS, bool) {
+func (c *memoryCache) Get(ctx context.Context, key string) (*types.JWKS, bool) {
 	value, lookup := c.local.get(key)
 	switch lookup {
 	case localMiss:
-		slog.Debug("Cache miss", "key", key)
+		logevent.Debug(ctx, nil, logevent.CacheMiss, "cache miss", cacheAttrs(backendMemory, key)...)
 		return nil, false
 	case localExpired:
-		slog.Debug("Cache entry expired", "key", key)
+		logevent.Debug(ctx, nil, logevent.CacheExpired, "cache entry expired", cacheAttrs(backendMemory, key)...)
 		return nil, false
 	}
 
-	slog.Debug("Cache hit", "key", key)
+	logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendMemory, key)...)
 	return value, true
 }
 
-func (c *memoryCache) Set(_ context.Context, key string, value *types.JWKS, ttl time.Duration) {
+func (c *memoryCache) Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = c.local.defaultTTL
 	}
-	c.local.put(key, value, time.Now().Add(ttl))
+	c.local.put(ctx, key, value, time.Now().Add(ttl))
 
-	slog.Debug("Cached value", "key", key, "ttl", ttl)
+	logevent.Debug(ctx, nil, logevent.CacheSet, "cache entry set",
+		cacheAttrs(backendMemory, key, slog.Int64("ttlMs", ttl.Milliseconds()))...)
 }
