@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
 
 // FetchFunc retrieves the raw configuration bytes from a remote source.
@@ -121,7 +123,7 @@ func (p *Provider) MaybeRefresh(ctx context.Context) {
 	}
 
 	if err := p.refreshLocked(ctx); err != nil {
-		slog.Error("Configuration refresh failed; keeping previous configuration", slog.String("error", err.Error()))
+		logevent.Error(ctx, nil, logevent.ConfigReloadFailure, "configuration refresh failed; keeping previous configuration", slog.String("error", err.Error()))
 	}
 }
 
@@ -177,7 +179,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		p.interval.Store(int64(cfg.ConfigReloadInterval))
 	}
 
-	slog.Info("Configuration reloaded",
+	logevent.Info(ctx, nil, logevent.ConfigReloadSuccess, "configuration reloaded",
 		slog.Int("roleMappings", len(cfg.effective)),
 		slog.Int("fragments", len(cfg.ConfigFragments)))
 	return nil
@@ -253,14 +255,14 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 	}
 
 	if totalMappings > fragmentMappingSoftCap {
-		slog.Warn("config_fragments: merged mapping count exceeds soft cap",
-			slog.Int("total_mappings", totalMappings),
-			slog.Int("soft_cap", fragmentMappingSoftCap),
-			slog.Int("fragment_count", len(cfg.ConfigFragments)))
+		logevent.Warn(ctx, nil, logevent.ConfigFragmentsSoftCap, "config_fragments merged mapping count exceeds soft cap",
+			slog.Int("totalMappings", totalMappings),
+			slog.Int("softCap", fragmentMappingSoftCap),
+			slog.Int("fragmentCount", len(cfg.ConfigFragments)))
 	}
-	slog.Info("config_fragments merged",
-		slog.Int("fragment_count", len(cfg.ConfigFragments)),
-		slog.Int("total_mappings", totalMappings))
+	logevent.Info(ctx, nil, logevent.ConfigFragmentsMerged, "config_fragments merged",
+		slog.Int("fragmentCount", len(cfg.ConfigFragments)),
+		slog.Int("totalMappings", totalMappings))
 
 	return next, nil
 }

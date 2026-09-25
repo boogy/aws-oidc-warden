@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/spf13/viper"
 )
@@ -413,7 +415,8 @@ func splitCommaList(v string) []string {
 // warnInvalidEnv logs the standard "invalid env var, skipping" warning shared
 // by every parse-then-assign env knob.
 func warnInvalidEnv(key, value string, err error) {
-	slog.Warn("invalid env var, skipping", "key", key, "value", value, "error", err)
+	logevent.Warn(context.Background(), nil, logevent.ConfigEnvInvalid, "invalid env var, skipping",
+		slog.String("key", key), slog.String("value", value), slog.String("error", err.Error()))
 }
 
 // envBinding ties one AOW_ environment knob to both viper's file-load binding
@@ -645,7 +648,9 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 	}
 
 	if dropped := lostFragmentPins(c, next); len(dropped) > 0 {
-		slog.Warn("overlay replaced config_fragment_checksums and dropped pins; those fragments are no longer integrity-checked",
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+			"overlay replaced config_fragment_checksums and dropped pins; those fragments are no longer integrity-checked",
+			slog.String("warning", "fragment_checksums_pins_dropped"),
 			slog.Any("fragments", dropped))
 	}
 
@@ -866,12 +871,16 @@ func (c *Config) Validate() error {
 		// Never write back: Provider clones the pristine base each reload, so a
 		// mutation here would be permanent and block a later reload from
 		// re-engaging enforcement. AuditEnforced() re-derives per snapshot.
-		slog.Warn("audit_required is set but log_to_s3/log_bucket are not configured; " +
-			"the durable audit trail is inactive until both are set (decisions still log to CloudWatch)")
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+			"audit_required is set but log_to_s3/log_bucket are not configured; "+
+				"the durable audit trail is inactive until both are set (decisions still log to CloudWatch)",
+			slog.String("warning", "audit_trail_inactive"))
 	}
 
 	if c.TagAuth != nil && c.TagAuth.TransitiveSessionTags && !c.SessionTagsTransitive {
-		slog.Warn("tag_auth.transitive_session_tags is deprecated; use the top-level session_tags_transitive")
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+			"tag_auth.transitive_session_tags is deprecated; use the top-level session_tags_transitive",
+			slog.String("warning", "transitive_session_tags_deprecated"))
 	}
 
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {
@@ -1041,8 +1050,10 @@ func (c *Config) Validate() error {
 	// Fragments guard against this (mergeFragment); the primary overlay does
 	// not, so just warn.
 	if implicitlyBound > 0 {
-		slog.Warn("mappings are bound to default_issuer while multiple issuers are configured; "+
-			"set an explicit issuer on each mapping to pin it",
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+			"mappings are bound to default_issuer while multiple issuers are configured; "+
+				"set an explicit issuer on each mapping to pin it",
+			slog.String("warning", "mappings_bound_to_default_issuer"),
 			slog.Int("mappingCount", implicitlyBound),
 			slog.String("defaultIssuer", c.DefaultIssuer),
 			slog.Int("issuerCount", len(c.Issuers)))
@@ -1111,7 +1122,9 @@ func (c *Config) Validate() error {
 			}
 		}
 		if len(c.CrossAccount.AllowedAccounts) == 0 {
-			slog.Warn("cross_account enabled with empty allowed_accounts; the warden may assume into ANY member account. Populate cross_account.allowed_accounts in production.")
+			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+				"cross_account enabled with empty allowed_accounts; the warden may assume into ANY member account. Populate cross_account.allowed_accounts in production.",
+				slog.String("warning", "cross_account_allowed_accounts_empty"))
 		}
 	}
 
@@ -1271,8 +1284,10 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 			continue
 		}
 		issuer, role, _ := strings.Cut(key, "\x00")
-		slog.Warn("role is granted by an unscoped mapping that outranks a scoped one; "+
-			"the session policy will NOT be applied when both match",
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+			"role is granted by an unscoped mapping that outranks a scoped one; "+
+				"the session policy will NOT be applied when both match",
+			slog.String("warning", "unscoped_mapping_outranks_scoped"),
 			slog.String("issuer", issuer),
 			slog.String("role", role),
 			slog.String("winningSubject", g.lowest.resolvedSubject),
@@ -1310,10 +1325,12 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 				continue
 			}
 			seen[role] = true
-			slog.Warn("tag_auth is enabled and this role is scoped in role_mappings; "+
-				"a tag-auth grant of the same role carries no session policy and no "+
-				"role_session_name override. Remove the role's tag-auth tags, or "+
-				"accept that the tag-auth path is unscoped.",
+			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+				"tag_auth is enabled and this role is scoped in role_mappings; "+
+					"a tag-auth grant of the same role carries no session policy and no "+
+					"role_session_name override. Remove the role's tag-auth tags, or "+
+					"accept that the tag-auth path is unscoped.",
+				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
 				slog.String("role", role),
 				slog.String("scopedBy", scopedBy),
 				slog.String("subject", m.resolvedSubject))

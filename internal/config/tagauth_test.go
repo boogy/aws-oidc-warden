@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"strings"
@@ -324,6 +325,54 @@ func captureWarnings(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+// warnLine is one JSON log line captured by captureWarnings.
+type warnLine struct {
+	EventType string `json:"eventType"`
+	Warning   string `json:"warning"`
+	Key       string `json:"key"`
+	Role      string `json:"role"`
+	ScopedBy  string `json:"scopedBy"`
+	Subject   string `json:"subject"`
+}
+
+// parseWarnLines parses captureWarnings' output, one JSON object per line.
+func parseWarnLines(t *testing.T, out string) []warnLine {
+	t.Helper()
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" {
+		return nil
+	}
+	lines := strings.Split(trimmed, "\n")
+	parsed := make([]warnLine, len(lines))
+	for i, line := range lines {
+		require.NoError(t, json.Unmarshal([]byte(line), &parsed[i]))
+	}
+	return parsed
+}
+
+// hasWarningCode reports whether logs contains a config.warning line with code.
+func hasWarningCode(t *testing.T, logs, code string) bool {
+	t.Helper()
+	for _, w := range parseWarnLines(t, logs) {
+		if w.EventType == "config.warning" && w.Warning == code {
+			return true
+		}
+	}
+	return false
+}
+
+// tagAuthBypassWarnings returns the tag_auth_bypasses_mapping_scoping warnings.
+func tagAuthBypassWarnings(t *testing.T, out string) []warnLine {
+	t.Helper()
+	var found []warnLine
+	for _, w := range parseWarnLines(t, out) {
+		if w.EventType == "config.warning" && w.Warning == "tag_auth_bypasses_mapping_scoping" {
+			found = append(found, w)
+		}
+	}
+	return found
+}
+
 func tagAuthScopingCfg(tagAuthEnabled bool, m RoleMapping) *Config {
 	cfg := &Config{
 		Issuers: []IssuerConfig{{
@@ -373,14 +422,15 @@ func TestValidate_WarnsWhenTagAuthCanBypassSessionPolicy(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(out, "tag_auth is enabled and this role is scoped") {
-		t.Errorf("no warning that tag-auth bypasses the mapping's session policy; got: %s", out)
+	warnings := tagAuthBypassWarnings(t, out)
+	if len(warnings) != 1 {
+		t.Fatalf("want exactly 1 tag_auth_bypasses_mapping_scoping warning; got %d: %s", len(warnings), out)
 	}
-	if !strings.Contains(out, "arn:aws:iam::111111111111:role/deploy") {
-		t.Errorf("warning does not name the affected role; got: %s", out)
+	if warnings[0].Role != "arn:aws:iam::111111111111:role/deploy" {
+		t.Errorf("warning does not name the affected role; got: %+v", warnings[0])
 	}
-	if !strings.Contains(out, `"scopedBy":"session_policy"`) {
-		t.Errorf("warning does not say what the scoping was; got: %s", out)
+	if warnings[0].ScopedBy != "session_policy" {
+		t.Errorf("warning does not say what the scoping was; got: %+v", warnings[0])
 	}
 }
 
@@ -399,7 +449,7 @@ func TestValidate_WarnsOncePerRoleForMultiSubjectEntry(t *testing.T) {
 		}
 	})
 
-	if n := strings.Count(out, "tag_auth is enabled and this role is scoped"); n != 1 {
+	if n := len(tagAuthBypassWarnings(t, out)); n != 1 {
 		t.Errorf("want exactly 1 bypass warning for the role, got %d; out: %s", n, out)
 	}
 }
@@ -419,7 +469,8 @@ func TestValidate_WarnsWhenTagAuthCanBypassRoleSessionName(t *testing.T) {
 		}
 	})
 
-	if !strings.Contains(out, `"scopedBy":"role_session_name"`) {
+	warnings := tagAuthBypassWarnings(t, out)
+	if len(warnings) != 1 || warnings[0].ScopedBy != "role_session_name" {
 		t.Errorf("no warning for the bypassed role_session_name; got: %s", out)
 	}
 }
@@ -442,7 +493,7 @@ func TestValidate_NoTagAuthWarningWhenTagAuthDisabled(t *testing.T) {
 		}
 	})
 
-	if strings.Contains(out, "tag_auth is enabled") {
+	if hasWarningCode(t, out, "tag_auth_bypasses_mapping_scoping") {
 		t.Errorf("warned about tag-auth scoping with tag_auth disabled; got: %s", out)
 	}
 }
@@ -462,7 +513,7 @@ func TestValidate_NoTagAuthWarningForUnscopedMapping(t *testing.T) {
 		}
 	})
 
-	if strings.Contains(out, "tag_auth is enabled and this role is scoped") {
+	if hasWarningCode(t, out, "tag_auth_bypasses_mapping_scoping") {
 		t.Errorf("warned about a mapping that declares no scoping; got: %s", out)
 	}
 }
