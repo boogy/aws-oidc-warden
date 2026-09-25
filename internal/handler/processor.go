@@ -101,13 +101,13 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	if cfg.LogClaimValues {
-		reqAttrs := []any{slog.String("role", requestedRole)}
+		reqAttrs := []any{slog.String("roleArn", requestedRole)}
 		for _, a := range identityAttrs(claims) {
 			reqAttrs = append(reqAttrs, a)
 		}
 		log = log.With(slog.Group("request", reqAttrs...))
 	} else {
-		log = log.With(slog.Group("request", slog.String("role", requestedRole)))
+		log = log.With(slog.Group("request", slog.String("roleArn", requestedRole)))
 	}
 
 	// IsTargetAccountAllowed encodes disabled-means-hub-only (fail closed).

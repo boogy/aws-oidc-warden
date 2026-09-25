@@ -330,7 +330,7 @@ type warnLine struct {
 	EventType string `json:"eventType"`
 	Warning   string `json:"warning"`
 	Key       string `json:"key"`
-	Role      string `json:"role"`
+	Role      string `json:"roleArn"`
 	ScopedBy  string `json:"scopedBy"`
 	Subject   string `json:"subject"`
 }

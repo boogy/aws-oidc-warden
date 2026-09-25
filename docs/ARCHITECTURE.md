@@ -281,10 +281,10 @@ The AWS consumer abstracts all AWS service interactions:
 ```go
 type AwsConsumerInterface interface {
     AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
-    GetS3Object(bucket, key string) (io.ReadCloser, error)
-    GetRole(role string) (*iam.GetRoleOutput, error)
-    GetRoleTags(roleARN string) (map[string]string, error)
-    IsTargetAccountAllowed(roleArn string) (bool, error)
+    GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+    GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
+    GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
+    IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
 ```
 

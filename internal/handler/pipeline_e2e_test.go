@@ -658,6 +658,7 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 		groups := requestGroups(t, &buf)
 		require.NotEmpty(t, groups, "pipeline logged no request group")
 		for _, g := range groups {
+			assert.Equal(t, role, g["roleArn"])
 			assert.Equal(t, "myorg/repo", g["subject"], "subject must identify the caller")
 			assert.Equal(t, "myorg/repo", g["repository"])
 			assert.Equal(t, "refs/heads/main", g["ref"])

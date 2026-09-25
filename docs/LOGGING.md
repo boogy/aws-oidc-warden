@@ -44,7 +44,7 @@ Every log line carries a base set of keys (from `internal/logevent.Setup` and th
 
 ## Event catalog
 
-Every registered event (`internal/logevent/events_*.go`), grouped by `eventCategory`. Attrs listed are in addition to the base keys above; `authz.decision`'s full attr set is detailed in [Decision log & audit record fields](#decision-log--audit-record-fields).
+Every registered event (`internal/logevent/events_*.go`), grouped by `eventCategory`. Attrs listed are in addition to the base keys above; `authz.decision`'s full attr set is detailed in [Decision log & audit record fields](#decision-log--audit-record-fields). Pipeline lines logged after the role is parsed carry a `request` group: `roleArn`, plus `subject`, `repository`, `ref`, `branch`, `actor` when `log_claim_values` is on.
 
 | eventType | Level | Key attrs |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ Every registered event (`internal/logevent/events_*.go`), grouped by `eventCateg
 | `config.jwt_validation.delegated` | Warn | mode |
 | `config.reload.failure` | Error | error |
 | `config.reload.success` | Info | roleMappings, fragments |
-| `config.warning` | Warn | warning (stable code) + context, e.g. mappingCount/defaultIssuer/issuerCount |
+| `config.warning` | Warn | warning (stable code) + context, e.g. mappingCount/defaultIssuer/issuerCount, issuer/roleArn/winningSubject/ignoredPolicySubject, roleArn/scopedBy/subject |
 | `http.response.failure` | Error | error |
 | `http.response.write_failure` | Warn | error |
 | `http.server.failure` | Error | error |

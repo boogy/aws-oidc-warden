@@ -109,6 +109,8 @@ func main() {
 
 		// Only accept POST requests
 		if r.Method != http.MethodPost {
+			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
+				slog.String("reason", "method not allowed"), slog.String("method", r.Method))
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -116,6 +118,8 @@ func main() {
 		// Read the request body
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
+			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
+				slog.String("reason", "body read failed"), slog.String("error", err.Error()))
 			http.Error(w, "Error reading request body", http.StatusBadRequest)
 			return
 		}

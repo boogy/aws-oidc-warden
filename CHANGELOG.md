@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Client-caused denials now log at Warn, never Error.** `authz.decision` with `outcome = "deny"` and `request.rejected` are both Warn — Error is reserved for server-side faults (STS/S3/IAM failures, JWKS fetch failure, audit write failure), never for a caller's bad or unauthorized token.
 - **Exactly one terminal log line per request.** Every request now emits precisely one of `authz.decision` (pipeline ran) or `request.rejected` (rejected before the pipeline); `request.response` is a separate Debug line and never a substitute for either.
 - **`msg` text changed on every migrated log line and is no longer a stable query key.** Query on `eventType` instead — see [docs/LOGGING.md § Event catalog](docs/LOGGING.md#event-catalog).
+- **Role ARNs are logged as `roleArn`, never `role`.** Affects the pipeline's `request` group and the `unscoped_mapping_outranks_scoped` / `tag_auth_bypasses_mapping_scoping` config warnings.
 - **`handler.NewBootstrap(adapter string)`** now takes the frontend adapter name, stamped into every log line as `adapter`.
 - **`aws.BuildSessionTags(ctx, rawClaims, tagSpec)`** now takes a `context.Context` as its first argument, so session-tag construction can log with request context attached.
 - Cache (`internal/cache`), validator (`internal/validator`), AWS (`internal/aws`), and `internal/s3logger` I/O paths are now context-aware throughout, so their log lines carry the request context.

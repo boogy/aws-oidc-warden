@@ -1289,7 +1289,7 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 				"the session policy will NOT be applied when both match",
 			slog.String("warning", "unscoped_mapping_outranks_scoped"),
 			slog.String("issuer", issuer),
-			slog.String("role", role),
+			slog.String("roleArn", role),
 			slog.String("winningSubject", g.lowest.resolvedSubject),
 			slog.String("ignoredPolicySubject", g.scoped.resolvedSubject))
 	}
@@ -1331,7 +1331,7 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 					"role_session_name override. Remove the role's tag-auth tags, or "+
 					"accept that the tag-auth path is unscoped.",
 				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
-				slog.String("role", role),
+				slog.String("roleArn", role),
 				slog.String("scopedBy", scopedBy),
 				slog.String("subject", m.resolvedSubject))
 		}
