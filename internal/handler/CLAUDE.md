@@ -27,7 +27,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `ClaimsExtractorInterface` is the only way claims enter `ProcessRequest` — never call `validator.Validate()` directly from adapters.
 - In delegated mode, if the upstream injects no claims, `Extract()` returns an error that wraps `ErrTokenValidationFailed` — the bypass-prevention guard.
 - `ParseRoleOnlyRequestBody` must be used by delegated adapters; `ParseRequestBody` requires a non-empty token.
-- Classify failures with sentinel errors in `types.go`; adapters map them to HTTP status via `errors.Is`.
+- Classify failures with sentinel errors in `types.go`; `classifyError` (`errors.go`) maps them to HTTP status.
 - Log via `logevent.{Debug,Info,Warn,Error}(ctx, log, event, msg, attrs...)` with the request-scoped logger and a catalog event, never a package-level `slog` call — `ctx` carries `requestId`/`frontendRequestId`/`sourceIp` correlation, which a bare `slog` call would lose. Never log token material; if a site ever must, redact it with `utils.RedactToken` first.
 - Claim VALUES in the log stream (canonical subject included) go through `subjectAttr(cfg, …)` / the `cfg.LogClaimValues` gate, so `log_claim_values=false` holds across the whole log stream and not just the audit record.
 - Test processor with `ClaimsExtractorInterface` mocks (not `TokenValidatorInterface`); the latter is for `SelfExtractor` unit tests only.
