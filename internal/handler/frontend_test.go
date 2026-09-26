@@ -164,6 +164,18 @@ func TestALBHandler_MultiValueXFFPopulatesSourceIP(t *testing.T) {
 		"user-agent is blank when it arrives in multiValueHeaders")
 }
 
+func TestALBHandler_OversizedOIDCHeaderIsInvalidRequest(t *testing.T) {
+	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), &captureExtractor{}, nil)
+
+	resp, err := h.Handler(context.Background(), albEvent(map[string][]string{
+		"x-amzn-oidc-data": {strings.Repeat("a", handler.MaxTokenLength+1)},
+	}, `{"role":"arn:aws:iam::123456789012:role/MyRole"}`))
+	require.NoError(t, err)
+
+	assert.Equal(t, 400, resp.StatusCode)
+	assert.Contains(t, resp.Body, `"errorCode":"invalid_request"`)
+}
+
 // Single-value target groups must keep working unchanged.
 func TestALBHandler_SingleValueHeadersStillWork(t *testing.T) {
 	ex := &captureExtractor{}

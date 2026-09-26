@@ -207,6 +207,11 @@ jobs:
               })
             });
 
+            if (!response.ok) {
+              core.setFailed(`warden request failed: ${response.status} ${await response.text()}`);
+              return;
+            }
+
             const { data } = await response.json();
             core.setSecret(data.AccessKeyId);
             core.setSecret(data.SecretAccessKey);

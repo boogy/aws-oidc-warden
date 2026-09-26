@@ -90,6 +90,10 @@ A caller requests an OIDC token, POSTs it with the role ARN it wants, and export
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, role: process.env.ROLE_ARN }),
       });
+      if (!res.ok) {
+        core.setFailed(`warden request failed: ${res.status} ${await res.text()}`);
+        return;
+      }
       const { data } = await res.json();
       core.setSecret(data.SecretAccessKey);   // mask before exporting
       core.setSecret(data.SessionToken);
@@ -223,7 +227,7 @@ The failure modes that actually bite, in rough order of likelihood:
 | `403 assume_role_denied`  | STS refused: the target role's trust policy, or the execution role missing `sts:AssumeRole`/`sts:TagSession`. The log line carries `stsErrorCode`      |
 | `500 assume_role_failed`  | Not a permission problem — throttling, expired broker credentials, or a malformed session policy                                                       |
 | `500 policy_error`        | The mapping's S3 session policy could not be read (missing object, no `s3:GetObject`) or is not valid JSON                                             |
-| `500 audit_write_failed`  | `audit_required` is on and the S3 audit write failed, so the request was denied. Check the log bucket and the execution role's `s3:PutObject`          |
+| `500 audit_write_failed`  | `audit_required` is on and the S3 audit write failed. Needs `s3:PutObject` **and** `s3:PutObjectTagging` on the log bucket; `make run` has no S3 sink  |
 | Cache misses / throttling | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                |
 | Cross-account failures    | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts` |
 

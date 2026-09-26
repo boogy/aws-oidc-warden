@@ -212,7 +212,9 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	if r.audit == nil {
 		// config.Validate() can't catch a missing sink; enforce here instead.
 		if cfg.AuditEnforced() {
-			return fmt.Errorf("%w: audit_required is set but no audit sink is configured", ErrAuditWriteFailed)
+			err := fmt.Errorf("%w: audit_required is set but no audit sink is configured", ErrAuditWriteFailed)
+			logevent.Error(ctx, log, logevent.AuditWriteFailure, "failed to write audit record", slog.String("error", err.Error()))
+			return err
 		}
 		return nil
 	}

@@ -930,6 +930,22 @@ func TestAudit_Required_NilSink_FailsClosed(t *testing.T) {
 		"a missing sink is an unmet audit requirement, not a permission or token failure: %v", err)
 }
 
+func TestAudit_Required_NilSink_LogsAuditWriteFailure(t *testing.T) {
+	cfg := auditTestCfg(t, true, false)
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t),
+		&fixedExtractor{claims: allowClaims("org/repo")}, nil, "test")
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"}, "req-nil-sink-log", log)
+	require.Error(t, err)
+	assert.Contains(t, buf.String(), `"eventType":"audit.write.failure"`)
+	assert.Contains(t, buf.String(), "no audit sink is configured")
+}
+
 // A nil sink stays a no-op when audit_required is false — the durable write is
 // optional there, so the request proceeds and credentials are returned.
 func TestAudit_NotRequired_NilSink_StillAllows(t *testing.T) {

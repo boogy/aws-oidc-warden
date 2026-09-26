@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.5.2] - 2026-09-26
+
+### Fixed
+
+- **A role ARN that is not an IAM role now returns `400 invalid_request`**, as documented. Only the partition prefix was checked, so `arn:aws:iam::123456789012:user/ci`, a `roles/` typo, or a missing account reached the pipeline and came back as a retryable `500 assume_role_failed`.
+- **ALB: an oversized `x-amzn-oidc-data` header returns `400 invalid_request`**, not `400 internal_error`.
+- **`audit_required` with no audit sink (`make run` with `log_to_s3` set) now logs `audit.write.failure`.** The request already failed closed with `500 audit_write_failed`, but nothing in the log said why.
+
+### Documentation
+
+- **`ARCHITECTURE.md` Required IAM Permissions** now covers every bucket the service touches. The audit bucket needs `s3:PutObject` **and** `s3:PutObjectTagging`; without them, `audit_required` fails every allowed request. The block also adds the config bucket (`s3:GetObject`) and the S3 cache bucket, and drops the unused `s3:PutObject` on session policies.
+- **`500 policy_error` and `500 audit_write_failed` are deterministic.** 3.5.1 marked `audit_write_failed` retryable, but its causes are IAM or bucket misconfiguration, and each retry mints and discards real credentials. The failover examples in `GITHUB_ACTIONS.md` (JS, `curl`, composite action) now stop on these `errorCode`s instead of failing over. A persistent `assume_role_failed` with `stsErrorCode = MalformedPolicyDocument` is called out as non-transient.
+- The README quick-start and the `SESSION_TAGGING.md` example check `res.ok`, so a refusal shows its status and `errorCode` instead of a `TypeError`.
+- `README.md` troubleshooting: `audit_write_failed` names `s3:PutObjectTagging` and the no-sink case under `make run`. `GITHUB_ACTIONS.md`: `400 invalid_request` lists the same causes as the README. `github-script@v9` needs Actions Runner v2.327.1+.
+
 ## [3.5.1] - 2026-09-26
 
 ### Dependencies
@@ -845,7 +860,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.1...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.2...HEAD
+[3.5.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.1...v3.5.2
 [3.5.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...v3.5.0
 [3.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.0...v3.4.1

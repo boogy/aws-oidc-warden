@@ -65,16 +65,20 @@ A failure carries only a classified code — internal detail never reaches the c
 
 The status code tells your client whether retrying is worth anything:
 
-| Status                   | Meaning                                                           | Retry or fail over?    |
-| ------------------------ | ----------------------------------------------------------------- | ---------------------- |
-| `400 invalid_request`    | Malformed body, or a missing `role`                               | **No** — deterministic |
-| `401 token_invalid`      | Signature, issuer, audience or time bounds failed                 | **No** — deterministic |
-| `403 permission_denied`  | _This service_ refused: no mapping matched, or a condition failed | **No** — deterministic |
-| `403 assume_role_denied` | _AWS STS_ refused a role this service authorized (trust policy)   | **No** — deterministic |
-| `500 assume_role_failed` | Throttling, expired broker credentials, malformed session policy  | **Yes** — transient    |
-| `500 policy_error`       | The mapping's S3 session policy is missing, unreadable or invalid | **No** — deterministic |
-| `500 audit_write_failed` | `audit_required` is on and the audit write to S3 failed           | **Yes** — transient    |
-| `502` / `503` / timeout  | The endpoint is unhealthy or unreachable                          | **Yes**                |
+| Status                   | Meaning                                                                 | Retry or fail over?     |
+| ------------------------ | ----------------------------------------------------------------------- | ----------------------- |
+| `400 invalid_request`    | Malformed body, bad token size, or a `role` that is not an IAM role ARN | **No** — deterministic  |
+| `401 token_invalid`      | Signature, issuer, audience or time bounds failed                       | **No** — deterministic  |
+| `403 permission_denied`  | _This service_ refused: no mapping matched, or a condition failed       | **No** — deterministic  |
+| `403 assume_role_denied` | _AWS STS_ refused a role this service authorized (trust policy)         | **No** — deterministic  |
+| `500 assume_role_failed` | Throttling, expired broker credentials, or a malformed session policy   | **Yes** — transient¹    |
+| `500 policy_error`       | The mapping's S3 session policy is missing, unreadable or invalid       | **No** — deterministic² |
+| `500 audit_write_failed` | `audit_required` is on and the audit write to S3 failed                 | **No** — deterministic² |
+| `502` / `503` / timeout  | The endpoint is unhealthy or unreachable                                | **Yes**                 |
+
+¹ Unless it persists: a malformed session policy fails the same way in every region — the log's `stsErrorCode` is `MalformedPolicyDocument`.
+
+² A missing S3 object or IAM grant (`s3:GetObject`; `s3:PutObject` + `s3:PutObjectTagging` on the audit bucket). Transient S3 errors are already retried server-side, and an `audit_write_failed` retry mints and discards real credentials.
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]
@@ -201,7 +205,7 @@ Two regional deployments, primary first, secondary only when the primary is genu
 Both versions below implement the same policy:
 
 1. **One token, reused for every attempt.** Validation is stateless and both regions list the same audience, so re-requesting the token would be pure latency.
-2. **Deterministic refusals are final.** `400`/`401`/`403` skip the remaining endpoints — every region shares the authorization config and returns the same answer.
+2. **Deterministic refusals are final.** `400`/`401`/`403`, and a `500` with `errorCode` `policy_error` or `audit_write_failed`, skip the remaining endpoints — every region shares the authorization config and returns the same answer.
 3. **Only unreachable or transient failures fail over.**
 4. **Mask before exporting**, on every path.
 
@@ -255,11 +259,16 @@ Both versions below implement the same policy:
           return;
         }
 
+        const body = await response.text();
+        let errorCode;
+        try { ({ errorCode } = JSON.parse(body)); } catch { /* gateway error page */ }
+
         // Deterministic refusal: every region shares this authorization config
         // and returns the same answer. Failing over would only delay the real
         // error and write a second audit record.
-        if ([400, 401, 403].includes(response.status)) {
-          core.setFailed(`warden refused (${response.status}): ${await response.text()}`);
+        if ([400, 401, 403].includes(response.status) ||
+            ['policy_error', 'audit_write_failed'].includes(errorCode)) {
+          core.setFailed(`warden refused (${response.status}): ${body}`);
           return;
         }
 
@@ -269,7 +278,7 @@ Both versions below implement the same policy:
       core.setFailed('no warden endpoint could issue credentials');
 ```
 
-`github-script` wraps the script in an async function, so top-level `await` and `return` both work as written. `AbortSignal.timeout` needs Node ≥ 17.3; `github-script@v9` runs Node 24.
+`github-script` wraps the script in an async function, so top-level `await` and `return` both work as written. `AbortSignal.timeout` needs Node ≥ 17.3; `github-script@v9` runs Node 24, which needs Actions Runner v2.327.1 or newer (relevant on GHES and self-hosted runners).
 
 <!-- prettier-ignore -->
 > [!NOTE]
@@ -306,9 +315,10 @@ This runs as a plain `run:` step, so there is no action to fetch before it can s
         -X POST "$URL" \
         -H 'Content-Type: application/json' \
         -d "{\"token\":\"$TOKEN\",\"role\":\"$ROLE_ARN\"}" || true)
+      ERR=$(jq -r '.errorCode // empty' "$BODY" 2>/dev/null || true)
 
-      case "${CODE:-000}" in
-        200)
+      case "${CODE:-000}:$ERR" in
+        200:*)
           read -r AKI SAK TOK < <(jq -r '.data | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken)"' "$BODY")
           echo "::add-mask::$AKI"; echo "::add-mask::$SAK"; echo "::add-mask::$TOK"
           { echo "AWS_ACCESS_KEY_ID=$AKI"
@@ -317,7 +327,7 @@ This runs as a plain `run:` step, so there is no action to fetch before it can s
           echo "credentials issued by $URL"
           exit 0
           ;;
-        400 | 401 | 403)
+        400:* | 401:* | 403:* | 500:policy_error | 500:audit_write_failed)
           # Deterministic refusal: the other region shares this authorization
           # config and returns the same answer. Failing over would only delay
           # the real error and write a second audit record.
@@ -342,7 +352,7 @@ This runs as a plain `run:` step, so there is no action to fetch before it can s
 | One `getIDToken` call, reused             | The token is replayable across regions; a second request would be pure latency                                                                                                                                                        |
 | `--connect-timeout 2` with `--max-time 8` | The two failure shapes get different budgets: a **blackholed** region is abandoned in ~2s, while a live region that is merely cold keeps its full 8s. A single flat timeout has to choose between slow failover and spurious failover |
 | One `jq` invocation                       | Three separate parses of the same tiny document buy nothing                                                                                                                                                                           |
-| Deterministic refusals are final          | `401`/`403` skip the second region entirely — the answer will not differ                                                                                                                                                              |
+| Deterministic refusals are final          | `400`/`401`/`403` and `policy_error`/`audit_write_failed` skip the second region entirely — the answer will not differ                                                                                                                |
 
 On the happy path the cost is one token request plus one POST, so the step is dominated by a single round trip to a warm Lambda. When the primary is unreachable, the added cost is the ~2s connect timeout.
 
@@ -440,9 +450,10 @@ runs:
             --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME" \
             -X POST "$URL" -H 'Content-Type: application/json' \
             "${ARGS[@]}" || true)
+          ERR=$(jq -r '.errorCode // empty' "$BODY" 2>/dev/null || true)
 
-          case "${CODE:-000}" in
-            200)
+          case "${CODE:-000}:$ERR" in
+            200:*)
               read -r AKI SAK TOK EXP < <(jq -r \
                 '.data | "\(.AccessKeyId) \(.SecretAccessKey) \(.SessionToken) \(.Expiration)"' "$BODY")
               echo "::add-mask::$AKI"; echo "::add-mask::$SAK"; echo "::add-mask::$TOK"
@@ -453,7 +464,7 @@ runs:
               echo "credentials issued by $URL"
               exit 0
               ;;
-            400 | 401 | 403)
+            400:* | 401:* | 403:* | 500:policy_error | 500:audit_write_failed)
               # Deterministic refusal — every endpoint shares the authorization
               # config and returns the same answer.
               echo "::error::warden refused ($CODE): $(cat "$BODY")"

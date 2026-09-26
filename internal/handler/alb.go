@@ -53,7 +53,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 
 	// Bound before body parsing to reject oversized ALB OIDC headers early.
 	if len(oidcData) > MaxTokenLength {
-		err := fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size")
+		err := fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size: %w", ErrTokenTooLarge)
 		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
 		return h.respondError(ctx, err, http.StatusBadRequest)
 	}
