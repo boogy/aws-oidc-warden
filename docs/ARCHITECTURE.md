@@ -665,7 +665,7 @@ Version-pinned tags (`apigatewayv2-v3.3.0`) are published alongside; a prereleas
 | Config         | Either bake `config.yaml` into the package (`CONFIG_NAME`/`CONFIG_PATH`) or serve it from S3 with `AOW_S3_CONFIG_BUCKET` + `AOW_S3_CONFIG_PATH`, which the provider re-reads on its refresh interval so policy changes need no redeploy. Every setting also has an `AOW_*` override (`AOW_JWT_VALIDATION_MODE`, `LOG_LEVEL`, …).                                                |
 | Execution role | The policy in [Required IAM Permissions](#required-iam-permissions), narrowed to the buckets, table, and target roles you actually enable.                                                                                                                                                                                                                                      |
 | Resources      | Only what the config turns on: the config bucket, a DynamoDB cache table (**with a TTL attribute configured**, or entries never expire), an S3 cache bucket, the audit bucket (`audit_required` needs one, or the fail-closed guarantee silently degrades to a no-op), and a session-policy bucket.                                                                             |
-| Raw logs       | Optional. The service writes operational logs to stdout (CloudWatch Logs) only — it does not ship them to S3 itself. To archive raw logs in S3, add a CloudWatch Logs subscription filter → Kinesis Data Firehose → S3 in your own IaC.                                                                                                                                       |
+| Raw logs       | Optional. The service writes operational logs to stdout (CloudWatch Logs) only — it does not ship them to S3 itself. To archive raw logs in S3, add a CloudWatch Logs subscription filter → Kinesis Data Firehose → S3 in your own IaC.                                                                                                                                         |
 | Front-end      | `apigw` mode needs one HTTP API JWT Authorizer + route per issuer (max 10 per API); WAF attaches to REST APIs only. In `apigw` mode, grant `lambda:InvokeFunction` to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — see [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).          |
 
 Cross-account target and spoke roles: [examples/cross-account/](examples/cross-account/README.md).
@@ -695,8 +695,18 @@ The Lambda execution role requires the following IAM permissions:
     },
     {
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject"],
-      "Resource": ["arn:aws:s3:::s3-aws-oidc-warden-session-policies/*"]
+      "Action": ["s3:GetObject"],
+      "Resource": ["arn:aws:s3:::aws-oidc-warden-config/*", "arn:aws:s3:::s3-aws-oidc-warden-session-policies/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:PutObjectTagging"],
+      "Resource": ["arn:aws:s3:::aws-oidc-warden-logs/*"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": ["arn:aws:s3:::aws-oidc-warden-cache/*"]
     },
     {
       "Effect": "Allow",
@@ -706,6 +716,8 @@ The Lambda execution role requires the following IAM permissions:
   ]
 }
 ```
+
+> Drop the statements for features you don't enable. The audit bucket (`log_bucket`) needs **both** `s3:PutObject` and `s3:PutObjectTagging` — every record is written with object tags, and with `audit_required` on a missing grant fails every allowed request with `500 audit_write_failed`. `s3:DeleteObject` on the cache bucket is only used with `cache.s3_cleanup`. Add `kms:GenerateDataKey`/`kms:Decrypt` if a bucket uses SSE-KMS.
 
 > `iam:GetRole` is only needed when `tag_auth` is enabled (role-tag reads via `GetRoleTags`; performed with spoke credentials only when the role is cross-account — the target `AssumeRole` itself is always direct with the hub's own credentials).
 
