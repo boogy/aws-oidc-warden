@@ -249,7 +249,7 @@ The validator component handles all OIDC token validation logic:
 
 ```go
 type TokenValidatorInterface interface {
-    Validate(string) (*types.Claims, error)
+    Validate(ctx context.Context, tokenString string) (*types.Claims, error)
 }
 ```
 

@@ -72,6 +72,8 @@ The status code tells your client whether retrying is worth anything:
 | `403 permission_denied`  | _This service_ refused: no mapping matched, or a condition failed | **No** — deterministic |
 | `403 assume_role_denied` | _AWS STS_ refused a role this service authorized (trust policy)   | **No** — deterministic |
 | `500 assume_role_failed` | Throttling, expired broker credentials, malformed session policy  | **Yes** — transient    |
+| `500 policy_error`       | The mapping's S3 session policy is missing, unreadable or invalid | **No** — deterministic |
+| `500 audit_write_failed` | `audit_required` is on and the audit write to S3 failed           | **Yes** — transient    |
 | `502` / `503` / timeout  | The endpoint is unhealthy or unreachable                          | **Yes**                |
 
 <!-- prettier-ignore -->
@@ -98,11 +100,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Get AWS credentials via OIDC warden
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
-            const core = require('@actions/core');
-
             // The audience must match the issuer's `audiences` in the warden config.
             const token = await core.getIDToken('sts.amazonaws.com');
 
@@ -142,10 +142,9 @@ In `apigw` mode the API Gateway JWT Authorizer verifies the signature, so the to
 
 ```yaml
 - name: Get AWS credentials via OIDC warden (apigw mode)
-  uses: actions/github-script@v7
+  uses: actions/github-script@v9
   with:
     script: |
-      const core = require('@actions/core');
       const token = await core.getIDToken('sts.amazonaws.com');
 
       const response = await fetch('https://your-api-id.execute-api.eu-west-1.amazonaws.com/prod/verify', {
@@ -210,15 +209,13 @@ Both versions below implement the same policy:
 
 ```yaml
 - name: Get AWS credentials via OIDC warden
-  uses: actions/github-script@v7
+  uses: actions/github-script@v9
   env:
     WARDEN_ENDPOINTS: >-
       https://warden.eu-west-1.example.com/verify, https://warden.eu-central-1.example.com/verify
     ROLE_ARN: arn:aws:iam::123456789012:role/github-actions-role
   with:
     script: |
-      const core = require('@actions/core');
-
       const endpoints = process.env.WARDEN_ENDPOINTS.split(',').map(s => s.trim()).filter(Boolean);
       const role = process.env.ROLE_ARN;
       const timeoutMs = 8000;
@@ -272,7 +269,7 @@ Both versions below implement the same policy:
       core.setFailed('no warden endpoint could issue credentials');
 ```
 
-`github-script` wraps the script in an async function, so top-level `await` and `return` both work as written. `AbortSignal.timeout` needs Node ≥ 17.3; `github-script@v7` runs Node 20.
+`github-script` wraps the script in an async function, so top-level `await` and `return` both work as written. `AbortSignal.timeout` needs Node ≥ 17.3; `github-script@v9` runs Node 24.
 
 <!-- prettier-ignore -->
 > [!NOTE]

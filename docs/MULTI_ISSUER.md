@@ -11,16 +11,16 @@ Adding a provider requires no code changes — just an `issuers[]` entry.
 
 ## Issuer fields
 
-| field             | required                                 | meaning                                                                              |
-| ----------------- | ---------------------------------------- | ------------------------------------------------------------------------------------ |
-| `issuer`          | yes                                      | exact `iss` value trusted (no normalization)                                         |
-| `provider`        | no                                       | `github` or `generic` (default `generic`)                                            |
-| `audiences`       | yes (≥1)                                 | accepted `aud` values (ANY-match)                                                    |
-| `jwks_uri`        | no                                       | explicit JWKS URL; omit to use OIDC discovery                                        |
-| `claim_mappings`  | github: no / generic: `subject` required | canonical field ← raw claim name; may not target `iss`/`aud`/`exp`/`nbf`/`iat`/`sub` |
-| `required_claims` | no                                       | raw claim names that must be present + non-empty                                     |
-| `session_tags`    | no                                       | STS tag key ← raw claim name (key charset `[A-Za-z0-9 _.:/=+@-]{1,128}`)             |
-| `tag_prefix`      | no                                       | tag-auth tag key prefix for this issuer; overrides `tag_auth.tag_prefix`             |
+| field             | required                                 | meaning                                                                                  |
+| ----------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `issuer`          | yes                                      | exact `iss` value trusted (no normalization)                                             |
+| `provider`        | no                                       | `github` or `generic` (default `generic`)                                                |
+| `audiences`       | yes (≥1)                                 | accepted `aud` values (ANY-match)                                                        |
+| `jwks_uri`        | no                                       | explicit JWKS URL; omit to use OIDC discovery                                            |
+| `claim_mappings`  | github: no / generic: `subject` required | canonical field ← raw claim name; `subject` may not target `iss`/`aud`/`exp`/`nbf`/`iat` |
+| `required_claims` | no                                       | raw claim names that must be present + non-empty                                         |
+| `session_tags`    | no                                       | STS tag key ← raw claim name (key charset `[A-Za-z0-9 _.:/=+@-]{1,128}`)                 |
+| `tag_prefix`      | no                                       | tag-auth tag key prefix for this issuer; overrides `tag_auth.tag_prefix`                 |
 
 Issuer and `jwks_uri` must be HTTPS (loopback `http://` only with `allow_insecure_issuers`, dev/test only).
 

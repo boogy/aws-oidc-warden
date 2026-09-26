@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Documentation
+
+- **Fixed every `github-script` example** (README, `GITHUB_ACTIONS.md`, `SESSION_TAGGING.md`): `const core = require('@actions/core')` redeclares the injected `core` parameter and fails with `SyntaxError: Identifier 'core' has already been declared`. Removed the line and moved the examples to `actions/github-script@v9` (Node 24).
+- Status-code tables in the README and `GITHUB_ACTIONS.md` now list `400 invalid_request`, `500 policy_error` and `500 audit_write_failed`.
+- `MULTI_ISSUER.md`: `claim_mappings.subject` may target `sub`; `ARCHITECTURE.md`: `TokenValidatorInterface.Validate` takes a `context.Context`.
+
 ## [3.5.0] - 2026-09-25
 
 ### Added
