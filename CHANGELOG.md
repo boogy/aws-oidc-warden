@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Dependencies
 
 - **Go toolchain** 1.26.7 → 1.27.1 (`go` directive in `go.mod`; CI and release builds follow via `go-version-file`).
+- golangci-lint (CI) 2.12.2 → 2.14.0 — 2.12.2 is built with Go 1.26 and refuses a Go 1.27 module.
 - **AWS SDK for Go v2 patch bumps.** No API changes; `go mod verify`, `govulncheck` and the full test suite pass.
   - `github.com/aws/aws-lambda-go` 1.55.0 → 1.55.1
   - `github.com/aws/aws-sdk-go-v2` 1.47.0 → 1.47.1
