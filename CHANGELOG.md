@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-09-26
+
+### Dependencies
+
+- **Go toolchain** 1.26.7 → 1.27.1 (`go` directive in `go.mod`; CI and release builds follow via `go-version-file`).
+- golangci-lint (CI) 2.12.2 → 2.14.0 — 2.12.2 is built with Go 1.26 and refuses a Go 1.27 module.
+- **AWS SDK for Go v2 patch bumps.** No API changes; `go mod verify`, `govulncheck` and the full test suite pass.
+  - `github.com/aws/aws-lambda-go` 1.55.0 → 1.55.1
+  - `github.com/aws/aws-sdk-go-v2` 1.47.0 → 1.47.1
+  - `github.com/aws/aws-sdk-go-v2/config` 1.33.5 → 1.33.6
+  - `github.com/aws/aws-sdk-go-v2/credentials` 1.20.5 → 1.20.6
+  - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.69.0 → 1.69.1
+  - `github.com/aws/aws-sdk-go-v2/service/iam` 1.64.0 → 1.64.1
+  - `github.com/aws/aws-sdk-go-v2/service/s3` 1.113.1 → 1.113.4
+  - `github.com/aws/aws-sdk-go-v2/service/sts` 1.51.0 → 1.51.1
+  - `github.com/aws/smithy-go` 1.28.1 → 1.28.2
+  - transitive `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` patch bumps
+
 ### Documentation
 
 - **Fixed every `github-script` example** (README, `GITHUB_ACTIONS.md`, `SESSION_TAGGING.md`): `const core = require('@actions/core')` redeclares the injected `core` parameter and fails with `SyntaxError: Identifier 'core' has already been declared`. Removed the line and moved the examples to `actions/github-script@v9` (Node 24).
@@ -827,7 +845,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.0...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.1...HEAD
+[3.5.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...v3.5.0
 [3.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.0...v3.4.1
 [3.4.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.3.0...v3.4.0
