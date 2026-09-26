@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [3.5.2] - 2026-09-26
+
 ### Fixed
 
 - **A role ARN that is not an IAM role now returns `400 invalid_request`**, as documented. Only the partition prefix was checked, so `arn:aws:iam::123456789012:user/ci`, a `roles/` typo, or a missing account reached the pipeline and came back as a retryable `500 assume_role_failed`.
@@ -858,7 +860,8 @@ Multi-issuer, any-provider release. v2 validates OIDC tokens from any number of 
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.1...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.2...HEAD
+[3.5.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.1...v3.5.2
 [3.5.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...v3.5.0
 [3.4.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.0...v3.4.1
