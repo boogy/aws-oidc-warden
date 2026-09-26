@@ -38,7 +38,7 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 - Follow effective-Go idioms; log through `internal/logevent` with a catalog event (static `msg`, camelCase `slog.Attr` attrs) — never `log/slog` directly or `fmt.Print`. A new event needs a `docs/LOGGING.md` catalog row.
 - Comments are short and rare: one line, only for a constraint the code cannot state itself. No paragraphs, no narration of what the code does, no rationale essays — that belongs in `CHANGELOG.md`, the PR, or `docs/`. Trim over-long comments in any file you touch.
 - Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
-- Sentinel errors in `internal/handler/types.go`, mapped to HTTP status in the frontend adapters.
+- Sentinel errors in `internal/handler/types.go`, mapped to HTTP status by `classifyError` (`internal/handler/errors.go`).
 - Config precedence: env vars > YAML > defaults.
 - Maintain a clean, up-to-date `CHANGELOG.md`.
 
