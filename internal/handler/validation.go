@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/boogy/aws-oidc-warden/internal/aws"
 )
 
 const maxBodyBytes = 1024 * 1024
 
-// validateRole validates that a role ARN is non-empty, within size bounds, and
-// has a recognized AWS partition prefix. Extracted for reuse by both
-// ValidateRequestData and ParseRoleOnlyRequestBody.
+// validateRole checks that role is a bounded IAM role ARN in a recognized partition.
 func validateRole(role string) error {
 	if strings.TrimSpace(role) == "" {
 		return ErrEmptyRole
@@ -20,6 +20,9 @@ func validateRole(role string) error {
 	}
 	for _, prefix := range ValidPrefixes {
 		if strings.HasPrefix(role, prefix) {
+			if _, _, err := aws.ParseRoleARN(role); err != nil {
+				return fmt.Errorf("%w: %w", ErrInvalidRoleFormat, err)
+			}
 			return nil
 		}
 	}

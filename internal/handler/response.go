@@ -39,8 +39,7 @@ func buildErrorResponse(ctx context.Context, err error, statusCode int) (Respons
 		slog.Int("status", statusCode),
 		slog.Int64("processingMs", processingMS))
 
-	// err.Error() is logged above but never in the response body: internal
-	// detail must not reach unauthenticated callers.
+	// err.Error() never reaches the body: internal detail must not reach unauthenticated callers.
 	return Response{
 		Success:      false,
 		StatusCode:   statusCode,
