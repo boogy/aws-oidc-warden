@@ -81,10 +81,9 @@ The target IAM role must trust the warden's execution role, with both `sts:Assum
 A caller requests an OIDC token, POSTs it with the role ARN it wants, and exports the credentials that come back. The job needs `id-token: write`:
 
 ```yaml
-- uses: actions/github-script@v7
+- uses: actions/github-script@v9
   with:
     script: |
-      const core = require('@actions/core');
       const token = await core.getIDToken('sts.amazonaws.com');
       const res = await fetch(process.env.WARDEN_URL, {
         method: 'POST',
@@ -132,7 +131,7 @@ Full detail — crypto hardening, JWKS handling, SSRF protection: **[docs/TOKEN_
 | **Multi-issuer, any provider** | Trust any number of issuers at once. GitHub is native; `provider: generic` onboards any OIDC IdP by mapping its claims             |
 | **Hardened validation**        | RS/ES 256–512 only (never `none`/`HS*`), key pinning, RSA ≥ 2048 / EC on-curve checks, SSRF-safe JWKS, bounded time and size       |
 | **Delegated modes**            | Let API Gateway or ALB verify the signature; claims are still re-validated here                                                    |
-| **Four deployment shapes**     | API Gateway REST v1 + HTTP v2, Lambda URL, ALB, plus a local dev server                                                            |
+| **Four Lambda front-ends**     | API Gateway REST v1 + HTTP v2, Lambda URL, ALB, plus a local dev server                                                            |
 | **Claim-based conditions**     | Auto-anchored regex on any verified claim, one pattern or a list, AND-ed by default, nestable with `all_of` / `any_of` / `none_of` |
 | **Session policies**           | Inline JSON or S3-stored, scoping permissions per mapping                                                                          |
 | **Session tags & ABAC**        | Verified claims become STS tags for audit, cost allocation, and `aws:PrincipalTag` policies                                        |
@@ -218,10 +217,13 @@ The failure modes that actually bite, in rough order of likelihood:
 
 | Symptom                   | Likely cause                                                                                                                                           |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `400 invalid_request`     | Empty or oversized token or role, a role that is not an IAM role ARN, or a body that is not JSON                                                       |
 | `401 token_invalid`       | Workflow missing `id-token: write`; issuer or audience mismatch; clock skew beyond `jwt_leeway`                                                        |
 | `403 permission_denied`   | Subject doesn't match any mapping, or a condition failed. The audit record's `stage` and `reason` say which                                            |
 | `403 assume_role_denied`  | STS refused: the target role's trust policy, or the execution role missing `sts:AssumeRole`/`sts:TagSession`. The log line carries `stsErrorCode`      |
 | `500 assume_role_failed`  | Not a permission problem — throttling, expired broker credentials, or a malformed session policy                                                       |
+| `500 policy_error`        | The mapping's S3 session policy could not be read (missing object, no `s3:GetObject`) or is not valid JSON                                             |
+| `500 audit_write_failed`  | `audit_required` is on and the S3 audit write failed, so the request was denied. Check the log bucket and the execution role's `s3:PutObject`          |
 | Cache misses / throttling | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                |
 | Cross-account failures    | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts` |
 

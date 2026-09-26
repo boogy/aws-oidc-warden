@@ -191,10 +191,9 @@ jobs:
 
     steps:
       - name: Get AWS credentials
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
-            const core = require('@actions/core');
             // Request an OIDC ID token with the audience configured on the issuer.
             // (github.token is NOT an OIDC token and will not validate.)
             const token = await core.getIDToken('sts.amazonaws.com');
