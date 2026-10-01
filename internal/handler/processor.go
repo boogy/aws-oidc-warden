@@ -199,6 +199,11 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	requestedRole := requestData.Role
 
+	if requestData.DurationSeconds != 0 || requestData.SessionName != "" {
+		rec.Stage, rec.Reason = "field_check", "field_not_supported"
+		return nil, r.deny(ctx, o, "field not supported", ErrFieldNotSupported)
+	}
+
 	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, o.decision)
 	if err != nil {
 		rec.setErrorReason("session_policy", err)

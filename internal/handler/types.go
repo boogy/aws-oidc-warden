@@ -39,6 +39,21 @@ var (
 	ErrAssumeRoleFailed      = errors.New("failed to assume the requested role")
 	ErrAssumeRoleDenied      = errors.New("aws denied the assume-role request for the requested role")
 	ErrAuditWriteFailed      = errors.New("audit record could not be durably written")
+
+	ErrIdPNotPermitted          = errors.New("IdP token not permitted for this role")
+	ErrIdPUnavailable           = errors.New("IdP token signing temporarily unavailable")
+	ErrMethodNotAllowed         = errors.New("method not allowed")
+	ErrIdPPathNotFound          = errors.New("IdP path not found")
+	ErrIdPTokenTooLarge         = errors.New("IdP token exceeds the STS size limit")
+	ErrInvalidDuration          = errors.New("durationSeconds must be between 900 and 43200")
+	ErrDurationExceedsCap       = errors.New("durationSeconds exceeds the configured cap")
+	ErrDurationExceedsRoleMax   = errors.New("durationSeconds exceeds the role's MaxSessionDuration")
+	ErrInvalidSessionName       = errors.New(`sessionName must match [\w+=,.@-]{2,64}`)
+	ErrSessionNameNotPermitted  = errors.New("sessionName is not permitted for this role")
+	ErrFieldNotSupported        = errors.New("request field is not supported on this path")
+	ErrIdPSourceIdentityInvalid = errors.New("source identity could not be derived for this request")
+	ErrIdPExchangeDenied        = errors.New("aws refused the web identity exchange")
+	ErrIdPExchangeUnavailable   = errors.New("aws could not reach the idp")
 )
 
 var (
@@ -59,8 +74,10 @@ var (
 
 // RequestData is the request format expected by the Lambda.
 type RequestData struct {
-	Token string `json:"token"`
-	Role  string `json:"role"`
+	Token           string `json:"token"`
+	Role            string `json:"role"`
+	DurationSeconds int32  `json:"durationSeconds,omitempty"`
+	SessionName     string `json:"sessionName,omitempty"`
 }
 
 // Response represents a standardized API response

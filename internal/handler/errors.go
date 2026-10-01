@@ -44,6 +44,62 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		errCode = "assume_role_failed"
 		errMsg = "Failed to assume the requested role"
 		*statusCode = http.StatusInternalServerError
+	case errors.Is(err, ErrIdPNotPermitted):
+		errCode = "idp_not_permitted"
+		errMsg = "IdP token not permitted for this role"
+		*statusCode = http.StatusForbidden
+	case errors.Is(err, ErrIdPUnavailable):
+		errCode = "idp_signing_unavailable"
+		errMsg = "IdP token signing temporarily unavailable"
+		*statusCode = http.StatusServiceUnavailable
+	case errors.Is(err, ErrMethodNotAllowed):
+		errCode = "method_not_allowed"
+		errMsg = "Method not allowed"
+		*statusCode = http.StatusMethodNotAllowed
+	case errors.Is(err, ErrIdPPathNotFound):
+		errCode = "idp_path_not_found"
+		errMsg = "IdP path not found"
+		*statusCode = http.StatusNotFound
+	case errors.Is(err, ErrIdPTokenTooLarge):
+		errCode = "idp_token_too_large"
+		errMsg = "IdP token exceeds the STS size limit; reduce session tags"
+		*statusCode = http.StatusInternalServerError
+	case errors.Is(err, ErrInvalidDuration):
+		errCode = "invalid_duration"
+		errMsg = "durationSeconds must be between 900 and 43200"
+		*statusCode = http.StatusBadRequest
+	case errors.Is(err, ErrDurationExceedsCap):
+		errCode = "duration_exceeds_cap"
+		errMsg = "durationSeconds exceeds the maximum configured for this role"
+		*statusCode = http.StatusBadRequest
+	case errors.Is(err, ErrDurationExceedsRoleMax):
+		errCode = "duration_exceeds_role_max"
+		errMsg = "durationSeconds exceeds the role's MaxSessionDuration"
+		*statusCode = http.StatusBadRequest
+	case errors.Is(err, ErrInvalidSessionName):
+		errCode = "invalid_session_name"
+		errMsg = "sessionName must be 2-64 characters of [A-Za-z0-9_+=,.@-]"
+		*statusCode = http.StatusBadRequest
+	case errors.Is(err, ErrSessionNameNotPermitted):
+		errCode = "session_name_not_permitted"
+		errMsg = "sessionName is not permitted for this role"
+		*statusCode = http.StatusForbidden
+	case errors.Is(err, ErrFieldNotSupported):
+		errCode = "field_not_supported"
+		errMsg = "Request field is not supported on this path"
+		*statusCode = http.StatusBadRequest
+	case errors.Is(err, ErrIdPSourceIdentityInvalid):
+		errCode = "idp_source_identity_invalid"
+		errMsg = "Source identity could not be derived for this request"
+		*statusCode = http.StatusForbidden
+	case errors.Is(err, ErrIdPExchangeDenied):
+		errCode = "idp_exchange_denied"
+		errMsg = "AWS refused the web identity exchange; check the role trust policy"
+		*statusCode = http.StatusForbidden
+	case errors.Is(err, ErrIdPExchangeUnavailable):
+		errCode = "idp_exchange_unavailable"
+		errMsg = "AWS could not reach the IdP; retry"
+		*statusCode = http.StatusServiceUnavailable
 	}
 	return
 }
