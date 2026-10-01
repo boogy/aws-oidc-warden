@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [[ \"$CLAUDE_FILE_PATHS\" =~ \\.go$ ]] && ! [[ \"$CLAUDE_FILE_PATHS\" =~ _test\\.go$ ]]; then gofmt -w \"$CLAUDE_FILE_PATHS\" 2>/dev/null || true; fi"
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *_test.go) ;; *.go) gofmt -w \"$f\" 2>/dev/null || true ;; esac"
           },
           {
             "type": "command",
@@ -22,7 +22,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [[ \"$CLAUDE_TOOL_INPUT\" =~ 'rm -rf /' ]] || [[ \"$CLAUDE_TOOL_INPUT\" =~ 'git push.*--force.*main' ]] || [[ \"$CLAUDE_TOOL_INPUT\" =~ 'git push.*-f.*main' ]]; then echo 'BLOCKED: Dangerous command detected' && exit 2; fi"
+            "command": "c=$(jq -r '.tool_input.command // empty'); if printf '%s' \"$c\" | grep -Eq 'rm -rf /|git push.*(--force|-f).*main'; then echo 'BLOCKED: Dangerous command detected' >&2; exit 2; fi"
           }
         ]
       }
