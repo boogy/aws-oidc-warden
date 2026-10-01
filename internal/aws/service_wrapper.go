@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
@@ -42,6 +43,7 @@ type AwsServiceWrapper struct {
 	s3Client  *s3.Client
 	stsClient *sts.Client
 	iamClient *iam.Client
+	kms       *kms.Client
 
 	maxS3ObjectSize int64
 	defaultTimeout  time.Duration
@@ -73,6 +75,7 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 			s3Client:        s3.NewFromConfig(cfg),
 			stsClient:       sts.NewFromConfig(cfg),
 			iamClient:       iam.NewFromConfig(cfg),
+			kms:             kms.NewFromConfig(cfg),
 			maxS3ObjectSize: 5 * 1024 * 1024,
 			defaultTimeout:  30 * time.Second,
 		}
@@ -80,6 +83,9 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 
 	return wrapper
 }
+
+// KMS returns the KMS client.
+func (s *AwsServiceWrapper) KMS() *kms.Client { return s.kms }
 
 // RefreshClients recreates AWS service clients, useful for long-running Lambda environments
 // where clients might need refreshing periodically
@@ -98,6 +104,7 @@ func (s *AwsServiceWrapper) RefreshClients() {
 	s.s3Client = s3.NewFromConfig(cfg)
 	s.stsClient = sts.NewFromConfig(cfg)
 	s.iamClient = iam.NewFromConfig(cfg)
+	s.kms = kms.NewFromConfig(cfg)
 
 	logevent.Info(context.Background(), nil, logevent.AWSClientsRefreshSuccess, "AWS clients successfully refreshed")
 }

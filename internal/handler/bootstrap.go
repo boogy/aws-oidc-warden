@@ -6,11 +6,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	s3logger "github.com/boogy/aws-oidc-warden/internal/s3logger"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
@@ -54,6 +56,7 @@ type Bootstrap struct {
 	S3Logger  *s3logger.S3Logger
 	Logger    *slog.Logger
 	Adapter   string
+	IdP       *idp.Service
 }
 
 // NewBootstrap initializes all common components needed by Lambda handlers.
@@ -77,14 +80,27 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	consumer := aws.NewAwsConsumer(cfg)
+	kms := func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }
+	return newBootstrap(adapter, logger, cfg, consumer, kms)
+}
+
+// bootstrapConsumer is the AWS consumer newBootstrap wires into the provider and handlers.
+type bootstrapConsumer interface {
+	aws.AwsConsumerInterface
+	SetConfigSource(func() *config.Config)
+}
+
+// newBootstrap wires every component from the already-loaded base config and AWS consumer.
+func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consumer bootstrapConsumer, kms func() idp.KMSAPI) (*Bootstrap, error) {
+	ctx := context.Background()
+
 	jwksCache, err := cache.NewCache(cfg)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
 			slog.String("component", "cache"), slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
-
-	consumer := aws.NewAwsConsumer(cfg)
 
 	provider, err := buildConfigProvider(cfg, consumer)
 	if err != nil {
@@ -116,6 +132,8 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 	}
 	warmJWKSCache(cfg.JWTValidation.Mode, tokenValidator)
 
+	idpSvc := NewIdPService(provider, kms, logger)
+
 	return &Bootstrap{
 		Config:    cfg,
 		Provider:  provider,
@@ -126,7 +144,29 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 		S3Logger:  s3log,
 		Logger:    logger,
 		Adapter:   adapter,
+		IdP:       idpSvc,
 	}, nil
+}
+
+// NewIdPService builds the frozen IdP service from the provider's post-Refresh config and warms it.
+func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.Logger) *idp.Service {
+	cfg := provider.Get().IdP
+	if cfg == nil {
+		return nil
+	}
+	provider.FreezeIdP(cfg)
+	c := *cfg
+	c.SigningKeys = slices.Clone(c.SigningKeys)
+	svc := idp.NewService(c, idp.NewLoader(c, kms, log))
+	if c.Enabled {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := svc.Warm(ctx); err != nil {
+			logevent.Error(ctx, log, logevent.IdPKeyLoadFailure, "idp keys not loaded at startup; retrying lazily",
+				slog.String("error", err.Error()))
+		}
+	}
+	return svc
 }
 
 // newClaimsExtractor creates the ClaimsExtractorInterface for the configured
@@ -264,23 +304,31 @@ func validateAdapterMode(bootstrap *Bootstrap, allowed ...string) {
 // NewAwsApiGatewayFromBootstrap creates a new API Gateway handler using bootstrap
 func NewAwsApiGatewayFromBootstrap(bootstrap *Bootstrap) *AwsApiGateway {
 	validateAdapterMode(bootstrap, "self")
-	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	h := NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	h.processor.WithIdP(bootstrap.IdP)
+	return h
 }
 
 // NewAwsLambdaUrlFromBootstrap creates a new Lambda URL handler using bootstrap
 func NewAwsLambdaUrlFromBootstrap(bootstrap *Bootstrap) *AwsLambdaUrl {
 	validateAdapterMode(bootstrap, "self")
-	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	h := NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	h.processor.WithIdP(bootstrap.IdP)
+	return h
 }
 
 // NewAwsApplicationLoadBalancerFromBootstrap creates a new ALB handler using bootstrap
 func NewAwsApplicationLoadBalancerFromBootstrap(bootstrap *Bootstrap) *AwsApplicationLoadBalancer {
 	validateAdapterMode(bootstrap, "alb", "self")
-	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	h := NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	h.processor.WithIdP(bootstrap.IdP)
+	return h
 }
 
 // NewAwsApiGatewayV2FromBootstrap creates a new HTTP API v2 handler using bootstrap
 func NewAwsApiGatewayV2FromBootstrap(bootstrap *Bootstrap) *AwsApiGatewayV2 {
 	validateAdapterMode(bootstrap, "apigw")
-	return NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	h := NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	h.processor.WithIdP(bootstrap.IdP)
+	return h
 }

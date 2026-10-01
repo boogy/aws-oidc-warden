@@ -3,17 +3,23 @@ package handler
 // NewBootstrap wiring: the claim extractor it selects, config_fragments, and
 // the JWKS warm-up.
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	s3logger "github.com/boogy/aws-oidc-warden/internal/s3logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -255,4 +261,101 @@ func TestCleanup_FlushesBufferedAuditRecords(t *testing.T) {
 	b.Cleanup()
 
 	assert.Equal(t, int32(1), spy.puts.Load())
+}
+
+const bootstrapKMSARN = "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+
+func bootstrapIdPConfig(issuer string, enabled bool) *config.IdPConfig {
+	return &config.IdPConfig{
+		Enabled:  enabled,
+		Issuer:   issuer,
+		Audience: "sts.amazonaws.com",
+		SigningKeys: []config.IdPSigningKey{
+			{KMSKeyID: bootstrapKMSARN, Algorithm: "RS256", Status: config.IdPKeyActive},
+		},
+	}
+}
+
+func bootstrapBaseConfig(t *testing.T, idpCfg *config.IdPConfig) *config.Config {
+	t.Helper()
+	cfg := fragmentTestBaseConfig(t, "")
+	cfg.IdP = idpCfg
+	require.NoError(t, cfg.Validate())
+	return cfg
+}
+
+func TestBootstrapIdPAbsent(t *testing.T) {
+	provider := config.NewStaticProvider(bootstrapBaseConfig(t, nil))
+	svc := NewIdPService(provider, func() idp.KMSAPI { t.Fatal("kms must not be used"); return nil }, nil)
+	require.Nil(t, svc)
+}
+
+func TestBootstrapIdPDisabledNoKeyLoad(t *testing.T) {
+	provider := config.NewStaticProvider(bootstrapBaseConfig(t, bootstrapIdPConfig("https://idp.example.com", false)))
+	calls := 0
+	svc := NewIdPService(provider, func() idp.KMSAPI { calls++; return nil }, nil)
+	require.NotNil(t, svc)
+	require.Equal(t, 0, calls)
+}
+
+type overlayConsumer struct {
+	aws.AwsConsumerInterface
+	overlay []byte
+}
+
+func (c *overlayConsumer) SetConfigSource(func() *config.Config) {}
+
+func (c *overlayConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(c.overlay)), nil
+}
+
+func TestBootstrapIdPUsesOverlay(t *testing.T) {
+	base := bootstrapBaseConfig(t, bootstrapIdPConfig("https://a.example.com", false))
+	base.JWTValidation.Mode = "apigw"
+	base.Cache = &config.Cache{Type: "memory", TTL: time.Hour}
+	base.S3ConfigBucket, base.S3ConfigPath = "bucket", "config.yaml"
+	consumer := &overlayConsumer{overlay: []byte("idp:\n  issuer: https://b.example.com\n")}
+
+	var buf bytes.Buffer
+	logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil)))
+	b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return nil })
+	require.NoError(t, err)
+	require.NotNil(t, b.IdP)
+	require.Equal(t, "https://b.example.com", b.IdP.Config().Issuer)
+	require.Equal(t, "https://b.example.com/.well-known/jwks.json", b.IdP.Config().JWKSURI)
+
+	r := NewRequestProcessor(b.Provider, nil, nil, nil, "test").WithIdP(b.IdP)
+	r.warnFrozenDrift(context.Background(), logger, b.Provider.Get())
+	require.Equal(t, 0, strings.Count(buf.String(), "config.idp.reload_ignored"))
+}
+
+func TestBootstrapAdaptersAttachIdP(t *testing.T) {
+	svc := idp.NewService(*bootstrapIdPConfig("https://idp.example.com", false), nil)
+	tests := []struct {
+		name  string
+		mode  string
+		build func(*Bootstrap) *RequestProcessor
+	}{
+		{"apigateway", "self", func(b *Bootstrap) *RequestProcessor { return NewAwsApiGatewayFromBootstrap(b).processor }},
+		{"lambdaurl", "self", func(b *Bootstrap) *RequestProcessor { return NewAwsLambdaUrlFromBootstrap(b).processor }},
+		{"alb", "self", func(b *Bootstrap) *RequestProcessor { return NewAwsApplicationLoadBalancerFromBootstrap(b).processor }},
+		{"apigatewayv2", "apigw", func(b *Bootstrap) *RequestProcessor { return NewAwsApiGatewayV2FromBootstrap(b).processor }},
+	}
+	for _, tt := range tests {
+		for _, withIdP := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/idp=%t", tt.name, withIdP), func(t *testing.T) {
+				cfg := &config.Config{JWTValidation: config.JWTValidation{Mode: tt.mode}}
+				b := &Bootstrap{Config: cfg, Provider: config.NewStaticProvider(cfg), Adapter: tt.name}
+				if withIdP {
+					b.IdP = svc
+				}
+				got := tt.build(b).idp
+				if withIdP {
+					require.Same(t, svc, got)
+				} else {
+					require.Nil(t, got)
+				}
+			})
+		}
+	}
 }

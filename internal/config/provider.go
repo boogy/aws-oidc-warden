@@ -61,6 +61,7 @@ type Provider struct {
 	fetch         FetchFunc                  // nil if there's no primary remote/S3 config overlay
 	fragmentFetch FragmentFetchFunc          // nil if no remote ("scheme://") fragments are configured
 	fragments     map[string]*cachedFragment // last-applied fragment cache; only touched under mu (in refreshLocked)
+	frozenIdP     *IdPConfig                 // idp config the running service was built from; guarded by mu
 }
 
 // NewStaticProvider returns a Provider that always serves cfg and never reloads.
@@ -85,6 +86,13 @@ func NewProvider(base *Config, interval time.Duration, format string, fetch Fetc
 	p.interval.Store(int64(interval))
 	p.current.Store(base)
 	return p
+}
+
+// FreezeIdP records the IdP config the running service was built from.
+func (p *Provider) FreezeIdP(c *IdPConfig) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.frozenIdP = c
 }
 
 // Get returns the currently active configuration.
@@ -167,6 +175,14 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	if len(cfg.ConfigFragments) > 0 {
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("invalid configuration after fragment merge: %w", err)
+		}
+	}
+
+	if p.frozenIdP != nil {
+		if err := p.frozenIdP.checkInbound(cfg.Issuers); err != nil {
+			logevent.Error(ctx, nil, logevent.ConfigIdPIssuerCollision, "reload rejected: inbound issuer collides with the idp issuer",
+				slog.String("issuer", p.frozenIdP.Issuer))
+			return err
 		}
 	}
 
