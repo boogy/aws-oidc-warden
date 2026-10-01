@@ -243,15 +243,21 @@ func parseCliFlags() (ServerSettings, error) {
 	settings := ServerSettings{}
 
 	flag.IntVar(&settings.Port, "port", 8080, "Port to listen on")
-	flag.StringVar(&settings.ConfigPath, "config", "", "Path to config file")
+	flag.StringVar(&settings.ConfigPath, "config", "", "Path to config file or directory")
 	flag.StringVar(&settings.LogLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	flag.DurationVar(&settings.SimulateLatency, "latency", 0, "Simulate network latency (e.g., 100ms)")
 
 	flag.Parse()
 
 	if settings.ConfigPath != "" {
-		if err := os.Setenv("CONFIG_PATH", settings.ConfigPath); err != nil {
+		dir, name := config.SplitConfigPath(settings.ConfigPath)
+		if err := os.Setenv("CONFIG_PATH", dir); err != nil {
 			return settings, err
+		}
+		if name != "" {
+			if err := os.Setenv("CONFIG_NAME", name); err != nil {
+				return settings, err
+			}
 		}
 	}
 
