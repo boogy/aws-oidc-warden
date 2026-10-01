@@ -37,6 +37,10 @@ type vFake struct {
 func (f *vFake) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("nope")
 }
+
+func (f *vFake) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
 func (f *vFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
 	f.lastAssume = in
 	f.assumeCalls++

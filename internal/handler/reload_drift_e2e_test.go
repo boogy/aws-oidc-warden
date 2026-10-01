@@ -118,6 +118,10 @@ type driftConsumer struct {
 func (c *driftConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("unused")
 }
+
+func (c *driftConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
 func (c *driftConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
 	return nil, nil
 }

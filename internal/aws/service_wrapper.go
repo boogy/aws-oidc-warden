@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -16,12 +17,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
 
 // AwsServiceWrapperInterface allows to test AWS specific code based on the AWS services
 type AwsServiceWrapperInterface interface {
 	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+	GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error)
 	AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
 	AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error)
 	GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
@@ -29,6 +32,13 @@ type AwsServiceWrapperInterface interface {
 	GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error)
 	GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
 	RefreshClients()
+}
+
+// MaxS3ConfigBytes caps a config object read by GetS3ObjectIfChanged.
+const MaxS3ConfigBytes = 1 << 20
+
+type s3GetObjectAPI interface {
+	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }
 
 var (
@@ -40,7 +50,7 @@ var (
 // it wraps the actual AWS service call but has no additional functionality implemented
 type AwsServiceWrapper struct {
 	cfg       aws.Config
-	s3Client  *s3.Client
+	s3Client  s3GetObjectAPI
 	stsClient *sts.Client
 	iamClient *iam.Client
 	kms       *kms.Client
@@ -286,4 +296,43 @@ func (s *AwsServiceWrapper) GetRoleAs(ctx context.Context, input *iam.GetRoleInp
 	defer cancel()
 	client := iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
 	return client.GetRole(ctx, input)
+}
+
+// GetS3ObjectIfChanged reads an owner-pinned object; a 304 returns (nil, prevETag, nil).
+func (s *AwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
+	defer cancel()
+
+	in := &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), ExpectedBucketOwner: aws.String(expectedOwner)}
+	if prevETag != "" {
+		in.IfNoneMatch = aws.String(prevETag)
+	}
+
+	out, err := s.s3Client.GetObject(ctx, in)
+	if err != nil {
+		var re *smithyhttp.ResponseError
+		if prevETag != "" && errors.As(err, &re) && re.HTTPStatusCode() == http.StatusNotModified {
+			return nil, prevETag, nil
+		}
+		logevent.Error(ctx, nil, logevent.AWSS3GetFailure, "error fetching S3 object",
+			slog.String("bucket", bucket),
+			slog.String("key", key),
+			slog.String("error", err.Error()),
+		)
+		return nil, "", err
+	}
+	defer func() {
+		if cerr := out.Body.Close(); cerr != nil && err == nil {
+			data, etag, err = nil, "", cerr
+		}
+	}()
+
+	data, err = io.ReadAll(io.LimitReader(out.Body, MaxS3ConfigBytes+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) > MaxS3ConfigBytes {
+		return nil, "", fmt.Errorf("s3://%s/%s exceeds %d bytes", bucket, key, MaxS3ConfigBytes)
+	}
+	return data, aws.ToString(out.ETag), nil
 }

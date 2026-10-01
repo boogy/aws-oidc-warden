@@ -28,6 +28,7 @@ type AwsConsumerInterface interface {
 	AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
 	AssumeRoleWithWebIdentity(ctx context.Context, roleARN, sessionName, token string, policy *string, duration int32) (*types.Credentials, error)
 	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+	GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error)
 	GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
 	GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
 	IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
@@ -521,4 +522,18 @@ func (a *AwsConsumer) GetS3Object(ctx context.Context, bucket, key string) (io.R
 	}
 
 	return a.AWS.GetS3Object(ctx, bucket, key)
+}
+
+// GetS3ObjectIfChanged reads a config object pinned to expectedOwner.
+func (a *AwsConsumer) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) ([]byte, string, error) {
+	if bucket == "" {
+		return nil, "", errors.New("bucket name cannot be empty")
+	}
+	if key == "" {
+		return nil, "", errors.New("object key cannot be empty")
+	}
+	if expectedOwner == "" {
+		return nil, "", errors.New("expected bucket owner cannot be empty")
+	}
+	return a.AWS.GetS3ObjectIfChanged(ctx, bucket, key, prevETag, expectedOwner)
 }

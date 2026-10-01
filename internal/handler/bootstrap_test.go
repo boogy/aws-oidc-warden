@@ -5,6 +5,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -307,6 +308,10 @@ func (c *overlayConsumer) SetConfigSource(func() *config.Config) {}
 
 func (c *overlayConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(c.overlay)), nil
+}
+
+func (c *overlayConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
 }
 
 func TestBootstrapIdPUsesOverlay(t *testing.T) {

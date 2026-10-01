@@ -17,8 +17,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -36,6 +38,12 @@ func (m *MockAwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key str
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(io.ReadCloser), args.Error(1)
+}
+
+func (m *MockAwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, owner string) ([]byte, string, error) {
+	args := m.Called(ctx, bucket, key, prevETag, owner)
+	b, _ := args.Get(0).([]byte)
+	return b, args.String(1), args.Error(2)
 }
 
 func (m *MockAwsServiceWrapper) AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error) {
@@ -747,4 +755,85 @@ func TestAssumeRole_LogsSuccessWithoutCredentials(t *testing.T) {
 	assert.Contains(t, line, "durationMs")
 	assert.NotContains(t, buf.String(), "ASIASECRETKEYID")
 	assert.NotContains(t, buf.String(), "topsecret")
+}
+
+type fakeS3 struct {
+	in  *s3.GetObjectInput
+	out *s3.GetObjectOutput
+	err error
+}
+
+func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	f.in = in
+	return f.out, f.err
+}
+
+type closeErrBody struct{ io.Reader }
+
+func (closeErrBody) Close() error { return errors.New("close failed") }
+
+func s3Out(body string, etag *string) *s3.GetObjectOutput {
+	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(body)), ETag: etag}
+}
+
+func s3HTTPErr(code int) error {
+	return &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: code}},
+		Err:      errors.New("s3 error"),
+	}
+}
+
+func TestGetS3ObjectIfChanged(t *testing.T) {
+	const owner = "111122223333"
+	tests := []struct {
+		name        string
+		prev        string
+		out         *s3.GetObjectOutput
+		err         error
+		wantData    string
+		wantETag    string
+		wantErr     string
+		wantINM     string
+		wantNilData bool
+	}{
+		{name: "first fetch", out: s3Out("abc", aws.String(`"e1"`)), wantData: "abc", wantETag: `"e1"`},
+		{name: "unchanged", prev: `"e1"`, err: s3HTTPErr(304), wantETag: `"e1"`, wantINM: `"e1"`, wantNilData: true},
+		{name: "304 without prev", err: s3HTTPErr(304), wantErr: "s3 error"},
+		{name: "other error", prev: `"e1"`, err: s3HTTPErr(500), wantErr: "s3 error", wantINM: `"e1"`},
+		{name: "changed", prev: `"e1"`, out: s3Out("xyz", aws.String(`"e2"`)), wantData: "xyz", wantETag: `"e2"`, wantINM: `"e1"`},
+		{name: "200 with nil etag", out: s3Out("abc", nil), wantData: "abc"},
+		{name: "at cap", out: s3Out(strings.Repeat("a", MaxS3ConfigBytes), nil), wantData: strings.Repeat("a", MaxS3ConfigBytes)},
+		{name: "oversize", out: s3Out(strings.Repeat("a", MaxS3ConfigBytes+1), nil), wantErr: "exceeds", wantNilData: true},
+		{name: "close error", out: &s3.GetObjectOutput{Body: closeErrBody{strings.NewReader("abc")}, ETag: aws.String(`"e1"`)}, wantErr: "close failed", wantNilData: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeS3{out: tt.out, err: tt.err}
+			w := &AwsServiceWrapper{s3Client: fake, defaultTimeout: time.Second}
+
+			data, etag, err := w.GetS3ObjectIfChanged(context.Background(), "b", "k", tt.prev, owner)
+
+			require.NotNil(t, fake.in.ExpectedBucketOwner)
+			assert.Equal(t, owner, *fake.in.ExpectedBucketOwner)
+			if tt.wantINM == "" {
+				assert.Nil(t, fake.in.IfNoneMatch)
+			} else {
+				require.NotNil(t, fake.in.IfNoneMatch)
+				assert.Equal(t, tt.wantINM, *fake.in.IfNoneMatch)
+			}
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.Nil(t, data)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantETag, etag)
+			if tt.wantNilData {
+				assert.Nil(t, data)
+			} else {
+				assert.Equal(t, tt.wantData, string(data))
+			}
+		})
+	}
 }

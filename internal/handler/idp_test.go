@@ -673,6 +673,10 @@ func (f *stsFake) creds() *ststypes.Credentials {
 func (f *stsFake) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("unused")
 }
+
+func (f *stsFake) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
 func (f *stsFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
 	f.lastAssume = in
 	return &sts.AssumeRoleOutput{Credentials: f.creds()}, nil

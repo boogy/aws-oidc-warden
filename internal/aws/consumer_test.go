@@ -613,6 +613,41 @@ func TestAwsConsumer_GetS3Object(t *testing.T) {
 	mockAWS.AssertExpectations(t)
 }
 
+func TestAwsConsumer_GetS3ObjectIfChanged(t *testing.T) {
+	const owner = "111122223333"
+	tests := []struct {
+		name, bucket, key, owner, wantErr string
+		call                              bool
+	}{
+		{name: "delegates", bucket: "b", key: "k", owner: owner, call: true},
+		{name: "empty bucket", key: "k", owner: owner, wantErr: "bucket name cannot be empty"},
+		{name: "empty key", bucket: "b", owner: owner, wantErr: "object key cannot be empty"},
+		{name: "empty owner", bucket: "b", key: "k", wantErr: "expected bucket owner cannot be empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAWS := new(MockAwsServiceWrapper)
+			consumer := &AwsConsumer{AWS: mockAWS, Config: &gtvcfg.Config{}}
+			if tt.call {
+				mockAWS.On("GetS3ObjectIfChanged", mock.Anything, "b", "k", "e1", owner).Return([]byte("d"), "e2", nil).Once()
+			}
+
+			data, etag, err := consumer.GetS3ObjectIfChanged(context.Background(), tt.bucket, tt.key, "e1", tt.owner)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				mockAWS.AssertNotCalled(t, "GetS3ObjectIfChanged", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "d", string(data))
+			assert.Equal(t, "e2", etag)
+			mockAWS.AssertExpectations(t)
+		})
+	}
+}
+
 // ---------- config source ----------
 
 // TestConfigSource_ReflectsLiveConfig verifies the consumer enforces the

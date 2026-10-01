@@ -56,6 +56,10 @@ func (f *vRecorder) GetS3Object(context.Context, string, string) (io.ReadCloser,
 	}
 	return io.NopCloser(stringReader(f.s3Body)), nil
 }
+
+func (f *vRecorder) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
 func (f *vRecorder) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) { return nil, nil }
 func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, error) {
 	f.tagAuthCalled++
