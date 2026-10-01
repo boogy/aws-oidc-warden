@@ -527,6 +527,9 @@ func TestSplitConfigExamplesLoad(t *testing.T) {
 			{"api off main", gh, "octo-org/api", map[string]any{"ref": branch}, nil},
 			{"web any branch", gh, "octo-org/web", map[string]any{"ref": branch}, []string{acct + "ReadOnly"}},
 			{"pipeline on main", gh, "octo-org/data-pipeline", map[string]any{"ref": main}, []string{acct + "LongDeploy"}},
+			{"reports any branch", gh, "octo-org/reports", map[string]any{"ref": branch}, []string{acct + "ReportsReader"}},
+			{"terraform on main", gh, "octo-org/terraform", map[string]any{"ref": main}, []string{acct + "TerraformApply"}},
+			{"terraform off main", gh, "octo-org/terraform", map[string]any{"ref": branch}, nil},
 			{"gitlab infra on main", gl, "platform/infra", map[string]any{"ref": "main"}, []string{acct + "ReadOnly"}},
 			{"gitlab subject under github", gh, "platform/infra", map[string]any{"ref": "main"}, nil},
 			{"group tool on push", gh, "octo-org/tool-a", map[string]any{"event_name": "push"}, []string{acct + "ReadOnly"}},
@@ -558,6 +561,29 @@ func TestSplitConfigExamplesLoad(t *testing.T) {
 				require.Equal(t, tt.idp, d.IDPTokenAllowed())
 				if tt.idp {
 					require.Equal(t, tt.ceiling, d.IdPMaxSessionDuration())
+				}
+			})
+		}
+
+		policyTests := []struct {
+			name, subject, role, file string
+			inline                    bool
+		}{
+			{"reports gets the inline policy", "octo-org/reports", acct + "ReportsReader", "", true},
+			{"terraform gets the policy file", "octo-org/terraform", acct + "TerraformApply", "session-policies/octo-org/terraform.json", false},
+			{"api has no session policy", "octo-org/api", acct + "ApiDeploy", "", false},
+		}
+		for _, tt := range policyTests {
+			t.Run(tt.name, func(t *testing.T) {
+				inline, file := p.Get().FindSessionPolicy(gh, tt.subject, tt.role, map[string]any{"ref": main})
+				require.Equal(t, tt.inline, inline != nil)
+				if tt.inline {
+					require.Contains(t, *inline, "arn:aws:s3:::octo-reports/*")
+				}
+				if tt.file == "" {
+					require.Nil(t, file)
+				} else {
+					require.Equal(t, tt.file, *file)
 				}
 			})
 		}

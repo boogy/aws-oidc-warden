@@ -32,6 +32,22 @@ role_mappings:
     idp_token: true
     idp_max_session_duration: 4h
 
+  # Inline session policy: the session gets the intersection of the role's
+  # permissions and this policy, here read-only on one bucket.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/reports"
+    roles: ["arn:aws:iam::111122223333:role/ReportsReader"]
+    session_policy: >
+      {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:ListBucket"],"Resource":["arn:aws:s3:::octo-reports","arn:aws:s3:::octo-reports/*"]}]}
+
+  # Session policy from a file: key in session_policy_bucket (service.yaml).
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/terraform"
+    roles: ["arn:aws:iam::111122223333:role/TerraformApply"]
+    session_policy_file: "session-policies/octo-org/terraform.json"
+    conditions:
+      ref: "refs/heads/main"
+
   # GitLab project, bound to the GitLab issuer explicitly.
   - issuer: "https://gitlab.com"
     subject: "platform/infra"

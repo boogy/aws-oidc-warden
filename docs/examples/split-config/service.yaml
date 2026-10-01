@@ -12,6 +12,7 @@ issuers:
       subject: "project_path" # canonical subject = the project path, e.g. platform/infra
 default_issuer: "https://token.actions.githubusercontent.com"
 role_session_name: "aws-oidc-warden"
+session_policy_bucket: "EXAMPLE-POLICY-BUCKET" # holds the files named by session_policy_file
 
 mappings_file: "s3://EXAMPLE-BUCKET/mappings.yaml"
 s3_config_bucket_owner: "111122223333" # required for s3://; sent as ExpectedBucketOwner
