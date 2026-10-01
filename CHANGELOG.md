@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **IdP mode (`idp`, optional).** The warden mints its own KMS-signed OIDC token and exchanges it in-process through an unsigned `sts:AssumeRoleWithWebIdentity`, so sessions are not bound by the 1-hour role-chaining cap. Per-mapping opt-in via `idp_token`; see `docs/IDP.md`.
+- **`idp-export` command** writes the static discovery and JWKS documents for hosting on S3/CloudFront, the production default.
+- **Session ceilings**: `idp.max_session_duration` and `idp.allow_session_name` bound the caller's `durationSeconds` and `sessionName`.
+- **Source identity** is derived from the template and immutable.
+- **Audit records** carry `action` and `tokenId` for IdP mints.
+- **14 new error codes** for IdP mode, documented in the README and `GITHUB_ACTIONS.md` retry tables.
+
+### Dependencies
+
+- **AWS SDK for Go v2**
+  - `github.com/aws/aws-sdk-go-v2/service/kms` v1.61.1 (new)
+
+### Documentation
+
+- `docs/IDP.md` setup guide; `CONFIGURATION.md` `idp` reference and `AOW_IDP_*` variables; `ARCHITECTURE.md` IdP infrastructure contract; commented `idp:` block in `example-config.yaml`.
+
 ## [3.5.2] - 2026-09-26
 
 ### Fixed

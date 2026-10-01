@@ -74,6 +74,20 @@ The status code tells your client whether retrying is worth anything:
 | `500 assume_role_failed` | Throttling, expired broker credentials, or a malformed session policy   | **Yes** — transient¹    |
 | `500 policy_error`       | The mapping's S3 session policy is missing, unreadable or invalid       | **No** — deterministic² |
 | `500 audit_write_failed` | `audit_required` is on and the audit write to S3 failed                 | **No** — deterministic² |
+| `403 idp_not_permitted` | Mapping lacks `idp_token`, role outside `idp.allowed_roles`, or the minted subject was invalid | **No** — deterministic |
+| `403 session_name_not_permitted` | `sessionName` sent without both `allow_session_name` flags, or alongside a mapping `role_session_name` | **No** — deterministic |
+| `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject` | **No** — deterministic |
+| `403 idp_exchange_denied` | STS refused the minted token: fix the role trust policy or the IAM OIDC provider | **No** — deterministic |
+| `400 invalid_duration` | `durationSeconds` outside 900..43200 | **No** — deterministic |
+| `400 duration_exceeds_cap` | `durationSeconds` above the mapping or `idp.max_session_duration` ceiling | **No** — deterministic |
+| `400 duration_exceeds_role_max` | `durationSeconds` above the role's `MaxSessionDuration` | **No** — deterministic |
+| `400 invalid_session_name` | `sessionName` is not 2-64 characters of `[\w+=,.@-]` | **No** — deterministic |
+| `400 field_not_supported` | `durationSeconds` or `sessionName` sent to the `AssumeRole` path | **No** — deterministic |
+| `404 idp_path_not_found` | An IdP-shaped path that is not a configured `idp.paths.*` | **No** — deterministic |
+| `405 method_not_allowed` | Wrong HTTP method on an IdP path | **No** — deterministic |
+| `500 idp_token_too_large` | Minted token or packed policy over the STS limit; reduce session tags | **No** — deterministic |
+| `503 idp_signing_unavailable` | KMS signing unavailable or throttled; also the IdP kill-switch answer | **Yes** — transient |
+| `503 idp_exchange_unavailable` | STS could not reach the IdP discovery or JWKS document | **Yes** — transient |
 | `502` / `503` / timeout  | The endpoint is unhealthy or unreachable                                | **Yes**                 |
 
 ¹ Unless it persists: a malformed session policy fails the same way in every region — the log's `stsErrorCode` is `MalformedPolicyDocument`.

@@ -670,6 +670,17 @@ Version-pinned tags (`apigatewayv2-v3.3.0`) are published alongside; a prereleas
 
 Cross-account target and spoke roles: [examples/cross-account/](examples/cross-account/README.md).
 
+**IdP mode** ([IDP.md](IDP.md)) adds this contract. One issuer URL and one KMS key per deployment; never shared between stages.
+
+| What | Requirement |
+| --- | --- |
+| KMS key | Asymmetric, single-region (`MultiRegion=false`), `SIGN_VERIFY`, `ECC_NIST_P256` or `RSA_2048/3072/4096`, enabled. Configured by full key ARN; aliases are rejected |
+| Warden role | `kms:Sign`, `kms:GetPublicKey`, `kms:DescribeKey` on that key. No `sts:AssumeRole` on IdP target roles (the exchange is unsigned `sts:AssumeRoleWithWebIdentity`), and no IdP-related `iam:GetRole` (that stays only for `tag_auth`) |
+| Key policy | Deny `kms:Sign` to every principal but the warden role; Deny `kms:PutKeyPolicy`, `kms:ScheduleKeyDeletion`, `kms:DisableKey`, `kms:CreateGrant`, `kms:ReplicateKey`, `kms:UpdateAlias`, `kms:UpdatePrimaryRegion` to everyone but a break-glass role. Alarm on any `kms:Sign` by another principal and on every tamper action |
+| Discovery and JWKS | Unauthenticated GET routes for discovery/JWKS, or static hosting. Static hosting from `idp-export` is the default; a warden-served JWKS couples STS availability to the Lambda |
+| IAM OIDC provider | URL = `idp.issuer`, client ID = `idp.audience` (one per target role ARN with `audience_mode: role_arn`) |
+| Target roles | `MaxSessionDuration` at least the longest allowed session; trust policy allowing `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity` for the IdP provider, pinned on `aud` and `sub` |
+
 ### Required IAM Permissions
 
 The Lambda execution role requires the following IAM permissions:

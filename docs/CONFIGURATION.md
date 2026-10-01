@@ -10,6 +10,7 @@ The complete configuration reference. If you are setting the service up for the 
 | [The issuer model](#the-issuer-model)                                     | `issuers[]`, per-issuer fields, the zero-config seed                                             |
 | [Authorization](#authorization-role_mappings-role_groups-role_sets)       | `role_mappings`, `role_groups`, `role_sets`, conditions, boolean logic                           |
 | [How a grant resolves](#how-a-grant-its-policy-and-its-overrides-resolve) | Session policies, `role_session_name`, per-mapping `session_tags`, **and the ordering foot-gun** |
+| [IdP](#idp-optional-identity-provider)                                   | Optional identity-provider mode: `idp` keys, per-mapping `idp_token`, request fields             |
 | [Environment Variable Reference](#environment-variable-reference)         | Every `AOW_*` variable, by area                                                                  |
 | [Config fragments](#config-fragments)                                     | Splitting mappings across files                                                                  |
 | [Hot-reloading](#hot-reloading)                                           | S3 refresh and overlay merge semantics                                                           |
@@ -324,6 +325,18 @@ Everything else a mapping can specify — session policy, `role_session_name`, e
 
 See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefine-them).
 
+#### Per-mapping IdP fields
+
+`role_mappings[]` and `role_groups[].defaults` accept three IdP fields. They apply only when [IdP mode](IDP.md) is configured, and only to roles granted by that mapping (group defaults apply to the expanded mappings).
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `idp_token` | `false` | Opt the mapping in to `POST` on the IdP token path |
+| `idp_max_session_duration` | unset | Ceiling for the caller's `durationSeconds`, 15m to 12h; the effective cap is `min(this, idp.max_session_duration)`. Needs `idp_token` |
+| `allow_session_name` | `false` | Let the caller pick the session name; also needs `idp.allow_session_name`. Needs `idp_token` |
+
+With `role_sets`, the lowest-order mapping that grants the role decides.
+
 #### Multi-subject entries share one policy
 
 This is the question a multi-subject entry usually raises: **both** an inline `session_policy` and an S3 `session_policy_file` apply to **every** subject the entry lists. The S3 key is a literal string with no subject interpolation, so one entry cannot vary the policy per subject. If you need per-subject policies, declare separate entries.
@@ -335,6 +348,48 @@ Internally, `Validate()` builds a per-issuer index (`exact` subject / `byOwner` 
 Bucketing happens per resolved subject, so each element of a `subject` list is classified on its own: `["octo-org/api", "octo-org/svc-.*"]` files one mapping in `exact` and one in `byOwner`. Note that a list is a spelling convenience, not an optimization — N subjects cost the same as N separate entries.
 
 Concretely, a mapping is `byOwner`-bucketed only when its compiled pattern's guaranteed literal prefix contains a `/`. So `"octo-org/(api|web)"` is owner-scoped (every match starts `octo-org/`), while `"octo-org/api|other-org/web"` — whose top-level alternation spans two owners — falls into `any`, where it is checked against every subject, just not via the fast path. (Its branches do share the literal prefix `"o"`, but a prefix with no `/` in it cannot pin down an owner, so the fast path is correctly declined.) The same rule covers patterns whose first slash is quantified (`"octo-org/?api"`, which also matches the slash-less `octo-orgapi`): no guaranteed `/` in the prefix means `any`, never a wrong owner bucket. Before v2.1.0 the owner was inferred from the raw pattern text before its first `/`, which mis-filed exactly those quantified-slash patterns and could drop a mapping the authorize path should have seen.
+
+## `idp` (optional identity provider)
+
+Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](IDP.md).
+
+| Key | Default | Bounds / values | Notes |
+| --- | --- | --- | --- |
+| `enabled` | `false` | | Live. Kill switch |
+| `issuer` | | https URL, no trailing slash, lowercase host | Must differ from every `issuers[]` entry; none of those may contain `#` |
+| `audience` | | required | Token `aud` (`audience_mode: static`) |
+| `audience_mode` | `static` | `static`, `role_arn` | `role_arn` sets `aud` to the target role ARN |
+| `token_ttl` | `2m` | 1m to 5m | Lifetime of the minted token only, not of the credentials |
+| `jwks_uri` | `<issuer>/.well-known/jwks.json` | https URL | Advertised in discovery |
+| `paths.token` | `<issuer path>/idp/token` | clean, under the issuer path | |
+| `paths.discovery` | `<issuer path>/.well-known/openid-configuration` | must end with that suffix | |
+| `paths.jwks` | `<issuer path>/.well-known/jwks.json` | | |
+| `subject_template` | `{role_arn}` | must end with `{role_arn}`; also `{account_id}`, `{role_name}`, `{source_issuer}`, `{source_subject}` | `{source_subject}` needs `{source_issuer}#` before it |
+| `include_source_identity` | `true` | | Adds the AWS source-identity claim to the minted token |
+| `source_identity` | `{issuer}:{subject}` | placeholders `{request_id}`, `{subject}`, `{issuer}` (host), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer |
+| `source_identity_overflow` | `truncate` | `truncate`, `reject` | Over 64 characters |
+| `max_session_duration` | `1h` | 15m to 12h, whole seconds | Live, base-only. Above `1h` logs `config.idp_uncapped` |
+| `allow_session_name` | `false` | | Live, base-only. Gates the per-mapping flag |
+| `allowed_roles` | empty (no cap) | role ARNs or `@role_set` | Live, base-only; roles outside it get 403 `idp_not_permitted` |
+| `sign_timeout` | `2s` | > 0 | Per KMS `Sign` call |
+| `jwks_cache_max_age` | `5m` | >= 0 | `Cache-Control` max-age of served documents |
+| `signing_keys[]` | | at most 5, exactly one `active` | `kms_key_id` (full key ARN) **or** `file` (dev only, refused on Lambda), `algorithm` (`ES256`/`RS256`), `status` (`active`/`verify_only`) |
+
+`idp` is rejected in config fragments. Two traps:
+
+- `idp.paths` must match the path the front end delivers. An HTTP API v2 with a named stage includes it (`/prod/idp/token`), which returns 404 unless configured that way.
+- `idp-export` reads only local config; run it against the config that carries the effective `idp` block.
+
+### IdP request and response
+
+The IdP token path takes the same body as `/verify`, plus:
+
+| Field | Notes |
+| --- | --- |
+| `durationSeconds` | 900..43200; omitted = `min(3600, ceiling)`; above the ceiling is refused, never clamped |
+| `sessionName` | Needs both `allow_session_name` flags; `^[\w+=,.@-]{2,64}$` |
+
+Both are refused on the `AssumeRole` path with 400 `field_not_supported`. The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`) plus `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
 ## Environment Variable Reference
 
@@ -419,6 +474,25 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 | `AOW_CROSS_ACCOUNT_EXTERNAL_ID`            | `cross_account.external_id`            | Optional external ID for the hub→spoke trust; never sent on the hub→target assume                                                                            |             |
 | `AOW_CROSS_ACCOUNT_SPOKE_SESSION_DURATION` | `cross_account.spoke_session_duration` | Hub→spoke session length; capped at `1h` (the spoke hop is a chained session, which AWS limits to 1 h)                                                       | `15m`       |
 | `AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS`       | `cross_account.allowed_accounts`       | Comma-separated member account IDs allowed as assume targets (must be 12 digits; hub always allowed; empty = any once enabled — a startup warning is logged) | (empty)     |
+
+### IdP Settings
+
+Applied only when the config file or S3 object already carries an `idp:` block; env alone never creates it. `signing_keys`, `paths` and `allowed_roles` are file/S3 only. Env beats S3 on every reload, including `AOW_IDP_ENABLED`.
+
+| Environment Variable | Config File Key | Default |
+| --- | --- | --- |
+| `AOW_IDP_ENABLED` | `idp.enabled` | `false` |
+| `AOW_IDP_ISSUER` | `idp.issuer` | |
+| `AOW_IDP_AUDIENCE` | `idp.audience` | |
+| `AOW_IDP_AUDIENCE_MODE` | `idp.audience_mode` | `static` |
+| `AOW_IDP_TOKEN_TTL` | `idp.token_ttl` | `2m` (1m to 5m) |
+| `AOW_IDP_JWKS_URI` | `idp.jwks_uri` | `<issuer>/.well-known/jwks.json` |
+| `AOW_IDP_SUBJECT_TEMPLATE` | `idp.subject_template` | `{role_arn}` |
+| `AOW_IDP_INCLUDE_SOURCE_IDENTITY` | `idp.include_source_identity` | `true` |
+| `AOW_IDP_SOURCE_IDENTITY` | `idp.source_identity` | `{issuer}:{subject}` |
+| `AOW_IDP_SOURCE_IDENTITY_OVERFLOW` | `idp.source_identity_overflow` | `truncate` |
+| `AOW_IDP_MAX_SESSION_DURATION` | `idp.max_session_duration` | `1h` |
+| `AOW_IDP_ALLOW_SESSION_NAME` | `idp.allow_session_name` | `false` |
 
 ### JWT Validation Mode Settings
 

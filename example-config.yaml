@@ -510,3 +510,23 @@ cross_account:
 jwt_validation:
   mode: "self"
   # alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"
+
+####################################################################################
+# IDP MODE (optional, default off) — mint a warden-signed OIDC token and exchange it
+# with AssumeRoleWithWebIdentity so sessions can exceed the 1h role-chaining cap.
+# Opt each mapping in with `idp_token: true` (optionally `idp_max_session_duration`).
+# See docs/IDP.md.
+####################################################################################
+# idp:
+#   enabled: true
+#   issuer: "https://idp.warden.example.com" # no trailing slash; must not equal any issuers[] entry
+#   audience: "idp-audience-example"
+#   audience_mode: "static" # or "role_arn"
+#   token_ttl: "2m" # minted token lifetime, 1m..5m
+#   max_session_duration: 1h # base ceiling for every mapping and request, 15m..12h
+#   allow_session_name: false # callers may not pick the session name unless a mapping also opts in
+#   allowed_roles: [] # role ARNs or @role_set; empty = no extra cap
+#   signing_keys:
+#     - kms_key_id: "arn:aws:kms:REGION:ACCOUNT:key/KEY_ID" # full key ARN; aliases are rejected
+#       algorithm: "ES256" # ES256 for ECC_NIST_P256, RS256 for RSA keys
+#       status: "active" # exactly one active; use verify_only while rotating
