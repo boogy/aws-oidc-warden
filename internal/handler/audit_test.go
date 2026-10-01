@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
@@ -1338,4 +1339,20 @@ func TestAuditClaims_GenericIssuerRecordsDecisionRelevantClaims(t *testing.T) {
 	// Claims the operator never named anywhere must never be copied out.
 	assert.NotContains(t, got, "email")
 	assert.NotContains(t, got, "name")
+}
+
+func TestAudit_DenyRecord_HasProcessingMs(t *testing.T) {
+	cfg := auditTestCfg(t, false, true)
+	sink := &fakeAuditSink{}
+	ex := &stubExtractor{err: errors.New("token is expired")}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), nil, ex, sink, "test-frontend")
+	ctx := context.WithValue(context.Background(), handler.StartTimeContextKey, time.Now().Add(-50*time.Millisecond))
+
+	_, err := proc.ProcessRequest(ctx,
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+		validator.ExtractionInput{Token: "t"},
+		"req-deny-ms", slog.Default())
+	require.Error(t, err)
+
+	assert.Greater(t, sink.last(t)["processingMs"], float64(0))
 }

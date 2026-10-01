@@ -8,11 +8,13 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
@@ -26,6 +28,27 @@ type RequestProcessor struct {
 	extractor validator.ClaimsExtractorInterface
 	audit     AuditSink // structured audit trail sink; nil is a safe no-op (see audit.go)
 	frontend  string    // adapter name (apigateway/apigatewayv2/alb/lambdaurl), for the audit record
+	idp       *idp.Service
+	lastDrift atomic.Pointer[config.Config]
+}
+
+// WithIdP enables the IdP mint path; a nil service leaves it disabled.
+func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
+	r.idp = s
+	return r
+}
+
+// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start.
+func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
+	if r.idp == nil || cfg.IdP == nil {
+		return
+	}
+	if cfg.IdP.Fingerprint() == r.idp.Config().Fingerprint() {
+		return
+	}
+	if r.lastDrift.Swap(cfg) != cfg {
+		logevent.Warn(ctx, log, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")
+	}
 }
 
 // NewRequestProcessor creates a new instance of request processor. audit may
@@ -96,6 +119,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		return time.Since(startTime).Milliseconds()
 	}
 
+	rec.Action = action
 	o := &authzOutcome{cfg: cfg, rec: rec, log: log, elapsed: elapsed}
 
 	claims, err := r.extractor.Extract(ctx, input)

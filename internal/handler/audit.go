@@ -38,6 +38,7 @@ type auditRecord struct {
 	JWTMode           string `json:"jwtMode"`
 	Decision          string `json:"decision"`        // "allow" | "deny"
 	Stage             string `json:"stage,omitempty"` // failing stage; deny only
+	Action            string `json:"action,omitempty"`
 
 	// SourceIPFrom: "frontend" (AWS-attested) or "x-forwarded-for" (spoofable).
 	SourceIP     string `json:"sourceIp,omitempty"`
@@ -60,6 +61,17 @@ type auditRecord struct {
 	GrantedRole   string `json:"grantedRole,omitempty"` // allow only
 	AccountID     string `json:"accountId,omitempty"`
 	SessionName   string `json:"sessionName,omitempty"` // actual STS session name used; allow only
+	// sessionNameDerived: SessionName came from the subject, so it follows the log_claim_values gate.
+	sessionNameDerived bool
+
+	TokenID                  string `json:"tokenId,omitempty"`
+	IdPSessionCapSeconds     *int   `json:"idpSessionCapSeconds,omitempty"`
+	RequestedDurationSeconds int    `json:"requestedDurationSeconds,omitempty"`
+	DurationSeconds          int    `json:"durationSeconds,omitempty"`
+	SourceIdentity           string `json:"sourceIdentity,omitempty"`
+	SourceIdentityTruncated  bool   `json:"sourceIdentityTruncated,omitempty"`
+	AccessKeyID              string `json:"accessKeyId,omitempty"`
+	SessionNameSource        string `json:"sessionNameSource,omitempty"`
 
 	// SessionTagKeys (names) are always safe to record. SessionTags (values)
 	// only when LogClaimValues is on and a role was actually granted.
@@ -88,6 +100,10 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.Audience = nil
 	rec.SessionTags = nil
 	rec.Claims = nil
+	rec.SourceIdentity = ""
+	if rec.sessionNameDerived {
+		rec.SessionName = ""
+	}
 	rec.Reason = rec.effectiveReason(logClaimValues) // replaced, not cleared
 	rec.reasonFromError = false
 }
@@ -129,6 +145,12 @@ func stageSummary(stage string) string {
 		return "session policy read failed"
 	case "assume_role":
 		return "role assumption failed"
+	case "idp":
+		return "identity provider request refused"
+	case "idp_mint":
+		return "token minting failed"
+	case "idp_exchange":
+		return "web identity exchange failed"
 	default:
 		return "request denied"
 	}
@@ -163,6 +185,14 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []slog.Attr {
 	appendIf("accountId", rec.AccountID)
 	appendIf("sessionName", rec.SessionName)
 	appendIf("stage", rec.Stage)
+	appendIf("action", rec.Action)
+	appendIf("tokenId", rec.TokenID)
+	appendIf("sourceIdentity", rec.SourceIdentity)
+	appendIf("sessionNameSource", rec.SessionNameSource)
+	appendIf("accessKeyId", rec.AccessKeyID)
+	if rec.DurationSeconds > 0 {
+		attrs = append(attrs, slog.Int("durationSeconds", rec.DurationSeconds))
+	}
 	appendIf("reason", rec.effectiveReason(logClaimValues))
 	if logClaimValues {
 		appendIf("jwtSub", rec.JWTSub)
