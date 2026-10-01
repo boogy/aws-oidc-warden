@@ -64,6 +64,10 @@ func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, err
 func (f *vRecorder) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return f.allowAccount, nil
 }
+func (f *vRecorder) AssumeRoleWithWebIdentity(context.Context, string, string, string, *string, int32) (*ststypes.Credentials, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (f *vRecorder) AssumeRole(_ context.Context, roleARN, _ string, policy *string, _ *int32, _ *types.Claims, spec map[string]string) (*ststypes.Credentials, error) {
 	f.assumeCalls++
 	f.assumedRole = roleARN

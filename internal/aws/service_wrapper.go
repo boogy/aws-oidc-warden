@@ -22,6 +22,7 @@ import (
 type AwsServiceWrapperInterface interface {
 	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 	AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
+	AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error)
 	GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
 	GetCallerAccount(ctx context.Context) (string, error)
 	GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error)
@@ -163,7 +164,7 @@ func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRol
 	if err != nil {
 		logevent.Error(ctx, nil, logevent.STSAssumeRoleFailure, "error assuming role",
 			slog.String("roleArn", *input.RoleArn),
-			slog.String("stsErrorCode", stsErrorCode(err)),
+			slog.String("stsErrorCode", STSErrorCode(err)),
 			slog.String("error", err.Error()),
 			slog.Int64("durationMs", time.Since(start).Milliseconds()),
 		)
@@ -180,6 +181,13 @@ func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRol
 	logevent.Info(ctx, nil, logevent.STSAssumeRoleSuccess, "assumed role", attrs...)
 
 	return output, nil
+}
+
+// AssumeRoleWithWebIdentity calls STS unsigned; the SDK selects the anonymous auth scheme for this operation.
+func (s *AwsServiceWrapper) AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
+	defer cancel()
+	return s.stsClient.AssumeRoleWithWebIdentity(ctx, in)
 }
 
 // validateRoleNameLength enforces IAM's 64-character cap on a role NAME,

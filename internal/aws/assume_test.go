@@ -46,6 +46,9 @@ func (f *vFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.Ass
 		SessionToken:    aws.String("token"),
 	}}, nil
 }
+func (f *vFake) AssumeRoleWithWebIdentity(context.Context, *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	return &sts.AssumeRoleWithWebIdentityOutput{}, nil
+}
 func (f *vFake) GetRole(context.Context, *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
 	return &iam.GetRoleOutput{Role: &iamtypes.Role{Tags: f.roleTags}}, nil
 }

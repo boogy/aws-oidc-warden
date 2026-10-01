@@ -38,6 +38,14 @@ func (m *MockAwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key str
 	return args.Get(0).(io.ReadCloser), args.Error(1)
 }
 
+func (m *MockAwsServiceWrapper) AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sts.AssumeRoleWithWebIdentityOutput), args.Error(1)
+}
+
 func (m *MockAwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {

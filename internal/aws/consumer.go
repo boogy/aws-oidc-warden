@@ -26,6 +26,7 @@ import (
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
 type AwsConsumerInterface interface {
 	AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
+	AssumeRoleWithWebIdentity(ctx context.Context, roleARN, sessionName, token string, policy *string, duration int32) (*types.Credentials, error)
 	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 	GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
 	GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
@@ -177,6 +178,38 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 
 	a.spokeCache[account] = cachedCreds{provider: provider, expires: expires}
 	return provider, nil
+}
+
+// AssumeRoleWithWebIdentity exchanges an OIDC token for credentials without SigV4 signing.
+func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, sessionName, token string, policy *string, duration int32) (*types.Credentials, error) {
+	if roleARN == "" {
+		return nil, errors.New("roleARN cannot be empty")
+	}
+	if sessionName == "" {
+		return nil, errors.New("sessionName cannot be empty")
+	}
+	if token == "" {
+		return nil, errors.New("token cannot be empty")
+	}
+
+	in := &sts.AssumeRoleWithWebIdentityInput{
+		RoleArn:          aws.String(roleARN),
+		RoleSessionName:  aws.String(sessionName),
+		WebIdentityToken: aws.String(token),
+		DurationSeconds:  aws.Int32(duration),
+	}
+	if policy != nil && *policy != "" {
+		in.Policy = policy
+	}
+
+	out, err := a.AWS.AssumeRoleWithWebIdentity(ctx, in)
+	if err != nil {
+		return nil, classifyWebIdentityError(err)
+	}
+	if out.Credentials == nil {
+		return nil, errors.New("sts.AssumeRoleWithWebIdentity returned no credentials")
+	}
+	return out.Credentials, nil
 }
 
 // AssumeRole assumes the specified AWS IAM role and returns temporary credentials.

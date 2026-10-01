@@ -30,6 +30,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -126,6 +127,10 @@ func (c *driftConsumer) GetRoleTags(context.Context, string) (map[string]string,
 func (c *driftConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return true, nil
 }
+func (c *driftConsumer) AssumeRoleWithWebIdentity(context.Context, string, string, string, *string, int32) (*ststypes.Credentials, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (c *driftConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, claims *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
 	aud := ""
 	if len(claims.Audience) > 0 {

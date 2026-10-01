@@ -22,8 +22,8 @@ var deniedCodes = map[string]struct{}{
 	"accessdeniedexception": {},
 }
 
-// stsErrorCode returns the AWS API error code, or "" when err is not an API error.
-func stsErrorCode(err error) string {
+// STSErrorCode returns the AWS API error code, or "" for non-API errors.
+func STSErrorCode(err error) string {
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		return apiErr.ErrorCode()
@@ -35,8 +35,47 @@ func stsErrorCode(err error) string {
 // so the handler can map it to a 403; every other failure passes through
 // unchanged and stays a 5xx.
 func classifyAssumeRoleError(err error) error {
-	if _, denied := deniedCodes[strings.ToLower(stsErrorCode(err))]; denied {
+	if _, denied := deniedCodes[strings.ToLower(STSErrorCode(err))]; denied {
 		return fmt.Errorf("%w: %w", ErrAssumeRoleDenied, err)
+	}
+	return err
+}
+
+var (
+	ErrWebIdentityDenied                 = errors.New("sts:AssumeRoleWithWebIdentity denied by AWS")
+	ErrWebIdentityUnavailable            = errors.New("sts:AssumeRoleWithWebIdentity could not reach the IdP")
+	ErrWebIdentityDurationExceedsRoleMax = errors.New("sts:AssumeRoleWithWebIdentity duration exceeds role MaxSessionDuration")
+	ErrWebIdentityPackedPolicyTooLarge   = errors.New("sts:AssumeRoleWithWebIdentity packed policy too large")
+)
+
+const (
+	idpFetchRetrieveHint = "retrieve"
+	idpFetchFetchHint    = "fetch"
+	idpFetchKeyHint      = "verification key"
+	roleMaxDurationHint  = "MaxSessionDuration"
+	durationSecondsHint  = "DurationSeconds"
+)
+
+// classifyWebIdentityError wraps known STS failures in a marker error; others pass through unchanged.
+func classifyWebIdentityError(err error) error {
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch strings.ToLower(STSErrorCode(err)) {
+	case "idpcommunicationerror":
+		return fmt.Errorf("%w: %w", ErrWebIdentityUnavailable, err)
+	case "invalididentitytoken":
+		if strings.Contains(lower, idpFetchRetrieveHint) || strings.Contains(lower, idpFetchFetchHint) || strings.Contains(lower, idpFetchKeyHint) {
+			return fmt.Errorf("%w: %w", ErrWebIdentityUnavailable, err)
+		}
+		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
+	case "accessdenied", "accessdeniedexception", "idprejectedclaim", "expiredtokenexception":
+		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
+	case "validationerror":
+		if strings.Contains(msg, durationSecondsHint) && strings.Contains(msg, roleMaxDurationHint) {
+			return fmt.Errorf("%w: %w", ErrWebIdentityDurationExceedsRoleMax, err)
+		}
+	case "packedpolicytoolarge":
+		return fmt.Errorf("%w: %w", ErrWebIdentityPackedPolicyTooLarge, err)
 	}
 	return err
 }

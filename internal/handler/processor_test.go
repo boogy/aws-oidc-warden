@@ -162,6 +162,10 @@ func (f *fakeConsumer) GetRoleTags(context.Context, string) (map[string]string, 
 func (f *fakeConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return f.allowAccount, f.allowAccountErr
 }
+func (f *fakeConsumer) AssumeRoleWithWebIdentity(context.Context, string, string, string, *string, int32) (*ststypes.Credentials, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, _ *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
 	f.assumed = roleARN
 	f.gotSessionName = sessionName

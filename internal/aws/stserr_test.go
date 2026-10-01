@@ -46,9 +46,9 @@ func TestClassifyAssumeRoleError(t *testing.T) {
 }
 
 func TestSTSErrorCode(t *testing.T) {
-	assert.Equal(t, "AccessDenied", stsErrorCode(fmt.Errorf("wrapped: %w", apiErr("AccessDenied"))))
-	assert.Equal(t, "MalformedPolicyDocument", stsErrorCode(&ststypes.MalformedPolicyDocumentException{}))
-	assert.Empty(t, stsErrorCode(errors.New("plain")))
+	assert.Equal(t, "AccessDenied", STSErrorCode(fmt.Errorf("wrapped: %w", apiErr("AccessDenied"))))
+	assert.Equal(t, "MalformedPolicyDocument", STSErrorCode(&ststypes.MalformedPolicyDocumentException{}))
+	assert.Empty(t, STSErrorCode(errors.New("plain")))
 }
 
 // failingFake overrides vFake.AssumeRole with an injected STS failure.
