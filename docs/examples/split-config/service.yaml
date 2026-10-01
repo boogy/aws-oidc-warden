@@ -20,6 +20,6 @@ idp:
     - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/00000000-0000-0000-0000-000000000000"
       algorithm: ES256
       status: active
-  max_session_duration: 4h
+  max_session_duration: 4h # >1h: logs config.idp_uncapped at startup by design
   allowed_roles:
     - "arn:aws:iam::111122223333:role/LongDeploy"

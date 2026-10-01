@@ -72,9 +72,13 @@ func (r *RequestProcessor) ProcessMint(ctx context.Context, requestData *Request
 	}
 	rec.sessionNameDerived = nameSource == "subject"
 
-	sourceIdentity, truncated, err := renderSourceIdentity(cfg.IdP.SourceIdentity, cfg.IdP.SourceIdentityOverflow, requestID, claims.Issuer, claims.Subject, claims.Raw)
-	if err != nil {
-		return refuse("idp_mint", "source identity could not be derived", "Source identity could not be derived", err)
+	var sourceIdentity string
+	var truncated bool
+	if frozen := r.idp.Config(); frozen.IncludeSourceIdentityClaim() {
+		sourceIdentity, truncated, err = renderSourceIdentity(frozen.SourceIdentity, frozen.SourceIdentityOverflow, requestID, claims.Issuer, claims.Subject, claims.Raw)
+		if err != nil {
+			return refuse("idp_mint", "source identity could not be derived", "Source identity could not be derived", err)
+		}
 	}
 
 	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, o.decision)

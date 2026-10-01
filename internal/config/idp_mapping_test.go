@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -243,23 +244,40 @@ func TestIdPCeilingSettingsValidate(t *testing.T) {
 	}
 }
 
-func TestIdPUncappedWarns(t *testing.T) {
-	const role = "arn:aws:iam::123456789012:role/R"
-	cfg := idpCeilingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true}, 12*time.Hour)
-	logs := captureWarnings(t, func() { require.NoError(t, cfg.Validate()) })
-	require.Equal(t, 1, strings.Count(logs, "config.idp_uncapped"))
+func TestIdPUncappedWarnsOnlyAtStartup(t *testing.T) {
+	const logKey = "config.idp_uncapped"
+	tests := []struct {
+		name     string
+		duration string
+		enabled  string
+		want     int
+	}{
+		{"above 1h", "4h", "true", 1},
+		{"exactly 1h", "1h", "true", 0},
+		{"disabled", "4h", "false", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := idpTestIssuerYAML + idpTestBlockYAML + "  max_session_duration: " + tt.duration + "\n"
+			body = strings.Replace(body, "enabled: true", "enabled: "+tt.enabled, 1)
+			var c *Config
+			logs := captureWarnings(t, func() {
+				var err error
+				c, err = loadIdPYAML(t, body)
+				require.NoError(t, err)
+			})
+			require.Equal(t, tt.want, strings.Count(logs, logKey))
 
-	cfg = idpCeilingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true}, time.Hour)
-	logs = captureWarnings(t, func() { require.NoError(t, cfg.Validate()) })
-	require.Zero(t, strings.Count(logs, "config.idp_uncapped"))
-}
-
-func TestIdPUncappedWarningOnlyWhenEnabled(t *testing.T) {
-	const role = "arn:aws:iam::123456789012:role/R"
-	cfg := idpCeilingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true}, 12*time.Hour)
-	cfg.IdP.Enabled = false
-	logs := captureWarnings(t, func() { require.NoError(t, cfg.Validate()) })
-	require.Zero(t, strings.Count(logs, "config.idp_uncapped"))
+			p := NewProvider(c, time.Hour, "yaml", func(context.Context) ([]byte, error) { return []byte("{}"), nil })
+			logs = captureWarnings(t, func() {
+				for range 2 {
+					require.NoError(t, p.Refresh(context.Background()))
+				}
+				require.NoError(t, c.Validate())
+			})
+			require.Zero(t, strings.Count(logs, logKey))
+		})
+	}
 }
 
 func TestIdPEnvSessionSettings(t *testing.T) {

@@ -189,6 +189,7 @@ Pitfalls:
 
 - `StringLike` `*` is greedy across `#`. Keep the source issuer as a fixed prefix and the role ARN as a fixed suffix so the wildcard covers only the source subject. Never wildcard the role-ARN part, and never put a leading or trailing wildcard around the issuer.
 - Matching is case-sensitive.
+- Pin `sub` with `StringEquals` wherever the whole value is known; avoid `StringLike` with `*`.
 - Without the fixed suffix, a subject containing `#` could forge another role's `sub`.
 
 Optional hardening:
@@ -269,7 +270,9 @@ The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other
 
 Over 64 characters, `idp.source_identity_overflow` decides: `truncate` (default; 47 characters, `+`, 16 hex of the SHA-256) or `reject` (403 `idp_source_identity_invalid`). The audit field `sourceIdentityTruncated` flags truncation. Truncation is attribution, not an access boundary.
 
-`aws:SourceIdentity` is the key for downstream ABAC and CloudTrail attribution. `idp.include_source_identity: false` omits it from the minted token.
+`{issuer}` renders only the issuer URL host, so two inbound issuers on the same host render the same prefix. Pair `{issuer}` with `{subject}`, or use distinct hosts, when that matters.
+
+`aws:SourceIdentity` is the key for downstream ABAC and CloudTrail attribution. `idp.include_source_identity: false` omits it from the minted token. The template is then not rendered, so a bad template cannot fail the mint.
 
 ## Calling the endpoint
 

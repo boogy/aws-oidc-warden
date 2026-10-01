@@ -370,6 +370,53 @@ func TestProcessMintSourceIdentity(t *testing.T) {
 	}
 }
 
+func TestProcessMintSourceIdentityClaimOff(t *testing.T) {
+	tests := []struct {
+		name string
+		tmpl string
+	}{
+		{"default_template", ""},
+		{"missing_claim_template", "{claim:nope}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := idpConfig(t, true, "", func(c *config.Config) {
+				c.LogClaimValues = true
+				off := false
+				c.IdP.IncludeSourceIdentity = &off
+				if tt.tmpl != "" {
+					c.IdP.SourceIdentity = tt.tmpl
+				}
+			})
+			proc, sink, _ := idpProcessorFor(t, cfg, mockWI(t), idpClaims(nil))
+			var buf bytes.Buffer
+			res, err := mint(t, proc, handler.RequestData{}, &buf)
+			require.NoError(t, err)
+			assert.Empty(t, res.SourceIdentity)
+			assert.NotContains(t, sink.last(t), "sourceIdentity")
+		})
+	}
+}
+
+func TestProcessMintSourceIdentityFrozenAtColdStart(t *testing.T) {
+	cfg := idpConfig(t, true, "", func(c *config.Config) {
+		c.LogClaimValues = true
+		c.IdP.SourceIdentity = "{request_id}"
+	})
+	signer := &countingSigner{Signer: idptest.NewSigner(t)}
+	svc := idpService(t, cfg, signer, nil)
+	cfg.IdP.SourceIdentity = "swapped-literal"
+	cfg.IdP.SourceIdentityOverflow = config.IdPOverflowReject
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), sink, "apigatewayv2").WithIdP(svc)
+
+	var buf bytes.Buffer
+	res, err := mint(t, proc, handler.RequestData{}, &buf)
+	require.NoError(t, err)
+	assert.Equal(t, "req-1", res.SourceIdentity)
+	assert.Equal(t, "req-1", sink.last(t)["sourceIdentity"])
+}
+
 func TestProcessMintPassesSessionPolicy(t *testing.T) {
 	const policy = `{"Version":"2012-10-17","Statement":[]}`
 	cfg := idpConfig(t, true, policy)

@@ -719,7 +719,20 @@ func (c *Config) LoadConfig() error {
 		c.Issuers = []IssuerConfig{defaultGitHubIssuer()}
 	}
 
-	return c.Validate()
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	c.warnIdPUncapped()
+	return nil
+}
+
+// warnIdPUncapped logs once at cold start; Validate also runs on every refresh.
+func (c *Config) warnIdPUncapped() {
+	if c.IdP != nil && c.IdP.Enabled && c.IdP.MaxSessionDuration > time.Hour {
+		logevent.Warn(context.Background(), nil, logevent.ConfigIdPUncapped,
+			"idp.max_session_duration exceeds 1h",
+			slog.Duration("maxSessionDuration", c.IdP.MaxSessionDuration))
+	}
 }
 
 // MergeBytes overlays serialized configuration onto c using the same snake_case
@@ -1041,11 +1054,6 @@ func (c *Config) Validate() error {
 			for _, r := range roles {
 				c.idpAllowedRoles[r] = true
 			}
-		}
-		if c.IdP.Enabled && c.IdP.MaxSessionDuration > time.Hour {
-			logevent.Warn(context.Background(), nil, logevent.ConfigIdPUncapped,
-				"idp.max_session_duration exceeds 1h",
-				slog.Duration("maxSessionDuration", c.IdP.MaxSessionDuration))
 		}
 	}
 
@@ -1457,16 +1465,16 @@ func (c *Config) validateFragmentChecksums() error {
 	return nil
 }
 
-// resolveRoleSet expands any "@name" alias in roles to c.RoleSets[name],
-// leaving literal role ARNs untouched. Resolution happens once, at Validate()
-// time, before AuthorizeRoles' role∈roles security gate ever runs, so an
-// alias can never widen a request beyond what's statically configured
-// (the token never selects the role set, config does).
 // IdPRoleAllowed reports whether role may receive an IdP token under idp.allowed_roles.
 func (c *Config) IdPRoleAllowed(role string) bool {
 	return c.idpAllowedRoles == nil || c.idpAllowedRoles[role]
 }
 
+// resolveRoleSet expands any "@name" alias in roles to c.RoleSets[name],
+// leaving literal role ARNs untouched. Resolution happens once, at Validate()
+// time, before AuthorizeRoles' role∈roles security gate ever runs, so an
+// alias can never widen a request beyond what's statically configured
+// (the token never selects the role set, config does).
 func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 	out := make([]string, 0, len(roles))
 	for _, r := range roles {
