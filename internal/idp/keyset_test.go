@@ -16,7 +16,8 @@ import (
 func testCfg() config.IdPConfig {
 	return config.IdPConfig{
 		Issuer: "https://idp.example.com", Audience: "sts.amazonaws.com",
-		JWKSURI: "https://idp.example.com/.well-known/jwks.json",
+		JWKSURI:         "https://idp.example.com/.well-known/jwks.json",
+		SubjectTemplate: config.IdPDefaultSubjectTemplate,
 	}
 }
 

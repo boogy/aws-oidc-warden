@@ -6,13 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/config"
-	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
@@ -33,21 +31,6 @@ var (
 
 	sourceIdentityPattern = regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
 )
-
-func renderSubject(roleARN string) (string, error) {
-	if _, _, err := utils.ParseRoleARN(roleARN); err != nil || strings.Count(roleARN, ":") != 5 {
-		return "", ErrInvalidSubject
-	}
-	if len(roleARN) > maxSubjectBytes {
-		return "", ErrInvalidSubject
-	}
-	for i := 0; i < len(roleARN); i++ {
-		if roleARN[i] < 0x21 || roleARN[i] > 0x7e {
-			return "", ErrInvalidSubject
-		}
-	}
-	return roleARN, nil
-}
 
 func maxSigLen(alg string) int {
 	if alg == "ES256" {
@@ -103,7 +86,7 @@ type mintClaims struct {
 }
 
 func mint(ctx context.Context, cfg config.IdPConfig, ks *KeySet, req MintRequest, now time.Time) (*Token, error) {
-	sub, err := renderSubject(req.RoleARN)
+	sub, err := renderSubject(cfg.SubjectTemplate, req.RoleARN, req.SourceIssuer, req.SourceSubject)
 	if err != nil {
 		return nil, err
 	}
