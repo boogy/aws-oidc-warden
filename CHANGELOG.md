@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Failed config refreshes back off exponentially** (up to 8x `config_reload_interval`), and requests no longer wait on an in-flight refresh.
+- **A mapping that sets both `session_policy` and `session_policy_file` fails to load.** Previously the file was used and the inline policy silently ignored. Keep the one you intend.
 
 ### Fixed
 
@@ -34,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Documentation
 
 - `docs/IDP.md` setup guide; `CONFIGURATION.md` `idp` reference and `AOW_IDP_*` variables; `ARCHITECTURE.md` IdP infrastructure contract; commented `idp:` block in `example-config.yaml`.
+- `docs/examples/split-config/`: annotated `service.yaml` and `mappings.yaml` with session policy and IdP examples, and a README covering ownership, per-caller outcomes, rejected files, staleness and S3 deployment.
 
 ## [3.5.2] - 2026-09-26
 

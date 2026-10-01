@@ -40,7 +40,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 
 - `apigatewayv2.go` is the only adapter compatible with API Gateway JWT Authorizer — v1 REST API does not receive authorizer claims.
 - The extractor is created once at bootstrap; changing `jwt_validation.mode` at runtime requires a Lambda cold start.
-- Inline session policy overrides the S3 file when both are set.
+- A mapping sets `session_policy` or `session_policy_file`, never both; `Validate()` rejects both.
 - S3 policy reads are bounded (`io.LimitReader`, 1 MB).
 - Start time is carried in context (`StartTimeContextKey`).
 - IdP kill switch: `idp.enabled` is live; when off, mint answers `503 idp_signing_unavailable`. Env overrides S3 config. A stale remote config past max-stale fails closed the same way.

@@ -339,7 +339,7 @@ With `role_sets`, the lowest-order mapping that grants the role decides.
 
 #### Multi-subject entries share one policy
 
-This is the question a multi-subject entry usually raises: **both** an inline `session_policy` and an S3 `session_policy_file` apply to **every** subject the entry lists. The S3 key is a literal string with no subject interpolation, so one entry cannot vary the policy per subject. If you need per-subject policies, declare separate entries.
+This is the question a multi-subject entry usually raises: the entry's session policy, inline `session_policy` or S3 `session_policy_file`, applies to **every** subject the entry lists. An entry sets one or the other; setting both fails to load. The S3 key is a literal string with no subject interpolation, so one entry cannot vary the policy per subject. If you need per-subject policies, declare separate entries.
 
 ### Owner-bucketed index
 

@@ -1124,6 +1124,9 @@ func (c *Config) Validate() error {
 		if m.AllowSessionName && !m.IDPToken {
 			return fmt.Errorf("%s[%d] (%s): allow_session_name requires idp_token", source, i, subject)
 		}
+		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
+			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
+		}
 		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)

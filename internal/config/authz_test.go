@@ -996,3 +996,22 @@ role_mappings:
 		}
 	}
 }
+
+func TestSessionPolicyAndFileAreMutuallyExclusive(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/R"
+	const inline = `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"iam:*","Resource":"*"}]}`
+
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, SessionPolicy: inline, SessionPolicyFile: "p.json"})
+	require.ErrorContains(t, cfg.Validate(), "set session_policy or session_policy_file, not both")
+
+	cfg = idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{role}})
+	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{role}, SessionPolicy: inline, SessionPolicyFile: "p.json"}}}
+	require.ErrorContains(t, cfg.Validate(), "set session_policy or session_policy_file, not both")
+
+	for _, m := range []RoleMapping{
+		{Subject: Patterns{"org/repo"}, Roles: []string{role}, SessionPolicy: inline},
+		{Subject: Patterns{"org/repo"}, Roles: []string{role}, SessionPolicyFile: "p.json"},
+	} {
+		require.NoError(t, idpMappingCfg(m).Validate())
+	}
+}
