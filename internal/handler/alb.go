@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
@@ -48,6 +49,11 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		slog.String("userAgent", headerValue(headers, "user-agent")),
 	)
 
+	kind := h.processor.route(event.HTTPMethod, event.Path)
+	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, event.Path, log, h.newResponse, h.newResponseWithHeaders); ok {
+		return resp, nil
+	}
+
 	oidcData := headerValue(headers, "x-amzn-oidc-data")
 	region := h.region
 
@@ -72,6 +78,14 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		}
 	} else {
 		input = validator.ExtractionInput{Token: requestData.Token}
+	}
+
+	if kind == routeMint {
+		credentials, err := h.processor.ProcessMint(ctx, requestData, input, requestID, log)
+		if err != nil {
+			return h.respondError(ctx, err, http.StatusInternalServerError)
+		}
+		return successResponseMsg(ctx, credentials, msgMinted, h.newResponse), nil
 	}
 
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
@@ -123,6 +137,23 @@ func (h *AwsApplicationLoadBalancer) newResponse(statusCode int, body string) ev
 		Headers:    ResponseHeaders,
 		Body:       body,
 	}
+}
+
+// newResponseWithHeaders sets both header maps: ALB reads only MultiValueHeaders when multi-value headers are enabled.
+func (h *AwsApplicationLoadBalancer) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.ALBTargetGroupResponse {
+	resp := h.newResponse(statusCode, body)
+	resp.Headers = mergeHeaders(extra)
+	resp.MultiValueHeaders = make(map[string][]string, len(resp.Headers))
+	for k, v := range resp.Headers {
+		resp.MultiValueHeaders[k] = []string{v}
+	}
+	return resp
+}
+
+// WithIdP enables the IdP routes and returns the handler.
+func (h *AwsApplicationLoadBalancer) WithIdP(s *idp.Service) *AwsApplicationLoadBalancer {
+	h.processor.WithIdP(s)
+	return h
 }
 
 // respondError formats a response with an error message

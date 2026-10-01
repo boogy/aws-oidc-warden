@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
@@ -42,6 +43,11 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
 
+	kind := h.processor.route(event.HTTPMethod, event.Path)
+	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, event.Path, log, h.newResponse, h.newResponseWithHeaders); ok {
+		return resp, nil
+	}
+
 	requestData, err := h.unmarshalRequestData(event)
 	if err != nil {
 		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
@@ -49,6 +55,14 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 	}
 
 	input := validator.ExtractionInput{Token: requestData.Token}
+
+	if kind == routeMint {
+		credentials, err := h.processor.ProcessMint(ctx, requestData, input, requestID, log)
+		if err != nil {
+			return h.respondError(ctx, err, http.StatusInternalServerError)
+		}
+		return successResponseMsg(ctx, credentials, msgMinted, h.newResponse), nil
+	}
 
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
@@ -80,6 +94,19 @@ func (h *AwsApiGateway) newResponse(statusCode int, body string) events.APIGatew
 		Body:            body,
 		IsBase64Encoded: false,
 	}
+}
+
+// newResponseWithHeaders is newResponse with extra headers overlaid on ResponseHeaders.
+func (h *AwsApiGateway) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.APIGatewayProxyResponse {
+	resp := h.newResponse(statusCode, body)
+	resp.Headers = mergeHeaders(extra)
+	return resp
+}
+
+// WithIdP enables the IdP routes and returns the handler.
+func (h *AwsApiGateway) WithIdP(s *idp.Service) *AwsApiGateway {
+	h.processor.WithIdP(s)
+	return h
 }
 
 // respondError formats a response with an error message.

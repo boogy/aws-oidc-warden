@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
@@ -40,6 +41,11 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 		slog.String("userAgent", event.RequestContext.HTTP.UserAgent),
 	)
 
+	kind := h.processor.route(event.RequestContext.HTTP.Method, event.RawPath)
+	if resp, ok := serveIdP(ctx, h.processor, kind, event.RequestContext.HTTP.Method, event.RawPath, log, h.newResponse, h.newResponseWithHeaders); ok {
+		return resp, nil
+	}
+
 	requestData, err := ParseRoleOnlyRequestBody(event.Body)
 	if err != nil {
 		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
@@ -52,6 +58,14 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 		authorizerClaims = event.RequestContext.Authorizer.JWT.Claims
 	}
 	input := validator.ExtractionInput{AuthorizerClaims: authorizerClaims}
+
+	if kind == routeMint {
+		credentials, err := h.processor.ProcessMint(ctx, requestData, input, requestID, log)
+		if err != nil {
+			return h.respondError(ctx, err, http.StatusInternalServerError)
+		}
+		return successResponseMsg(ctx, credentials, msgMinted, h.newResponse), nil
+	}
 
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
@@ -72,6 +86,19 @@ func (h *AwsApiGatewayV2) createRequestContext(ctx context.Context, event events
 // newResponse builds this frontend's response type from a status and body.
 func (h *AwsApiGatewayV2) newResponse(statusCode int, body string) events.APIGatewayV2HTTPResponse {
 	return events.APIGatewayV2HTTPResponse{StatusCode: statusCode, Headers: ResponseHeaders, Body: body}
+}
+
+// newResponseWithHeaders is newResponse with extra headers overlaid on ResponseHeaders.
+func (h *AwsApiGatewayV2) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.APIGatewayV2HTTPResponse {
+	resp := h.newResponse(statusCode, body)
+	resp.Headers = mergeHeaders(extra)
+	return resp
+}
+
+// WithIdP enables the IdP routes and returns the handler.
+func (h *AwsApiGatewayV2) WithIdP(s *idp.Service) *AwsApiGatewayV2 {
+	h.processor.WithIdP(s)
+	return h
 }
 
 func (h *AwsApiGatewayV2) respondError(ctx context.Context, err error, statusCode int) (events.APIGatewayV2HTTPResponse, error) {
