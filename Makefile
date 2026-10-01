@@ -33,6 +33,11 @@ build-local:
 	@mkdir -p $(BUILD_DIR)
 	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/$(APP_NAME)-local ./cmd/local
 
+.PHONY: build-idp-export
+build-idp-export:
+	@mkdir -p $(BUILD_DIR)
+	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/idp-export ./cmd/idp-export
+
 .PHONY: build-lambda
 build-lambda: build-apigateway build-apigatewayv2 build-alb build-lambdaurl
 

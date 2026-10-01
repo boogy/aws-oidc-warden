@@ -19,6 +19,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
@@ -93,94 +94,13 @@ func main() {
 	// Initialize the AWS client
 	awsClient := aws.NewAwsConsumer(cfg)
 
+	svc := handler.NewIdPService(provider, func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }, logger)
+
 	// Create the handler function. No audit sink for the local dev server.
-	handlerFunc := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).Handler
+	h := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).WithIdP(svc)
 
-	// Set up HTTP server
-	http.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
-		requestID := uuid.New().String()
-		sourceIP := remoteIP(r.RemoteAddr)
-		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: requestID, SourceIP: sourceIP})
-
-		// Simulate network latency if configured
-		if settings.SimulateLatency > 0 {
-			time.Sleep(settings.SimulateLatency)
-		}
-
-		// Only accept POST requests
-		if r.Method != http.MethodPost {
-			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
-				slog.String("reason", "method not allowed"), slog.String("method", r.Method))
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Read the request body
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
-				slog.String("reason", "body read failed"), slog.String("error", err.Error()))
-			http.Error(w, "Error reading request body", http.StatusBadRequest)
-			return
-		}
-		defer func() {
-			if err := r.Body.Close(); err != nil {
-				logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error closing request body",
-					slog.String("error", err.Error()))
-			}
-		}()
-
-		// Create an API Gateway proxy request event
-		apiGatewayEvent := events.APIGatewayProxyRequest{
-			Body:                  string(body),
-			Path:                  "/verify",
-			HTTPMethod:            r.Method,
-			Headers:               make(map[string]string),
-			QueryStringParameters: make(map[string]string),
-			PathParameters:        make(map[string]string),
-			RequestContext: events.APIGatewayProxyRequestContext{
-				RequestID: requestID,
-				Identity:  events.APIGatewayRequestIdentity{SourceIP: sourceIP},
-			},
-		}
-
-		// Copy headers
-		for k, v := range r.Header {
-			if len(v) > 0 {
-				apiGatewayEvent.Headers[k] = v[0]
-			}
-		}
-
-		// Copy query parameters
-		for k, v := range r.URL.Query() {
-			if len(v) > 0 {
-				apiGatewayEvent.QueryStringParameters[k] = v[0]
-			}
-		}
-
-		// Call the Lambda handler function
-		response, err := handlerFunc(reqCtx, apiGatewayEvent)
-		if err != nil {
-			logevent.Error(reqCtx, logger, logevent.HTTPResponseFailure, "handler error",
-				slog.String("error", err.Error()))
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		// Set response headers
-		for k, v := range response.Headers {
-			w.Header().Set(k, v)
-		}
-
-		// Set status code
-		w.WriteHeader(response.StatusCode)
-
-		// Write response body
-		if _, err := w.Write([]byte(response.Body)); err != nil {
-			logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error writing response",
-				slog.String("error", err.Error()))
-		}
-	})
+	// Every path goes through the shared router; unknown paths get its 404.
+	http.HandleFunc("/", localHandler(logger, settings.SimulateLatency, h.Handler))
 
 	// Add a health check endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +147,84 @@ func main() {
 	}
 
 	logevent.Info(ctx, logger, logevent.AppStop, "server stopped")
+}
+
+// localHandler adapts the Lambda handler to net/http.
+func localHandler(logger *slog.Logger, latency time.Duration, handlerFunc func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		requestID := uuid.New().String()
+		sourceIP := remoteIP(r.RemoteAddr)
+		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: requestID, SourceIP: sourceIP})
+
+		if latency > 0 {
+			time.Sleep(latency)
+		}
+
+		if r.URL.Path == "/verify" && r.Method != http.MethodPost {
+			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
+				slog.String("reason", "method not allowed"), slog.String("method", r.Method))
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
+				slog.String("reason", "body read failed"), slog.String("error", err.Error()))
+			http.Error(w, "Error reading request body", http.StatusBadRequest)
+			return
+		}
+		defer func() {
+			if err := r.Body.Close(); err != nil {
+				logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error closing request body",
+					slog.String("error", err.Error()))
+			}
+		}()
+
+		response, err := handlerFunc(reqCtx, buildEvent(r, body, requestID, sourceIP))
+		if err != nil {
+			logevent.Error(reqCtx, logger, logevent.HTTPResponseFailure, "handler error",
+				slog.String("error", err.Error()))
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		for k, v := range response.Headers {
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(response.StatusCode)
+		if _, err := w.Write([]byte(response.Body)); err != nil {
+			logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error writing response",
+				slog.String("error", err.Error()))
+		}
+	}
+}
+
+// buildEvent maps an HTTP request to an API Gateway proxy event.
+func buildEvent(r *http.Request, body []byte, requestID, sourceIP string) events.APIGatewayProxyRequest {
+	ev := events.APIGatewayProxyRequest{
+		Body:                  string(body),
+		Path:                  r.URL.Path,
+		HTTPMethod:            r.Method,
+		Headers:               make(map[string]string),
+		QueryStringParameters: make(map[string]string),
+		PathParameters:        make(map[string]string),
+		RequestContext: events.APIGatewayProxyRequestContext{
+			RequestID: requestID,
+			Identity:  events.APIGatewayRequestIdentity{SourceIP: sourceIP},
+		},
+	}
+	for k, v := range r.Header {
+		if len(v) > 0 {
+			ev.Headers[k] = v[0]
+		}
+	}
+	for k, v := range r.URL.Query() {
+		if len(v) > 0 {
+			ev.QueryStringParameters[k] = v[0]
+		}
+	}
+	return ev
 }
 
 // remoteIP strips the port from RemoteAddr, returning it unchanged if it has none.
