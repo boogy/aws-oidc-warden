@@ -61,7 +61,7 @@ Every registered event (`internal/logevent/events_*.go`), grouped by `eventCateg
 | `audit.marshal.failure` | Error | error |
 | `audit.write.failure` | Error | error (s3logger: bucket, key) |
 | `audit.write.success` | Debug | bucket, key, bytes |
-| `authz.decision` | Info (allow) / Warn (deny) | frontend, jwtMode, decision, matchedRole, processingMs, issuer, provider, accountId, sessionName, stage, reason, jwtSub, subject, audience, claims |
+| `authz.decision` | Info (allow) / Warn (deny) | frontend, jwtMode, decision, matchedRole, processingMs, issuer, provider, accountId, sessionName, stage, action, tokenId, reason, jwtSub, subject, audience, claims |
 | `authz.stage.deny` | Debug | stage-specific |
 | `authz.tag_auth.lookup_failure` | Warn | error |
 | `authz.tag_auth.success` | Info | — |
@@ -175,7 +175,9 @@ Added by `auditLogAttrs` for the decision itself:
 | `frontend`, `jwtMode`, `decision`, `matchedRole`, `processingMs` | Always                                         | `decision` is `allow`/`deny`                                                                                                                       |
 | `issuer`, `provider`                                             | Once claims are extracted                      | So they appear on **every deny past the `extract` stage** — `account_check`, `authorize`, `session_policy` and `assume_role` denies all carry them |
 | `accountId`, `sessionName`                                       | Allow only                                     | Genuinely allow-only: both are set only once a role has actually been assumed                                                                      |
-| `stage`                                                          | Deny only                                      | One of `extract` / `account_check` / `authorize` / `session_policy` / `assume_role`                                                                |
+| `stage`                                                          | Deny only                                      | One of `config` / `extract` / `account_check` / `authorize` / `session_policy` / `assume_role`. `config` is `503 config_stale`                      |
+| `action`                                                         | When the pipeline ran                          | `assume_role` for `/verify`, `mint_token` for the IdP mint path                                                                                    |
+| `tokenId`                                                        | IdP mints only                                 | The ID of the minted IdP token, also returned to the caller                                                                                      |
 | `reason`                                                         | Deny only                                      |                                                                                                                                                    |
 | `jwtSub`, `subject`, `audience`, `claims`                        | When `log_claim_values=true` **and** non-empty | Suppressed entirely, not blanked, when the gate is off                                                                                             |
 

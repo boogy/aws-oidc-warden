@@ -88,6 +88,7 @@ The status code tells your client whether retrying is worth anything:
 | `500 idp_token_too_large` | Minted token or packed policy over the STS limit; reduce session tags | **No** — deterministic |
 | `503 idp_signing_unavailable` | KMS signing unavailable or throttled; also the IdP kill-switch answer | **Yes** — transient |
 | `503 idp_exchange_unavailable` | STS could not reach the IdP discovery or JWKS document | **Yes** — transient |
+| `503 config_stale` | Role mappings are older than `mappings_max_stale` | **Yes** — transient, retry with backoff or fail over |
 | `502` / `503` / timeout  | The endpoint is unhealthy or unreachable                                | **Yes**                 |
 
 ¹ Unless it persists: a malformed session policy fails the same way in every region — the log's `stsErrorCode` is `MalformedPolicyDocument`.
@@ -220,7 +221,7 @@ Both versions below implement the same policy:
 
 1. **One token, reused for every attempt.** Validation is stateless and both regions list the same audience, so re-requesting the token would be pure latency.
 2. **Deterministic refusals are final.** `400`/`401`/`403`, and a `500` with `errorCode` `policy_error` or `audit_write_failed`, skip the remaining endpoints — every region shares the authorization config and returns the same answer.
-3. **Only unreachable or transient failures fail over.**
+3. **Only unreachable or transient failures fail over.** That includes `503 config_stale` (this region's mappings are stale; another region may be fresh) and the `503`/`500` transient codes above.
 4. **Mask before exporting**, on every path.
 
 ### With `github-script`

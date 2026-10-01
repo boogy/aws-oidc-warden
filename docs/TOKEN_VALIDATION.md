@@ -251,6 +251,7 @@ Validation failures propagate as sentinel errors mapped to HTTP status by the fr
 | AssumeRole refused by AWS (`AccessDenied`)                               | `ErrAssumeRoleDenied`      | 403  | `assume_role_denied` |
 | AssumeRole failed for any other reason                                   | `ErrAssumeRoleFailed`      | 500  | `assume_role_failed` |
 | Required audit write failed (`audit_required=true`)                      | `ErrAuditWriteFailed`      | 500  | `audit_write_failed` |
+| Role mappings older than `mappings_max_stale` (retryable)                | `ErrConfigStale`           | 503  | `config_stale`       |
 | IdP mode: mapping lacks `idp_token`, role outside `idp.allowed_roles`, or the minted subject was invalid | `ErrIdPNotPermitted` | 403 | `idp_not_permitted` |
 | IdP mode: `sessionName` sent without both `allow_session_name` flags, or alongside a mapping `role_session_name` | `ErrSessionNameNotPermitted` | 403 | `session_name_not_permitted` |
 | IdP mode: the source identity could not be derived (missing claim) or overflowed with `reject` | `ErrIdPSourceIdentityInvalid` | 403 | `idp_source_identity_invalid` |

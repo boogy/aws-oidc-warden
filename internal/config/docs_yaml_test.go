@@ -487,3 +487,32 @@ func TestExampleConfigGenericIssuer(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitConfigExamplesLoad(t *testing.T) {
+	const dir = "../../docs/examples/split-config/"
+	service, err := os.ReadFile(dir + "service.yaml")
+	require.NoError(t, err)
+	mappings, err := filepath.Abs(dir + "mappings.yaml")
+	require.NoError(t, err)
+
+	t.Run("service.yaml loads as written", func(t *testing.T) {
+		require.NoError(t, (&config.Config{}).MergeBytes(service, "yaml"))
+	})
+
+	t.Run("mappings.yaml authorizes through a provider", func(t *testing.T) {
+		const uri = "s3://EXAMPLE-BUCKET/mappings.yaml"
+		require.Contains(t, string(service), uri)
+		local := strings.Replace(string(service), uri, mappings, 1)
+		local = strings.Replace(local, "config_reload_interval: 60s\n", "", 1)
+
+		cfg := &config.Config{}
+		require.NoError(t, cfg.MergeBytes([]byte(local), "yaml"))
+		p := config.NewProvider(cfg, 0, "yaml", nil)
+		require.NoError(t, p.Refresh(t.Context()))
+
+		ok, roles := p.Get().AuthorizeRoles(
+			"https://token.actions.githubusercontent.com", "octo-org/api", map[string]any{})
+		require.True(t, ok)
+		require.Equal(t, []string{"arn:aws:iam::111122223333:role/Deploy"}, roles)
+	})
+}

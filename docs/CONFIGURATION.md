@@ -401,7 +401,10 @@ Both are refused on the `AssumeRole` path with 400 `field_not_supported`. The re
 | `AOW_S3_CONFIG_BUCKET`       | `s3_config_bucket`       | S3 bucket holding the remote config object                                                                                   | (empty)           |
 | `AOW_S3_CONFIG_PATH`         | `s3_config_path`         | Key/path of the remote config object in that bucket                                                                          | (empty)           |
 | `AOW_CONFIG_RELOAD_INTERVAL` | `config_reload_interval` | Hot-reload the S3 config at most this often (e.g. `5m`); `0` disables                                                        | `0` (disabled)    |
-| `AOW_CONFIG_FRAGMENTS`       | `config_fragments`       | Comma-separated fragment sources merged onto base config (local paths only — see [Config fragments](#config-fragments))      | (empty)           |
+| `AOW_CONFIG_FRAGMENTS`       | `config_fragments`       | Comma-separated fragment sources merged onto base config (local paths or `s3://` — see [Config fragments](#config-fragments)) | (empty)           |
+| `AOW_MAPPINGS_FILE`          | `mappings_file`          | Local path or `s3://` URI of the role-mappings file (see [Split configuration](#split-configuration))                        | (empty)           |
+| `AOW_MAPPINGS_MAX_STALE`     | `mappings_max_stale`     | Refuse requests with `503 config_stale` once mappings are older than this; `0` disables                                      | 3x reload interval (`s3://` only) |
+| `AOW_S3_CONFIG_BUCKET_OWNER` | `s3_config_bucket_owner` | 12-digit account ID sent as `ExpectedBucketOwner` on S3 config reads; required for `s3://` mappings or fragments             | (empty)           |
 | `AOW_SESSION_POLICY_BUCKET`  | `session_policy_bucket`  | S3 bucket for `session_policy_file` lookups                                                                                  | (empty)           |
 
 `issuers`, `default_issuer`, `role_sets`, `role_mappings`, `role_groups`, and `config_fragment_checksums` are structured values with no flat env-var equivalent — set them in the config file (or a fragment).
@@ -514,13 +517,76 @@ Applied only when the config file or S3 object already carries an `idp:` block; 
 
 `CONFIG_PATH` is also always checked at `/etc/aws-oidc-warden/` in addition to the configured path.
 
+## Split configuration
+
+`mappings_file` moves `role_mappings`, `role_groups` and `role_sets` out of the service config into a separate file. The platform team owns `service.yaml` (issuers, hardening, `idp`); workload owners own `mappings.yaml`. The two are reviewed and deployed separately, and a bucket policy scopes who may write the mappings. Worked example: [`docs/examples/split-config/`](examples/split-config/).
+
+```yaml
+s3_config_bucket_owner: "111122223333"
+mappings_file: "s3://EXAMPLE-BUCKET/mappings.yaml"
+config_reload_interval: 60s
+# mappings_max_stale: 180s   # default: 3x config_reload_interval; 0 disables
+```
+
+| Key | Env | Notes |
+| --- | --- | --- |
+| `mappings_file` | `AOW_MAPPINGS_FILE` | Local path or `s3://bucket/key`. `-mappings` sets it on `cmd/local` |
+| `mappings_max_stale` | `AOW_MAPPINGS_MAX_STALE` | See [Freshness](#freshness) |
+| `s3_config_bucket_owner` | `AOW_S3_CONFIG_BUCKET_OWNER` | Exactly 12 digits; never auto-resolved |
+
+With `mappings_file` set, the service config may not carry inline `role_mappings` or `role_groups`. Base `role_sets` are allowed only when `idp.allowed_roles` references them.
+
+### What the mappings file may contain
+
+Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token`, `idp_max_session_duration` and `allow_session_name`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment". It may not redefine a `role_sets` name referenced by `idp.allowed_roles`.
+
+The mappings file is a layer beside the base config and the S3 overlay (`s3_config_bucket`/`s3_config_path`). It merges first, then `config_fragments` in order; fragments are rejected inside it. A `role_sets` name defined twice across layers is an error.
+
+### Bucket owner
+
+`s3_config_bucket_owner` is sent as `ExpectedBucketOwner` on config reads only: the mappings file, `s3://` fragments and the S3 overlay. JWKS-cache and audit S3 calls do not use it.
+
+- Required for an `s3://` `mappings_file` or `s3://` fragment; a missing value fails `Validate()`.
+- Recommended for the S3 overlay. Unset, the overlay still loads and startup logs `config.s3_owner_unpinned` (Warn).
+
+### Reload
+
+With `config_reload_interval` > 0, the mappings are re-read lazily at most once per interval, with a conditional GET: a 304 means no re-parse. A failed or invalid refresh keeps the last good config. A refresh that fails backs off: the next attempt waits 2x, 4x, then 8x the interval, resetting on success. Requests never wait on a refresh. Once mappings are stale, backoff pauses and refreshes retry at the plain interval. A missing or invalid file at cold start fails startup.
+
+### Freshness
+
+`mappings_max_stale` bounds how old the last successful refresh may be.
+
+- Unset with an `s3://` `mappings_file` and `config_reload_interval` > 0: 3x the interval.
+- Explicit `0` disables the check.
+- An explicit value must be at least 2x `config_reload_interval`.
+- A local-path `mappings_file` rejects any value > 0.
+
+Past the limit every request gets `503 config_stale`, audited with `stage: config` and logged as `config.mappings_stale`. This covers `/verify` and the IdP mint path; static providers are never stale. The status is transient: retry with backoff or fail over ([GITHUB_ACTIONS.md](GITHUB_ACTIONS.md#request--response-contract)).
+
+### Integrity
+
+`config_fragment_checksums` pins (`sha256:<hex>` of the content) are impractical for a hot-reloaded mappings file, because every legitimate edit invalidates the pin. Use them for rarely-changing fragments. For the mappings file rely on bucket policy, versioning and object lock. Never use S3 ETags as pins.
+
+### Blast radius
+
+One invalid fragment or mappings file fails the whole refresh for every tenant. The last good config keeps serving until `mappings_max_stale`, then requests fail closed. Validate every change in CI before upload by running the config loader against the file.
+
+### Revocation
+
+Deleting or breaking the file is not revocation: the last good config keeps granting until it goes stale. To revoke, publish a file without the grant.
+
+### Security
+
+Whoever writes the mappings can grant roles and set `idp_token: true`, but never `idp.*` or `issuers`. The target role's trust policy (and, in IdP mode, the `sub` pin plus `idp.allowed_roles`) remains the final gate.
+
 ## Config fragments
 
 `config_fragments` lists additional sources merged on top of the base config's `default_issuer`, `role_sets`, `role_mappings`, and `role_groups` (and _only_ those four keys; anything else in a fragment is a hard error). This lets teams own their own role-mapping fragment without touching the base config that defines `issuers`/hardening knobs/`tag_auth`.
 
-> **Local paths only, for now.** `config.Provider` supports remote (`"scheme://"`, e.g. `s3://`) fragment URIs through an injected `FragmentFetchFunc` (`config.WithFragmentFetcher`), but the shipped binaries (Lambda and `cmd/local`) never install one — `bootstrap.go` calls `config.NewProvider(...)` with no `ProviderOption`s. A `config_fragments` entry with a `scheme://` prefix will hard-fail to fetch in every current deployment. Use local filesystem paths only until a fetcher is wired in.
+`s3://` fragments are fetched with the same conditional, owner-pinned read as the mappings file (1 MiB cap, `s3_config_bucket_owner` required; see [Split configuration](#split-configuration)).
 
-Fragments do **not** require an S3 config source: with only local-path fragments, they're merged once at startup (an invalid fragment fails startup) and re-resolved per `config_reload_interval` when it's > 0. With an S3 config source they're re-resolved on that same reload cadence.
+Fragments do **not** require an S3 config overlay: they are merged once at startup (an invalid fragment fails startup) and re-resolved per `config_reload_interval` when it is > 0, whether they are local paths or `s3://` objects.
 
 ```yaml
 config_fragments:
@@ -543,7 +609,8 @@ Rules enforced on every merge:
 - **`role_sets`**: merged by name; a fragment defining a `role_sets` name the base (or another already-merged fragment) already defined is rejected.
 - **`role_mappings`/`role_groups`**: appended.
 - Each fragment is capped at 1 MiB; fetch failures (and re-validation failures after merge) fall back to the last-known-good config rather than serving a partial/invalid merge.
-- Local-path fragments are content-hashed (sha256) for change detection; a remote fetcher (once wired) would use its own scheme's native change-detection token (e.g. an S3 ETag). Either can be pinned via `config_fragment_checksums`.
+- Local-path fragments are content-hashed (sha256) for change detection; `s3://` fragments use a conditional GET (an unchanged object is not re-parsed). Either can be pinned via `config_fragment_checksums`.
+- One invalid fragment fails the whole refresh for every tenant; see [Blast radius](#blast-radius).
 
 ## Hot-reloading
 

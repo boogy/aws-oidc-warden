@@ -1,0 +1,16 @@
+# Role mappings, owned by workload teams. May only declare default_issuer,
+# role_sets, role_mappings and role_groups.
+role_sets:
+  Deployers:
+    - "arn:aws:iam::111122223333:role/Deploy"
+
+role_mappings:
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/api"
+    roles: ["@Deployers"]
+
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/long-job"
+    roles: ["arn:aws:iam::111122223333:role/LongDeploy"]
+    idp_token: true
+    idp_max_session_duration: 4h

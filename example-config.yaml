@@ -168,6 +168,11 @@ session_policy_bucket: "aws-oidc-warden-session-policies"
 # s3_config_path: "config.yaml"
 # config_reload_interval: "5m"   # 0 (default) disables reloading
 
+## Optional split config: role mappings in their own local or s3:// file.
+# mappings_file: s3://EXAMPLE-BUCKET/mappings.yaml
+# s3_config_bucket_owner: "111122223333"   # required for an s3:// mappings_file
+# mappings_max_stale: 180s                 # default 3x config_reload_interval; 0 disables
+
 ####################################################################################
 # CONFIG FRAGMENTS (optional, for scaling to thousands of mappings)
 #

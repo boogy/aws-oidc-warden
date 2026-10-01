@@ -14,6 +14,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Source identity** is derived from the template and immutable.
 - **Audit records** carry `action` and `tokenId` for IdP mints.
 - **14 new error codes** for IdP mode, documented in the README and `GITHUB_ACTIONS.md` retry tables.
+- **`mappings_file`** (`AOW_MAPPINGS_FILE`, `-mappings` on the local server) loads role mappings from a separate local or `s3://` file, hot-reloaded and restricted to mapping keys. See `docs/CONFIGURATION.md` § Split configuration.
+- **`mappings_max_stale`** (`AOW_MAPPINGS_MAX_STALE`) refuses requests with `503 config_stale` once mappings are older than this. Defaults to 3x `config_reload_interval` for an `s3://` file; `0` disables.
+- **`s3_config_bucket_owner`** (`AOW_S3_CONFIG_BUCKET_OWNER`) is the expected owner account, sent as `ExpectedBucketOwner` on S3 config reads. Required for an `s3://` `mappings_file` or fragment. Optional for `s3_config_bucket`; a startup warning is logged when unset.
+
+### Changed
+
+- **Failed config refreshes back off exponentially** (up to 8x `config_reload_interval`), and requests no longer wait on an in-flight refresh.
+
+### Fixed
+
+- **`s3://` entries in `config_fragments` are fetched** (conditional GET, 1 MiB cap, owner pin, `sha256:` pins) instead of failing every refresh.
 
 ### Dependencies
 
