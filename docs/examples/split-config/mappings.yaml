@@ -1,16 +1,49 @@
-# Role mappings, owned by workload teams. May only declare default_issuer,
-# role_sets, role_mappings and role_groups.
+# mappings.yaml: who may assume which role, owned by the workload teams.
+# Allowed top-level keys: default_issuer, role_sets, role_mappings, role_groups.
+# Any other key rejects the whole file; the warden keeps the last good version.
+# Set issuer on every entry: with several issuers, one omitted falls back to default_issuer.
+
 role_sets:
-  Deployers:
-    - "arn:aws:iam::111122223333:role/Deploy"
+  api-deployers:
+    - "arn:aws:iam::111122223333:role/ApiDeploy"
+    - "arn:aws:iam::111122223333:role/ApiMigrate"
+  readonly:
+    - "arn:aws:iam::111122223333:role/ReadOnly"
 
 role_mappings:
+  # GitHub repo octo-org/api, main branch only: both deploy roles, 1h via /verify.
   - issuer: "https://token.actions.githubusercontent.com"
     subject: "octo-org/api"
-    roles: ["@Deployers"]
+    roles: ["@api-deployers"]
+    conditions:
+      ref: "refs/heads/main"
 
+  # Two repos sharing one grant, any branch.
   - issuer: "https://token.actions.githubusercontent.com"
-    subject: "octo-org/long-job"
+    subject: ["octo-org/web", "octo-org/docs"]
+    roles: ["@readonly"]
+
+  # Long job: may also call /idp/token for up to 4h (capped by idp.max_session_duration).
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/data-pipeline"
     roles: ["arn:aws:iam::111122223333:role/LongDeploy"]
+    conditions:
+      ref: "refs/heads/main"
     idp_token: true
     idp_max_session_duration: 4h
+
+  # GitLab project, bound to the GitLab issuer explicitly.
+  - issuer: "https://gitlab.com"
+    subject: "platform/infra"
+    roles: ["@readonly"]
+    conditions:
+      ref: "main"
+
+# Many repos with identical access: one entry, expanded per subject.
+role_groups:
+  - issuer: "https://token.actions.githubusercontent.com"
+    subjects: ["octo-org/tool-a", "octo-org/tool-b"]
+    defaults:
+      roles: ["@readonly"]
+      conditions:
+        event_name: "push"

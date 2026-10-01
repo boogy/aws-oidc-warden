@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/stretchr/testify/require"
@@ -510,9 +511,55 @@ func TestSplitConfigExamplesLoad(t *testing.T) {
 		p := config.NewProvider(cfg, 0, "yaml", nil)
 		require.NoError(t, p.Refresh(t.Context()))
 
-		ok, roles := p.Get().AuthorizeRoles(
-			"https://token.actions.githubusercontent.com", "octo-org/api", map[string]any{})
-		require.True(t, ok)
-		require.Equal(t, []string{"arn:aws:iam::111122223333:role/Deploy"}, roles)
+		const (
+			gh     = "https://token.actions.githubusercontent.com"
+			gl     = "https://gitlab.com"
+			acct   = "arn:aws:iam::111122223333:role/"
+			main   = "refs/heads/main"
+			branch = "refs/heads/feature"
+		)
+		tests := []struct {
+			name, issuer, subject string
+			claims                map[string]any
+			roles                 []string
+		}{
+			{"api on main", gh, "octo-org/api", map[string]any{"ref": main}, []string{acct + "ApiDeploy", acct + "ApiMigrate"}},
+			{"api off main", gh, "octo-org/api", map[string]any{"ref": branch}, nil},
+			{"web any branch", gh, "octo-org/web", map[string]any{"ref": branch}, []string{acct + "ReadOnly"}},
+			{"pipeline on main", gh, "octo-org/data-pipeline", map[string]any{"ref": main}, []string{acct + "LongDeploy"}},
+			{"gitlab infra on main", gl, "platform/infra", map[string]any{"ref": "main"}, []string{acct + "ReadOnly"}},
+			{"gitlab subject under github", gh, "platform/infra", map[string]any{"ref": "main"}, nil},
+			{"group tool on push", gh, "octo-org/tool-a", map[string]any{"event_name": "push"}, []string{acct + "ReadOnly"}},
+			{"group tool on pull_request", gh, "octo-org/tool-a", map[string]any{"event_name": "pull_request"}, nil},
+			{"unlisted repo", gh, "octo-org/other", map[string]any{"ref": main}, nil},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				ok, roles := p.Get().AuthorizeRoles(tt.issuer, tt.subject, tt.claims)
+				require.Equal(t, tt.roles != nil, ok)
+				if tt.roles != nil {
+					require.ElementsMatch(t, tt.roles, roles)
+				}
+			})
+		}
+
+		idpTests := []struct {
+			name, subject, role string
+			idp                 bool
+			ceiling             time.Duration
+		}{
+			{"pipeline may mint for 4h", "octo-org/data-pipeline", acct + "LongDeploy", true, 4 * time.Hour},
+			{"api may not mint", "octo-org/api", acct + "ApiDeploy", false, 0},
+		}
+		for _, tt := range idpTests {
+			t.Run(tt.name, func(t *testing.T) {
+				d := p.Get().Authorize(gh, tt.subject, tt.role, map[string]any{"ref": main})
+				require.True(t, d.Matched)
+				require.Equal(t, tt.idp, d.IDPTokenAllowed())
+				if tt.idp {
+					require.Equal(t, tt.ceiling, d.IdPMaxSessionDuration())
+				}
+			})
+		}
 	})
 }

@@ -519,7 +519,7 @@ Applied only when the config file or S3 object already carries an `idp:` block; 
 
 ## Split configuration
 
-`mappings_file` moves `role_mappings`, `role_groups` and `role_sets` out of the service config into a separate file. The platform team owns `service.yaml` (issuers, hardening, `idp`); workload owners own `mappings.yaml`. The two are reviewed and deployed separately, and a bucket policy scopes who may write the mappings. Worked example: [`docs/examples/split-config/`](examples/split-config/).
+`mappings_file` moves `role_mappings`, `role_groups` and `role_sets` out of the service config into a separate file. The platform team owns `service.yaml` (issuers, hardening, `idp`); workload owners own `mappings.yaml`. The two are reviewed and deployed separately, and a bucket policy scopes who may write the mappings. Worked example, with both files annotated, the access each caller gets, rejected files and the stale timeline: [`docs/examples/split-config/README.md`](examples/split-config/README.md).
 
 ```yaml
 s3_config_bucket_owner: "111122223333"

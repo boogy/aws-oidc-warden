@@ -1,25 +1,31 @@
-# Service config, owned by the platform team. Role mappings live in mappings.yaml.
+# service.yaml: the warden's own config, owned by the platform team.
+# It holds no role mappings; those live in the file named by mappings_file.
+
 issuers:
   - issuer: "https://token.actions.githubusercontent.com"
-    provider: "github"
+    provider: "github" # canonical subject = the repository, e.g. octo-org/api
     audiences: ["sts.amazonaws.com"]
+  - issuer: "https://gitlab.com"
+    provider: "generic"
+    audiences: ["https://gitlab.com"]
+    claim_mappings:
+      subject: "project_path" # canonical subject = the project path, e.g. platform/infra
 default_issuer: "https://token.actions.githubusercontent.com"
 role_session_name: "aws-oidc-warden"
 
-# Required for an s3:// mappings_file; sent as ExpectedBucketOwner on config reads.
-s3_config_bucket_owner: "111122223333"
 mappings_file: "s3://EXAMPLE-BUCKET/mappings.yaml"
+s3_config_bucket_owner: "111122223333" # required for s3://; sent as ExpectedBucketOwner
 config_reload_interval: 60s
-# mappings_max_stale: 180s   # default: 3x config_reload_interval; 0 disables
+# mappings_max_stale: 180s # default 3x config_reload_interval; past it requests get 503 config_stale
 
 idp:
   enabled: true
-  issuer: "https://idp.example.com"
+  issuer: "https://idp.example.com" # the warden's own issuer, registered as an IAM OIDC provider
   audience: "idp-audience-example"
   signing_keys:
     - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/00000000-0000-0000-0000-000000000000"
       algorithm: ES256
       status: active
   max_session_duration: 4h # >1h: logs config.idp_uncapped at startup by design
-  allowed_roles:
+  allowed_roles: # the only roles any mapping may reach through /idp/token
     - "arn:aws:iam::111122223333:role/LongDeploy"
