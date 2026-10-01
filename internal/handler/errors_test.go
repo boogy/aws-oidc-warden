@@ -34,6 +34,8 @@ func TestClassifyError(t *testing.T) {
 		{ErrAssumeRoleDenied, "assume_role_denied", http.StatusForbidden},
 		{ErrAssumeRoleFailed, "assume_role_failed", http.StatusInternalServerError},
 		{ErrAuditWriteFailed, "audit_write_failed", http.StatusInternalServerError},
+		{ErrConfigStale, "config_stale", http.StatusServiceUnavailable},
+		{fmt.Errorf("%w: %w", ErrConfigStale, ErrAuditWriteFailed), "audit_write_failed", http.StatusInternalServerError},
 		{ErrIdPNotPermitted, "idp_not_permitted", http.StatusForbidden},
 		{ErrIdPUnavailable, "idp_signing_unavailable", http.StatusServiceUnavailable},
 		{ErrMethodNotAllowed, "method_not_allowed", http.StatusMethodNotAllowed},

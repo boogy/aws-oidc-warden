@@ -31,6 +31,7 @@ import (
 type ServerSettings struct {
 	Port            int
 	ConfigPath      string
+	MappingsPath    string
 	LogLevel        string
 	SimulateLatency time.Duration
 }
@@ -68,31 +69,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Config provider shared by the validator and the handler so both read the
-	// same snapshot. Without config_fragments it is static (no reload). With
-	// fragments, a static provider would silently ignore them (fragments only
-	// merge on a provider Refresh), so build a reloadable provider with no
-	// primary fetch: fragments merge once here, and — like the Lambda
-	// bootstrap — are re-resolved per config_reload_interval when it's > 0.
-	var provider *config.Provider
-	if len(cfg.ConfigFragments) > 0 {
-		provider = config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil)
-		if err := provider.Refresh(ctx); err != nil {
-			logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to merge config fragments",
-				slog.String("component", "remote_config"), slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-	} else {
-		provider = config.NewStaticProvider(cfg)
+	awsClient := aws.NewAwsConsumer(cfg)
+
+	// Shared by the validator and the handler so both read the same snapshot.
+	provider, err := handler.BuildConfigProvider(cfg, awsClient)
+	if err != nil {
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to load configuration",
+			slog.String("component", "remote_config"), slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
 	// Initialize the token validator and wrap it in a SelfExtractor so the local
 	// server always validates JWT signatures itself (no delegated mode).
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 	extractor := validator.NewSelfExtractor(tokenValidator)
-
-	// Initialize the AWS client
-	awsClient := aws.NewAwsConsumer(cfg)
 
 	svc := handler.NewIdPService(provider, func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }, logger)
 
@@ -242,6 +232,7 @@ func parseCliFlags() (ServerSettings, error) {
 
 	flag.IntVar(&settings.Port, "port", 8080, "Port to listen on")
 	flag.StringVar(&settings.ConfigPath, "config", "", "Path to config file or directory")
+	flag.StringVar(&settings.MappingsPath, "mappings", "", "Path or s3:// URI of the role-mappings file")
 	flag.StringVar(&settings.LogLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	flag.DurationVar(&settings.SimulateLatency, "latency", 0, "Simulate network latency (e.g., 100ms)")
 
@@ -256,6 +247,12 @@ func parseCliFlags() (ServerSettings, error) {
 			if err := os.Setenv("CONFIG_NAME", name); err != nil {
 				return settings, err
 			}
+		}
+	}
+
+	if settings.MappingsPath != "" {
+		if err := os.Setenv("AOW_MAPPINGS_FILE", settings.MappingsPath); err != nil {
+			return settings, err
 		}
 	}
 

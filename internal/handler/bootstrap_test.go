@@ -103,7 +103,7 @@ func fragmentTestBaseConfig(t *testing.T, fragmentPath string) *config.Config {
 
 // TestBuildConfigProvider_LocalFragmentsWithoutS3Source is the regression test
 // for fragments being silently dropped when no S3 config source is set: the
-// provider buildConfigProvider returns must serve a config with the fragment's
+// provider BuildConfigProvider returns must serve a config with the fragment's
 // role_mappings merged in, not the bare base config.
 func TestBuildConfigProvider_LocalFragmentsWithoutS3Source(t *testing.T) {
 	fragPath := filepath.Join(t.TempDir(), "team-fragment.yaml")
@@ -117,7 +117,7 @@ role_mappings:
 	cfg := fragmentTestBaseConfig(t, fragPath)
 	require.Empty(t, cfg.S3ConfigBucket, "test premise: no S3 config source")
 
-	provider, err := buildConfigProvider(cfg, nil)
+	provider, err := BuildConfigProvider(cfg, nil)
 	require.NoError(t, err)
 
 	served := provider.Get()
@@ -139,7 +139,7 @@ role_mappings:
 func TestBuildConfigProvider_NoFragmentsNoS3IsStatic(t *testing.T) {
 	cfg := fragmentTestBaseConfig(t, "")
 
-	provider, err := buildConfigProvider(cfg, nil)
+	provider, err := BuildConfigProvider(cfg, nil)
 	require.NoError(t, err)
 	assert.Same(t, cfg, provider.Get(), "no-fragment path must serve the base config unchanged")
 }
@@ -154,7 +154,7 @@ tag_auth:
 `), 0o600))
 
 	cfg := fragmentTestBaseConfig(t, fragPath)
-	_, err := buildConfigProvider(cfg, nil)
+	_, err := BuildConfigProvider(cfg, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not allowed in a config fragment")
 }

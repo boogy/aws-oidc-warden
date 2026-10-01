@@ -18,6 +18,10 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		errCode = "audit_write_failed"
 		errMsg = "Request denied: durable audit logging is required and unavailable"
 		*statusCode = http.StatusInternalServerError
+	case errors.Is(err, ErrConfigStale):
+		errCode = "config_stale"
+		errMsg = "Service configuration is stale; try again later"
+		*statusCode = http.StatusServiceUnavailable
 	case errors.Is(err, ErrEmptyToken), errors.Is(err, ErrTokenTooLarge),
 		errors.Is(err, ErrEmptyRole), errors.Is(err, ErrInvalidRoleFormat),
 		errors.Is(err, ErrRoleTooLarge), errors.Is(err, ErrInvalidJSON):

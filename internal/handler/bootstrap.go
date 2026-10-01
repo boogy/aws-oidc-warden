@@ -102,7 +102,7 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
-	provider, err := buildConfigProvider(cfg, consumer)
+	provider, err := BuildConfigProvider(cfg, consumer)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
 			slog.String("component", "remote_config"), slog.String("error", err.Error()))
@@ -202,46 +202,62 @@ func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfi
 	return &cfg.Issuers[0], nil
 }
 
-// buildConfigProvider wires the config provider: with an S3 config source it
-// fetches+overlays it (failing fast) and enables hot-reload when
-// ConfigReloadInterval > 0; without one, a static provider serves the local
-// config unless config_fragments are set, which need a reloadable provider
-// (nil fetch) to get merged at all.
-func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
-	if cfg.S3ConfigBucket == "" || cfg.S3ConfigPath == "" {
-		if len(cfg.ConfigFragments) == 0 {
+// BuildConfigProvider wires the config provider shared by every front-end. It stays static
+// only with no mappings file, S3 overlay or config_fragments; otherwise it refreshes at startup (failing fast).
+func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
+	ctx := context.Background()
+	opt := config.WithFragmentFetcher(s3FragmentFetcher(consumer, cfg.S3ConfigBucketOwner))
+	hasOverlay := cfg.S3ConfigBucket != "" && cfg.S3ConfigPath != ""
+
+	if !hasOverlay {
+		if cfg.MappingsFile == "" && len(cfg.ConfigFragments) == 0 {
 			return config.NewStaticProvider(cfg), nil
 		}
-		provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil)
-		if err := provider.Refresh(context.Background()); err != nil {
+		provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, opt)
+		if err := provider.Refresh(ctx); err != nil {
 			return nil, err
+		}
+		if cfg.MappingsFile != "" && cfg.ConfigReloadInterval > 0 {
+			logevent.Info(ctx, nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled",
+				slog.Int64("intervalMs", cfg.ConfigReloadInterval.Milliseconds()),
+				slog.String("mappingsFile", cfg.MappingsFile))
 		}
 		return provider, nil
 	}
 
-	bucket, key := cfg.S3ConfigBucket, cfg.S3ConfigPath
-	fetch := func(ctx context.Context) ([]byte, error) {
-		body, err := consumer.GetS3Object(ctx, bucket, key)
-		if err != nil {
-			return nil, err
+	bucket, key, owner := cfg.S3ConfigBucket, cfg.S3ConfigPath, cfg.S3ConfigBucketOwner
+	var fetch config.FetchFunc
+	if owner != "" {
+		fetch = func(ctx context.Context) ([]byte, error) {
+			data, _, err := consumer.GetS3ObjectIfChanged(ctx, bucket, key, "", owner)
+			return data, err
 		}
-		defer func() {
-			if cerr := body.Close(); cerr != nil {
-				logevent.Warn(ctx, nil, logevent.AppResourceCloseFailure, "failed to close resource",
-					slog.String("resource", "s3_config_object"), slog.String("error", cerr.Error()))
+	} else {
+		logevent.Warn(ctx, nil, logevent.ConfigS3OwnerUnpinned, "s3 config read is not pinned to a bucket owner",
+			slog.String("bucket", bucket))
+		fetch = func(ctx context.Context) ([]byte, error) {
+			body, err := consumer.GetS3Object(ctx, bucket, key)
+			if err != nil {
+				return nil, err
 			}
-		}()
-		return io.ReadAll(io.LimitReader(body, maxRemoteConfigSize))
+			defer func() {
+				if cerr := body.Close(); cerr != nil {
+					logevent.Warn(ctx, nil, logevent.AppResourceCloseFailure, "failed to close resource",
+						slog.String("resource", "s3_config_object"), slog.String("error", cerr.Error()))
+				}
+			}()
+			return io.ReadAll(io.LimitReader(body, maxRemoteConfigSize))
+		}
 	}
 
-	provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, config.FormatFromPath(key), fetch)
+	provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, config.FormatFromPath(key), fetch, opt)
 
-	if err := provider.Refresh(context.Background()); err != nil {
+	if err := provider.Refresh(ctx); err != nil {
 		return nil, err
 	}
 
 	if cfg.ConfigReloadInterval > 0 {
-		logevent.Info(context.Background(), nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled",
+		logevent.Info(ctx, nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled",
 			slog.Int64("intervalMs", cfg.ConfigReloadInterval.Milliseconds()),
 			slog.String("bucket", bucket),
 			slog.String("key", key))

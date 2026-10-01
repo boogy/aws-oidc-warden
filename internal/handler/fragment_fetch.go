@@ -1,0 +1,74 @@
+package handler
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net/url"
+	"strings"
+	"sync"
+
+	"github.com/boogy/aws-oidc-warden/internal/aws"
+	"github.com/boogy/aws-oidc-warden/internal/config"
+)
+
+// parseS3URI splits s3://bucket/key; the key keeps any "//" intact.
+func parseS3URI(uri string) (bucket, key string, err error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid s3 uri %q: %w", uri, err)
+	}
+	switch {
+	case u.Scheme != "s3":
+		return "", "", fmt.Errorf("invalid s3 uri %q: scheme must be s3", uri)
+	case u.Host == "" || u.Port() != "" || strings.Contains(u.Host, ":"):
+		return "", "", fmt.Errorf("invalid s3 uri %q: bucket missing or has a port", uri)
+	case u.User != nil:
+		return "", "", fmt.Errorf("invalid s3 uri %q: userinfo not allowed", uri)
+	case u.RawQuery != "" || u.Fragment != "" || strings.Contains(uri, "?") || strings.Contains(uri, "#"):
+		return "", "", fmt.Errorf("invalid s3 uri %q: query and fragment not allowed", uri)
+	}
+	key = strings.TrimPrefix(u.Path, "/")
+	if key == "" {
+		return "", "", fmt.Errorf("invalid s3 uri %q: key missing", uri)
+	}
+	return u.Host, key, nil
+}
+
+type fetchedETag struct{ digest, s3ETag string }
+
+// s3FragmentFetcher reads fragments through the owner-pinned conditional GET and reports a sha256 content digest as the etag.
+func s3FragmentFetcher(consumer aws.AwsConsumerInterface, owner string) config.FragmentFetchFunc {
+	var mu sync.Mutex
+	seen := map[string]fetchedETag{}
+
+	return func(ctx context.Context, uri, prevETag string) ([]byte, string, error) {
+		bucket, key, err := parseS3URI(uri)
+		if err != nil {
+			return nil, "", err
+		}
+
+		mu.Lock()
+		var prevS3 string
+		if e, ok := seen[uri]; ok && prevETag != "" && e.digest == prevETag {
+			prevS3 = e.s3ETag
+		}
+		mu.Unlock()
+
+		data, s3ETag, err := consumer.GetS3ObjectIfChanged(ctx, bucket, key, prevS3, owner)
+		if err != nil {
+			return nil, "", err
+		}
+		if prevS3 != "" && data == nil {
+			return nil, prevETag, nil
+		}
+
+		sum := sha256.Sum256(data)
+		digest := "sha256:" + hex.EncodeToString(sum[:])
+		mu.Lock()
+		seen[uri] = fetchedETag{digest: digest, s3ETag: s3ETag}
+		mu.Unlock()
+		return data, digest, nil
+	}
+}

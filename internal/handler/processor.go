@@ -122,6 +122,13 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	rec.Action = action
 	o := &authzOutcome{cfg: cfg, rec: rec, log: log, elapsed: elapsed}
 
+	if age, limit, stale := r.provider.Stale(); stale {
+		o.rec.Stage, o.rec.Reason = "config", "mappings older than mappings_max_stale"
+		logevent.Error(ctx, log, logevent.ConfigMappingsStale, "role mappings are stale; refusing request",
+			slog.Int64("ageMs", age.Milliseconds()), slog.Int64("maxStaleMs", limit.Milliseconds()))
+		return nil, r.deny(ctx, o, "Configuration stale", ErrConfigStale)
+	}
+
 	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
 		rec.setErrorReason("extract", err)
