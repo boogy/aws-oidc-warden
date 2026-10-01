@@ -10,7 +10,7 @@ The complete configuration reference. If you are setting the service up for the 
 | [The issuer model](#the-issuer-model)                                     | `issuers[]`, per-issuer fields, the zero-config seed                                             |
 | [Authorization](#authorization-role_mappings-role_groups-role_sets)       | `role_mappings`, `role_groups`, `role_sets`, conditions, boolean logic                           |
 | [How a grant resolves](#how-a-grant-its-policy-and-its-overrides-resolve) | Session policies, `role_session_name`, per-mapping `session_tags`, **and the ordering foot-gun** |
-| [IdP](#idp-optional-identity-provider)                                   | Optional identity-provider mode: `idp` keys, per-mapping `idp_token`, request fields             |
+| [IdP](#idp-optional-identity-provider)                                    | Optional identity-provider mode: `idp` keys, per-mapping `idp_token`, request fields             |
 | [Environment Variable Reference](#environment-variable-reference)         | Every `AOW_*` variable, by area                                                                  |
 | [Config fragments](#config-fragments)                                     | Splitting mappings across files                                                                  |
 | [Hot-reloading](#hot-reloading)                                           | S3 refresh and overlay merge semantics                                                           |
@@ -329,11 +329,11 @@ See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefin
 
 `role_mappings[]` and `role_groups[].defaults` accept three IdP fields. They apply only when [IdP mode](IDP.md) is configured, and only to roles granted by that mapping (group defaults apply to the expanded mappings).
 
-| Field | Default | Notes |
-| --- | --- | --- |
-| `idp_token` | `false` | Opt the mapping in to `POST` on the IdP token path |
-| `idp_max_session_duration` | unset | Ceiling for the caller's `durationSeconds`, 15m to 12h; the effective cap is `min(this, idp.max_session_duration)`. Needs `idp_token` |
-| `allow_session_name` | `false` | Let the caller pick the session name; also needs `idp.allow_session_name`. Needs `idp_token` |
+| Field                      | Default | Notes                                                                                                                                 |
+| -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `idp_token`                | `false` | Opt the mapping in to `POST` on the IdP token path                                                                                    |
+| `idp_max_session_duration` | unset   | Ceiling for the caller's `durationSeconds`, 15m to 12h; the effective cap is `min(this, idp.max_session_duration)`. Needs `idp_token` |
+| `allow_session_name`       | `false` | Let the caller pick the session name; also needs `idp.allow_session_name`. Needs `idp_token`                                          |
 
 With `role_sets`, the lowest-order mapping that grants the role decides.
 
@@ -353,27 +353,27 @@ Concretely, a mapping is `byOwner`-bucketed only when its compiled pattern's gua
 
 Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](IDP.md).
 
-| Key | Default | Bounds / values | Notes |
-| --- | --- | --- | --- |
-| `enabled` | `false` | | Live. Kill switch |
-| `issuer` | | https URL, no trailing slash, lowercase host | Must differ from every `issuers[]` entry; none of those may contain `#` |
-| `audience` | | required | Token `aud` (`audience_mode: static`) |
-| `audience_mode` | `static` | `static`, `role_arn` | `role_arn` sets `aud` to the target role ARN |
-| `token_ttl` | `2m` | 1m to 5m | Lifetime of the minted token only, not of the credentials |
-| `jwks_uri` | `<idp.issuer>/.well-known/jwks.json` | https URL | Advertised in discovery |
-| `paths.token` | `<idp.issuer path>/idp/token` | clean, under the `idp.issuer` path | |
-| `paths.discovery` | `<idp.issuer path>/.well-known/openid-configuration` | must end with that suffix | |
-| `paths.jwks` | `<idp.issuer path>/.well-known/jwks.json` | | |
-| `subject_template` | `{role_arn}` | must end with `{role_arn}`; also `{account_id}`, `{role_name}`, `{source_issuer}`, `{source_subject}` | `{source_subject}` needs `{source_issuer}#` before it |
-| `include_source_identity` | `true` | | Adds the AWS source-identity claim to the minted token |
-| `source_identity` | `{issuer}:{subject}` | placeholders `{request_id}`, `{subject}`, `{issuer}` (inbound issuer host, not `idp.issuer`), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer |
-| `source_identity_overflow` | `truncate` | `truncate`, `reject` | Over 64 characters |
-| `max_session_duration` | `1h` | 15m to 12h, whole seconds | Live, base-only. Above `1h` logs `config.idp_uncapped` |
-| `allow_session_name` | `false` | | Live, base-only. Gates the per-mapping flag |
-| `allowed_roles` | empty (no cap) | role ARNs or `@role_set` | Live, base-only; roles outside it get 403 `idp_not_permitted` |
-| `sign_timeout` | `2s` | > 0 | Per KMS `Sign` call |
-| `jwks_cache_max_age` | `5m` | >= 0 | `Cache-Control` max-age of served documents |
-| `signing_keys[]` | | at most 5, exactly one `active` | `kms_key_id` (full key ARN) **or** `file` (dev only, refused on Lambda), `algorithm` (`ES256`/`RS256`), `status` (`active`/`verify_only`) |
+| Key                        | Default                                              | Bounds / values                                                                                                | Notes                                                                                                                                     |
+| -------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                  | `false`                                              |                                                                                                                | Live. Kill switch                                                                                                                         |
+| `issuer`                   |                                                      | https URL, no trailing slash, lowercase host                                                                   | Must differ from every `issuers[]` entry; none of those may contain `#`                                                                   |
+| `audience`                 |                                                      | required                                                                                                       | Token `aud` (`audience_mode: static`)                                                                                                     |
+| `audience_mode`            | `static`                                             | `static`, `role_arn`                                                                                           | `role_arn` sets `aud` to the target role ARN                                                                                              |
+| `token_ttl`                | `2m`                                                 | 1m to 5m                                                                                                       | Lifetime of the minted token only, not of the credentials                                                                                 |
+| `jwks_uri`                 | `<idp.issuer>/.well-known/jwks.json`                 | https URL                                                                                                      | Advertised in discovery                                                                                                                   |
+| `paths.token`              | `<idp.issuer path>/idp/token`                        | clean, under the `idp.issuer` path                                                                             |                                                                                                                                           |
+| `paths.discovery`          | `<idp.issuer path>/.well-known/openid-configuration` | must end with that suffix                                                                                      |                                                                                                                                           |
+| `paths.jwks`               | `<idp.issuer path>/.well-known/jwks.json`            |                                                                                                                |                                                                                                                                           |
+| `subject_template`         | `{role_arn}`                                         | must end with `{role_arn}`; also `{account_id}`, `{role_name}`, `{source_issuer}`, `{source_subject}`          | `{source_subject}` needs `{source_issuer}#` before it                                                                                     |
+| `include_source_identity`  | `true`                                               |                                                                                                                | Adds the AWS source-identity claim to the minted token                                                                                    |
+| `source_identity`          | `{issuer}:{subject}`                                 | placeholders `{request_id}`, `{subject}`, `{issuer}` (inbound issuer host, not `idp.issuer`), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer                                                                                         |
+| `source_identity_overflow` | `truncate`                                           | `truncate`, `reject`                                                                                           | Over 64 characters                                                                                                                        |
+| `max_session_duration`     | `1h`                                                 | 15m to 12h, whole seconds                                                                                      | Live, base-only. Above `1h` logs `config.idp_uncapped`                                                                                    |
+| `allow_session_name`       | `false`                                              |                                                                                                                | Live, base-only. Gates the per-mapping flag                                                                                               |
+| `allowed_roles`            | empty (no cap)                                       | role ARNs or `@role_set`                                                                                       | Live, base-only; roles outside it get 403 `idp_not_permitted`                                                                             |
+| `sign_timeout`             | `2s`                                                 | > 0                                                                                                            | Per KMS `Sign` call                                                                                                                       |
+| `jwks_cache_max_age`       | `5m`                                                 | >= 0                                                                                                           | `Cache-Control` max-age of served documents                                                                                               |
+| `signing_keys[]`           |                                                      | at most 5, exactly one `active`                                                                                | `kms_key_id` (full key ARN) **or** `file` (dev only, refused on Lambda), `algorithm` (`ES256`/`RS256`), `status` (`active`/`verify_only`) |
 
 `idp` is rejected in config fragments. Two traps:
 
@@ -384,10 +384,10 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 
 The IdP token path takes the same body as `/verify`, plus:
 
-| Field | Notes |
-| --- | --- |
+| Field             | Notes                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------- |
 | `durationSeconds` | 900..43200; omitted = `min(3600, ceiling)`; above the ceiling is refused, never clamped |
-| `sessionName` | Needs both `allow_session_name` flags; `^[\w+=,.@-]{2,64}$` |
+| `sessionName`     | Needs both `allow_session_name` flags; `^[\w+=,.@-]{2,64}$`                             |
 
 Both are refused on the `AssumeRole` path with 400 `field_not_supported`. The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`) plus `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
@@ -395,17 +395,17 @@ Both are refused on the `AssumeRole` path with 400 `field_not_supported`. The re
 
 ### Core Settings
 
-| Environment Variable         | Config File Key          | Description                                                                                                                  | Default           |
-| ---------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `AOW_ROLE_SESSION_NAME`      | `role_session_name`      | AWS STS role session name; overridable per-mapping (see [role_mappings](#authorization-role_mappings-role_groups-role_sets)) | `aws-oidc-warden` |
-| `AOW_S3_CONFIG_BUCKET`       | `s3_config_bucket`       | S3 bucket holding the remote config object                                                                                   | (empty)           |
-| `AOW_S3_CONFIG_PATH`         | `s3_config_path`         | Key/path of the remote config object in that bucket                                                                          | (empty)           |
-| `AOW_CONFIG_RELOAD_INTERVAL` | `config_reload_interval` | Hot-reload the S3 config at most this often (e.g. `5m`); `0` disables                                                        | `0` (disabled)    |
-| `AOW_CONFIG_FRAGMENTS`       | `config_fragments`       | Comma-separated fragment sources merged onto base config (local paths or `s3://` — see [Config fragments](#config-fragments)) | (empty)           |
-| `AOW_MAPPINGS_FILE`          | `mappings_file`          | Local path or `s3://` URI of the role-mappings file (see [Split configuration](#split-configuration))                        | (empty)           |
-| `AOW_MAPPINGS_MAX_STALE`     | `mappings_max_stale`     | Refuse requests with `503 config_stale` once mappings are older than this; `0` disables                                      | 3x reload interval (`s3://` only) |
-| `AOW_S3_CONFIG_BUCKET_OWNER` | `s3_config_bucket_owner` | 12-digit account ID sent as `ExpectedBucketOwner` on S3 config reads; required for `s3://` mappings or fragments             | (empty)           |
-| `AOW_SESSION_POLICY_BUCKET`  | `session_policy_bucket`  | S3 bucket for `session_policy_file` lookups                                                                                  | (empty)           |
+| Environment Variable         | Config File Key          | Description                                                                                                                   | Default                           |
+| ---------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `AOW_ROLE_SESSION_NAME`      | `role_session_name`      | AWS STS role session name; overridable per-mapping (see [role_mappings](#authorization-role_mappings-role_groups-role_sets))  | `aws-oidc-warden`                 |
+| `AOW_S3_CONFIG_BUCKET`       | `s3_config_bucket`       | S3 bucket holding the remote config object                                                                                    | (empty)                           |
+| `AOW_S3_CONFIG_PATH`         | `s3_config_path`         | Key/path of the remote config object in that bucket                                                                           | (empty)                           |
+| `AOW_CONFIG_RELOAD_INTERVAL` | `config_reload_interval` | Hot-reload the S3 config at most this often (e.g. `5m`); `0` disables                                                         | `0` (disabled)                    |
+| `AOW_CONFIG_FRAGMENTS`       | `config_fragments`       | Comma-separated fragment sources merged onto base config (local paths or `s3://` — see [Config fragments](#config-fragments)) | (empty)                           |
+| `AOW_MAPPINGS_FILE`          | `mappings_file`          | Local path or `s3://` URI of the role-mappings file (see [Split configuration](#split-configuration))                         | (empty)                           |
+| `AOW_MAPPINGS_MAX_STALE`     | `mappings_max_stale`     | Refuse requests with `503 config_stale` once mappings are older than this; `0` disables                                       | 3x reload interval (`s3://` only) |
+| `AOW_S3_CONFIG_BUCKET_OWNER` | `s3_config_bucket_owner` | 12-digit account ID sent as `ExpectedBucketOwner` on S3 config reads; required for `s3://` mappings or fragments              | (empty)                           |
+| `AOW_SESSION_POLICY_BUCKET`  | `session_policy_bucket`  | S3 bucket for `session_policy_file` lookups                                                                                   | (empty)                           |
 
 `issuers`, `default_issuer`, `role_sets`, `role_mappings`, `role_groups`, and `config_fragment_checksums` are structured values with no flat env-var equivalent — set them in the config file (or a fragment).
 
@@ -482,20 +482,20 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 
 Applied only when the config file or S3 object already carries an `idp:` block; env alone never creates it. `signing_keys`, `paths` and `allowed_roles` are file/S3 only. Env beats S3 on every reload, including `AOW_IDP_ENABLED`.
 
-| Environment Variable | Config File Key | Default |
-| --- | --- | --- |
-| `AOW_IDP_ENABLED` | `idp.enabled` | `false` |
-| `AOW_IDP_ISSUER` | `idp.issuer` | |
-| `AOW_IDP_AUDIENCE` | `idp.audience` | |
-| `AOW_IDP_AUDIENCE_MODE` | `idp.audience_mode` | `static` |
-| `AOW_IDP_TOKEN_TTL` | `idp.token_ttl` | `2m` (1m to 5m) |
-| `AOW_IDP_JWKS_URI` | `idp.jwks_uri` | `<idp.issuer>/.well-known/jwks.json` |
-| `AOW_IDP_SUBJECT_TEMPLATE` | `idp.subject_template` | `{role_arn}` |
-| `AOW_IDP_INCLUDE_SOURCE_IDENTITY` | `idp.include_source_identity` | `true` |
-| `AOW_IDP_SOURCE_IDENTITY` | `idp.source_identity` | `{issuer}:{subject}` |
-| `AOW_IDP_SOURCE_IDENTITY_OVERFLOW` | `idp.source_identity_overflow` | `truncate` |
-| `AOW_IDP_MAX_SESSION_DURATION` | `idp.max_session_duration` | `1h` |
-| `AOW_IDP_ALLOW_SESSION_NAME` | `idp.allow_session_name` | `false` |
+| Environment Variable               | Config File Key                | Default                              |
+| ---------------------------------- | ------------------------------ | ------------------------------------ |
+| `AOW_IDP_ENABLED`                  | `idp.enabled`                  | `false`                              |
+| `AOW_IDP_ISSUER`                   | `idp.issuer`                   |                                      |
+| `AOW_IDP_AUDIENCE`                 | `idp.audience`                 |                                      |
+| `AOW_IDP_AUDIENCE_MODE`            | `idp.audience_mode`            | `static`                             |
+| `AOW_IDP_TOKEN_TTL`                | `idp.token_ttl`                | `2m` (1m to 5m)                      |
+| `AOW_IDP_JWKS_URI`                 | `idp.jwks_uri`                 | `<idp.issuer>/.well-known/jwks.json` |
+| `AOW_IDP_SUBJECT_TEMPLATE`         | `idp.subject_template`         | `{role_arn}`                         |
+| `AOW_IDP_INCLUDE_SOURCE_IDENTITY`  | `idp.include_source_identity`  | `true`                               |
+| `AOW_IDP_SOURCE_IDENTITY`          | `idp.source_identity`          | `{issuer}:{subject}`                 |
+| `AOW_IDP_SOURCE_IDENTITY_OVERFLOW` | `idp.source_identity_overflow` | `truncate`                           |
+| `AOW_IDP_MAX_SESSION_DURATION`     | `idp.max_session_duration`     | `1h`                                 |
+| `AOW_IDP_ALLOW_SESSION_NAME`       | `idp.allow_session_name`       | `false`                              |
 
 ### JWT Validation Mode Settings
 
@@ -528,11 +528,11 @@ config_reload_interval: 60s
 # mappings_max_stale: 180s   # default: 3x config_reload_interval; 0 disables
 ```
 
-| Key | Env | Notes |
-| --- | --- | --- |
-| `mappings_file` | `AOW_MAPPINGS_FILE` | Local path or `s3://bucket/key`. `-mappings` sets it on `cmd/local` |
-| `mappings_max_stale` | `AOW_MAPPINGS_MAX_STALE` | See [Freshness](#freshness) |
-| `s3_config_bucket_owner` | `AOW_S3_CONFIG_BUCKET_OWNER` | Exactly 12 digits; never auto-resolved |
+| Key                      | Env                          | Notes                                                               |
+| ------------------------ | ---------------------------- | ------------------------------------------------------------------- |
+| `mappings_file`          | `AOW_MAPPINGS_FILE`          | Local path or `s3://bucket/key`. `-mappings` sets it on `cmd/local` |
+| `mappings_max_stale`     | `AOW_MAPPINGS_MAX_STALE`     | See [Freshness](#freshness)                                         |
+| `s3_config_bucket_owner` | `AOW_S3_CONFIG_BUCKET_OWNER` | Exactly 12 digits; never auto-resolved                              |
 
 With `mappings_file` set, the service config may not carry inline `role_mappings` or `role_groups`. Base `role_sets` are allowed only when `idp.allowed_roles` references them.
 

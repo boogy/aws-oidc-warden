@@ -24,14 +24,14 @@ All output is JSON (`slog.NewJSONHandler` is the only handler constructed anywhe
 
 Every log line carries a base set of keys (from `internal/logevent.Setup` and the request context) plus the event's own attrs.
 
-| Key                                                        | Source                            | Notes                                                                                 |
-| ----------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------- |
-| `time`, `level`, `msg`                                     | `slog`                             | `msg` is a static string, never interpolated — look up detail in the event's attrs     |
-| `eventType`                                                | catalog event                      | dot-separated, e.g. `sts.assume_role.failure` — the stable field to query and alert on |
-| `eventCategory`                                             | catalog event                      | `eventType`'s first segment, e.g. `sts`                                               |
-| `outcome`                                                  | catalog event                      | `success`/`failure` when the event type ends in one of those; `allow`/`deny` on `authz.decision` only; absent otherwise |
-| `service`, `version`, `adapter`, `schemaVersion`           | `internal/logevent.Setup`          | `service="aws-oidc-warden"`; `adapter` is `apigateway`\|`apigatewayv2`\|`alb`\|`lambdaurl`\|`local`; `schemaVersion=1` |
-| `requestId`, `frontendRequestId`, `sourceIp`, `sourceIpFrom` | request context (`logevent.WithRequest`) | Present once a request context exists; see [Decision log & audit record fields](#decision-log--audit-record-fields) |
+| Key                                                          | Source                                   | Notes                                                                                                                   |
+| ------------------------------------------------------------ | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `time`, `level`, `msg`                                       | `slog`                                   | `msg` is a static string, never interpolated — look up detail in the event's attrs                                      |
+| `eventType`                                                  | catalog event                            | dot-separated, e.g. `sts.assume_role.failure` — the stable field to query and alert on                                  |
+| `eventCategory`                                              | catalog event                            | `eventType`'s first segment, e.g. `sts`                                                                                 |
+| `outcome`                                                    | catalog event                            | `success`/`failure` when the event type ends in one of those; `allow`/`deny` on `authz.decision` only; absent otherwise |
+| `service`, `version`, `adapter`, `schemaVersion`             | `internal/logevent.Setup`                | `service="aws-oidc-warden"`; `adapter` is `apigateway`\|`apigatewayv2`\|`alb`\|`lambdaurl`\|`local`; `schemaVersion=1`  |
+| `requestId`, `frontendRequestId`, `sourceIp`, `sourceIpFrom` | request context (`logevent.WithRequest`) | Present once a request context exists; see [Decision log & audit record fields](#decision-log--audit-record-fields)     |
 
 **Level policy:**
 
@@ -46,93 +46,93 @@ Every log line carries a base set of keys (from `internal/logevent.Setup` and th
 
 Every registered event (`internal/logevent/events_*.go`), grouped by `eventCategory`. Attrs listed are in addition to the base keys above; `authz.decision`'s full attr set is detailed in [Decision log & audit record fields](#decision-log--audit-record-fields). Pipeline lines logged after the role is parsed carry a `request` group: `roleArn`, plus `subject`, `repository`, `ref`, `branch`, `actor` when `log_claim_values` is on.
 
-| eventType | Level | Key attrs |
-| --- | --- | --- |
-| `app.start` | Info | binName, commit, date |
-| `app.stop` | Info | — |
-| `app.init.failure` | Error | component, error |
-| `app.resource_close.failure` | Warn | resource, error |
-| `audit.buffer.failure` | Error | error |
-| `audit.client.init` | Info | bucket |
-| `audit.client.init.failure` | Error | error |
-| `audit.client.unavailable` | Debug | error |
-| `audit.flush.failure` | Error | error |
-| `audit.flush.success` | Debug | bucket, key, bytes |
-| `audit.marshal.failure` | Error | error |
-| `audit.write.failure` | Error | error (s3logger: bucket, key) |
-| `audit.write.success` | Debug | bucket, key, bytes |
-| `authz.decision` | Info (allow) / Warn (deny) | frontend, jwtMode, decision, matchedRole, processingMs, issuer, provider, accountId, sessionName, stage, action, tokenId, reason, jwtSub, subject, audience, claims |
-| `authz.stage.deny` | Debug | stage-specific |
-| `authz.tag_auth.lookup_failure` | Warn | error |
-| `authz.tag_auth.success` | Info | — |
-| `aws.clients.refresh.failure` | Error | error |
-| `aws.clients.refresh.start` | Debug | — |
-| `aws.clients.refresh.success` | Info | — |
-| `aws.iam.get_role.failure` | Error | roleName, error |
-| `aws.iam.get_role.success` | Debug | roleName |
-| `aws.s3.get.failure` | Error | bucket, key, error |
-| `aws.s3.get.success` | Debug | bucket, key, sizeBytes |
-| `aws.s3.object.oversize` | Warn | size, maxAllowed, bucket, key |
-| `cache.cleanup.failure` | Warn | backend, key, error |
-| `cache.evict` | Debug | backend, key, lastAccess |
-| `cache.expired` | Debug | backend, key |
-| `cache.hit` | Debug | backend, key |
-| `cache.item.invalid` | Error | backend, key, error |
-| `cache.item.oversize` | Warn | backend, key, maxAllowed, size (write path) |
-| `cache.miss` | Debug | backend, key |
-| `cache.read.failure` | Error | backend, key, error |
-| `cache.set` | Debug | backend, key, ttlMs, size (dynamodb, s3) |
-| `cache.write.failure` | Error | backend, key, error |
-| `config.env.invalid` | Warn | key, value, error |
-| `config.fragments.merged` | Info | fragmentCount, totalMappings |
-| `config.fragments.soft_cap` | Warn | totalMappings, softCap, fragmentCount |
-| `config.hot_reload.enabled` | Info | intervalMs, bucket, key, mappingsFile |
-| `config.idp.issuer_collision` | Error | issuer |
-| `config.idp.reload_ignored` | Warn | — |
-| `config.idp_uncapped` | Warn | maxSessionDuration |
-| `config.jwt_validation.delegated` | Warn | mode |
-| `config.mappings_stale` | Error | ageMs, maxStaleMs |
-| `config.reload.failure` | Error | error |
-| `config.reload.success` | Info | roleMappings, fragments |
-| `config.s3_owner_unpinned` | Warn | bucket |
-| `config.warning` | Warn | warning (stable code) + context, e.g. mappingCount/defaultIssuer/issuerCount, issuer/roleArn/winningSubject/ignoredPolicySubject, roleArn/scopedBy/subject |
-| `http.response.failure` | Error | error |
-| `http.response.write_failure` | Warn | error |
-| `http.server.failure` | Error | error |
-| `http.server.start` | Info | port, verifyEndpoint, healthEndpoint |
-| `idp.credentials.success` | Info | tokenId, accessKeyId, durationSeconds; sessionName and sourceIdentity only when `log_claim_values` is true |
-| `idp.document.served` | Debug | document |
-| `idp.exchange.failure` | Warn | roleArn, stsErrorCode |
-| `idp.key.insecure_source` | Warn | source, onLambda |
-| `idp.key.load.failure` | Error | error |
-| `idp.key.loaded` | Info | kid, algorithm, source, status |
-| `idp.path.not_found` | Warn | path |
-| `idp.sign.failure` | Error | kid, error |
-| `idp.token.minted` | Debug | tokenId, roleArn, expiresAt, kid |
-| `idp.token.too_large` | Error | roleArn, length, limit |
-| `idp.unavailable` | Warn | reason |
-| `jwks.alb_key.failure` | Error | kid, region, error |
-| `jwks.discovery.failure` | Error | issuer, error |
-| `jwks.fetch.failure` | Error | issuer, error |
-| `jwks.prefetch.failure` | Warn | issuer, error |
-| `jwks.refetch.forced` | Info | issuer, kid |
-| `jwks.refetch.rate_limited` | Warn | issuer, kid |
-| `policy.session.load.failure` | Error | bucket, key, error |
-| `policy.session.loaded` | Debug | subject, source, bucket, key, policySize, durationMs |
-| `request.rejected` | Warn | reason |
-| `request.response` | Debug (outcome=failure) | errorCode, status, processingMs |
-| `request.response` | Debug (outcome=success) | processingMs |
-| `sts.assume_role.failure` | Error | roleArn, stsErrorCode, error, durationMs |
-| `sts.assume_role.success` | Info | roleArn, durationMs, assumedRoleId |
-| `sts.caller_identity.failure` | Error | error |
-| `sts.duration.clamped` | Warn | requestedSeconds, clampReason |
-| `sts.external_id.suspicious` | Warn | externalIdLength, roleArn |
-| `sts.session_name.truncated` | Warn | original, originalLength |
-| `sts.session_tag.dropped` | Warn | tagKey, claim, dropReason |
-| `sts.spoke.assumed` | Info | roleArn, sessionName, expires |
-| `token.claims` | Debug | claims (gated by `log_claim_values`) |
-| `token.extract` | Debug | jwtMode |
-| `token.validated` | Debug | validationMs |
+| eventType                         | Level                      | Key attrs                                                                                                                                                           |
+| --------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.start`                       | Info                       | binName, commit, date                                                                                                                                               |
+| `app.stop`                        | Info                       | —                                                                                                                                                                   |
+| `app.init.failure`                | Error                      | component, error                                                                                                                                                    |
+| `app.resource_close.failure`      | Warn                       | resource, error                                                                                                                                                     |
+| `audit.buffer.failure`            | Error                      | error                                                                                                                                                               |
+| `audit.client.init`               | Info                       | bucket                                                                                                                                                              |
+| `audit.client.init.failure`       | Error                      | error                                                                                                                                                               |
+| `audit.client.unavailable`        | Debug                      | error                                                                                                                                                               |
+| `audit.flush.failure`             | Error                      | error                                                                                                                                                               |
+| `audit.flush.success`             | Debug                      | bucket, key, bytes                                                                                                                                                  |
+| `audit.marshal.failure`           | Error                      | error                                                                                                                                                               |
+| `audit.write.failure`             | Error                      | error (s3logger: bucket, key)                                                                                                                                       |
+| `audit.write.success`             | Debug                      | bucket, key, bytes                                                                                                                                                  |
+| `authz.decision`                  | Info (allow) / Warn (deny) | frontend, jwtMode, decision, matchedRole, processingMs, issuer, provider, accountId, sessionName, stage, action, tokenId, reason, jwtSub, subject, audience, claims |
+| `authz.stage.deny`                | Debug                      | stage-specific                                                                                                                                                      |
+| `authz.tag_auth.lookup_failure`   | Warn                       | error                                                                                                                                                               |
+| `authz.tag_auth.success`          | Info                       | —                                                                                                                                                                   |
+| `aws.clients.refresh.failure`     | Error                      | error                                                                                                                                                               |
+| `aws.clients.refresh.start`       | Debug                      | —                                                                                                                                                                   |
+| `aws.clients.refresh.success`     | Info                       | —                                                                                                                                                                   |
+| `aws.iam.get_role.failure`        | Error                      | roleName, error                                                                                                                                                     |
+| `aws.iam.get_role.success`        | Debug                      | roleName                                                                                                                                                            |
+| `aws.s3.get.failure`              | Error                      | bucket, key, error                                                                                                                                                  |
+| `aws.s3.get.success`              | Debug                      | bucket, key, sizeBytes                                                                                                                                              |
+| `aws.s3.object.oversize`          | Warn                       | size, maxAllowed, bucket, key                                                                                                                                       |
+| `cache.cleanup.failure`           | Warn                       | backend, key, error                                                                                                                                                 |
+| `cache.evict`                     | Debug                      | backend, key, lastAccess                                                                                                                                            |
+| `cache.expired`                   | Debug                      | backend, key                                                                                                                                                        |
+| `cache.hit`                       | Debug                      | backend, key                                                                                                                                                        |
+| `cache.item.invalid`              | Error                      | backend, key, error                                                                                                                                                 |
+| `cache.item.oversize`             | Warn                       | backend, key, maxAllowed, size (write path)                                                                                                                         |
+| `cache.miss`                      | Debug                      | backend, key                                                                                                                                                        |
+| `cache.read.failure`              | Error                      | backend, key, error                                                                                                                                                 |
+| `cache.set`                       | Debug                      | backend, key, ttlMs, size (dynamodb, s3)                                                                                                                            |
+| `cache.write.failure`             | Error                      | backend, key, error                                                                                                                                                 |
+| `config.env.invalid`              | Warn                       | key, value, error                                                                                                                                                   |
+| `config.fragments.merged`         | Info                       | fragmentCount, totalMappings                                                                                                                                        |
+| `config.fragments.soft_cap`       | Warn                       | totalMappings, softCap, fragmentCount                                                                                                                               |
+| `config.hot_reload.enabled`       | Info                       | intervalMs, bucket, key, mappingsFile                                                                                                                               |
+| `config.idp.issuer_collision`     | Error                      | issuer                                                                                                                                                              |
+| `config.idp.reload_ignored`       | Warn                       | —                                                                                                                                                                   |
+| `config.idp_uncapped`             | Warn                       | maxSessionDuration                                                                                                                                                  |
+| `config.jwt_validation.delegated` | Warn                       | mode                                                                                                                                                                |
+| `config.mappings_stale`           | Error                      | ageMs, maxStaleMs                                                                                                                                                   |
+| `config.reload.failure`           | Error                      | error                                                                                                                                                               |
+| `config.reload.success`           | Info                       | roleMappings, fragments                                                                                                                                             |
+| `config.s3_owner_unpinned`        | Warn                       | bucket                                                                                                                                                              |
+| `config.warning`                  | Warn                       | warning (stable code) + context, e.g. mappingCount/defaultIssuer/issuerCount, issuer/roleArn/winningSubject/ignoredPolicySubject, roleArn/scopedBy/subject          |
+| `http.response.failure`           | Error                      | error                                                                                                                                                               |
+| `http.response.write_failure`     | Warn                       | error                                                                                                                                                               |
+| `http.server.failure`             | Error                      | error                                                                                                                                                               |
+| `http.server.start`               | Info                       | port, verifyEndpoint, healthEndpoint                                                                                                                                |
+| `idp.credentials.success`         | Info                       | tokenId, accessKeyId, durationSeconds; sessionName and sourceIdentity only when `log_claim_values` is true                                                          |
+| `idp.document.served`             | Debug                      | document                                                                                                                                                            |
+| `idp.exchange.failure`            | Warn                       | roleArn, stsErrorCode                                                                                                                                               |
+| `idp.key.insecure_source`         | Warn                       | source, onLambda                                                                                                                                                    |
+| `idp.key.load.failure`            | Error                      | error                                                                                                                                                               |
+| `idp.key.loaded`                  | Info                       | kid, algorithm, source, status                                                                                                                                      |
+| `idp.path.not_found`              | Warn                       | path                                                                                                                                                                |
+| `idp.sign.failure`                | Error                      | kid, error                                                                                                                                                          |
+| `idp.token.minted`                | Debug                      | tokenId, roleArn, expiresAt, kid                                                                                                                                    |
+| `idp.token.too_large`             | Error                      | roleArn, length, limit                                                                                                                                              |
+| `idp.unavailable`                 | Warn                       | reason                                                                                                                                                              |
+| `jwks.alb_key.failure`            | Error                      | kid, region, error                                                                                                                                                  |
+| `jwks.discovery.failure`          | Error                      | issuer, error                                                                                                                                                       |
+| `jwks.fetch.failure`              | Error                      | issuer, error                                                                                                                                                       |
+| `jwks.prefetch.failure`           | Warn                       | issuer, error                                                                                                                                                       |
+| `jwks.refetch.forced`             | Info                       | issuer, kid                                                                                                                                                         |
+| `jwks.refetch.rate_limited`       | Warn                       | issuer, kid                                                                                                                                                         |
+| `policy.session.load.failure`     | Error                      | bucket, key, error                                                                                                                                                  |
+| `policy.session.loaded`           | Debug                      | subject, source, bucket, key, policySize, durationMs                                                                                                                |
+| `request.rejected`                | Warn                       | reason                                                                                                                                                              |
+| `request.response`                | Debug (outcome=failure)    | errorCode, status, processingMs                                                                                                                                     |
+| `request.response`                | Debug (outcome=success)    | processingMs                                                                                                                                                        |
+| `sts.assume_role.failure`         | Error                      | roleArn, stsErrorCode, error, durationMs                                                                                                                            |
+| `sts.assume_role.success`         | Info                       | roleArn, durationMs, assumedRoleId                                                                                                                                  |
+| `sts.caller_identity.failure`     | Error                      | error                                                                                                                                                               |
+| `sts.duration.clamped`            | Warn                       | requestedSeconds, clampReason                                                                                                                                       |
+| `sts.external_id.suspicious`      | Warn                       | externalIdLength, roleArn                                                                                                                                           |
+| `sts.session_name.truncated`      | Warn                       | original, originalLength                                                                                                                                            |
+| `sts.session_tag.dropped`         | Warn                       | tagKey, claim, dropReason                                                                                                                                           |
+| `sts.spoke.assumed`               | Info                       | roleArn, sessionName, expires                                                                                                                                       |
+| `token.claims`                    | Debug                      | claims (gated by `log_claim_values`)                                                                                                                                |
+| `token.extract`                   | Debug                      | jwtMode                                                                                                                                                             |
+| `token.validated`                 | Debug                      | validationMs                                                                                                                                                        |
 
 ## Knobs
 
@@ -175,9 +175,9 @@ Added by `auditLogAttrs` for the decision itself:
 | `frontend`, `jwtMode`, `decision`, `matchedRole`, `processingMs` | Always                                         | `decision` is `allow`/`deny`                                                                                                                       |
 | `issuer`, `provider`                                             | Once claims are extracted                      | So they appear on **every deny past the `extract` stage** — `account_check`, `authorize`, `session_policy` and `assume_role` denies all carry them |
 | `accountId`, `sessionName`                                       | Allow only                                     | Genuinely allow-only: both are set only once a role has actually been assumed                                                                      |
-| `stage`                                                          | Deny only                                      | One of `config` / `extract` / `account_check` / `authorize` / `session_policy` / `assume_role`. `config` is `503 config_stale`                      |
+| `stage`                                                          | Deny only                                      | One of `config` / `extract` / `account_check` / `authorize` / `session_policy` / `assume_role`. `config` is `503 config_stale`                     |
 | `action`                                                         | When the pipeline ran                          | `assume_role` for `/verify`, `mint_token` for the IdP mint path                                                                                    |
-| `tokenId`                                                        | IdP mints only                                 | The ID of the minted IdP token, also returned to the caller                                                                                      |
+| `tokenId`                                                        | IdP mints only                                 | The ID of the minted IdP token, also returned to the caller                                                                                        |
 | `reason`                                                         | Deny only                                      |                                                                                                                                                    |
 | `jwtSub`, `subject`, `audience`, `claims`                        | When `log_claim_values=true` **and** non-empty | Suppressed entirely, not blanked, when the gate is off                                                                                             |
 
@@ -315,11 +315,11 @@ Warn/Error lines carry context (never secrets). Query these by `eventType` (see 
 
 CloudWatch Logs Insights queries, filtered on `eventType` (and `outcome` where relevant). **Lambda must set `LoggingConfig.LogFormat = "JSON"`** so these become structured fields — the app already emits JSON either way, but without that setting Lambda re-wraps each line as a string field and the query below won't see `eventType` directly.
 
-| Query | Why |
-| --- | --- |
-| `filter eventType = "authz.decision" and outcome = "deny" and stage = "authorize"` | Misconfigured mappings, or an attack |
-| `filter eventType = "audit.write.failure" or eventType = "audit.buffer.failure"` | Audit sink unavailable under `audit_required` |
-| `filter eventType = "sts.assume_role.failure"` | A target role's trust policy is refusing, or the execution role is missing `sts:AssumeRole`/`sts:TagSession`. Carries `stsErrorCode` |
-| `filter eventType = "jwks.refetch.forced"` (rate of occurrence, rising) | Possible bogus-`kid` flooding |
+| Query                                                                              | Why                                                                                                                                  |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `filter eventType = "authz.decision" and outcome = "deny" and stage = "authorize"` | Misconfigured mappings, or an attack                                                                                                 |
+| `filter eventType = "audit.write.failure" or eventType = "audit.buffer.failure"`   | Audit sink unavailable under `audit_required`                                                                                        |
+| `filter eventType = "sts.assume_role.failure"`                                     | A target role's trust policy is refusing, or the execution role is missing `sts:AssumeRole`/`sts:TagSession`. Carries `stsErrorCode` |
+| `filter eventType = "jwks.refetch.forced"` (rate of occurrence, rising)            | Possible bogus-`kid` flooding                                                                                                        |
 
 `matchedVia = "tag-auth"` (credentials issued through the tag-auth fallback) is S3-record-only — it is not on the CloudWatch decision line — so alert on it against the durable trail (e.g. Athena over the S3 objects), not Logs Insights.

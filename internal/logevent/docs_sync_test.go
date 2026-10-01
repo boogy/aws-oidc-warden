@@ -1,9 +1,8 @@
 package logevent
 
 import (
-	"fmt"
 	"os"
-	"strings"
+	"regexp"
 	"testing"
 )
 
@@ -12,11 +11,11 @@ func TestCatalog_EveryEventDocumentedInLoggingMD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading docs/LOGGING.md: %v", err)
 	}
-	contents := "\n" + string(doc)
+	contents := string(doc)
 
 	for _, e := range All() {
-		want := fmt.Sprintf("\n| `%s` |", e.String())
-		if !strings.Contains(contents, want) {
+		row := regexp.MustCompile("(?m)^\\|[ ]*`" + regexp.QuoteMeta(e.String()) + "`[ ]*\\|")
+		if !row.MatchString(contents) {
 			t.Errorf("event %q has no catalog row in docs/LOGGING.md", e.String())
 		}
 	}
