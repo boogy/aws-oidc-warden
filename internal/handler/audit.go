@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
@@ -252,15 +251,10 @@ func (r *RequestProcessor) finalizeDeny(ctx context.Context, log *slog.Logger, c
 	return origErr
 }
 
-// finalizeAllow records an allow decision. The write happens synchronously
-// before this returns, so a required write failure yields (nil, error) —
-// credentials are never handed back without a durable record.
-func (r *RequestProcessor) finalizeAllow(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord, credentials *ststypes.Credentials) (*ststypes.Credentials, error) {
+// finalizeAllow records an allow decision synchronously: credentials are never handed back without a durable record.
+func (r *RequestProcessor) finalizeAllow(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.Decision = "allow"
-	if auditErr := r.recordDecision(ctx, log, cfg, rec); auditErr != nil {
-		return nil, auditErr
-	}
-	return credentials, nil
+	return r.recordDecision(ctx, log, cfg, rec)
 }
 
 // inputMode classifies which extraction path a request used, for the "jwtMode" field.

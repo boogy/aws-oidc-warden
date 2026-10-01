@@ -40,8 +40,32 @@ func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInte
 	}
 }
 
-// ProcessRequest contains the main business logic for processing requests
-func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error) {
+const (
+	actionAssumeRole = "assume_role"
+	actionMintToken  = "mint_token"
+)
+
+// authzOutcome carries the state of an authorized (or denied) request between pipeline stages.
+type authzOutcome struct {
+	cfg       *config.Config
+	claims    *gtypes.Claims
+	claimsMap map[string]any
+	decision  config.Decision
+	rec       *auditRecord
+	log       *slog.Logger
+	elapsed   func() int64
+}
+
+// deny finishes a rejected request. o.rec.Stage and o.rec.Reason must already be set.
+func (r *RequestProcessor) deny(ctx context.Context, o *authzOutcome, msg string, ret error, attrs ...slog.Attr) error {
+	o.rec.ProcessingMS = o.elapsed()
+	sattrs := append([]slog.Attr{slog.String("stage", o.rec.Stage)}, attrs...)
+	logevent.Debug(ctx, o.log, logevent.AuthzStageDeny, msg, sattrs...)
+	return r.finalizeDeny(ctx, o.log, o.cfg, o.rec, ret)
+}
+
+// authorizeRequest runs refresh, extraction, account check and authorization; it records the deny itself on failure.
+func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger, action string) (*authzOutcome, error) {
 	startTime, _ := ctx.Value(StartTimeContextKey).(time.Time)
 
 	r.provider.MaybeRefresh(ctx)
@@ -72,20 +96,14 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return time.Since(startTime).Milliseconds()
 	}
 
-	// deny finishes a rejected request. rec.Stage and rec.Reason must already
-	// be set; log is read at call time, so it picks up the enriched logger.
-	deny := func(msg string, ret error, attrs ...slog.Attr) error {
-		rec.ProcessingMS = elapsed()
-		sattrs := append([]slog.Attr{slog.String("stage", rec.Stage)}, attrs...)
-		logevent.Debug(ctx, log, logevent.AuthzStageDeny, msg, sattrs...)
-		return r.finalizeDeny(ctx, log, cfg, rec, ret)
-	}
+	o := &authzOutcome{cfg: cfg, rec: rec, log: log, elapsed: elapsed}
 
 	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
 		rec.setErrorReason("extract", err)
-		return nil, deny("Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
 	}
+	o.claims = claims
 
 	requestedRole := requestData.Role
 
@@ -105,21 +123,22 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		for _, a := range identityAttrs(claims) {
 			reqAttrs = append(reqAttrs, a)
 		}
-		log = log.With(slog.Group("request", reqAttrs...))
+		o.log = o.log.With(slog.Group("request", reqAttrs...))
 	} else {
-		log = log.With(slog.Group("request", slog.String("roleArn", requestedRole)))
+		o.log = o.log.With(slog.Group("request", slog.String("roleArn", requestedRole)))
 	}
+	log = o.log
 
 	// IsTargetAccountAllowed encodes disabled-means-hub-only (fail closed).
 	ok, aerr := r.consumer.IsTargetAccountAllowed(ctx, requestedRole)
 	if aerr != nil {
 		rec.setErrorReason("account_check", aerr)
-		return nil, deny("Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
 	}
 	if !ok {
 		rec.Stage = "account_check"
 		rec.Reason = "target account not allowed"
-		return nil, deny("Target account not allowed", ErrAccountNotAllowed)
+		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
 	}
 
 	// claims.Raw, not the typed struct: generic issuers' claims have no
@@ -128,6 +147,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if claimsMap == nil {
 		claimsMap = map[string]any{}
 	}
+	o.claimsMap = claimsMap
 
 	logevent.Debug(ctx, log, logevent.TokenValidated, "token validated",
 		slog.Int64("validationMs", elapsed()),
@@ -137,6 +157,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	decision := cfg.Authorize(claims.Issuer, claims.Subject, requestedRole, claimsMap)
+	o.decision = decision
 	roles := decision.Roles
 	explicitlyAllowed := decision.Matched && slices.Contains(roles, requestedRole)
 
@@ -144,7 +165,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if explicitlyAllowed {
 		rec.MatchedVia = "explicit"
 	}
-	if !allowed && cfg.TagAuth != nil && cfg.TagAuth.Enabled {
+	if action == actionAssumeRole && !allowed && cfg.TagAuth != nil && cfg.TagAuth.Enabled {
 		roleTags, terr := r.consumer.GetRoleTags(ctx, requestedRole)
 		if terr != nil {
 			logevent.Warn(ctx, log, logevent.AuthzTagAuthLookupFailure, "role tag lookup failed",
@@ -163,23 +184,35 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		if cfg.LogClaimValues {
 			denyAttrs = append(denyAttrs, identityAttrs(claims)...)
 		}
-		return nil, deny("Role not allowed for this subject or its conditions are not met", ErrRoleNotPermitted, denyAttrs...)
+		return nil, r.deny(ctx, o, "Role not allowed for this subject or its conditions are not met", ErrRoleNotPermitted, denyAttrs...)
 	}
 
-	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, decision)
+	return o, nil
+}
+
+// ProcessRequest contains the main business logic for processing requests
+func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error) {
+	o, err := r.authorizeRequest(ctx, requestData, input, requestID, log, actionAssumeRole)
+	if err != nil {
+		return nil, err
+	}
+	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
+	requestedRole := requestData.Role
+
+	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, o.decision)
 	if err != nil {
 		rec.setErrorReason("session_policy", err)
-		return nil, deny("Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
 	}
 
 	// Per-mapping override, resolved via the same mapping that authorized the
 	// role, so CloudTrail can name the requester rather than the service.
 	sessionName := cfg.RoleSessionName
-	if override := decision.RoleSessionName(); override != "" {
+	if override := o.decision.RoleSessionName(); override != "" {
 		sessionName = override
 	}
 
-	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, decision)
+	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, o.decision)
 	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
@@ -189,7 +222,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		if errors.Is(err, aws.ErrAssumeRoleDenied) {
 			ret = ErrAssumeRoleDenied
 		}
-		return nil, deny("Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
 	rec.GrantedRole = requestedRole
@@ -205,9 +238,12 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if credentials.Expiration != nil {
 		rec.Expiry = credentials.Expiration
 	}
-	rec.ProcessingMS = elapsed()
+	rec.ProcessingMS = o.elapsed()
 
-	return r.finalizeAllow(ctx, log, cfg, rec, credentials)
+	if err := r.finalizeAllow(ctx, log, cfg, rec); err != nil {
+		return nil, err
+	}
+	return credentials, nil
 }
 
 // getSessionPolicy retrieves the session policy for an (issuer, subject) pair

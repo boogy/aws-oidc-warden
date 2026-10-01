@@ -17,6 +17,9 @@ import (
 // string can't leak to the caller or break the JSON via unescaped chars.
 const fallbackErrorBody = `{"success":false,"statusCode":500,"errorCode":"internal_error","message":"An internal error occurred"}`
 
+// msgAssumed is the success message for a role assumption.
+const msgAssumed = "Token validation successful and role assumed"
+
 // requestMeta extracts the request ID and elapsed time from ctx. No fallback
 // on empty: minting a second UUID would report an ID absent from any log line.
 func requestMeta(ctx context.Context) (requestID string, processingMS int64) {
@@ -50,9 +53,9 @@ func buildErrorResponse(ctx context.Context, err error, statusCode int) (Respons
 	}, statusCode
 }
 
-// buildSuccessResponse builds the shared Response for a successful role
-// assumption and logs it. Shared by every adapter's respondJSON.
-func buildSuccessResponse(ctx context.Context, credentials *ststypes.Credentials) Response {
+// buildSuccessResponse builds the shared Response for a successful request
+// and logs it. Shared by every adapter's respondJSON.
+func buildSuccessResponse(ctx context.Context, data any, message string) Response {
 	requestID, processingMS := requestMeta(ctx)
 
 	logevent.Debug(ctx, nil, logevent.RequestResponse.WithOutcome("success"), "response sent",
@@ -61,10 +64,10 @@ func buildSuccessResponse(ctx context.Context, credentials *ststypes.Credentials
 	return Response{
 		Success:      true,
 		StatusCode:   http.StatusOK,
-		Message:      "Token validation successful and role assumed",
+		Message:      message,
 		RequestID:    requestID,
 		ProcessingMS: processingMS,
-		Data:         credentials,
+		Data:         data,
 	}
 }
 
@@ -84,7 +87,12 @@ func errorResponse[T any](ctx context.Context, err error, statusCode int, newRes
 // successResponse renders the shared success Response the same way, falling
 // back to errorResponse when the credentials themselves fail to marshal.
 func successResponse[T any](ctx context.Context, credentials *ststypes.Credentials, newResp func(int, string) T) T {
-	response := buildSuccessResponse(ctx, credentials)
+	return successResponseMsg(ctx, credentials, msgAssumed, newResp)
+}
+
+// successResponseMsg renders a success Response carrying data and message.
+func successResponseMsg[T any](ctx context.Context, data any, message string, newResp func(int, string) T) T {
+	response := buildSuccessResponse(ctx, data, message)
 
 	body, err := json.Marshal(response)
 	if err != nil {
