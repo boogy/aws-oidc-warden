@@ -86,15 +86,31 @@ Every registered event (`internal/logevent/events_*.go`), grouped by `eventCateg
 | `config.env.invalid` | Warn | key, value, error |
 | `config.fragments.merged` | Info | fragmentCount, totalMappings |
 | `config.fragments.soft_cap` | Warn | totalMappings, softCap, fragmentCount |
-| `config.hot_reload.enabled` | Info | intervalMs, bucket, key |
+| `config.hot_reload.enabled` | Info | intervalMs, bucket, key, mappingsFile |
+| `config.idp.issuer_collision` | Error | issuer |
+| `config.idp.reload_ignored` | Warn | — |
+| `config.idp_uncapped` | Warn | maxSessionDuration |
 | `config.jwt_validation.delegated` | Warn | mode |
+| `config.mappings_stale` | Error | ageMs, maxStaleMs |
 | `config.reload.failure` | Error | error |
 | `config.reload.success` | Info | roleMappings, fragments |
+| `config.s3_owner_unpinned` | Warn | bucket |
 | `config.warning` | Warn | warning (stable code) + context, e.g. mappingCount/defaultIssuer/issuerCount, issuer/roleArn/winningSubject/ignoredPolicySubject, roleArn/scopedBy/subject |
 | `http.response.failure` | Error | error |
 | `http.response.write_failure` | Warn | error |
 | `http.server.failure` | Error | error |
 | `http.server.start` | Info | port, verifyEndpoint, healthEndpoint |
+| `idp.credentials.success` | Info | tokenId, accessKeyId, durationSeconds; sessionName and sourceIdentity only when `log_claim_values` is true |
+| `idp.document.served` | Debug | document |
+| `idp.exchange.failure` | Warn | roleArn, stsErrorCode |
+| `idp.key.insecure_source` | Warn | source, onLambda |
+| `idp.key.load.failure` | Error | error |
+| `idp.key.loaded` | Info | kid, algorithm, source, status |
+| `idp.path.not_found` | Warn | path |
+| `idp.sign.failure` | Error | kid, error |
+| `idp.token.minted` | Debug | tokenId, roleArn, expiresAt, kid |
+| `idp.token.too_large` | Error | roleArn, length, limit |
+| `idp.unavailable` | Warn | reason |
 | `jwks.alb_key.failure` | Error | kid, region, error |
 | `jwks.discovery.failure` | Error | issuer, error |
 | `jwks.fetch.failure` | Error | issuer, error |
