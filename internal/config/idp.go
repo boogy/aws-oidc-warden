@@ -21,7 +21,7 @@ const (
 	IdPKeyVerifyOnly = "verify_only"
 
 	IdPDefaultSubjectTemplate = "{role_arn}"
-	IdPDefaultSourceIdentity  = "{subject}"
+	IdPDefaultSourceIdentity  = "{issuer}:{subject}"
 
 	IdPOverflowTruncate = "truncate"
 	IdPOverflowReject   = "reject"
@@ -169,9 +169,6 @@ func (c *IdPConfig) validate(allowInsecure bool, inbound []IssuerConfig) error {
 	}
 	return c.validateKeys(allowInsecure)
 }
-
-// validateTemplates is filled by T02.
-func (c *IdPConfig) validateTemplates(issuerCount int) error { return nil }
 
 func (c *IdPConfig) validateAllowedRoles() error {
 	for i, r := range c.AllowedRoles {
