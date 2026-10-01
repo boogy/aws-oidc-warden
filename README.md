@@ -232,7 +232,7 @@ The failure modes that actually bite, in rough order of likelihood:
 | `403 idp_not_permitted` | Mapping lacks `idp_token`, role outside `idp.allowed_roles`, or the minted subject was invalid |
 | `403 session_name_not_permitted` | `sessionName` sent without both `allow_session_name` flags, or alongside a mapping `role_session_name` |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject` |
-| `403 idp_exchange_denied` | STS refused the minted token: fix the role trust policy or the IAM OIDC provider |
+| `403 idp_exchange_denied` | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider |
 | `400 invalid_duration` | `durationSeconds` outside 900..43200 |
 | `400 duration_exceeds_cap` | `durationSeconds` above the mapping or `idp.max_session_duration` ceiling |
 | `400 duration_exceeds_role_max` | `durationSeconds` above the role's `MaxSessionDuration` |

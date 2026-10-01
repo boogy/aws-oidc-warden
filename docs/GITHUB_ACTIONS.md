@@ -77,7 +77,7 @@ The status code tells your client whether retrying is worth anything:
 | `403 idp_not_permitted` | Mapping lacks `idp_token`, role outside `idp.allowed_roles`, or the minted subject was invalid | **No** — deterministic |
 | `403 session_name_not_permitted` | `sessionName` sent without both `allow_session_name` flags, or alongside a mapping `role_session_name` | **No** — deterministic |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject` | **No** — deterministic |
-| `403 idp_exchange_denied` | STS refused the minted token: fix the role trust policy or the IAM OIDC provider | **No** — deterministic |
+| `403 idp_exchange_denied` | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider | **No** — deterministic |
 | `400 invalid_duration` | `durationSeconds` outside 900..43200 | **No** — deterministic |
 | `400 duration_exceeds_cap` | `durationSeconds` above the mapping or `idp.max_session_duration` ceiling | **No** — deterministic |
 | `400 duration_exceeds_role_max` | `durationSeconds` above the role's `MaxSessionDuration` | **No** — deterministic |

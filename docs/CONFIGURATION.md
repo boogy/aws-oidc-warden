@@ -360,13 +360,13 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 | `audience` | | required | Token `aud` (`audience_mode: static`) |
 | `audience_mode` | `static` | `static`, `role_arn` | `role_arn` sets `aud` to the target role ARN |
 | `token_ttl` | `2m` | 1m to 5m | Lifetime of the minted token only, not of the credentials |
-| `jwks_uri` | `<issuer>/.well-known/jwks.json` | https URL | Advertised in discovery |
-| `paths.token` | `<issuer path>/idp/token` | clean, under the issuer path | |
-| `paths.discovery` | `<issuer path>/.well-known/openid-configuration` | must end with that suffix | |
-| `paths.jwks` | `<issuer path>/.well-known/jwks.json` | | |
+| `jwks_uri` | `<idp.issuer>/.well-known/jwks.json` | https URL | Advertised in discovery |
+| `paths.token` | `<idp.issuer path>/idp/token` | clean, under the `idp.issuer` path | |
+| `paths.discovery` | `<idp.issuer path>/.well-known/openid-configuration` | must end with that suffix | |
+| `paths.jwks` | `<idp.issuer path>/.well-known/jwks.json` | | |
 | `subject_template` | `{role_arn}` | must end with `{role_arn}`; also `{account_id}`, `{role_name}`, `{source_issuer}`, `{source_subject}` | `{source_subject}` needs `{source_issuer}#` before it |
 | `include_source_identity` | `true` | | Adds the AWS source-identity claim to the minted token |
-| `source_identity` | `{issuer}:{subject}` | placeholders `{request_id}`, `{subject}`, `{issuer}` (host), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer |
+| `source_identity` | `{issuer}:{subject}` | placeholders `{request_id}`, `{subject}`, `{issuer}` (inbound issuer host, not `idp.issuer`), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer |
 | `source_identity_overflow` | `truncate` | `truncate`, `reject` | Over 64 characters |
 | `max_session_duration` | `1h` | 15m to 12h, whole seconds | Live, base-only. Above `1h` logs `config.idp_uncapped` |
 | `allow_session_name` | `false` | | Live, base-only. Gates the per-mapping flag |
@@ -489,7 +489,7 @@ Applied only when the config file or S3 object already carries an `idp:` block; 
 | `AOW_IDP_AUDIENCE` | `idp.audience` | |
 | `AOW_IDP_AUDIENCE_MODE` | `idp.audience_mode` | `static` |
 | `AOW_IDP_TOKEN_TTL` | `idp.token_ttl` | `2m` (1m to 5m) |
-| `AOW_IDP_JWKS_URI` | `idp.jwks_uri` | `<issuer>/.well-known/jwks.json` |
+| `AOW_IDP_JWKS_URI` | `idp.jwks_uri` | `<idp.issuer>/.well-known/jwks.json` |
 | `AOW_IDP_SUBJECT_TEMPLATE` | `idp.subject_template` | `{role_arn}` |
 | `AOW_IDP_INCLUDE_SOURCE_IDENTITY` | `idp.include_source_identity` | `true` |
 | `AOW_IDP_SOURCE_IDENTITY` | `idp.source_identity` | `{issuer}:{subject}` |

@@ -49,9 +49,9 @@ The minted token never leaves the warden and is never logged or returned. Its cl
 
 ## Hosting discovery and JWKS
 
-STS fetches `{issuer}/.well-known/openid-configuration` and the JWKS when it validates the minted token. Both must be reachable from the public internet at the issuer URL.
+STS fetches `idp.issuer` + `/.well-known/openid-configuration` (here `https://idp.example.com/.well-known/openid-configuration`) and the JWKS when it validates the minted token. Both must be reachable from the public internet at the `idp.issuer` URL.
 
-**Production default: static documents.** Generate them with `idp-export` and upload them to S3/CloudFront (or any static host) at the issuer origin:
+**Production default: static documents.** Generate them with `idp-export` and upload them to S3/CloudFront (or any static host) at the `idp.issuer` origin:
 
 ```sh
 idp-export -config config.yaml -out ./site
@@ -127,10 +127,10 @@ Also:
 
 ## IAM OIDC provider
 
-Create one IAM OIDC provider per deployment:
+Create one IAM OIDC provider per deployment for the warden itself. The inbound issuers (GitHub, GitLab, …) need no IAM provider for IdP mode:
 
-- URL: `idp.issuer`
-- Client ID: `idp.audience`
+- URL: `idp.issuer` (`https://idp.example.com`)
+- Client ID: `idp.audience` (`idp-audience-example`)
 
 IAM ignores thumbprints for providers served by a CA-trusted certificate.
 
@@ -188,7 +188,7 @@ Pitfalls:
 Optional hardening:
 
 - Pin session tags, for example `"aws:RequestTag/repository": "octo-org/api"` under `StringEquals`; pair it with `Null` (`"aws:RequestTag/repository": "false"`) so the tag must be present.
-- Pin the source-identity prefix with `StringLike` on `sts:SourceIdentity` (for example `token.actions.githubusercontent.com=*`); never pin the full value.
+- Pin the source-identity prefix with `StringLike` on `sts:SourceIdentity`. With the default template it starts with the inbound issuer host the warden writes there (for example `token.actions.githubusercontent.com=*`); never pin the full value.
 - Use `ForAllValues:StringEquals` on `aws:TagKeys` with a `Null` check to restrict which tag keys may be sent.
 
 ### `audience_mode: role_arn`
@@ -212,7 +212,7 @@ idp:
     - "arn:aws:iam::123456789012:role/LongDeploy"
 
 role_mappings:
-  - issuer: "https://token.actions.githubusercontent.com"
+  - issuer: "https://token.actions.githubusercontent.com" # inbound issuer, not idp.issuer
     subject: "octo-org/long-job"
     roles: ["arn:aws:iam::123456789012:role/LongDeploy"]
     idp_token: true
@@ -252,14 +252,14 @@ Resolved in this order:
 
 `idp.source_identity` is a template rendered per request and set as the STS `SourceIdentity` (carried in the minted token, immutable for the session). Placeholders:
 
-| Placeholder      | Value                                                                                  |
-| ---------------- | -------------------------------------------------------------------------------------- |
-| `{request_id}`   | the warden request ID                                                                  |
-| `{subject}`      | the canonical subject                                                                  |
-| `{issuer}`       | the **host** of the inbound issuer, so two issuers sharing a subject cannot collide    |
-| `{claim:<name>}` | a verified inbound claim; a missing claim fails with 403 `idp_source_identity_invalid` |
+| Placeholder      | Value                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------ |
+| `{request_id}`   | the warden request ID                                                                                  |
+| `{subject}`      | the canonical subject                                                                                  |
+| `{issuer}`       | the **host** of the inbound issuer (not `idp.issuer`), so two issuers sharing a subject cannot collide |
+| `{claim:<name>}` | a verified inbound claim; a missing claim fails with 403 `idp_source_identity_invalid`                 |
 
-The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. A substituted value that needed sanitizing also gets `+` and 16 hex characters of its SHA-256, so distinct inputs stay distinct. Example: issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<16 hex>`.
+The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. A substituted value that needed sanitizing also gets `+` and 16 hex characters of its SHA-256, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<16 hex>`.
 
 Over 64 characters, `idp.source_identity_overflow` decides: `truncate` (default; 47 characters, `+`, 16 hex of the SHA-256) or `reject` (403 `idp_source_identity_invalid`). The audit field `sourceIdentityTruncated` flags truncation. Truncation is attribution, not an access boundary.
 
@@ -269,7 +269,7 @@ Over 64 characters, `idp.source_identity_overflow` decides: `truncate` (default;
 
 ## Calling the endpoint
 
-`POST` the same body as `/verify`, plus the optional `durationSeconds` and `sessionName`, to `idp.paths.token` (default `<issuer path>/idp/token`). GitHub Actions example:
+`POST` the same body as `/verify`, plus the optional `durationSeconds` and `sessionName`, to `idp.paths.token` (default: the `idp.issuer` path + `/idp/token`) on the warden's own front end (API Gateway, ALB or Lambda URL), here `https://warden.example.com`. It is not the static discovery host. The inbound token's audience must match that issuer's `audiences` in the warden config, not `idp.audience`. GitHub Actions example:
 
 ```yaml
 name: long-job
@@ -284,7 +284,7 @@ jobs:
         run: |
           TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
-          RESP=$(curl -sSf -X POST "https://idp.example.com/idp/token" \
+          RESP=$(curl -sSf -X POST "https://warden.example.com/idp/token" \
             -d "$(jq -n --arg t "$TOKEN" '{token:$t, role:"arn:aws:iam::123456789012:role/LongDeploy", durationSeconds:14400}')")
           echo "::add-mask::$(jq -r .data.SecretAccessKey <<<"$RESP")"
           echo "::add-mask::$(jq -r .data.SessionToken <<<"$RESP")"
@@ -322,7 +322,7 @@ A reload that changes a frozen field logs `config.idp.reload_ignored` once and k
 
 1. Disable.
 2. Confirm `/idp/token` answers 503 `idp_signing_unavailable`.
-3. Then revoke (remove the client ID from the IAM OIDC provider; add a Deny on `aws:TokenIssueTime`).
+3. Then revoke (remove the client ID from the warden's IAM OIDC provider; add a Deny on `aws:TokenIssueTime`).
 
 Discovery and JWKS keep serving while disabled.
 
@@ -349,7 +349,7 @@ Discovery and JWKS keep serving while disabled.
 In order:
 
 1. Stop minting: `idp.enabled: false` (see the kill switch above).
-2. Stop STS accepting: remove the client ID from the IAM OIDC provider, or disable the KMS key.
+2. Stop STS accepting: remove the client ID from the warden's IAM OIDC provider, or disable the KMS key.
 3. Revoke live sessions: add a Deny on `aws:TokenIssueTime` to the affected roles.
 4. Scope the damage in CloudTrail by `accessKeyId` and `sourceIdentity` (both are in the audit record).
 5. Rotate the signing key.
@@ -364,7 +364,7 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | `idp_not_permitted`           | 403    | No    | Mapping has no `idp_token`, role outside `idp.allowed_roles`, or invalid subject |
 | `session_name_not_permitted`  | 403    | No    | `sessionName` not allowed here                                                   |
 | `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                 |
-| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the IAM OIDC provider                       |
+| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider              |
 | `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                             |
 | `duration_exceeds_cap`        | 400    | No    | Above the mapping or `idp.max_session_duration` ceiling                          |
 | `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                            |
