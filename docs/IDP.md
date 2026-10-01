@@ -70,12 +70,12 @@ One issuer URL and one KMS key per deployment; never shared between stages.
 
 ## KMS signing key
 
-| Requirement | Value |
-| --- | --- |
-| Key spec | `ECC_NIST_P256` (`ES256`) or `RSA_2048`/`RSA_3072`/`RSA_4096` (`RS256`) |
-| Key usage | `SIGN_VERIFY` |
-| Multi-region | `false` |
-| State | `Enabled` |
+| Requirement  | Value                                                                   |
+| ------------ | ----------------------------------------------------------------------- |
+| Key spec     | `ECC_NIST_P256` (`ES256`) or `RSA_2048`/`RSA_3072`/`RSA_4096` (`RS256`) |
+| Key usage    | `SIGN_VERIFY`                                                           |
+| Multi-region | `false`                                                                 |
+| State        | `Enabled`                                                               |
 
 `NewKMSSigner` calls `DescribeKey` and `GetPublicKey` and refuses a key that is disabled, multi-region, not `SIGN_VERIFY`, of another spec, or whose `SigningAlgorithms` lacks the configured algorithm.
 
@@ -112,15 +112,7 @@ Key policy: grant the warden role only `kms:Sign`, `kms:GetPublicKey`, `kms:Desc
       "Sid": "DenyTamper",
       "Effect": "Deny",
       "NotPrincipal": { "AWS": "arn:aws:iam::123456789012:role/break-glass" },
-      "Action": [
-        "kms:PutKeyPolicy",
-        "kms:ScheduleKeyDeletion",
-        "kms:DisableKey",
-        "kms:CreateGrant",
-        "kms:ReplicateKey",
-        "kms:UpdateAlias",
-        "kms:UpdatePrimaryRegion"
-      ],
+      "Action": ["kms:PutKeyPolicy", "kms:ScheduleKeyDeletion", "kms:DisableKey", "kms:CreateGrant", "kms:ReplicateKey", "kms:UpdateAlias", "kms:UpdatePrimaryRegion"],
       "Resource": "*"
     }
   ]
@@ -144,15 +136,15 @@ IAM ignores thumbprints for providers served by a CA-trusted certificate.
 
 ## Trust policy
 
-Every target role trusts the IdP and needs these actions: `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity`. Replace `<issuer-host-and-path>` with `idp.issuer` without `https://`.
+Every target role trusts the warden's IAM OIDC provider (not GitHub's or any other inbound issuer's) and needs these actions: `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity`. The examples use `idp.issuer: https://idp.example.com`, so the provider is `oidc-provider/idp.example.com` and the condition keys are `idp.example.com:aud` / `idp.example.com:sub`.
 
 `aud` is always pinned with `StringEquals`. The minted `sub` is `idp.subject_template` with its placeholders filled, and always ends with the role ARN:
 
-| Placeholder | Value |
-| --- | --- |
-| `{role_arn}` | target role ARN (required, exactly once, at the end) |
-| `{account_id}`, `{role_name}` | parts of the role ARN |
-| `{source_issuer}`, `{source_subject}` | inbound issuer and canonical subject |
+| Placeholder                           | Value                                                |
+| ------------------------------------- | ---------------------------------------------------- |
+| `{role_arn}`                          | target role ARN (required, exactly once, at the end) |
+| `{account_id}`, `{role_name}`         | parts of the role ARN                                |
+| `{source_issuer}`, `{source_subject}` | inbound issuer and canonical subject                 |
 
 `{source_subject}` needs `{source_issuer}` before it, separated by `#`. The default template `{role_arn}` makes `sub` the role's own ARN. With `{source_issuer}#{source_subject}#{role_arn}` the `sub` also names the caller, which lets the trust policy pin the caller.
 
@@ -164,12 +156,12 @@ Worked example for `role/LongDeploy`, default template, tags pinned:
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": { "Federated": "arn:aws:iam::123456789012:oidc-provider/<issuer-host-and-path>" },
+      "Principal": { "Federated": "arn:aws:iam::123456789012:oidc-provider/idp.example.com" },
       "Action": ["sts:AssumeRoleWithWebIdentity", "sts:TagSession", "sts:SetSourceIdentity"],
       "Condition": {
         "StringEquals": {
-          "<issuer-host-and-path>:aud": "idp-audience-example",
-          "<issuer-host-and-path>:sub": "arn:aws:iam::123456789012:role/LongDeploy"
+          "idp.example.com:aud": "idp-audience-example",
+          "idp.example.com:sub": "arn:aws:iam::123456789012:role/LongDeploy"
         }
       }
     }
@@ -177,11 +169,12 @@ Worked example for `role/LongDeploy`, default template, tags pinned:
 }
 ```
 
-With a caller-bearing template, pin the whole `sub` with `StringEquals`, or one source issuer with `StringLike`:
+With the caller-bearing template `{source_issuer}#{source_subject}#{role_arn}`, the warden still issues the token; the inbound issuer and subject are only text inside the minted `sub`. A GitHub Actions caller from `octo-org/api` (canonical subject = `repository` claim) minting for `LongDeploy` gets this `sub`, pinned whole with `StringEquals`:
 
 ```json
-"StringLike": {
-  "<issuer-host-and-path>:sub": "https://token.actions.githubusercontent.com#*#arn:aws:iam::123456789012:role/LongDeploy"
+"StringEquals": {
+  "idp.example.com:aud": "idp-audience-example",
+  "idp.example.com:sub": "https://token.actions.githubusercontent.com#octo-org/api#arn:aws:iam::123456789012:role/LongDeploy"
 }
 ```
 
@@ -200,7 +193,7 @@ Optional hardening:
 
 ### `audience_mode: role_arn`
 
-`aud` becomes the target role ARN instead of `idp.audience`. Register each role ARN as a client ID on the IAM OIDC provider (IAM limits client IDs per provider; check the current quota) and pin `<issuer-host-and-path>:aud` with `StringEquals` to the role's own ARN. A token minted for role A then fails `aud` on role B even if a `sub` pin is wrong. The default `static` keeps `idp.audience`.
+`aud` becomes the target role ARN instead of `idp.audience`. Register each role ARN as a client ID on the IAM OIDC provider (IAM limits client IDs per provider; check the current quota) and pin `idp.example.com:aud` with `StringEquals` to the role's own ARN. A token minted for role A then fails `aud` on role B even if a `sub` pin is wrong. The default `static` keeps `idp.audience`.
 
 ## Configuration
 
@@ -235,12 +228,12 @@ Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-pr
 
 ## Session duration
 
-| Request `durationSeconds` | Result |
-| --- | --- |
-| omitted | `min(3600, ceiling)` |
-| outside 900..43200 | 400 `invalid_duration` |
-| above the ceiling | 400 `duration_exceeds_cap` (never clamped) |
-| above the role's `MaxSessionDuration` | 400 `duration_exceeds_role_max` |
+| Request `durationSeconds`             | Result                                     |
+| ------------------------------------- | ------------------------------------------ |
+| omitted                               | `min(3600, ceiling)`                       |
+| outside 900..43200                    | 400 `invalid_duration`                     |
+| above the ceiling                     | 400 `duration_exceeds_cap` (never clamped) |
+| above the role's `MaxSessionDuration` | 400 `duration_exceeds_role_max`            |
 
 Ceiling = `min(mapping idp_max_session_duration, idp.max_session_duration)`. When `role_sets` expansion yields several mappings, the lowest-order mapping wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
@@ -259,11 +252,11 @@ Resolved in this order:
 
 `idp.source_identity` is a template rendered per request and set as the STS `SourceIdentity` (carried in the minted token, immutable for the session). Placeholders:
 
-| Placeholder | Value |
-| --- | --- |
-| `{request_id}` | the warden request ID |
-| `{subject}` | the canonical subject |
-| `{issuer}` | the **host** of the inbound issuer, so two issuers sharing a subject cannot collide |
+| Placeholder      | Value                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| `{request_id}`   | the warden request ID                                                                  |
+| `{subject}`      | the canonical subject                                                                  |
+| `{issuer}`       | the **host** of the inbound issuer, so two issuers sharing a subject cannot collide    |
 | `{claim:<name>}` | a verified inbound claim; a missing claim fails with 403 `idp_source_identity_invalid` |
 
 The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. A substituted value that needed sanitizing also gets `+` and 16 hex characters of its SHA-256, so distinct inputs stay distinct. Example: issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<16 hex>`.
@@ -319,8 +312,8 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 
 ## Hot reload and the kill switch
 
-| Frozen at cold start (restart to change) | Live (read per request) |
-| --- | --- |
+| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `allowed_roles`, `max_session_duration`, `allow_session_name`, plus per-mapping `idp_token`, `idp_max_session_duration`, `allow_session_name` |
 
 A reload that changes a frozen field logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected (`config.idp.issuer_collision`).
@@ -342,14 +335,14 @@ Discovery and JWKS keep serving while disabled.
 - `idp.allowed_roles` is base-only (ARNs or `@role_set` names); empty means no extra cap.
 - PEM key files are dev-only; they are refused on Lambda unless `allow_insecure_issuers` is set.
 
-| Risk | Control |
-| --- | --- |
-| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, single-region check, tamper Deny, SCP, alarms |
-| A mapping writer widening sessions | `idp.max_session_duration` (base-only) caps every mapping and every request |
-| Self-DoS through JWKS fetches | Static hosting from `idp-export` by default |
-| Half-rotated keys | All-or-nothing loader; rotation order above |
-| Cross-role token reuse | `sub` ends with the role ARN; optional `audience_mode: role_arn` |
-| Session-name spoofing | Off by default; two-level opt-in |
+| Risk                                                          | Control                                                                     |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, single-region check, tamper Deny, SCP, alarms             |
+| A mapping writer widening sessions                            | `idp.max_session_duration` (base-only) caps every mapping and every request |
+| Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                 |
+| Half-rotated keys                                             | All-or-nothing loader; rotation order above                                 |
+| Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`            |
+| Session-name spoofing                                         | Off by default; two-level opt-in                                            |
 
 ## Incident response
 
@@ -366,21 +359,21 @@ In order:
 
 Every response uses the standard error envelope. "Retry" means the same request may succeed later.
 
-| Code | Status | Retry | Cause |
-| --- | --- | --- | --- |
-| `idp_not_permitted` | 403 | No | Mapping has no `idp_token`, role outside `idp.allowed_roles`, or invalid subject |
-| `session_name_not_permitted` | 403 | No | `sessionName` not allowed here |
-| `idp_source_identity_invalid` | 403 | No | Source identity could not be derived or overflowed with `reject` |
-| `idp_exchange_denied` | 403 | No | STS refused: fix the trust policy or the IAM OIDC provider |
-| `invalid_duration` | 400 | No | `durationSeconds` outside 900..43200 |
-| `duration_exceeds_cap` | 400 | No | Above the mapping or `idp.max_session_duration` ceiling |
-| `duration_exceeds_role_max` | 400 | No | Above the role's `MaxSessionDuration` |
-| `invalid_session_name` | 400 | No | `sessionName` fails the pattern |
-| `field_not_supported` | 400 | No | `durationSeconds` or `sessionName` on the `AssumeRole` path |
-| `idp_path_not_found` | 404 | No | IdP-shaped path that is not configured |
-| `method_not_allowed` | 405 | No | Wrong method on an IdP path |
-| `idp_token_too_large` | 500 | No | Minted token or packed policy over the STS limit; reduce session tags |
-| `idp_signing_unavailable` | 503 | Yes | KMS unavailable or throttled; also the kill-switch answer |
-| `idp_exchange_unavailable` | 503 | Yes | STS could not reach discovery or JWKS |
+| Code                          | Status | Retry | Cause                                                                            |
+| ----------------------------- | ------ | ----- | -------------------------------------------------------------------------------- |
+| `idp_not_permitted`           | 403    | No    | Mapping has no `idp_token`, role outside `idp.allowed_roles`, or invalid subject |
+| `session_name_not_permitted`  | 403    | No    | `sessionName` not allowed here                                                   |
+| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                 |
+| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the IAM OIDC provider                       |
+| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                             |
+| `duration_exceeds_cap`        | 400    | No    | Above the mapping or `idp.max_session_duration` ceiling                          |
+| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                            |
+| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                  |
+| `field_not_supported`         | 400    | No    | `durationSeconds` or `sessionName` on the `AssumeRole` path                      |
+| `idp_path_not_found`          | 404    | No    | IdP-shaped path that is not configured                                           |
+| `method_not_allowed`          | 405    | No    | Wrong method on an IdP path                                                      |
+| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags            |
+| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer                        |
+| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                            |
 
 The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `requestedDurationSeconds`, `durationSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`, `sessionNameSource` (`mapping`, `request`, `subject` or `default`). Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).
