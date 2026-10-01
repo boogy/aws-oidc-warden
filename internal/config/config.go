@@ -313,6 +313,9 @@ type Config struct {
 	// other AWS accounts.
 	CrossAccount *CrossAccount `mapstructure:"cross_account" json:"cross_account,omitempty"`
 
+	// Optional token-minting IdP; frozen at cold start except Enabled and AllowedRoles
+	IdP *IdPConfig `mapstructure:"idp" json:"idp,omitempty"`
+
 	// JWTValidation controls whether the service validates JWT signatures itself
 	// or trusts pre-validation by an upstream AWS service.
 	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation,omitempty"`
@@ -522,6 +525,59 @@ var envBindings = []envBinding{
 		envDuration("cross_account.spoke_session_duration", v, func(d time.Duration) { ensureCrossAccount(c).SpokeSessionDuration = d })
 	}},
 
+	// IdP knobs apply only when the idp block already exists; signing keys and
+	// allowed_roles are file/S3 only.
+	{"idp.enabled", func(c *Config, v string) {
+		if c.IdP != nil {
+			envBool("idp.enabled", v, func(b bool) { c.IdP.Enabled = b })
+		}
+	}},
+	{"idp.issuer", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.Issuer = v
+		}
+	}},
+	{"idp.audience", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.Audience = v
+		}
+	}},
+	{"idp.token_ttl", func(c *Config, v string) {
+		if c.IdP != nil {
+			envDuration("idp.token_ttl", v, func(d time.Duration) { c.IdP.TokenTTL = d })
+		}
+	}},
+	{"idp.audience_mode", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.AudienceMode = v
+		}
+	}},
+	{"idp.source_identity", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SourceIdentity = v
+		}
+	}},
+	{"idp.source_identity_overflow", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SourceIdentityOverflow = v
+		}
+	}},
+	{"idp.include_source_identity", func(c *Config, v string) {
+		if c.IdP != nil {
+			envBool("idp.include_source_identity", v, func(b bool) { c.IdP.IncludeSourceIdentity = &b })
+		}
+	}},
+	{"idp.jwks_uri", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.JWKSURI = v
+		}
+	}},
+	{"idp.subject_template", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SubjectTemplate = v
+		}
+	}},
+
 	// JWT validation settings (value struct, always present).
 	{"jwt_validation.mode", func(c *Config, v string) { c.JWTValidation.Mode = v }},
 	{"jwt_validation.alb_expected_signer", func(c *Config, v string) { c.JWTValidation.ALBExpectedSigner = v }},
@@ -576,7 +632,9 @@ func (c *Config) LoadConfig() error {
 	// envBindings (see below) so this list and reapplyEnvOverrides cannot
 	// drift apart.
 	for _, b := range envBindings {
-		_ = viper.BindEnv(b.key)
+		if !strings.HasPrefix(b.key, "idp.") {
+			_ = viper.BindEnv(b.key)
+		}
 	}
 
 	configFileFound := true
@@ -585,6 +643,15 @@ func (c *Config) LoadConfig() error {
 			configFileFound = false // No config file; rely on defaults/env
 		} else {
 			return fmt.Errorf("problem reading config file: %w", err)
+		}
+	}
+
+	// A bound idp.* key would let env alone create the block.
+	if viper.InConfig("idp") {
+		for _, b := range envBindings {
+			if strings.HasPrefix(b.key, "idp.") {
+				_ = viper.BindEnv(b.key)
+			}
 		}
 	}
 
@@ -666,6 +733,23 @@ var clearOnDeclare = map[string]func(*Config){
 	"role_mappings":             func(c *Config) { c.RoleMappings = nil },
 	"role_groups":               func(c *Config) { c.RoleGroups = nil },
 	"config_fragment_checksums": func(c *Config) { c.ConfigFragmentChecksums = nil },
+	"idp.signing_keys": func(c *Config) {
+		if c.IdP != nil {
+			c.IdP.SigningKeys = nil
+		}
+	},
+	"idp.allowed_roles": func(c *Config) {
+		if c.IdP != nil {
+			c.IdP.AllowedRoles = nil
+		}
+	},
+	// re-derive jwks_uri and paths from the new issuer
+	"idp.issuer": func(c *Config) {
+		if c.IdP != nil {
+			c.IdP.JWKSURI = ""
+			c.IdP.Paths = IdPPaths{}
+		}
+	},
 }
 
 // lostFragmentPins returns fragments still listed after a merge that were
@@ -881,6 +965,13 @@ func (c *Config) Validate() error {
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 			"tag_auth.transitive_session_tags is deprecated; use the top-level session_tags_transitive",
 			slog.String("warning", "transitive_session_tags_deprecated"))
+	}
+
+	if c.IdP != nil {
+		c.IdP.applyDefaults()
+		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
+			return err
+		}
 	}
 
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {

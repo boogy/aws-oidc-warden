@@ -10,6 +10,7 @@ func TestParseRoleARN(t *testing.T) {
 		{"arn:aws:iam::123456789012:role/app", "123456789012", "app", false},
 		{"arn:aws:iam::123456789012:role/path/to/app", "123456789012", "app", false},
 		{"arn:aws-us-gov:iam::222222222222:role/x", "222222222222", "x", false},
+		{"arn:aws-cn:iam::333333333333:role/y", "333333333333", "y", false},
 		{"not-an-arn", "", "", true},
 		{"arn:aws:iam::123:user/bob", "", "", true},
 	}
