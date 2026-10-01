@@ -146,9 +146,9 @@ Every target role trusts the warden's IAM OIDC provider (not GitHub's or any oth
 | `{account_id}`, `{role_name}`         | parts of the role ARN                                |
 | `{source_issuer}`, `{source_subject}` | inbound issuer and canonical subject                 |
 
-`{source_subject}` needs `{source_issuer}` before it, separated by `#`. The default template `{role_arn}` makes `sub` the role's own ARN. With `{source_issuer}#{source_subject}#{role_arn}` the `sub` also names the caller, which lets the trust policy pin the caller.
+**Recommended: keep the default `{role_arn}`.** The `sub` is then the role's own ARN: short, one fixed value per role. Which callers may assume the role is decided by the warden's mappings and `idp.allowed_roles`.
 
-Worked example for `role/LongDeploy`, default template, tags pinned:
+Worked example for `role/LongDeploy` with the default template:
 
 ```json
 {
@@ -169,7 +169,9 @@ Worked example for `role/LongDeploy`, default template, tags pinned:
 }
 ```
 
-With the caller-bearing template `{source_issuer}#{source_subject}#{role_arn}`, the warden still issues the token; the inbound issuer and subject are only text inside the minted `sub`. A GitHub Actions caller from `octo-org/api` (canonical subject = `repository` claim) minting for `LongDeploy` gets this `sub`, pinned whole with `StringEquals`:
+**Optional: `{source_issuer}#{source_subject}#{role_arn}`** puts the caller into `sub`, so the role's trust policy can also pin the caller. Use it only when whoever writes the mappings is trusted less than the role owner (for example a split `mappings_file`). Costs: the full issuer URL makes each value long, and the trust policy size limit (2,048 characters by default) caps how many callers one role can list. `{source_subject}` needs `{source_issuer}#` before it.
+
+The warden still issues the token; the inbound issuer and subject are only text inside the minted `sub`. A GitHub Actions caller from `octo-org/api` (canonical subject = `repository` claim) minting for `LongDeploy` gets this `sub`, pinned whole with `StringEquals`:
 
 ```json
 "StringEquals": {
@@ -178,7 +180,7 @@ With the caller-bearing template `{source_issuer}#{source_subject}#{role_arn}`, 
 }
 ```
 
-Pitfalls:
+Pitfalls with the caller-bearing template:
 
 - `StringLike` `*` is greedy across `#`. Keep the source issuer as a fixed prefix and the role ARN as a fixed suffix so the wildcard covers only the source subject. Never wildcard the role-ARN part, and never put a leading or trailing wildcard around the issuer.
 - Matching is case-sensitive.
