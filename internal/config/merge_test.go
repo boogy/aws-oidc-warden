@@ -423,6 +423,7 @@ issuers:
   - issuer: "`+issuer+`"
     provider: github
     audiences: ["sts.amazonaws.com"]
+s3_config_bucket_owner: "123456789012"
 config_fragments: ["s3://cfg/a.yaml", "s3://cfg/b.yaml"]
 config_fragment_checksums:
   - uri: "s3://cfg/a.yaml"
@@ -539,6 +540,7 @@ issuers:
   - issuer: "`+issuer+`"
     provider: github
     audiences: ["sts.amazonaws.com"]
+s3_config_bucket_owner: "123456789012"
 config_fragments: ["s3://cfg/a.yaml", "s3://cfg/b.yaml"]
 config_fragment_checksums:
   - uri: "s3://cfg/a.yaml"

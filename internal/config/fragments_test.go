@@ -457,6 +457,7 @@ func TestAudit_ChecksumPinNotReappliedToCachedFragment(t *testing.T) {
 func TestAudit_ChecksumPinTrustsFetcherETagNotContent(t *testing.T) {
 	base := a2Base(t)
 	base.ConfigFragments = []string{"s3://bucket/frag.yaml"}
+	base.S3ConfigBucketOwner = "123456789012"
 	base.ConfigFragmentChecksums = []FragmentChecksum{{URI: "s3://bucket/frag.yaml", Checksum: "pinned-etag"}}
 	require.NoError(t, base.Validate())
 

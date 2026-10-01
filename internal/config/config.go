@@ -288,6 +288,15 @@ type Config struct {
 	// not by this field's type.
 	ConfigFragments []string `mapstructure:"config_fragments" json:"config_fragments,omitempty"`
 
+	// MappingsFile is a local path or s3:// URI of the role-mappings file (fragment #0); base-only.
+	MappingsFile string `mapstructure:"mappings_file" json:"mappings_file,omitempty"`
+
+	// MappingsMaxStale refuses requests once mappings are older than this; nil = unset.
+	MappingsMaxStale *time.Duration `mapstructure:"mappings_max_stale" json:"mappings_max_stale,omitempty"`
+
+	// S3ConfigBucketOwner is sent as ExpectedBucketOwner on every S3 config read.
+	S3ConfigBucketOwner string `mapstructure:"s3_config_bucket_owner" json:"s3_config_bucket_owner,omitempty"`
+
 	// ConfigFragmentChecksums optionally pins an expected integrity value
 	// (etag, or sha256 content hash for local paths) per config_fragments
 	// entry; a mismatch on fetch is rejected. Unpinned entries use their etag
@@ -498,6 +507,9 @@ var envBindings = []envBinding{
 	{"jwt_leeway", func(c *Config, v string) {
 		envDuration("jwt_leeway", v, func(d time.Duration) { c.JWTLeeway = &d })
 	}},
+	{"mappings_max_stale", func(c *Config, v string) {
+		envDuration("mappings_max_stale", v, func(d time.Duration) { c.MappingsMaxStale = &d })
+	}},
 
 	// Int (warn-and-skip on parse error).
 	{"max_token_bytes", func(c *Config, v string) {
@@ -506,6 +518,8 @@ var envBindings = []envBinding{
 
 	// Comma-separated list.
 	{"config_fragments", func(c *Config, v string) { c.ConfigFragments = splitCommaList(v) }},
+	{"mappings_file", func(c *Config, v string) { c.MappingsFile = v }},
+	{"s3_config_bucket_owner", func(c *Config, v string) { c.S3ConfigBucketOwner = v }},
 
 	// Cache knobs (c.Cache is guaranteed non-nil before these run).
 	{"cache.type", func(c *Config, v string) { c.Cache.Type = v }},
@@ -799,7 +813,7 @@ func lostFragmentPins(prev, next *Config) []string {
 		if _, pinned := next.fragmentChecksum(p.URI); pinned {
 			continue
 		}
-		if slices.Contains(next.ConfigFragments, p.URI) {
+		if slices.Contains(next.fragmentSources(), p.URI) {
 			dropped = append(dropped, p.URI)
 		}
 	}
@@ -946,6 +960,13 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(uri) == "" {
 			return fmt.Errorf("config_fragments[%d]: must not be empty", i)
 		}
+	}
+
+	if err := c.validateMaxStale(); err != nil {
+		return err
+	}
+	if err := c.validateS3ConfigOwner(); err != nil {
+		return err
 	}
 
 	// Hardening knobs: apply defaults, then enforce bounds.
@@ -1322,6 +1343,99 @@ func (c *Config) fragmentChecksum(uri string) (string, bool) {
 	return "", false
 }
 
+// fragmentSources lists mappings_file (first) and config_fragments in merge order.
+func (c *Config) fragmentSources() []string {
+	if c.MappingsFile == "" {
+		return c.ConfigFragments
+	}
+	return append([]string{c.MappingsFile}, c.ConfigFragments...)
+}
+
+var bucketOwnerPattern = regexp.MustCompile(`^\d{12}$`)
+
+func (c *Config) validateMaxStale() error {
+	if c.MappingsMaxStale == nil {
+		return nil
+	}
+	switch d := *c.MappingsMaxStale; {
+	case d < 0:
+		return errors.New("mappings_max_stale must not be negative")
+	case d == 0:
+		return nil
+	case !strings.HasPrefix(c.MappingsFile, "s3://"):
+		return errors.New("mappings_max_stale requires an s3:// mappings_file")
+	case c.ConfigReloadInterval <= 0:
+		return errors.New("mappings_max_stale requires config_reload_interval > 0")
+	case d < 2*c.ConfigReloadInterval:
+		return errors.New("mappings_max_stale must be at least twice config_reload_interval")
+	}
+	return nil
+}
+
+// effectiveMappingsMaxStale resolves the unset default: 3x the reload interval for an s3:// mappings_file.
+func (c *Config) effectiveMappingsMaxStale() time.Duration {
+	if c.MappingsMaxStale != nil {
+		return *c.MappingsMaxStale
+	}
+	if !strings.HasPrefix(c.MappingsFile, "s3://") || c.ConfigReloadInterval <= 0 {
+		return 0
+	}
+	return 3 * c.ConfigReloadInterval
+}
+
+func (c *Config) validateS3ConfigOwner() error {
+	needsOwner := strings.HasPrefix(c.MappingsFile, "s3://")
+	for _, uri := range c.ConfigFragments {
+		if strings.HasPrefix(uri, "s3://") {
+			needsOwner = true
+		}
+	}
+	if needsOwner && c.S3ConfigBucketOwner == "" {
+		return errors.New("s3_config_bucket_owner is required when mappings_file or config_fragments use s3://")
+	}
+	if c.S3ConfigBucketOwner != "" && !bucketOwnerPattern.MatchString(c.S3ConfigBucketOwner) {
+		return errors.New("s3_config_bucket_owner must be exactly 12 digits")
+	}
+	return nil
+}
+
+// validateMappingsSplit rejects service configs that inline mappings while mappings_file owns them.
+func (c *Config) validateMappingsSplit() error {
+	if c.MappingsFile == "" {
+		return nil
+	}
+	if c.MappingsFile != strings.TrimSpace(c.MappingsFile) {
+		return errors.New("mappings_file must not have leading or trailing whitespace")
+	}
+	if slices.Contains(c.ConfigFragments, c.MappingsFile) {
+		return errors.New("mappings_file must not also be listed in config_fragments")
+	}
+	if len(c.RoleMappings) > 0 || len(c.RoleGroups) > 0 {
+		return errors.New("mappings_file is set: role_mappings and role_groups belong in the mappings file, not the service config")
+	}
+	owned := c.idpReferencedRoleSets()
+	for name := range c.RoleSets {
+		if !owned[strings.ToLower(name)] {
+			return fmt.Errorf("mappings_file is set: role_sets %q must live in the mappings file unless idp.allowed_roles references it", name)
+		}
+	}
+	return nil
+}
+
+// idpReferencedRoleSets returns the lower-cased @name entries of idp.allowed_roles.
+func (c *Config) idpReferencedRoleSets() map[string]bool {
+	out := map[string]bool{}
+	if c.IdP == nil {
+		return out
+	}
+	for _, r := range c.IdP.AllowedRoles {
+		if name, ok := strings.CutPrefix(r, "@"); ok {
+			out[strings.ToLower(name)] = true
+		}
+	}
+	return out
+}
+
 // validateFragmentChecksums rejects malformed or inert pins: a pin naming a
 // URI absent from config_fragments would look integrity-checked while
 // nothing is ever verified against it — fail at boot instead.
@@ -1335,8 +1449,8 @@ func (c *Config) validateFragmentChecksums() error {
 			return fmt.Errorf("config_fragment_checksums[%d] (%s): checksum is required", i, p.URI)
 		case seen[p.URI]:
 			return fmt.Errorf("config_fragment_checksums[%d]: duplicate pin for %q", i, p.URI)
-		case !slices.Contains(c.ConfigFragments, p.URI):
-			return fmt.Errorf("config_fragment_checksums[%d]: %q is not listed in config_fragments, so nothing would ever be checked against it", i, p.URI)
+		case !slices.Contains(c.fragmentSources(), p.URI):
+			return fmt.Errorf("config_fragment_checksums[%d]: %q is not listed in config_fragments or mappings_file, so nothing would ever be checked against it", i, p.URI)
 		}
 		seen[p.URI] = true
 	}

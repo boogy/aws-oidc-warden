@@ -28,6 +28,8 @@ func baseConfig(t *testing.T) *Config {
 		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "aws-oidc-warden",
 		Cache:           &Cache{Type: "memory", TTL: time.Hour},
+
+		S3ConfigBucketOwner: "123456789012",
 	}
 	require.NoError(t, c.Validate())
 	return c
