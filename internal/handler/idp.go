@@ -111,15 +111,17 @@ func (r *RequestProcessor) ProcessMint(ctx context.Context, requestData *Request
 		case errors.Is(err, idp.ErrInvalidSubject):
 			ret = ErrIdPNotPermitted
 		case errors.Is(err, idp.ErrTokenTooLarge):
-			logevent.Error(ctx, log, logevent.IdPTokenTooLarge, "IdP token exceeds the STS size limit", slog.String("roleArn", role))
+			logevent.Error(ctx, log, logevent.IdPTokenTooLarge, "IdP token exceeds the STS size limit",
+				slog.String("roleArn", role), slog.String("error", err.Error()))
 			ret = ErrIdPTokenTooLarge
 		case errors.Is(err, idp.ErrInvalidSourceIdentity):
 			ret = ErrIdPSourceIdentityInvalid
 		case errors.Is(err, idp.ErrUnavailable):
-			logevent.Warn(ctx, log, logevent.IdPUnavailable, "IdP signing keys unavailable")
+			logevent.Warn(ctx, log, logevent.IdPUnavailable, "IdP signing keys unavailable", slog.String("error", err.Error()))
 			ret = ErrIdPUnavailable
 		default:
-			logevent.Error(ctx, log, logevent.IdPSignFailure, "IdP token signing failed", slog.String("roleArn", role))
+			logevent.Error(ctx, log, logevent.IdPSignFailure, "IdP token signing failed",
+				slog.String("roleArn", role), slog.String("error", err.Error()))
 			ret = ErrIdPUnavailable
 		}
 		rec.Stage, rec.Reason = "idp_mint", "token minting failed"
