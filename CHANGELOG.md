@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Failed config refreshes back off exponentially** (up to 8x `config_reload_interval`), and requests no longer wait on an in-flight refresh.
+- **The classic credential path rejects `durationSeconds` and `sessionName`** with `400 field_not_supported`, even when IdP mode is off; they were previously ignored. A non-integer `durationSeconds` (e.g. `"3600"`) is now `400 invalid_request`. Drop these fields from requests that do not target `idp.paths.token`.
 - **A mapping that sets both `session_policy` and `session_policy_file` fails to load.** Previously the file was used and the inline policy silently ignored. Keep the one you intend.
 
 ### Fixed
