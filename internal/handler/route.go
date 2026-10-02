@@ -15,7 +15,6 @@ type routeKind int
 
 const (
 	routeAssume routeKind = iota
-	routeMint
 	routeDiscovery
 	routeJWKS
 	routeMethodNotAllowed
@@ -29,11 +28,6 @@ func (r *RequestProcessor) route(method, path string) routeKind {
 	}
 	p := r.idp.Config().Paths
 	switch path {
-	case p.Token:
-		if method == http.MethodPost {
-			return routeMint
-		}
-		return routeMethodNotAllowed
 	case p.Discovery:
 		return documentRoute(method, routeDiscovery)
 	case p.JWKS:
@@ -62,21 +56,13 @@ func idpShaped(path string, p config.IdPPaths) bool {
 		}
 	}
 	for _, c := range candidates {
-		for _, want := range []string{p.Token, p.Discovery, p.JWKS} {
+		for _, want := range []string{p.Discovery, p.JWKS} {
 			if c == strings.ToLower(want) {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// allowFor returns the Allow header value for an IdP path.
-func allowFor(path string, p config.IdPPaths) string {
-	if path == p.Token {
-		return http.MethodPost
-	}
-	return "GET, HEAD"
 }
 
 // mergeHeaders copies ResponseHeaders and overlays extra.
@@ -87,7 +73,7 @@ func mergeHeaders(extra map[string]string) map[string]string {
 	return h
 }
 
-// serveIdP answers every non-mint IdP route; ok is false for routeAssume and routeMint.
+// serveIdP answers the IdP document routes; ok is false for routeAssume.
 func serveIdP[T any](ctx context.Context, r *RequestProcessor, kind routeKind, method, path string, log *slog.Logger,
 	newResp func(int, string) T, newRespH func(int, string, map[string]string) T,
 ) (resp T, ok bool) {
@@ -97,7 +83,7 @@ func serveIdP[T any](ctx context.Context, r *RequestProcessor, kind routeKind, m
 		return newRespH(status, body, headers), true
 	case routeMethodNotAllowed:
 		status, body := errorBody(ctx, ErrMethodNotAllowed, http.StatusMethodNotAllowed)
-		return newRespH(status, body, map[string]string{"Allow": allowFor(path, r.idp.Config().Paths)}), true
+		return newRespH(status, body, map[string]string{"Allow": "GET, HEAD"}), true
 	case routeNotFound:
 		logevent.Warn(ctx, log, logevent.IdPPathNotFound, "idp path not found", slog.String("path", path))
 		return errorResponse(ctx, ErrIdPPathNotFound, http.StatusNotFound, newResp), true

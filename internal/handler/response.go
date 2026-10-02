@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
 
@@ -86,8 +85,8 @@ func errorResponse[T any](ctx context.Context, err error, statusCode int, newRes
 
 // successResponse renders the shared success Response the same way, falling
 // back to errorResponse when the credentials themselves fail to marshal.
-func successResponse[T any](ctx context.Context, credentials *ststypes.Credentials, newResp func(int, string) T) T {
-	return successResponseMsg(ctx, credentials, msgAssumed, newResp)
+func successResponse[T any](ctx context.Context, credentials *IssuedCredentials, newResp func(int, string) T) T {
+	return successResponseMsg(ctx, credentials, credentials.message(), newResp)
 }
 
 // successResponseMsg renders a success Response carrying data and message.

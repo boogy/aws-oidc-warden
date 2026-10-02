@@ -518,7 +518,8 @@ jwt_validation:
 ####################################################################################
 # IDP MODE (optional, default off) — mint a warden-signed OIDC token and exchange it
 # with AssumeRoleWithWebIdentity so sessions can exceed the 1h role-chaining cap.
-# Opt each mapping in with `idp_token: true` (optionally `idp_max_session_duration`).
+# Opt each mapping in with `idp_token: true` (optionally `idp_max_session_duration`);
+# its roles are then issued through the IdP on /verify at any duration.
 # See docs/IDP.md.
 ####################################################################################
 # idp:
@@ -528,7 +529,6 @@ jwt_validation:
 #   audience_mode: "static" # or "role_arn"
 #   token_ttl: "2m" # minted token lifetime, 1m..5m
 #   max_session_duration: 1h # base ceiling for every mapping and request, 15m..12h
-#   allow_session_name: false # callers may not pick the session name unless a mapping also opts in
 #   allowed_roles: [] # role ARNs or @role_set; empty = no extra cap
 #   signing_keys:
 #     - kms_key_id: "arn:aws:kms:REGION:ACCOUNT:key/KEY_ID" # full key ARN; aliases are rejected

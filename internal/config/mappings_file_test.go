@@ -65,7 +65,7 @@ func TestMappingsFileRejectsBaseOnlyKeys(t *testing.T) {
 		{"issuers", "issuers:\n  - issuer: https://evil.example.com\n    provider: github\n    audiences: [x]\n"},
 		{"idp allowed_roles", "idp:\n  allowed_roles: [\"" + mapAdminARN + "\"]\n"},
 		{"idp max_session_duration", "idp:\n  max_session_duration: 4h\n"},
-		{"idp allow_session_name", "idp:\n  allow_session_name: true\n"},
+		{"idp enabled", "idp:\n  enabled: true\n"},
 		{"mappings_file", "mappings_file: /etc/other.yaml\n"},
 		{"mappings_max_stale", "mappings_max_stale: 1h\n"},
 		{"s3_config_bucket_owner", "s3_config_bucket_owner: \"123456789012\"\n"},
@@ -83,7 +83,7 @@ func TestMappingsFileRejectsBaseOnlyKeys(t *testing.T) {
 
 func TestMappingsFileAcceptsMappingIdPFields(t *testing.T) {
 	content := "role_mappings:\n  - subject: org/repo\n    roles: [\"" + mapRoleARN + "\"]\n" +
-		"    idp_token: true\n    idp_max_session_duration: 4h\n    allow_session_name: true\n"
+		"    idp_token: true\n    idp_max_session_duration: 4h\n"
 	p := NewProvider(mappingsCfg(t, content), 0, "", nil)
 	require.NoError(t, p.Refresh(context.Background()))
 }

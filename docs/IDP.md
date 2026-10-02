@@ -23,7 +23,13 @@ Optional. The warden validates the inbound OIDC token as usual, then mints its *
 
 `sts:AssumeRole` called with a role session (always the case on Lambda) is role chaining: STS caps the session at **1 hour**. `AssumeRoleWithWebIdentity` is not chained, so the session can last up to the target role's `MaxSessionDuration` (15 minutes to 12 hours). IdP mode exists for long jobs that outlive one hour.
 
-The default `AssumeRole` path is unchanged and is still capped at 1h. IdP mode is opt-in per mapping (`idp_token: true`).
+Every caller uses the same endpoint (`/verify`). A role whose authorizing mapping sets `idp_token: true` (and is in `idp.allowed_roles`) is issued through the IdP whenever `idp.enabled` is on, at any duration. Every other role keeps `AssumeRole`, capped at 1h. A request for more than 1h that cannot use the IdP is refused, never shortened:
+
+| Over 1h requested, and…                                   | Answer                        |
+| --------------------------------------------------------- | ----------------------------- |
+| no `idp` block configured                                 | 400 `duration_exceeds_cap`    |
+| mapping lacks `idp_token`, or role not in `allowed_roles` | 403 `idp_not_permitted`       |
+| `idp.enabled: false` (kill switch)                        | 503 `idp_signing_unavailable` |
 
 ## Flow
 
@@ -36,8 +42,8 @@ sequenceDiagram
     participant S as STS
     participant H as Discovery/JWKS host
 
-    C->>W: POST /idp/token {token, role, durationSeconds?, sessionName?}
-    W->>W: Validate inbound token, authorize (idp_token mapping, idp.allowed_roles)
+    C->>W: POST /verify {token, role, durationSeconds?, sessionName?}
+    W->>W: Validate inbound token, authorize; idp_token mapping + idp.allowed_roles selects the IdP
     W->>K: kms:Sign (minted token, self-verified before use)
     W->>S: AssumeRoleWithWebIdentity (unsigned, minted token)
     S->>H: GET discovery + JWKS
@@ -61,10 +67,10 @@ The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.j
 
 **Dev and low volume: warden-served.** The warden answers `GET`/`HEAD` on `idp.paths.discovery` and `idp.paths.jwks` with `Cache-Control: public, max-age=<jwks_cache_max_age>`. If you use this:
 
-- Throttle the discovery/JWKS routes separately from `/idp/token`.
+- Throttle the discovery/JWKS routes separately from `/verify`.
 - The routes must carry **no authorizer** (required in `apigw` delegated mode; STS cannot present a token).
-- `idp.paths.*` must match the path the front end actually delivers. An HTTP API v2 with a named stage includes it (`/prod/idp/token`) and returns 404 unless configured that way.
-- Only the three `idp.paths.*` are exposed. Any other IdP-shaped near miss (other case, trailing slash, one extra leading segment) returns 404 `idp_path_not_found`. Wrong method returns 405 `method_not_allowed` with an `Allow` header.
+- `idp.paths.*` must match the path the front end actually delivers. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`) and returns 404 unless configured that way.
+- Only the two `idp.paths.*` are exposed. Any other near miss of them (other case, trailing slash, one extra leading segment) returns 404 `idp_path_not_found`. A method other than `GET`/`HEAD` returns 405 `method_not_allowed` with an `Allow` header.
 
 One issuer URL and one KMS key per deployment; never shared between stages.
 
@@ -209,7 +215,6 @@ idp:
       algorithm: ES256
       status: active
   max_session_duration: 1h
-  allow_session_name: false
   allowed_roles:
     - "arn:aws:iam::123456789012:role/LongDeploy"
 
@@ -224,8 +229,7 @@ role_mappings:
 Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-provider).
 
 - `idp.max_session_duration`: base-only ceiling, default `1h`, range 15m to 12h. It caps every mapping's `idp_max_session_duration` and every request. Above `1h` the warden logs `config.idp_uncapped` at Warn.
-- `idp.allow_session_name`: base-only, default `false`. Gates the per-mapping `allow_session_name`.
-- Both are read per request (live) and rejected in config fragments, which cannot carry an `idp` block at all.
+- It is read per request (live) and rejected in config fragments, which cannot carry an `idp` block at all.
 - Unset `idp_max_session_duration` on a mapping means the base ceiling (1h unless raised).
 
 ## Session duration
@@ -239,16 +243,15 @@ Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-pr
 
 Ceiling = `min(mapping idp_max_session_duration, idp.max_session_duration)`. When `role_sets` expansion yields several mappings, the lowest-order mapping wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
-The `AssumeRole` path (`/verify`) accepts `durationSeconds` from 900 to 3600 (STS caps role chaining at 1h); above that it answers 400 `duration_exceeds_cap`.
+A role served by `AssumeRole` accepts `durationSeconds` from 900 to 3600 (omitted = 3600). Above that see [Why](#why).
 
 ## Session name
 
-Resolved in this order:
+The same rule applies to every request, IdP or `AssumeRole`:
 
-1. The mapping's `role_session_name`, if set. It overrides a request `sessionName`, which is still validated.
-2. Request `sessionName`, only when both `idp.allow_session_name` and the mapping's `allow_session_name` are true; otherwise 403 `session_name_not_permitted`. It must match `^[\w+=,.@-]{2,64}$`, else 400 `invalid_session_name`.
-3. The canonical subject, sanitized and fitted to 64 characters.
-4. The global `role_session_name`.
+1. The mapping's `role_session_name`, if set. It overrides a request `sessionName`.
+2. The request `sessionName`. It must match `^[\w+=,.@-]{2,64}$`, else 400 `invalid_session_name` (checked even when step 1 overrides it).
+3. The global `role_session_name`.
 
 ## Source identity
 
@@ -271,7 +274,7 @@ Over 64 characters, `idp.source_identity_overflow` decides: `truncate` (default;
 
 ## Calling the endpoint
 
-`POST` the same body as `/verify`, plus the optional `durationSeconds` and `sessionName`, to `idp.paths.token` (default: the `idp.issuer` path + `/idp/token`) on the warden's own front end (API Gateway, ALB or Lambda URL), here `https://warden.example.com`. It is not the static discovery host. The inbound token's audience must match that issuer's `audiences` in the warden config, not `idp.audience`. GitHub Actions example:
+`POST` to `/verify` on the warden's own front end (API Gateway, ALB or Lambda URL), here `https://warden.example.com`, with the optional `durationSeconds` and `sessionName`. It is not the static discovery host. The inbound token's audience must match that issuer's `audiences` in the warden config, not `idp.audience`. GitHub Actions example:
 
 ```yaml
 name: long-job
@@ -286,7 +289,7 @@ jobs:
         run: |
           TOKEN=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
-          RESP=$(curl -sSf -X POST "https://warden.example.com/idp/token" \
+          RESP=$(curl -sSf -X POST "https://warden.example.com/verify" \
             -d "$(jq -n --arg t "$TOKEN" '{token:$t, role:"arn:aws:iam::123456789012:role/LongDeploy", durationSeconds:14400}')")
           echo "::add-mask::$(jq -r .data.SecretAccessKey <<<"$RESP")"
           echo "::add-mask::$(jq -r .data.SessionToken <<<"$RESP")"
@@ -314,16 +317,16 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 
 ## Hot reload and the kill switch
 
-| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                                                                                                  |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `allowed_roles`, `max_session_duration`, `allow_session_name`, plus per-mapping `idp_token`, `idp_max_session_duration`, `allow_session_name` |
+| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `allowed_roles`, `max_session_duration`, plus per-mapping `idp_token`, `idp_max_session_duration` |
 
 A reload that changes a frozen field logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected (`config.idp.issuer_collision`).
 
 **Kill switch:** set `idp.enabled: false` in the layer that set it. Environment beats S3: `AOW_IDP_ENABLED` is re-applied after every S3 merge, so never set `AOW_IDP_ENABLED` on Lambda if the S3 overlay is your switch. Order of operations:
 
 1. Disable.
-2. Confirm `/idp/token` answers 503 `idp_signing_unavailable`.
+2. Confirm a request for more than 1h answers 503 `idp_signing_unavailable`. Requests of 1h or less fall back to `AssumeRole`, which only works where the role also trusts the warden's own role.
 3. Then revoke (remove the client ID from the warden's IAM OIDC provider; add a Deny on `aws:TokenIssueTime`).
 
 Discovery and JWKS keep serving while disabled.
@@ -361,20 +364,19 @@ In order:
 
 Every response uses the standard error envelope. "Retry" means the same request may succeed later.
 
-| Code                          | Status | Retry | Cause                                                                            |
-| ----------------------------- | ------ | ----- | -------------------------------------------------------------------------------- |
-| `idp_not_permitted`           | 403    | No    | Mapping has no `idp_token`, role outside `idp.allowed_roles`, or invalid subject |
-| `session_name_not_permitted`  | 403    | No    | `sessionName` not allowed here                                                   |
-| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                 |
-| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider              |
-| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                             |
-| `duration_exceeds_cap`        | 400    | No    | Above the mapping or `idp.max_session_duration` ceiling                          |
-| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                            |
-| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                  |
-| `idp_path_not_found`          | 404    | No    | IdP-shaped path that is not configured                                           |
-| `method_not_allowed`          | 405    | No    | Wrong method on an IdP path                                                      |
-| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags            |
-| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer                        |
-| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                            |
+| Code                          | Status | Retry | Cause                                                                          |
+| ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------ |
+| `idp_not_permitted`           | 403    | No    | Over 1h without `idp_token` or outside `idp.allowed_roles`, or invalid subject |
+| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`               |
+| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider            |
+| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                           |
+| `duration_exceeds_cap`        | 400    | No    | Above the IdP ceiling, or over 1h with no `idp` block                          |
+| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                          |
+| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                |
+| `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path                                             |
+| `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                      |
+| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags          |
+| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer over 1h              |
+| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                          |
 
-The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `requestedDurationSeconds`, `durationSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`, `sessionNameSource` (`mapping`, `request`, `subject` or `default`). Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).
+The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `requestedDurationSeconds`, `durationSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`, `sessionNameSource` (`mapping`, `request` or `default`). Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).

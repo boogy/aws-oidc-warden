@@ -49,32 +49,26 @@ func TestResolveDuration(t *testing.T) {
 }
 
 func TestResolveSessionName(t *testing.T) {
-	long := strings.Repeat("a", 74)
 	tests := []struct {
 		name       string
 		fixed      string
-		allow      bool
 		requested  string
-		subject    string
-		fallback   string
 		want       string
 		wantSource string
 		wantErr    error
 	}{
-		{"fixed mapping name", "fixed", false, "", "org/repo", "fallback", "fixed", "mapping", nil},
-		{"fixed overrides request", "fixed", true, "asked", "org/repo", "fallback", "fixed", "mapping", nil},
-		{"fixed with invalid request", "fixed", true, "bad name!", "org/repo", "fallback", "", "", ErrInvalidSessionName},
-		{"request without opt-in", "", false, "asked", "org/repo", "fallback", "", "", ErrSessionNameNotPermitted},
-		{"opt-in valid", "", true, "asked", "org/repo", "fallback", "asked", "request", nil},
-		{"opt-in invalid chars", "", true, "no spaces!", "org/repo", "fallback", "", "", ErrInvalidSessionName},
-		{"opt-in too short", "", true, "a", "org/repo", "fallback", "", "", ErrInvalidSessionName},
-		{"subject sanitized", "", false, "", "org/repo", "fallback", "org=repo", "subject", nil},
-		{"long subject fitted", "", false, "", long, "fallback", utils.FitSTSName(long), "subject", nil},
-		{"short subject falls back", "", false, "", "a", "fallback", "fallback", "default", nil},
+		{"mapping name", "fixed", "", "fixed", "mapping", nil},
+		{"mapping overrides request", "fixed", "asked", "fixed", "mapping", nil},
+		{"invalid request with mapping name", "fixed", "bad name!", "", "", ErrInvalidSessionName},
+		{"request", "", "asked", "asked", "request", nil},
+		{"invalid chars", "", "no spaces!", "", "", ErrInvalidSessionName},
+		{"too short", "", "a", "", "", ErrInvalidSessionName},
+		{"too long", "", strings.Repeat("a", 65), "", "", ErrInvalidSessionName},
+		{"global default", "", "", "fallback", "default", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, source, err := resolveSessionName(tt.fixed, tt.allow, tt.requested, tt.subject, tt.fallback)
+			got, source, err := resolveSessionName(tt.fixed, tt.requested, "fallback")
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -84,7 +78,6 @@ func TestResolveSessionName(t *testing.T) {
 			require.Equal(t, tt.wantSource, source)
 		})
 	}
-	require.Len(t, utils.FitSTSName(long), utils.MaxSTSNameLen)
 }
 
 func TestRenderSourceIdentity(t *testing.T) {

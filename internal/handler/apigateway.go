@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
@@ -55,14 +54,6 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 	}
 
 	input := validator.ExtractionInput{Token: requestData.Token}
-
-	if kind == routeMint {
-		credentials, err := h.processor.ProcessMint(ctx, requestData, input, requestID, log)
-		if err != nil {
-			return h.respondError(ctx, err, http.StatusInternalServerError)
-		}
-		return successResponseMsg(ctx, credentials, msgMinted, h.newResponse), nil
-	}
 
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
@@ -115,6 +106,6 @@ func (h *AwsApiGateway) respondError(ctx context.Context, err error, statusCode 
 }
 
 // respondJSON formats a successful response with credentials
-func (h *AwsApiGateway) respondJSON(ctx context.Context, credentials *types.Credentials) (events.APIGatewayProxyResponse, error) {
+func (h *AwsApiGateway) respondJSON(ctx context.Context, credentials *IssuedCredentials) (events.APIGatewayProxyResponse, error) {
 	return successResponse(ctx, credentials, h.newResponse), nil
 }

@@ -59,14 +59,14 @@ func TestRunWritesDocuments(t *testing.T) {
 			name:    "default paths",
 			issuer:  "https://idp.example.com",
 			jwksURI: "https://idp.example.com/.well-known/jwks.json",
-			paths:   config.IdPPaths{Token: "/idp/token", Discovery: "/.well-known/openid-configuration", JWKS: "/.well-known/jwks.json"},
+			paths:   config.IdPPaths{Discovery: "/.well-known/openid-configuration", JWKS: "/.well-known/jwks.json"},
 			wantDir: ".well-known",
 		},
 		{
 			name:    "issuer path",
 			issuer:  "https://h/x",
 			jwksURI: "https://h/x/.well-known/jwks.json",
-			paths:   config.IdPPaths{Token: "/x/idp/token", Discovery: "/x/.well-known/openid-configuration", JWKS: "/x/.well-known/jwks.json"},
+			paths:   config.IdPPaths{Discovery: "/x/.well-known/openid-configuration", JWKS: "/x/.well-known/jwks.json"},
 			wantDir: "x/.well-known",
 		},
 	}
@@ -134,7 +134,7 @@ func TestRunRequiresEnabledIdP(t *testing.T) {
 
 func TestRunWritesOnlyPublicMaterial(t *testing.T) {
 	cfg, pemBytes := testConfig(t, "https://idp.example.com", "https://idp.example.com/.well-known/jwks.json",
-		config.IdPPaths{Token: "/idp/token", Discovery: "/.well-known/openid-configuration", JWKS: "/.well-known/jwks.json"})
+		config.IdPPaths{Discovery: "/.well-known/openid-configuration", JWKS: "/.well-known/jwks.json"})
 	out := t.TempDir()
 	if err := run(context.Background(), cfg, nil, out); err != nil {
 		t.Fatal(err)

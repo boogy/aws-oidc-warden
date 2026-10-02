@@ -339,7 +339,7 @@ func idpFrontends() []idpFrontend {
 }
 
 const (
-	idpTokenPath = "/idp/token"
+	idpTokenPath = "/verify"
 	idpDiscPath  = "/.well-known/openid-configuration"
 	idpJWKSPath  = "/.well-known/jwks.json"
 )
@@ -406,19 +406,11 @@ func TestIdPFrontends(t *testing.T) {
 			wantStatus: 400, wantCode: "duration_exceeds_cap",
 		},
 		{
-			name: "duration over 1h on credential path", method: "POST", path: "/verify", body: mintBody(`,"durationSeconds":7200`),
-			wantStatus: 400, wantCode: "duration_exceeds_cap",
-		},
-		{
-			name: "token wrong method", multi: true, method: "GET", path: idpTokenPath, wantStatus: 405, wantCode: "method_not_allowed",
-			wantHeaders: map[string]string{"Allow": "POST"},
-		},
-		{
 			name: "jwks wrong method", multi: true, method: "POST", path: idpJWKSPath, wantStatus: 405, wantCode: "method_not_allowed",
 			wantHeaders: map[string]string{"Allow": "GET, HEAD"},
 		},
 		{
-			name: "kill switch mint", mutate: []func(*config.Config){disabled}, method: "POST", path: idpTokenPath, body: mintBody(""),
+			name: "kill switch over 1h", mutate: []func(*config.Config){disabled}, method: "POST", path: idpTokenPath, body: mintBody(`,"durationSeconds":7200`),
 			wantStatus: 503, wantCode: "idp_signing_unavailable",
 			check: func(t *testing.T, _ idpFrontResp, cons *fakeConsumer, _ string) {
 				assert.Zero(t, cons.wiCalls)
@@ -427,14 +419,14 @@ func TestIdPFrontends(t *testing.T) {
 		},
 		{name: "kill switch jwks", mutate: []func(*config.Config){disabled}, method: "GET", path: idpJWKSPath, wantStatus: 200},
 		{
-			name: "stage prefixed path", method: "POST", path: "/prod/idp/token", body: mintBody(""),
+			name: "stage prefixed path", method: "GET", path: "/prod" + idpJWKSPath,
 			wantStatus: 404, wantCode: "idp_path_not_found",
 			check: func(t *testing.T, _ idpFrontResp, _ *fakeConsumer, logs string) {
 				assert.Equal(t, 1, countEventLines(logs, "idp.path.not_found"))
 			},
 		},
 		{name: "no idp jwks path", noIdP: true, denyExtract: true, method: "GET", path: idpJWKSPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
-		{name: "no idp token path", noIdP: true, denyExtract: true, method: "POST", path: idpTokenPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
+		{name: "no idp credential path", noIdP: true, denyExtract: true, method: "POST", path: idpTokenPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
 		{
 			name: "loader failure", loadErr: errBoom, method: "GET", path: idpJWKSPath, wantStatus: 503, wantCode: "idp_signing_unavailable",
 			wantHeaders: map[string]string{"Content-Type": "application/json"},

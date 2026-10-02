@@ -683,5 +683,5 @@ idp:
 
 	require.NoError(t, c.MergeBytes([]byte("idp:\n  issuer: \"https://b.example.com\"\n"), "yaml"))
 	require.Equal(t, "https://b.example.com/.well-known/jwks.json", c.IdP.JWKSURI)
-	require.Equal(t, "/idp/token", c.IdP.Paths.Token)
+	require.Equal(t, "/.well-known/jwks.json", c.IdP.Paths.JWKS)
 }

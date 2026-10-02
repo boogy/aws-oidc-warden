@@ -101,14 +101,9 @@ func TestIdPValidate(t *testing.T) {
 		{name: "file key off lambda ok", mutate: func(c *IdPConfig) { c.SigningKeys[0].KMSKeyID, c.SigningKeys[0].File = "", "/k.pem" }},
 
 		{name: "bad discovery path", mutate: func(c *IdPConfig) { c.Paths.Discovery = "/openid" }, wantErr: "/.well-known/openid-configuration"},
-		{name: "token path collides", mutate: func(c *IdPConfig) { c.Paths.Token = "/.well-known/jwks.json" }, wantErr: "distinct"},
-		{name: "relative path", mutate: func(c *IdPConfig) { c.Paths.Token = "idp/token" }, wantErr: "must start with /"},
-		{name: "unclean path", mutate: func(c *IdPConfig) { c.Paths.Token = "/idp/../idp/token" }, wantErr: "clean"},
-		{name: "token path outside issuer prefix", mutate: func(c *IdPConfig) {
-			c.Issuer = "https://idp.example.com/warden"
-			c.JWKSURI = ""
-			c.Paths.Token = "/other/idp/token"
-		}, wantErr: "issuer path"},
+		{name: "jwks path collides", mutate: func(c *IdPConfig) { c.Paths.JWKS = "/.well-known/openid-configuration" }, wantErr: "distinct"},
+		{name: "relative path", mutate: func(c *IdPConfig) { c.Paths.JWKS = "keys.json" }, wantErr: "must start with /"},
+		{name: "unclean path", mutate: func(c *IdPConfig) { c.Paths.JWKS = "/a/../jwks.json" }, wantErr: "clean"},
 		{name: "discovery not at issuer path", mutate: func(c *IdPConfig) {
 			c.Issuer = "https://idp.example.com/warden"
 			c.Paths.Discovery = "/other/.well-known/openid-configuration"
@@ -118,7 +113,7 @@ func TestIdPValidate(t *testing.T) {
 			c.JWKSURI = ""
 			c.Paths.JWKS = "/other/.well-known/jwks.json"
 		}, wantErr: "issuer path"},
-		{name: "token path is /verify", mutate: func(c *IdPConfig) { c.Paths.Token = "/verify" }, wantErr: "conflicts with /verify"},
+		{name: "jwks path is /verify", mutate: func(c *IdPConfig) { c.Paths.JWKS = "/verify" }, wantErr: "conflicts with /verify"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -156,7 +151,6 @@ func TestIdPDefaults(t *testing.T) {
 	require.Equal(t, "{role_arn}", c.SubjectTemplate)
 	require.Equal(t, 2*time.Second, c.SignTimeout)
 	require.Equal(t, 5*time.Minute, c.JWKSCacheMaxAge)
-	require.Equal(t, "/warden/idp/token", c.Paths.Token)
 	require.Equal(t, "/warden/.well-known/openid-configuration", c.Paths.Discovery)
 	require.Equal(t, "/warden/.well-known/jwks.json", c.Paths.JWKS)
 	require.Equal(t, "https://h.example.com/warden/.well-known/jwks.json", c.JWKSURI)
@@ -164,7 +158,6 @@ func TestIdPDefaults(t *testing.T) {
 	require.True(t, c.IncludeSourceIdentityClaim())
 	require.Empty(t, c.AllowedRoles)
 	require.Equal(t, time.Hour, c.MaxSessionDuration)
-	require.False(t, c.AllowSessionName)
 }
 
 func TestIdPFingerprintIgnoresReloadableFields(t *testing.T) {
@@ -172,7 +165,6 @@ func TestIdPFingerprintIgnoresReloadableFields(t *testing.T) {
 	b.Enabled = false
 	b.AllowedRoles = []string{"@idp"}
 	b.MaxSessionDuration = 12 * time.Hour
-	b.AllowSessionName = true
 	require.Equal(t, a.Fingerprint(), b.Fingerprint())
 	b.TokenTTL = time.Minute
 	require.NotEqual(t, a.Fingerprint(), b.Fingerprint())
@@ -196,7 +188,6 @@ idp:
   allowed_roles:
     - "arn:aws:iam::123456789012:role/R"
   paths:
-    token: /idp/token
     discovery: /.well-known/openid-configuration
     jwks: /.well-known/jwks.json
   signing_keys:
@@ -256,7 +247,6 @@ func TestIdPYAMLRoundTrip(t *testing.T) {
 	require.Equal(t, IdPAudienceRoleARN, c.IdP.AudienceMode)
 	require.Equal(t, "{subject}", c.IdP.SourceIdentity)
 	require.Equal(t, []string{"arn:aws:iam::123456789012:role/R"}, c.IdP.AllowedRoles)
-	require.Equal(t, "/idp/token", c.IdP.Paths.Token)
 	require.Equal(t, "/.well-known/openid-configuration", c.IdP.Paths.Discovery)
 	require.Equal(t, "/.well-known/jwks.json", c.IdP.Paths.JWKS)
 	require.Equal(t, []IdPSigningKey{{KMSKeyID: idpKMSARN, Algorithm: "RS256", Status: IdPKeyActive}}, c.IdP.SigningKeys)

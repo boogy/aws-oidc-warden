@@ -57,13 +57,11 @@ type IdPConfig struct {
 	SignTimeout            time.Duration   `mapstructure:"sign_timeout"             json:"sign_timeout,omitempty"`
 	JWKSCacheMaxAge        time.Duration   `mapstructure:"jwks_cache_max_age"       json:"jwks_cache_max_age,omitempty"`
 	MaxSessionDuration     time.Duration   `mapstructure:"max_session_duration"     json:"max_session_duration,omitempty"`
-	AllowSessionName       bool            `mapstructure:"allow_session_name"       json:"allow_session_name,omitempty"`
 	SigningKeys            []IdPSigningKey `mapstructure:"signing_keys"             json:"signing_keys"`
 }
 
 // IdPPaths are the exact request paths the IdP endpoints answer on.
 type IdPPaths struct {
-	Token     string `mapstructure:"token"     json:"token,omitempty"`
 	Discovery string `mapstructure:"discovery" json:"discovery,omitempty"`
 	JWKS      string `mapstructure:"jwks"      json:"jwks,omitempty"`
 }
@@ -91,7 +89,7 @@ func (c IdPConfig) IncludeSourceIdentityClaim() bool {
 
 // Fingerprint identifies the cold-start-frozen settings (everything but the live fields).
 func (c IdPConfig) Fingerprint() string {
-	c.Enabled, c.AllowedRoles, c.MaxSessionDuration, c.AllowSessionName = false, nil, 0, false
+	c.Enabled, c.AllowedRoles, c.MaxSessionDuration = false, nil, 0
 	b, _ := json.Marshal(c)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -125,9 +123,6 @@ func (c *IdPConfig) applyDefaults() {
 	base := ""
 	if u, err := url.Parse(c.Issuer); err == nil {
 		base = strings.TrimSuffix(u.Path, "/")
-	}
-	if c.Paths.Token == "" {
-		c.Paths.Token = base + "/idp/token"
 	}
 	if c.Paths.Discovery == "" {
 		c.Paths.Discovery = base + idpDiscoverySufx
@@ -211,7 +206,7 @@ func (c *IdPConfig) checkInbound(inbound []IssuerConfig) error {
 func (c *IdPConfig) validatePaths() error {
 	seen := map[string]bool{}
 	for _, e := range []struct{ name, p string }{
-		{"token", c.Paths.Token}, {"discovery", c.Paths.Discovery}, {"jwks", c.Paths.JWKS},
+		{"discovery", c.Paths.Discovery}, {"jwks", c.Paths.JWKS},
 	} {
 		if !strings.HasPrefix(e.p, "/") || path.Clean(e.p) != e.p {
 			return fmt.Errorf("idp.paths.%s %q must start with / and be clean", e.name, e.p)
@@ -232,9 +227,7 @@ func (c *IdPConfig) validatePaths() error {
 		return fmt.Errorf("idp.issuer %q must be an absolute URL", c.Issuer)
 	}
 	issuerPath := strings.TrimSuffix(u.Path, "/")
-	if c.Paths.Discovery != issuerPath+idpDiscoverySufx ||
-		!strings.HasPrefix(c.Paths.Token, issuerPath+"/") ||
-		!strings.HasPrefix(c.Paths.JWKS, issuerPath+"/") {
+	if c.Paths.Discovery != issuerPath+idpDiscoverySufx || !strings.HasPrefix(c.Paths.JWKS, issuerPath+"/") {
 		return fmt.Errorf("idp.paths must be under the issuer path %q", issuerPath)
 	}
 	return nil

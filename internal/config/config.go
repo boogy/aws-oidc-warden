@@ -92,7 +92,6 @@ type RoleMapping struct {
 	RoleSessionName       string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`             // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
 	IDPToken              bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`                     // Allow minting an IdP token for roles granted by THIS mapping
 	IdPMaxSessionDuration time.Duration `mapstructure:"idp_max_session_duration" json:"idp_max_session_duration,omitempty"` // Ceiling for the caller's durationSeconds; 0 = use idp.max_session_duration
-	AllowSessionName      bool          `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`            // Let the caller pick the IdP session name; also needs idp.allow_session_name
 
 	// SessionTags are STS tags ADDED to the issuer's session_tags for roles
 	// granted by this mapping. Additive only: a key the issuer already defines
@@ -120,7 +119,6 @@ type RoleGroupDefaults struct {
 
 	IDPToken              bool          `mapstructure:"idp_token"                json:"idp_token,omitempty"`
 	IdPMaxSessionDuration time.Duration `mapstructure:"idp_max_session_duration" json:"idp_max_session_duration,omitempty"`
-	AllowSessionName      bool          `mapstructure:"allow_session_name"       json:"allow_session_name,omitempty"`
 }
 
 // RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
@@ -624,11 +622,6 @@ var envBindings = []envBinding{
 			envDuration("idp.max_session_duration", v, func(d time.Duration) { c.IdP.MaxSessionDuration = d })
 		}
 	}},
-	{"idp.allow_session_name", func(c *Config, v string) {
-		if c.IdP != nil {
-			envBool("idp.allow_session_name", v, func(b bool) { c.IdP.AllowSessionName = b })
-		}
-	}},
 
 	// JWT validation settings (value struct, always present).
 	{"jwt_validation.mode", func(c *Config, v string) { c.JWTValidation.Mode = v }},
@@ -1127,9 +1120,6 @@ func (c *Config) Validate() error {
 		if m.IdPMaxSessionDuration != 0 && !m.IDPToken {
 			return fmt.Errorf("%s[%d] (%s): idp_max_session_duration requires idp_token", source, i, subject)
 		}
-		if m.AllowSessionName && !m.IDPToken {
-			return fmt.Errorf("%s[%d] (%s): allow_session_name requires idp_token", source, i, subject)
-		}
 		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
 			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
 		}
@@ -1232,7 +1222,6 @@ func (c *Config) Validate() error {
 
 				IDPToken:              group.Defaults.IDPToken,
 				IdPMaxSessionDuration: group.Defaults.IdPMaxSessionDuration,
-				AllowSessionName:      group.Defaults.AllowSessionName,
 			}
 			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
 				return err
@@ -1738,8 +1727,7 @@ type Decision struct {
 	// role was requested or none granted it.
 	authorizing *RoleMapping
 
-	idpCeiling   time.Duration
-	idpAllowName bool
+	idpCeiling time.Duration
 }
 
 // SessionPolicy returns the (inline, file) session policy from the mapping
@@ -1769,11 +1757,6 @@ func (d Decision) sessionTags() map[string]string {
 // IDPTokenAllowed reports whether the mapping that authorized the role opted into IdP token minting.
 func (d Decision) IDPTokenAllowed() bool {
 	return d.authorizing != nil && d.authorizing.IDPToken
-}
-
-// AllowSessionName reports whether both idp.allow_session_name and the authorizing mapping allow a caller-chosen session name.
-func (d Decision) AllowSessionName() bool {
-	return d.authorizing != nil && d.authorizing.AllowSessionName && d.idpAllowName
 }
 
 // IdPMaxSessionDuration is the authorizing mapping's cap clamped to idp.max_session_duration; 0 when nothing authorized.
@@ -1807,7 +1790,7 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 	}
 	d := Decision{Roles: make([]string, 0, capacity)}
 	if c.IdP != nil {
-		d.idpCeiling, d.idpAllowName = c.IdP.MaxSessionDuration, c.IdP.AllowSessionName
+		d.idpCeiling = c.IdP.MaxSessionDuration
 	}
 
 	idx, ok := c.index[issuer]

@@ -21,8 +21,8 @@ Both files load in CI: `TestSplitConfigExamplesLoad` (`internal/config/docs_yaml
 | `s3_config_bucket_owner`   | Required for `s3://`. The read fails unless the bucket belongs to this account.                                   |
 | `config_reload_interval`   | Re-read the mappings at most once per interval (conditional GET; unchanged file = 304, no re-parse).              |
 | `mappings_max_stale`       | Default 3x the interval. Past it, requests get `503 config_stale`.                                                |
-| `idp.max_session_duration` | Hard ceiling for any `/idp/token` session.                                                                        |
-| `idp.allowed_roles`        | The only roles any mapping may reach through `/idp/token`.                                                        |
+| `idp.max_session_duration` | Hard ceiling for any IdP-issued session.                                                                          |
+| `idp.allowed_roles`        | The only roles any mapping may have issued through the IdP.                                                       |
 | `session_policy_bucket`    | Bucket holding the files named by a mapping's `session_policy_file`.                                              |
 
 ## mappings.yaml
@@ -43,27 +43,27 @@ The building blocks in `mappings.yaml`:
 - **`role_sets`**: named lists of ARNs, referenced as `"@api-deployers"`. Rename a role once, not in every mapping.
 - **`role_mappings`**: one grant per entry. `subject` may be a list; each element gets the same roles and conditions.
 - **`role_groups`**: many subjects, one shared `defaults` block. Use it for fleets of repos with identical access.
-- **Session policies** (`session_policy`, `session_policy_file`): narrow what one mapping's session may do. The session gets the intersection of the role's permissions and the policy, so one broad role can serve several callers with different scopes. `session_policy` is inline JSON; `session_policy_file` is a key in `session_policy_bucket`. Set one per mapping. They apply on `/verify` and `/idp/token` alike.
-- **IdP fields** (`idp_token`, `idp_max_session_duration`): opt a mapping into `/idp/token` for sessions longer than 1h. Without `idp_token`, the mapping gets `/verify` only.
+- **Session policies** (`session_policy`, `session_policy_file`): narrow what one mapping's session may do. The session gets the intersection of the role's permissions and the policy, so one broad role can serve several callers with different scopes. `session_policy` is inline JSON; `session_policy_file` is a key in `session_policy_bucket`. Set one per mapping. They apply to `AssumeRole` and IdP-issued sessions alike.
+- **IdP fields** (`idp_token`, `idp_max_session_duration`): issue a mapping's roles through the warden's IdP, which allows sessions longer than 1h. Without `idp_token`, the mapping gets `AssumeRole`, capped at 1h.
 
 ## What each caller gets
 
-| Caller (issuer, subject, claims)                    | Matching entry                  | `/verify` (AssumeRole, 1h)                   | `/idp/token`            |
+| Caller (issuer, subject, claims)                    | Matching entry                  | `/verify` up to 1h                           | `/verify` over 1h       |
 | --------------------------------------------------- | ------------------------------- | -------------------------------------------- | ----------------------- |
 | GitHub `octo-org/api`, `ref=refs/heads/main`        | `@api-deployers`                | `ApiDeploy`, `ApiMigrate`                    | denied (no `idp_token`) |
 | GitHub `octo-org/api`, `ref=refs/heads/feature`     | none (condition fails)          | denied                                       | denied                  |
-| GitHub `octo-org/web`, any ref                      | `@readonly` (list subject)      | `ReadOnly`                                   | denied                  |
-| GitHub `octo-org/data-pipeline`, main               | `LongDeploy`, `idp_token`       | `LongDeploy`                                 | `LongDeploy`, up to 4h  |
-| GitHub `octo-org/reports`, any ref                  | `ReportsReader` + inline policy | `ReportsReader`, read-only on `octo-reports` | denied                  |
-| GitHub `octo-org/terraform`, main                   | `TerraformApply` + policy file  | `TerraformApply`, scoped by `terraform.json` | denied                  |
+| GitHub `octo-org/web`, any ref                      | `@readonly` (list subject)      | `ReadOnly`                                   | denied (no `idp_token`) |
+| GitHub `octo-org/data-pipeline`, main               | `LongDeploy`, `idp_token`       | `LongDeploy` (via IdP)                       | `LongDeploy`, up to 4h  |
+| GitHub `octo-org/reports`, any ref                  | `ReportsReader` + inline policy | `ReportsReader`, read-only on `octo-reports` | denied (no `idp_token`) |
+| GitHub `octo-org/terraform`, main                   | `TerraformApply` + policy file  | `TerraformApply`, scoped by `terraform.json` | denied (no `idp_token`) |
 | GitHub `octo-org/terraform`, other ref              | none (condition fails)          | denied                                       | denied                  |
-| GitLab `platform/infra`, `ref=main`                 | `@readonly`                     | `ReadOnly`                                   | denied                  |
+| GitLab `platform/infra`, `ref=main`                 | `@readonly`                     | `ReadOnly`                                   | denied (no `idp_token`) |
 | GitHub token claiming `platform/infra`              | none (bound to GitLab)          | denied                                       | denied                  |
-| GitHub `octo-org/tool-a`, `event_name=push`         | `role_groups` entry             | `ReadOnly`                                   | denied                  |
+| GitHub `octo-org/tool-a`, `event_name=push`         | `role_groups` entry             | `ReadOnly`                                   | denied (no `idp_token`) |
 | GitHub `octo-org/tool-a`, `event_name=pull_request` | none (condition fails)          | denied                                       | denied                  |
 | GitHub `octo-org/other`                             | none                            | denied                                       | denied                  |
 
-The `/idp/token` row works only because `LongDeploy` is in `idp.allowed_roles` and the role trusts the warden's own OIDC provider ([IDP.md § Trust policy](../../IDP.md)). The 4h is the smaller of the mapping's `idp_max_session_duration` and `idp.max_session_duration`.
+The `LongDeploy` row is IdP-issued at every duration because `LongDeploy` is in `idp.allowed_roles` and the role trusts the warden's own OIDC provider ([IDP.md § Trust policy](../../IDP.md)). The 4h is the smaller of the mapping's `idp_max_session_duration` and `idp.max_session_duration`.
 
 A session policy comes from the first mapping, in file order, that matches the caller and grants the requested role. Give scoped grants their own roles (`ReportsReader`, `TerraformApply`). If a role's first grant has no policy and a later grant does, the later policy is never applied, and the warden logs a warning at load.
 
@@ -91,9 +91,9 @@ role_mappings:
     roles: ["@readonly"]
 ```
 
-An `idp_max_session_duration` or `allow_session_name` without `idp_token: true`.
+An `idp_max_session_duration` without `idp_token: true`.
 
-Not a load error: `idp_token: true` on a role missing from `idp.allowed_roles` loads, but `/idp/token` refuses it with `403 idp_not_permitted`. The platform team's `allowed_roles` always wins over the mappings file.
+Not a load error: `idp_token: true` on a role missing from `idp.allowed_roles` loads, but is served by `AssumeRole`: up to 1h works, more gets `403 idp_not_permitted`. The platform team's `allowed_roles` always wins over the mappings file.
 
 The reverse also fails, at startup: `role_mappings` or `role_groups` inside `service.yaml` while `mappings_file` is set.
 
@@ -105,13 +105,13 @@ mappings_file is set: role_mappings and role_groups belong in the mappings file,
 
 With `config_reload_interval: 60s` and the default `mappings_max_stale` (180s):
 
-| Time  | Event                                  | Requests                                                 |
-| ----- | -------------------------------------- | -------------------------------------------------------- |
-| 0s    | Last successful read                   | Served from that version                                 |
-| 60s   | New upload is invalid; refresh fails   | Still served from the 0s version                         |
-| 120s+ | Retries back off (2x, 4x, 8x interval) | Still served from the 0s version                         |
-| 180s  | No successful refresh for 3x interval  | Every `/verify` and `/idp/token` gets `503 config_stale` |
-| later | A valid file is uploaded and read      | Served again from the new version                        |
+| Time  | Event                                  | Requests                                |
+| ----- | -------------------------------------- | --------------------------------------- |
+| 0s    | Last successful read                   | Served from that version                |
+| 60s   | New upload is invalid; refresh fails   | Still served from the 0s version        |
+| 120s+ | Retries back off (2x, 4x, 8x interval) | Still served from the 0s version        |
+| 180s  | No successful refresh for 3x interval  | Every `/verify` gets `503 config_stale` |
+| later | A valid file is uploaded and read      | Served again from the new version       |
 
 A `304 Not Modified` counts as a successful refresh, so an unchanged file never goes stale. Deleting a grant takes effect on the next refresh; deleting or breaking the file does not revoke anything until it goes stale.
 

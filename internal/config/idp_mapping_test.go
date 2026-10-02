@@ -60,38 +60,6 @@ func TestIDPTokenInheritedFromRoleGroup(t *testing.T) {
 	require.True(t, d.IDPTokenAllowed())
 }
 
-func TestAllowSessionNameRequiresIDPToken(t *testing.T) {
-	const role = "arn:aws:iam::123456789012:role/R"
-	allowed := func(m RoleMapping, base bool) bool {
-		cfg := idpMappingCfg(m)
-		cfg.IdP = validIdP()
-		cfg.IdP.AllowSessionName = base
-		require.NoError(t, cfg.Validate())
-		return cfg.Authorize(idpTestIss, "org/repo", role, map[string]any{}).AllowSessionName()
-	}
-
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, AllowSessionName: true})
-	require.ErrorContains(t, cfg.Validate(), "allow_session_name requires idp_token")
-
-	cfg = idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{role}})
-	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{role}, AllowSessionName: true}}}
-	require.ErrorContains(t, cfg.Validate(), "allow_session_name requires idp_token")
-
-	on := RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true, AllowSessionName: true}
-	off := RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true}
-	require.True(t, allowed(on, true))
-	require.False(t, allowed(on, false), "base gate off")
-	require.False(t, allowed(off, true), "mapping not opted in")
-	require.False(t, Decision{}.AllowSessionName())
-
-	cfg = idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{role}})
-	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{role}, IDPToken: true, AllowSessionName: true}}}
-	cfg.IdP = validIdP()
-	cfg.IdP.AllowSessionName = true
-	require.NoError(t, cfg.Validate())
-	require.True(t, cfg.Authorize(idpTestIss, "org/repo", role, map[string]any{}).AllowSessionName(), "group default is copied at expansion")
-}
-
 func TestIdPRoleAllowed(t *testing.T) {
 	const allowed, other = "arn:aws:iam::123456789012:role/R", "arn:aws:iam::123456789012:role/Other"
 	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{allowed, other}, IDPToken: true})
@@ -284,16 +252,13 @@ func TestIdPEnvSessionSettings(t *testing.T) {
 	t.Run("set on existing block", func(t *testing.T) {
 		viper.Reset()
 		t.Setenv("AOW_IDP_MAX_SESSION_DURATION", "4h")
-		t.Setenv("AOW_IDP_ALLOW_SESSION_NAME", "true")
 		c := &Config{IdP: &IdPConfig{}}
 		reapplyEnvOverrides(c)
 		require.Equal(t, 4*time.Hour, c.IdP.MaxSessionDuration)
-		require.True(t, c.IdP.AllowSessionName)
 	})
 	t.Run("no block stays nil", func(t *testing.T) {
 		viper.Reset()
 		t.Setenv("AOW_IDP_MAX_SESSION_DURATION", "4h")
-		t.Setenv("AOW_IDP_ALLOW_SESSION_NAME", "true")
 		c := &Config{}
 		reapplyEnvOverrides(c)
 		require.Nil(t, c.IdP)
@@ -301,11 +266,10 @@ func TestIdPEnvSessionSettings(t *testing.T) {
 }
 
 func TestIdPMappingFieldsSurviveClone(t *testing.T) {
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{"arn:aws:iam::123456789012:role/R"}, IDPToken: true, IdPMaxSessionDuration: 2 * time.Hour, AllowSessionName: true})
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{"arn:aws:iam::123456789012:role/R"}, IDPToken: true, IdPMaxSessionDuration: 2 * time.Hour})
 	clone, err := cloneConfig(cfg)
 	require.NoError(t, err)
 	got := clone.RoleMappings[0]
 	require.True(t, got.IDPToken)
 	require.Equal(t, 2*time.Hour, got.IdPMaxSessionDuration)
-	require.True(t, got.AllowSessionName)
 }

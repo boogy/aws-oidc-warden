@@ -11,7 +11,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
@@ -221,17 +220,39 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	return o, nil
 }
 
-// ProcessRequest contains the main business logic for processing requests
-func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error) {
+// ProcessRequest authorizes once, then issues credentials through the IdP for an IdP-enabled role or AssumeRole otherwise.
+func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*IssuedCredentials, error) {
 	o, err := r.authorizeRequest(ctx, requestData, input, requestID, log, actionAssumeRole)
 	if err != nil {
 		return nil, err
 	}
+	if d := requestData.DurationSeconds; d != 0 && (d < minDurationSecs || d > maxDurationSecs) {
+		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
+		return nil, r.deny(ctx, o, "Duration refused", ErrInvalidDuration)
+	}
+	useIdP, err := r.selectIdP(o.cfg, o.decision, requestData.Role, requestData.DurationSeconds)
+	if err != nil {
+		o.rec.Stage, o.rec.Reason = "duration", "over 1h without idp"
+		if errors.Is(err, ErrIdPNotPermitted) {
+			o.rec.Reason = "over 1h but role not idp-enabled"
+		} else if errors.Is(err, ErrIdPUnavailable) {
+			o.rec.Reason = "over 1h but idp disabled"
+		}
+		return nil, r.deny(ctx, o, "Duration refused", err)
+	}
+	if useIdP {
+		o.rec.Action = actionMintToken
+		return r.issueIdP(ctx, o, requestData, requestID)
+	}
+	return r.issueAssumeRole(ctx, o, requestData)
+}
+
+// issueAssumeRole assumes the role from the warden's own credentials.
+func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestData *RequestData) (*IssuedCredentials, error) {
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	requestedRole := requestData.Role
 
-	// AssumeRole from the warden's own role is role chaining, which STS caps at 1h.
-	duration, err := resolveDuration(requestData.DurationSeconds, time.Hour)
+	duration, err := resolveDuration(requestData.DurationSeconds, assumeRoleMaxSecs*time.Second)
 	if err != nil {
 		rec.Stage, rec.Reason = "duration", "invalid or excessive duration"
 		return nil, r.deny(ctx, o, "Duration refused", err)
@@ -243,18 +264,13 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	// Per-mapping override, resolved via the same mapping that authorized the
-	// role, so CloudTrail can name the requester rather than the service.
-	sessionName := cfg.RoleSessionName
-	if override := o.decision.RoleSessionName(); override != "" {
-		sessionName = override
+	sessionName, nameSource, err := resolveSessionName(o.decision.RoleSessionName(), requestData.SessionName, cfg.RoleSessionName)
+	if err != nil {
+		rec.Stage, rec.Reason = "session_name", "session name refused"
+		return nil, r.deny(ctx, o, "Session name refused", err)
 	}
 	if requestData.SessionName != "" {
-		sessionName, rec.SessionNameSource, err = resolveSessionName(o.decision.RoleSessionName(), true, requestData.SessionName, "", "")
-		if err != nil {
-			rec.Stage, rec.Reason = "session_name", "session name refused"
-			return nil, r.deny(ctx, o, "Session name refused", err)
-		}
+		rec.SessionNameSource = nameSource
 	}
 
 	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, o.decision)
@@ -292,7 +308,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if err := r.finalizeAllow(ctx, log, cfg, rec); err != nil {
 		return nil, err
 	}
-	return credentials, nil
+	return &IssuedCredentials{Credentials: *credentials}, nil
 }
 
 // getSessionPolicy retrieves the session policy for an (issuer, subject) pair

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
@@ -78,14 +77,6 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		}
 	} else {
 		input = validator.ExtractionInput{Token: requestData.Token}
-	}
-
-	if kind == routeMint {
-		credentials, err := h.processor.ProcessMint(ctx, requestData, input, requestID, log)
-		if err != nil {
-			return h.respondError(ctx, err, http.StatusInternalServerError)
-		}
-		return successResponseMsg(ctx, credentials, msgMinted, h.newResponse), nil
 	}
 
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
@@ -162,6 +153,6 @@ func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error
 }
 
 // respondJSON formats a successful response with credentials
-func (h *AwsApplicationLoadBalancer) respondJSON(ctx context.Context, credentials *types.Credentials) (events.ALBTargetGroupResponse, error) {
+func (h *AwsApplicationLoadBalancer) respondJSON(ctx context.Context, credentials *IssuedCredentials) (events.ALBTargetGroupResponse, error) {
 	return successResponse(ctx, credentials, h.newResponse), nil
 }

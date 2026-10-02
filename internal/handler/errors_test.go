@@ -46,7 +46,6 @@ func TestClassifyError(t *testing.T) {
 		{ErrDurationExceedsCap, "duration_exceeds_cap", http.StatusBadRequest},
 		{ErrDurationExceedsRoleMax, "duration_exceeds_role_max", http.StatusBadRequest},
 		{ErrInvalidSessionName, "invalid_session_name", http.StatusBadRequest},
-		{ErrSessionNameNotPermitted, "session_name_not_permitted", http.StatusForbidden},
 		{ErrIdPSourceIdentityInvalid, "idp_source_identity_invalid", http.StatusForbidden},
 		{ErrIdPExchangeDenied, "idp_exchange_denied", http.StatusForbidden},
 		{ErrIdPExchangeUnavailable, "idp_exchange_unavailable", http.StatusServiceUnavailable},
@@ -80,7 +79,7 @@ func TestClassifyErrorIdPSentinelsDistinct(t *testing.T) {
 	all := []error{
 		ErrIdPNotPermitted, ErrIdPUnavailable, ErrMethodNotAllowed, ErrIdPPathNotFound,
 		ErrIdPTokenTooLarge, ErrInvalidDuration, ErrDurationExceedsCap, ErrDurationExceedsRoleMax,
-		ErrInvalidSessionName, ErrSessionNameNotPermitted,
+		ErrInvalidSessionName,
 		ErrIdPSourceIdentityInvalid, ErrIdPExchangeDenied, ErrIdPExchangeUnavailable,
 		ErrAssumeRoleDenied, ErrAssumeRoleFailed,
 	}

@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
@@ -59,14 +58,6 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 	}
 	input := validator.ExtractionInput{AuthorizerClaims: authorizerClaims}
 
-	if kind == routeMint {
-		credentials, err := h.processor.ProcessMint(ctx, requestData, input, requestID, log)
-		if err != nil {
-			return h.respondError(ctx, err, http.StatusInternalServerError)
-		}
-		return successResponseMsg(ctx, credentials, msgMinted, h.newResponse), nil
-	}
-
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
 		return h.respondError(ctx, err, http.StatusInternalServerError)
@@ -105,6 +96,6 @@ func (h *AwsApiGatewayV2) respondError(ctx context.Context, err error, statusCod
 	return errorResponse(ctx, err, statusCode, h.newResponse), nil
 }
 
-func (h *AwsApiGatewayV2) respondJSON(ctx context.Context, credentials *types.Credentials) (events.APIGatewayV2HTTPResponse, error) {
+func (h *AwsApiGatewayV2) respondJSON(ctx context.Context, credentials *IssuedCredentials) (events.APIGatewayV2HTTPResponse, error) {
 	return successResponse(ctx, credentials, h.newResponse), nil
 }

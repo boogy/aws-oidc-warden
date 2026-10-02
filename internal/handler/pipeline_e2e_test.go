@@ -122,7 +122,7 @@ func vE2EClaims(subject, ref string) *types.Claims {
 	}
 }
 
-func vRun(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.Claims, role string) (*ststypes.Credentials, error) {
+func vRun(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.Claims, role string) (*handler.IssuedCredentials, error) {
 	t.Helper()
 	p := handler.NewRequestProcessor(
 		config.NewStaticProvider(cfg), rec, &vExtractor{claims: claims}, nil, "test")

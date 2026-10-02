@@ -229,18 +229,17 @@ The failure modes that actually bite, in rough order of likelihood:
 | `500 policy_error`                | The mapping's S3 session policy could not be read (missing object, no `s3:GetObject`) or is not valid JSON                                             |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`. Transient; retry with backoff or fail over                                                          |
 | `500 audit_write_failed`          | `audit_required` is on and the S3 audit write failed. Needs `s3:PutObject` **and** `s3:PutObjectTagging` on the log bucket; `make run` has no S3 sink  |
-| `403 idp_not_permitted`           | Mapping lacks `idp_token`, role outside `idp.allowed_roles`, or the minted subject was invalid                                                         |
-| `403 session_name_not_permitted`  | IdP path: `sessionName` sent without both `allow_session_name` flags                                                                                   |
+| `403 idp_not_permitted`           | Over 1h for a role without `idp_token` or outside `idp.allowed_roles`, or the minted subject was invalid                                               |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                                                                   |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                                                              |
 | `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                                                                   |
-| `400 duration_exceeds_cap`        | `durationSeconds` above the mapping or `idp.max_session_duration` ceiling                                                                              |
+| `400 duration_exceeds_cap`        | `durationSeconds` above the IdP ceiling, or over 1h with no `idp` block                                                                                |
 | `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                                                                |
 | `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                                                                   |
-| `404 idp_path_not_found`          | An IdP-shaped path that is not a configured `idp.paths.*`                                                                                              |
-| `405 method_not_allowed`          | Wrong HTTP method on an IdP path                                                                                                                       |
+| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path                                                                                                        |
+| `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                              |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                                                                  |
-| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the IdP kill-switch answer                                                                                  |
+| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                                                              |
 | `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document                                                                                                 |
 | Cache misses / throttling         | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                |
 | Cross-account failures            | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts` |

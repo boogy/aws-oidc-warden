@@ -12,49 +12,60 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
-	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
 
 const msgMinted = "Token validation successful and IdP credentials issued"
 
-// IdPCredentials is the success payload of the IdP endpoint; the token is never part of it.
-type IdPCredentials struct {
+// IssuedCredentials is the success payload; the IdP fields are set only for a minted session and the token is never part of it.
+type IssuedCredentials struct {
 	ststypes.Credentials
-	Issuer          string `json:"issuer"`
-	RoleARN         string `json:"roleArn"`
-	SessionName     string `json:"sessionName"`
-	SourceIdentity  string `json:"sourceIdentity"`
-	DurationSeconds int    `json:"durationSeconds"`
-	TokenID         string `json:"tokenId"`
+	Issuer          string `json:"issuer,omitempty"`
+	RoleARN         string `json:"roleArn,omitempty"`
+	SessionName     string `json:"sessionName,omitempty"`
+	SourceIdentity  string `json:"sourceIdentity,omitempty"`
+	DurationSeconds int    `json:"durationSeconds,omitempty"`
+	TokenID         string `json:"tokenId,omitempty"`
+}
+
+func (c *IssuedCredentials) message() string {
+	if c.TokenID != "" {
+		return msgMinted
+	}
+	return msgAssumed
 }
 
 func (r *RequestProcessor) idpEnabled(cfg *config.Config) bool {
 	return r.idp != nil && cfg.IdP != nil && cfg.IdP.Enabled
 }
 
-// ProcessMint authorizes the request, mints an IdP token in-process and exchanges it for credentials.
-func (r *RequestProcessor) ProcessMint(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*IdPCredentials, error) {
-	o, err := r.authorizeRequest(ctx, requestData, input, requestID, log, actionMintToken)
-	if err != nil {
-		return nil, err
+// selectIdP routes an IdP-eligible role to the IdP when enabled; otherwise only a session within the AssumeRole cap is servable.
+func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, role string, requested int32) (bool, error) {
+	eligible := d.IDPTokenAllowed() && cfg.IdPRoleAllowed(role)
+	if eligible && r.idpEnabled(cfg) {
+		return true, nil
 	}
+	if requested <= assumeRoleMaxSecs {
+		return false, nil
+	}
+	switch {
+	case r.idp == nil || cfg.IdP == nil:
+		return false, ErrDurationExceedsCap
+	case !eligible:
+		return false, ErrIdPNotPermitted
+	default:
+		return false, ErrIdPUnavailable
+	}
+}
+
+// issueIdP mints an IdP token in-process for an authorized request and exchanges it for credentials.
+func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, requestData *RequestData, requestID string) (*IssuedCredentials, error) {
 	r.warnFrozenDrift(ctx, o.log, o.cfg)
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	role := requestData.Role
 
-	refuse := func(stage, reason, msg string, ret error) (*IdPCredentials, error) {
+	refuse := func(stage, reason, msg string, ret error) (*IssuedCredentials, error) {
 		rec.Stage, rec.Reason = stage, reason
 		return nil, r.deny(ctx, o, msg, ret)
-	}
-
-	if !r.idpEnabled(cfg) {
-		return refuse("idp", "idp disabled", "IdP is disabled", ErrIdPUnavailable)
-	}
-	if !o.decision.IDPTokenAllowed() {
-		return refuse("idp", "mapping has not opted into idp_token", "Mapping has not opted into IdP tokens", ErrIdPNotPermitted)
-	}
-	if !cfg.IdPRoleAllowed(role) {
-		return refuse("idp", "role not in idp.allowed_roles", "Role is not in idp.allowed_roles", ErrIdPNotPermitted)
 	}
 
 	ceiling := o.decision.IdPMaxSessionDuration()
@@ -66,11 +77,10 @@ func (r *RequestProcessor) ProcessMint(ctx context.Context, requestData *Request
 		return refuse("idp", "invalid or excessive duration", "Duration refused", err)
 	}
 
-	sessionName, nameSource, err := resolveSessionName(o.decision.RoleSessionName(), o.decision.AllowSessionName(), requestData.SessionName, claims.Subject, cfg.RoleSessionName)
+	sessionName, nameSource, err := resolveSessionName(o.decision.RoleSessionName(), requestData.SessionName, cfg.RoleSessionName)
 	if err != nil {
 		return refuse("idp", "session name refused", "Session name refused", err)
 	}
-	rec.sessionNameDerived = nameSource == "subject"
 
 	var sourceIdentity string
 	var truncated bool
@@ -180,7 +190,7 @@ func (r *RequestProcessor) ProcessMint(ctx context.Context, requestData *Request
 	}
 	logevent.Info(ctx, log, logevent.IdPCredentialsSuccess, msgMinted, attrs...)
 
-	return &IdPCredentials{
+	return &IssuedCredentials{
 		Credentials:     *creds,
 		Issuer:          r.idp.Config().Issuer,
 		RoleARN:         role,

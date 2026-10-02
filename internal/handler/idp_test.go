@@ -148,27 +148,30 @@ func idpLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
-func mint(t *testing.T, proc *handler.RequestProcessor, rd handler.RequestData, buf *bytes.Buffer) (*handler.IdPCredentials, error) {
+func mint(t *testing.T, proc *handler.RequestProcessor, rd handler.RequestData, buf *bytes.Buffer) (*handler.IssuedCredentials, error) {
 	t.Helper()
 	if rd.Role == "" {
 		rd.Role = testRoleARN
 	}
-	return proc.ProcessMint(context.Background(), &rd, validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(buf))
+	return proc.ProcessRequest(context.Background(), &rd, validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(buf))
 }
 
 func mockWI(t *testing.T) *fakeConsumer { return mockConsumer(t) }
 
 func TestProcessMint(t *testing.T) {
 	tests := []struct {
-		name     string
-		optedIn  bool
-		role     string
-		wantErr  error
-		wantMint bool
+		name       string
+		optedIn    bool
+		role       string
+		duration   int32
+		wantErr    error
+		wantMint   bool
+		wantAction string
 	}{
-		{"opted_in_mints", true, testRoleARN, nil, true},
-		{"not_opted_in", false, testRoleARN, handler.ErrIdPNotPermitted, false},
-		{"role_not_granted", true, otherRoleARN, handler.ErrRoleNotPermitted, false},
+		{"opted_in_mints", true, testRoleARN, 0, nil, true, "mint_token"},
+		{"opted_in_mints_within_1h", true, testRoleARN, 900, nil, true, "mint_token"},
+		{"not_opted_in_over_1h", false, testRoleARN, 7200, handler.ErrIdPNotPermitted, false, "assume_role"},
+		{"role_not_granted", true, otherRoleARN, 0, handler.ErrRoleNotPermitted, false, "assume_role"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -176,12 +179,12 @@ func TestProcessMint(t *testing.T) {
 			cons := mockWI(t)
 			proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
 			var buf bytes.Buffer
-			res, err := mint(t, proc, handler.RequestData{Role: tt.role}, &buf)
+			res, err := mint(t, proc, handler.RequestData{Role: tt.role, DurationSeconds: tt.duration}, &buf)
 
 			assert.Zero(t, cons.assumeCalls)
 			assert.Zero(t, cons.tagCalls)
 			rec := sink.last(t)
-			assert.Equal(t, "mint_token", rec["action"])
+			assert.Equal(t, tt.wantAction, rec["action"])
 			if tt.wantMint {
 				require.NoError(t, err)
 				assert.Equal(t, "AKIAEXAMPLE", *res.AccessKeyId)
@@ -273,38 +276,29 @@ func orZero(v any) any {
 }
 
 func TestProcessMintSessionName(t *testing.T) {
-	long := "org/" + strings.Repeat("a", 100)
 	tests := []struct {
 		name       string
 		fixed      string
-		mapAllow   bool
-		baseAllow  bool
 		requested  string
-		subject    string
 		wantName   string
 		wantSource string
 		err        error
 	}{
-		{"fixed", "fixed", false, false, "", "org/repo", "fixed", "mapping", nil},
-		{"fixed_overrides_request", "fixed", true, true, "asked", "org/repo", "fixed", "mapping", nil},
-		{"opt_in_request", "", true, true, "asked", "org/repo", "asked", "request", nil},
-		{"no_opt_in_request", "", false, false, "asked", "org/repo", "", "", handler.ErrSessionNameNotPermitted},
-		{"bad_charset", "", true, true, "bad name!", "org/repo", "", "", handler.ErrInvalidSessionName},
-		{"too_short", "", true, true, "a", "org/repo", "", "", handler.ErrInvalidSessionName},
-		{"subject", "", false, false, "", "org/repo", "org=repo", "subject", nil},
-		{"long_subject", "", false, false, "", long, utils.FitSTSName(long), "subject", nil},
+		{"fixed", "fixed", "", "fixed", "mapping", nil},
+		{"fixed_overrides_request", "fixed", "asked", "fixed", "mapping", nil},
+		{"request", "", "asked", "asked", "request", nil},
+		{"bad_charset", "", "bad name!", "", "", handler.ErrInvalidSessionName},
+		{"too_short", "", "a", "", "", handler.ErrInvalidSessionName},
+		{"bad_request_with_fixed", "fixed", "a", "", "", handler.ErrInvalidSessionName},
+		{"global_default", "", "", "test", "default", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := idpConfig(t, true, "", func(c *config.Config) {
-				c.RoleMappings[0].Subject = config.Patterns{"org/.+"}
 				c.RoleMappings[0].RoleSessionName = tt.fixed
-				c.RoleMappings[0].AllowSessionName = tt.mapAllow
-				c.IdP.AllowSessionName = tt.baseAllow
 			})
 			cons := mockWI(t)
-			ext := &fixedExtractor{claims: allowClaims(tt.subject)}
-			proc, sink, signer := idpProcessorFor(t, cfg, cons, ext)
+			proc, sink, signer := idpProcessorFor(t, cfg, cons, idpClaims(nil))
 			var buf bytes.Buffer
 			res, err := mint(t, proc, handler.RequestData{SessionName: tt.requested}, &buf)
 			if tt.err != nil {
@@ -613,72 +607,86 @@ func TestProcessMintNeverLeaksTokenSegments(t *testing.T) {
 	}
 }
 
-func TestProcessMintRedactsSubjectDerivedFields(t *testing.T) {
+func TestProcessMintRedactsSourceIdentity(t *testing.T) {
 	srcID := "token.actions.githubusercontent.com=" + utils.SanitizeSTSNameHashed("org/repo")
 	tests := []struct {
 		name      string
 		lcv       bool
 		requested string
 		wantName  string
-		wantSrc   bool
 	}{
-		{"off_subject_name", false, "", "org=repo", false},
-		{"on_subject_name", true, "", "org=repo", true},
-		{"off_request_name", false, "asked", "asked", false},
+		{"off_default_name", false, "", "test"},
+		{"on_default_name", true, "", "test"},
+		{"off_request_name", false, "asked", "asked"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpConfig(t, true, "", func(c *config.Config) {
-				c.LogClaimValues = tt.lcv
-				c.RoleMappings[0].AllowSessionName = true
-				c.IdP.AllowSessionName = true
-			})
+			cfg := idpConfig(t, true, "", func(c *config.Config) { c.LogClaimValues = tt.lcv })
 			proc, sink, _ := idpProcessorFor(t, cfg, mockWI(t), idpClaims(nil))
 			var buf bytes.Buffer
 			_, err := mint(t, proc, handler.RequestData{SessionName: tt.requested}, &buf)
 			require.NoError(t, err)
 			audit, logs := sink.dump(t), buf.String()
 
-			nameShown := tt.lcv || tt.requested != ""
-			assert.Equal(t, nameShown, strings.Contains(audit, `"sessionName":"`+tt.wantName+`"`), "audit sessionName")
-			assert.Equal(t, nameShown, strings.Contains(logs, `"sessionName":"`+tt.wantName+`"`), "log sessionName")
+			assert.Contains(t, audit, `"sessionName":"`+tt.wantName+`"`, "audit sessionName")
+			assert.Contains(t, logs, `"sessionName":"`+tt.wantName+`"`, "log sessionName")
 			assert.Equal(t, tt.lcv, strings.Contains(audit, srcID), "audit sourceIdentity")
 			assert.Equal(t, tt.lcv, strings.Contains(logs, srcID), "log sourceIdentity")
 		})
 	}
 }
 
-func TestProcessMintDisabledKillSwitch(t *testing.T) {
-	cfg := idpConfig(t, true, "", func(c *config.Config) { c.IdP.Enabled = false })
-	cons := mockWI(t)
-	proc, sink, signer := idpProcessorFor(t, cfg, cons, idpClaims(nil))
-	var buf bytes.Buffer
-	_, err := mint(t, proc, handler.RequestData{}, &buf)
-	require.ErrorIs(t, err, handler.ErrIdPUnavailable)
-	assert.Zero(t, signer.calls)
-	assert.Zero(t, cons.wiCalls)
-	assert.Equal(t, "deny", sink.last(t)["decision"])
+func TestProcessRequestRouting(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(*config.Config)
+		optedIn  bool
+		duration int32
+		wantErr  error
+		wantWI   int
+		wantAR   int
+	}{
+		{"opted_in_uses_idp", nil, true, 0, nil, 1, 0},
+		{"not_opted_in_uses_assume_role", nil, false, 3600, nil, 0, 1},
+		{"not_opted_in_over_1h", nil, false, 3601, handler.ErrIdPNotPermitted, 0, 0},
+		{"kill_switch_within_1h_uses_assume_role", func(c *config.Config) { c.IdP.Enabled = false }, true, 0, nil, 0, 1},
+		{"kill_switch_over_1h", func(c *config.Config) { c.IdP.Enabled = false }, true, 7200, handler.ErrIdPUnavailable, 0, 0},
+		{"outside_allowed_roles_within_1h", func(c *config.Config) { c.IdP.AllowedRoles = []string{otherRoleARN} }, true, 0, nil, 0, 1},
+		{"outside_allowed_roles_over_1h", func(c *config.Config) { c.IdP.AllowedRoles = []string{otherRoleARN} }, true, 7200, handler.ErrIdPNotPermitted, 0, 0},
+		{"over_12h_invalid", nil, true, 43201, handler.ErrInvalidDuration, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mutate []func(*config.Config)
+			if tt.mutate != nil {
+				mutate = append(mutate, tt.mutate)
+			}
+			cfg := idpConfig(t, tt.optedIn, "", mutate...)
+			cons := mockWI(t)
+			proc, sink, signer := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+			var buf bytes.Buffer
+			_, err := mint(t, proc, handler.RequestData{DurationSeconds: tt.duration}, &buf)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Zero(t, signer.calls)
+				assert.Equal(t, "deny", sink.last(t)["decision"])
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantWI, cons.wiCalls)
+			assert.Equal(t, tt.wantAR, cons.assumeCalls)
+		})
+	}
 }
 
-func TestProcessMintRoleOutsideAllowedRolesDeniedBeforeSign(t *testing.T) {
-	cfg := idpConfig(t, true, "", func(c *config.Config) { c.IdP.AllowedRoles = []string{otherRoleARN} })
-	proc, sink, signer := idpProcessorFor(t, cfg, mockWI(t), idpClaims(nil))
-	var buf bytes.Buffer
-	_, err := mint(t, proc, handler.RequestData{}, &buf)
-	require.ErrorIs(t, err, handler.ErrIdPNotPermitted)
-	assert.Equal(t, "deny", sink.last(t)["decision"])
-	assert.Zero(t, signer.calls)
-}
-
-func TestAssumeRolePathIgnoresIdPSessionCap(t *testing.T) {
-	cfg := idpConfig(t, true, "", func(c *config.Config) { c.RoleMappings[0].IdPMaxSessionDuration = time.Hour })
-	cons := mockWI(t)
-	proc, _, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
-	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Role: testRoleARN},
+func TestProcessRequestOverOneHourWithoutIdP(t *testing.T) {
+	cfg := auditTestCfg(t, false, false)
+	cons := mockConsumer(t)
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), cons, idpClaims(nil), &fakeAuditSink{}, "test")
+	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Role: testRoleARN, DurationSeconds: 7200},
 		validator.ExtractionInput{Token: "t"}, "req-1", slog.Default())
-	require.NoError(t, err)
-	assert.Equal(t, 1, cons.assumeCalls)
-	assert.Zero(t, cons.wiCalls)
+	require.ErrorIs(t, err, handler.ErrDurationExceedsCap)
+	assert.Zero(t, cons.assumeCalls)
 }
 
 func TestProcessRequestAuditActionAssumeRole(t *testing.T) {
@@ -790,10 +798,11 @@ func TestSessionTagParity(t *testing.T) {
 			cons, fake := captureConsumer(t, cfg)
 			signer := &countingSigner{Signer: idptest.NewSigner(t)}
 			sink := &fakeAuditSink{}
+			classic := handler.NewRequestProcessor(config.NewStaticProvider(cfg), cons, idpClaims(tt.raw), sink, "apigatewayv2")
 			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), cons, idpClaims(tt.raw), sink, "apigatewayv2").
 				WithIdP(idpService(t, cfg, signer, nil))
 
-			_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Role: testRoleARN},
+			_, err := classic.ProcessRequest(context.Background(), &handler.RequestData{Role: testRoleARN},
 				validator.ExtractionInput{Token: "t"}, "req-1", slog.Default())
 			require.NoError(t, err)
 			var buf bytes.Buffer

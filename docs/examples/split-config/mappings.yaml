@@ -23,7 +23,7 @@ role_mappings:
     subject: ["octo-org/web", "octo-org/docs"]
     roles: ["@readonly"]
 
-  # Long job: may also call /idp/token for up to 4h (capped by idp.max_session_duration).
+  # Long job: issued through the IdP, up to 4h (capped by idp.max_session_duration).
   - issuer: "https://token.actions.githubusercontent.com"
     subject: "octo-org/data-pipeline"
     roles: ["arn:aws:iam::111122223333:role/LongDeploy"]

@@ -327,13 +327,12 @@ See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefin
 
 #### Per-mapping IdP fields
 
-`role_mappings[]` and `role_groups[].defaults` accept three IdP fields. They apply only when [IdP mode](IDP.md) is configured, and only to roles granted by that mapping (group defaults apply to the expanded mappings).
+`role_mappings[]` and `role_groups[].defaults` accept two IdP fields. They apply only when [IdP mode](IDP.md) is configured, and only to roles granted by that mapping (group defaults apply to the expanded mappings).
 
 | Field                      | Default | Notes                                                                                                                                 |
 | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `idp_token`                | `false` | Opt the mapping in to `POST` on the IdP token path                                                                                    |
+| `idp_token`                | `false` | Issue this mapping's roles through the IdP (any duration) while `idp.enabled`; needed for over 1h                                     |
 | `idp_max_session_duration` | unset   | Ceiling for the caller's `durationSeconds`, 15m to 12h; the effective cap is `min(this, idp.max_session_duration)`. Needs `idp_token` |
-| `allow_session_name`       | `false` | Let the caller pick the session name; also needs `idp.allow_session_name`. Needs `idp_token`                                          |
 
 With `role_sets`, the lowest-order mapping that grants the role decides.
 
@@ -361,7 +360,6 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 | `audience_mode`            | `static`                                             | `static`, `role_arn`                                                                                           | `role_arn` sets `aud` to the target role ARN                                                                                              |
 | `token_ttl`                | `2m`                                                 | 1m to 5m                                                                                                       | Lifetime of the minted token only, not of the credentials                                                                                 |
 | `jwks_uri`                 | `<idp.issuer>/.well-known/jwks.json`                 | https URL                                                                                                      | Advertised in discovery                                                                                                                   |
-| `paths.token`              | `<idp.issuer path>/idp/token`                        | clean, under the `idp.issuer` path                                                                             |                                                                                                                                           |
 | `paths.discovery`          | `<idp.issuer path>/.well-known/openid-configuration` | must end with that suffix                                                                                      |                                                                                                                                           |
 | `paths.jwks`               | `<idp.issuer path>/.well-known/jwks.json`            |                                                                                                                |                                                                                                                                           |
 | `subject_template`         | `{role_arn}`                                         | must end with `{role_arn}`; also `{account_id}`, `{role_name}`, `{source_issuer}`, `{source_subject}`          | `{source_subject}` needs `{source_issuer}#` before it                                                                                     |
@@ -369,7 +367,6 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 | `source_identity`          | `{issuer}:{subject}`                                 | placeholders `{request_id}`, `{subject}`, `{issuer}` (inbound issuer host, not `idp.issuer`), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer                                                                                         |
 | `source_identity_overflow` | `truncate`                                           | `truncate`, `reject`                                                                                           | Over 64 characters                                                                                                                        |
 | `max_session_duration`     | `1h`                                                 | 15m to 12h, whole seconds                                                                                      | Live, base-only. Above `1h` logs `config.idp_uncapped`                                                                                    |
-| `allow_session_name`       | `false`                                              |                                                                                                                | Live, base-only. Gates the per-mapping flag                                                                                               |
 | `allowed_roles`            | empty (no cap)                                       | role ARNs or `@role_set`                                                                                       | Live, base-only; roles outside it get 403 `idp_not_permitted`                                                                             |
 | `sign_timeout`             | `2s`                                                 | > 0                                                                                                            | Per KMS `Sign` call                                                                                                                       |
 | `jwks_cache_max_age`       | `5m`                                                 | >= 0                                                                                                           | `Cache-Control` max-age of served documents                                                                                               |
@@ -377,19 +374,19 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 
 `idp` is rejected in config fragments. Two traps:
 
-- `idp.paths` must match the path the front end delivers. An HTTP API v2 with a named stage includes it (`/prod/idp/token`), which returns 404 unless configured that way.
+- `idp.paths` must match the path the front end delivers. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`), which returns 404 unless configured that way.
 - `idp-export` reads only local config; run it against the config that carries the effective `idp` block.
 
-### IdP request and response
+### Request and response
 
-The IdP token path takes the same body as `/verify`, plus:
+Every request goes to `/verify`. The body takes `token` and `role`, plus:
 
-| Field             | Notes                                                                                   |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| `durationSeconds` | 900..43200; omitted = `min(3600, ceiling)`; above the ceiling is refused, never clamped |
-| `sessionName`     | Needs both `allow_session_name` flags; `^[\w+=,.@-]{2,64}$`                             |
+| Field             | Notes                                                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `durationSeconds` | 900..43200. `AssumeRole` roles: up to 3600, omitted = 3600. IdP roles: up to the ceiling, omitted = `min(3600, ceiling)`; never clamped |
+| `sessionName`     | `^[\w+=,.@-]{2,64}$`. A mapping `role_session_name` overrides it; omitted = the global `role_session_name`                              |
 
-The `AssumeRole` path (`/verify`) accepts both too: `durationSeconds` is 900..3600 (STS caps role chaining at 1h; omitted = 3600), and `sessionName` must match `^[\w+=,.@-]{2,64}$` but needs no `allow_session_name` flag. A mapping `role_session_name` overrides a requested `sessionName` on both paths. The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`) plus `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
+An `idp_token` role (in `idp.allowed_roles`) is issued through the IdP while `idp.enabled`; any other role uses `AssumeRole`. Over 1h without the IdP is refused ([IDP.md § Why](IDP.md#why)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
 ## Environment Variable Reference
 
@@ -495,7 +492,6 @@ Applied only when the config file or S3 object already carries an `idp:` block; 
 | `AOW_IDP_SOURCE_IDENTITY`          | `idp.source_identity`          | `{issuer}:{subject}`                 |
 | `AOW_IDP_SOURCE_IDENTITY_OVERFLOW` | `idp.source_identity_overflow` | `truncate`                           |
 | `AOW_IDP_MAX_SESSION_DURATION`     | `idp.max_session_duration`     | `1h`                                 |
-| `AOW_IDP_ALLOW_SESSION_NAME`       | `idp.allow_session_name`       | `false`                              |
 
 ### JWT Validation Mode Settings
 
@@ -538,7 +534,7 @@ With `mappings_file` set, the service config may not carry inline `role_mappings
 
 ### What the mappings file may contain
 
-Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token`, `idp_max_session_duration` and `allow_session_name`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment". It may not redefine a `role_sets` name referenced by `idp.allowed_roles`.
+Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `idp_max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment". It may not redefine a `role_sets` name referenced by `idp.allowed_roles`.
 
 The mappings file is a layer beside the base config and the S3 overlay (`s3_config_bucket`/`s3_config_path`). It merges first, then `config_fragments` in order; fragments are rejected inside it. A `role_sets` name defined twice across layers is an error.
 

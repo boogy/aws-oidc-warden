@@ -61,8 +61,6 @@ type auditRecord struct {
 	GrantedRole   string `json:"grantedRole,omitempty"` // allow only
 	AccountID     string `json:"accountId,omitempty"`
 	SessionName   string `json:"sessionName,omitempty"` // actual STS session name used; allow only
-	// sessionNameDerived: SessionName came from the subject, so it follows the log_claim_values gate.
-	sessionNameDerived bool
 
 	TokenID                  string `json:"tokenId,omitempty"`
 	IdPSessionCapSeconds     *int   `json:"idpSessionCapSeconds,omitempty"`
@@ -101,9 +99,6 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.SessionTags = nil
 	rec.Claims = nil
 	rec.SourceIdentity = ""
-	if rec.sessionNameDerived {
-		rec.SessionName = ""
-	}
 	rec.Reason = rec.effectiveReason(logClaimValues) // replaced, not cleared
 	rec.reasonFromError = false
 }

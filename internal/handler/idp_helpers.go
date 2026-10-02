@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	minDurationSecs = 900
-	maxDurationSecs = 43200
-	defDurationSecs = 3600
+	minDurationSecs   = 900
+	maxDurationSecs   = 43200
+	defDurationSecs   = 3600
+	assumeRoleMaxSecs = 3600 // STS caps role chaining at 1h
 )
 
 var (
@@ -41,22 +42,16 @@ func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 	return requested, nil
 }
 
-// resolveSessionName picks the role session name and reports its source; a mapping's fixed name overrides the request.
-func resolveSessionName(fixed string, allow bool, requested, subject, fallback string) (name, source string, err error) {
+// resolveSessionName applies mapping > request > global; a requested name is validated even when the mapping overrides it.
+func resolveSessionName(fixed, requested, fallback string) (name, source string, err error) {
 	if requested != "" && !sessionNamePattern.MatchString(requested) {
 		return "", "", ErrInvalidSessionName
 	}
-	if fixed != "" {
+	switch {
+	case fixed != "":
 		return fixed, "mapping", nil
-	}
-	if requested != "" {
-		if !allow {
-			return "", "", ErrSessionNameNotPermitted
-		}
+	case requested != "":
 		return requested, "request", nil
-	}
-	if fitted := utils.FitSTSName(subject); len(fitted) >= 2 {
-		return fitted, "subject", nil
 	}
 	return fallback, "default", nil
 }

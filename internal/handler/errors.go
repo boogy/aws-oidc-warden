@@ -84,10 +84,6 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		errCode = "invalid_session_name"
 		errMsg = "sessionName must be 2-64 characters of [A-Za-z0-9_+=,.@-]"
 		*statusCode = http.StatusBadRequest
-	case errors.Is(err, ErrSessionNameNotPermitted):
-		errCode = "session_name_not_permitted"
-		errMsg = "sessionName is not permitted for this role"
-		*statusCode = http.StatusForbidden
 	case errors.Is(err, ErrIdPSourceIdentityInvalid):
 		errCode = "idp_source_identity_invalid"
 		errMsg = "Source identity could not be derived for this request"
