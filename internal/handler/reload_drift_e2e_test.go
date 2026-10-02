@@ -30,6 +30,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -117,6 +118,10 @@ type driftConsumer struct {
 func (c *driftConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("unused")
 }
+
+func (c *driftConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
 func (c *driftConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
 	return nil, nil
 }
@@ -126,6 +131,10 @@ func (c *driftConsumer) GetRoleTags(context.Context, string) (map[string]string,
 func (c *driftConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return true, nil
 }
+func (c *driftConsumer) AssumeRoleWithWebIdentity(context.Context, string, string, string, *string, int32) (*ststypes.Credentials, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (c *driftConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, claims *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
 	aud := ""
 	if len(claims.Audience) > 0 {

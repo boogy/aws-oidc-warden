@@ -65,16 +65,29 @@ A failure carries only a classified code — internal detail never reaches the c
 
 The status code tells your client whether retrying is worth anything:
 
-| Status                   | Meaning                                                                 | Retry or fail over?     |
-| ------------------------ | ----------------------------------------------------------------------- | ----------------------- |
-| `400 invalid_request`    | Malformed body, bad token size, or a `role` that is not an IAM role ARN | **No** — deterministic  |
-| `401 token_invalid`      | Signature, issuer, audience or time bounds failed                       | **No** — deterministic  |
-| `403 permission_denied`  | _This service_ refused: no mapping matched, or a condition failed       | **No** — deterministic  |
-| `403 assume_role_denied` | _AWS STS_ refused a role this service authorized (trust policy)         | **No** — deterministic  |
-| `500 assume_role_failed` | Throttling, expired broker credentials, or a malformed session policy   | **Yes** — transient¹    |
-| `500 policy_error`       | The mapping's S3 session policy is missing, unreadable or invalid       | **No** — deterministic² |
-| `500 audit_write_failed` | `audit_required` is on and the audit write to S3 failed                 | **No** — deterministic² |
-| `502` / `503` / timeout  | The endpoint is unhealthy or unreachable                                | **Yes**                 |
+| Status                            | Meaning                                                                                                | Retry or fail over?                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| `400 invalid_request`             | Malformed body, bad token size, or a `role` that is not an IAM role ARN                                | **No** — deterministic                               |
+| `401 token_invalid`               | Signature, issuer, audience or time bounds failed                                                      | **No** — deterministic                               |
+| `403 permission_denied`           | _This service_ refused: no mapping matched, or a condition failed                                      | **No** — deterministic                               |
+| `403 assume_role_denied`          | _AWS STS_ refused a role this service authorized (trust policy)                                        | **No** — deterministic                               |
+| `500 assume_role_failed`          | Throttling, expired broker credentials, or a malformed session policy                                  | **Yes** — transient¹                                 |
+| `500 policy_error`                | The mapping's S3 session policy is missing, unreadable or invalid                                      | **No** — deterministic²                              |
+| `500 audit_write_failed`          | `audit_required` is on and the audit write to S3 failed                                                | **No** — deterministic²                              |
+| `403 idp_not_permitted`           | Over 1h without `idp_token` or outside `idp.allowed_roles`, or invalid minted subject                  | **No** — deterministic                               |
+| `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                   | **No** — deterministic                               |
+| `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider              | **No** — deterministic                               |
+| `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                   | **No** — deterministic                               |
+| `400 duration_exceeds_cap`        | `durationSeconds` above the IdP ceiling, or over 1h with no `idp` block                                | **No** — deterministic                               |
+| `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                | **No** — deterministic                               |
+| `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                   | **No** — deterministic                               |
+| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path                                                        | **No** — deterministic                               |
+| `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                              | **No** — deterministic                               |
+| `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                  | **No** — deterministic                               |
+| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                              | **Yes** — transient                                  |
+| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document                                                 | **Yes** — transient                                  |
+| `503 config_stale`                | Role mappings are older than `mappings_max_stale`                                                      | **Yes** — transient, retry with backoff or fail over |
+| `502` / `503` / timeout           | The endpoint is unhealthy or unreachable                                                               | **Yes**                                              |
 
 ¹ Unless it persists: a malformed session policy fails the same way in every region — the log's `stsErrorCode` is `MalformedPolicyDocument`.
 
@@ -206,7 +219,7 @@ Both versions below implement the same policy:
 
 1. **One token, reused for every attempt.** Validation is stateless and both regions list the same audience, so re-requesting the token would be pure latency.
 2. **Deterministic refusals are final.** `400`/`401`/`403`, and a `500` with `errorCode` `policy_error` or `audit_write_failed`, skip the remaining endpoints — every region shares the authorization config and returns the same answer.
-3. **Only unreachable or transient failures fail over.**
+3. **Only unreachable or transient failures fail over.** That includes `503 config_stale` (this region's mappings are stale; another region may be fresh) and the `503`/`500` transient codes above.
 4. **Mask before exporting**, on every path.
 
 ### With `github-script`
@@ -387,6 +400,12 @@ inputs:
   mode:
     description: "`self` (token in body) or `apigw` (token in the Authorization header)."
     default: self
+  duration-seconds:
+    description: Session duration in seconds. Always sent. 900-3600, or up to the IdP ceiling for a role the warden issues through its IdP.
+    default: "3600"
+  session-name:
+    description: STS role session name, 2-64 chars of [A-Za-z0-9_+=,.@-]. Empty uses the warden's configured name; a mapping role_session_name always wins.
+    default: ""
   endpoints:
     description: >-
       Comma-separated warden endpoints, tried in order. Defaulted HERE so that adding, moving or reordering a region needs no change in any caller.
@@ -416,6 +435,8 @@ runs:
         ROLE_ARN: ${{ inputs.role }}
         AUDIENCE: ${{ inputs.audience }}
         MODE: ${{ inputs.mode }}
+        DURATION: ${{ inputs.duration-seconds }}
+        SESSION_NAME: ${{ inputs.session-name }}
         CONNECT_TIMEOUT: ${{ inputs.connect-timeout }}
         MAX_TIME: ${{ inputs.max-time }}
       run: |
@@ -433,11 +454,18 @@ runs:
           -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
           "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r .value)
 
+        [[ "$DURATION" =~ ^[0-9]+$ ]] || { echo "::error::duration-seconds must be an integer"; exit 1; }
+        if [ -n "$SESSION_NAME" ] && ! [[ "$SESSION_NAME" =~ ^[A-Za-z0-9_+=,.@-]{2,64}$ ]]; then
+          echo "::error::session-name must be 2-64 characters of [A-Za-z0-9_+=,.@-]"; exit 1
+        fi
+        REQ=$(jq -nc --arg role "$ROLE_ARN" --argjson dur "$DURATION" --arg name "$SESSION_NAME" \
+          '{role: $role, durationSeconds: $dur} + (if $name == "" then {} else {sessionName: $name} end)')
+
         # The one place the wire contract is encoded. Switching the fleet from
         # self to apigw mode is this branch, not fifty workflow edits.
         case "$MODE" in
-          apigw) ARGS=(-H "Authorization: Bearer $TOKEN" -d "{\"role\":\"$ROLE_ARN\"}") ;;
-          self)  ARGS=(-d "{\"token\":\"$TOKEN\",\"role\":\"$ROLE_ARN\"}") ;;
+          apigw) ARGS=(-H "Authorization: Bearer $TOKEN" -d "$REQ") ;;
+          self)  ARGS=(-d "$(jq -c --arg t "$TOKEN" '. + {token: $t}' <<< "$REQ")") ;;
           *)     echo "::error::unknown mode '$MODE' (expected self or apigw)"; exit 1 ;;
         esac
 
@@ -493,6 +521,9 @@ jobs:
       - uses: my-org/aws-oidc-warden-action@v1
         with:
           role: arn:aws:iam::123456789012:role/gha-payments
+          # Optional, like aws-actions/configure-aws-credentials:
+          # duration-seconds: 1800
+          # session-name: deploy-payments
 
       - run: aws sts get-caller-identity
 ```

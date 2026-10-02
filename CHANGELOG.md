@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **IdP mode (`idp`, optional).** The warden mints its own KMS-signed OIDC token and exchanges it in-process through an unsigned `sts:AssumeRoleWithWebIdentity`, so sessions are not bound by the 1-hour role-chaining cap. Per-mapping opt-in via `idp_token`. There is no separate endpoint: `/verify` issues an opted-in role through the IdP while `idp.enabled`, and refuses a request over 1h it cannot serve that way. See `docs/IDP.md`.
+- **`idp-export` command** writes the static discovery and JWKS documents for hosting on S3/CloudFront, the production default.
+- **Session ceiling**: `max_session_duration` on a mapping (or `role_groups[].defaults`) bounds the caller's `durationSeconds` for the roles it grants through the IdP, 15m to 12h, default 1h. There is no service-level ceiling.
+- **Source identity** is derived from the template and immutable.
+- **Audit records** carry `action` (`assume_role` or `mint_token`) and, for IdP-issued sessions, `tokenId`. A caller-supplied `durationSeconds` or `sessionName` is recorded as `requestedDurationSeconds`/`durationSeconds` and `sessionNameSource`.
+- **12 new error codes** for IdP mode, documented in the README and `GITHUB_ACTIONS.md` retry tables.
+- **`mappings_file`** (`AOW_MAPPINGS_FILE`, `-mappings` on the local server) loads role mappings from a separate local or `s3://` file, hot-reloaded and restricted to mapping keys. See `docs/CONFIGURATION.md` § Split configuration.
+- **`mappings_max_stale`** (`AOW_MAPPINGS_MAX_STALE`) refuses requests with `503 config_stale` once mappings are older than this. Defaults to 3x `config_reload_interval` for an `s3://` file; `0` disables.
+- **`s3_config_bucket_owner`** (`AOW_S3_CONFIG_BUCKET_OWNER`) is the expected owner account, sent as `ExpectedBucketOwner` on S3 config reads. Required for an `s3://` `mappings_file` or fragment. Optional for `s3_config_bucket`; a startup warning is logged when unset.
+
+### Changed
+
+- **Failed config refreshes back off exponentially** (up to 8x `config_reload_interval`), and requests no longer wait on an in-flight refresh.
+- **`/verify` accepts `durationSeconds` and `sessionName`**, like `aws-actions/configure-aws-credentials`. `durationSeconds` is 900..3600 (role chaining caps at 1h; omitted = 3600); outside that is 400 `invalid_duration` / `duration_exceeds_cap`. `sessionName` must match `^[\w+=,.@-]{2,64}$` (else 400 `invalid_session_name`). A mapping `role_session_name` overrides a requested name; without either, the global `role_session_name` applies. A non-integer `durationSeconds` (e.g. `"3600"`) is 400 `invalid_request`.
+- **A mapping that sets both `session_policy` and `session_policy_file` fails to load.** Previously the file was used and the inline policy silently ignored. Keep the one you intend.
+
+### Fixed
+
+- **`s3://` entries in `config_fragments` are fetched** (conditional GET, 1 MiB cap, owner pin, `sha256:` pins) instead of failing every refresh.
+- **The local dev server (`cmd/local`) caps request bodies and sets read timeouts**, and without an `idp` block it serves only `/verify` again instead of routing every path to the credential flow.
+- **A remote `mappings_file` or `config_fragments` entry must use the lowercase `s3://` scheme.** `S3://…` was fetched from S3 but skipped the `s3_config_bucket_owner` requirement and the default `mappings_max_stale` gate. S3 fragment reads also refuse to run without an owner in the service config.
+
+### Dependencies
+
+- **AWS SDK for Go v2**
+  - `github.com/aws/aws-sdk-go-v2/service/kms` v1.61.1 (new)
+
+### Documentation
+
+- `docs/IDP.md` setup guide; `CONFIGURATION.md` `idp` reference and `AOW_IDP_*` variables; `ARCHITECTURE.md` IdP infrastructure contract; commented `idp:` block and IdP mapping examples in `example-config.yaml`.
+- `docs/examples/split-config/`: annotated `service.yaml` and `mappings.yaml` showing AssumeRole roles up to 1h, IdP roles at the default 1h and at 4h/6h/12h (one role, a role list, a role group), caller-chosen and forced session names, and session policies; a README with per-caller outcomes, sample request bodies, rejected files, staleness and S3 deployment.
+- `GITHUB_ACTIONS.md`: the composite action gains `duration-seconds` (default 3600, always sent) and `session-name` inputs and builds its request body with `jq`.
+
 ## [3.5.2] - 2026-09-26
 
 ### Fixed

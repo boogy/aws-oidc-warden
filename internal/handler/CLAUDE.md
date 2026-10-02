@@ -12,6 +12,9 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `response.go` — shared success/error response construction.
 - `reqcontext.go` — `resolveRequestID` / `clientIP`; the only supported way for an adapter to derive `requestId`, `frontendRequestId`, and `sourceIp`.
 - `audit.go` — `AuditSink` and the allow/deny audit record, including `auditClaims` (claim values formatted through `utils.FormatClaimValue`).
+- `route.go` — classifies the IdP discovery/JWKS paths before the normal pipeline; near misses and wrong methods map to `idp_path_not_found` / `method_not_allowed`. Credentials always go through `/verify`.
+- `idp.go` — `selectIdP` routes an `idp_token` role (in `idp.allowed_roles`) to `issueIdP` while `idp.enabled`; over 1h without it is refused. `issueIdP` mints and runs an in-process `AssumeRoleWithWebIdentity`; `ProcessRequest` (`processor.go`) is the single entry for both. `idp_helpers.go` — duration, session-name and source-identity resolution. `idp_document.go` — serves discovery/JWKS.
+- `bootstrap.go` `NewIdPService` — builds the `idp.Service` whenever an `idp` block exists (keys warm only when `idp.enabled`); the KMS client is read through a func so `RefreshClients` is honoured.
 - `apigateway.go` — REST API v1 adapter (`events.APIGatewayProxyRequest`). Passes `ExtractionInput{Token: requestData.Token}`; always self mode.
 - `apigatewayv2.go` — HTTP API v2 adapter (`events.APIGatewayV2HTTPRequest`). Reads authorizer claims from `event.RequestContext.Authorizer.JWT.Claims`; use with `jwt_validation.mode: "apigw"`.
 - `alb.go` — ALB adapter. Reads `x-amzn-oidc-data` header when present (delegated ALB mode); falls back to token-in-body (self mode).
@@ -37,6 +40,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 
 - `apigatewayv2.go` is the only adapter compatible with API Gateway JWT Authorizer — v1 REST API does not receive authorizer claims.
 - The extractor is created once at bootstrap; changing `jwt_validation.mode` at runtime requires a Lambda cold start.
-- Inline session policy overrides the S3 file when both are set.
+- A mapping sets `session_policy` or `session_policy_file`, never both; `Validate()` rejects both.
 - S3 policy reads are bounded (`io.LimitReader`, 1 MB).
 - Start time is carried in context (`StartTimeContextKey`).
+- IdP kill switch: `idp.enabled` is live; when off, mint answers `503 idp_signing_unavailable`. Env overrides S3 config. A stale remote config past max-stale fails closed the same way.

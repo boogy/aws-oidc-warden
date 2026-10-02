@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/stretchr/testify/require"
@@ -486,4 +487,117 @@ func TestExampleConfigGenericIssuer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSplitConfigExamplesLoad(t *testing.T) {
+	const dir = "../../docs/examples/split-config/"
+	service, err := os.ReadFile(dir + "service.yaml")
+	require.NoError(t, err)
+	mappings, err := filepath.Abs(dir + "mappings.yaml")
+	require.NoError(t, err)
+
+	t.Run("service.yaml loads as written", func(t *testing.T) {
+		require.NoError(t, (&config.Config{}).MergeBytes(service, "yaml"))
+	})
+
+	t.Run("mappings.yaml authorizes through a provider", func(t *testing.T) {
+		const uri = "s3://EXAMPLE-BUCKET/mappings.yaml"
+		require.Contains(t, string(service), uri)
+		local := strings.Replace(string(service), uri, mappings, 1)
+		local = strings.Replace(local, "config_reload_interval: 60s\n", "", 1)
+
+		cfg := &config.Config{}
+		require.NoError(t, cfg.MergeBytes([]byte(local), "yaml"))
+		p := config.NewProvider(cfg, 0, "yaml", nil)
+		require.NoError(t, p.Refresh(t.Context()))
+
+		const (
+			gh     = "https://token.actions.githubusercontent.com"
+			gl     = "https://gitlab.com"
+			acct   = "arn:aws:iam::111122223333:role/"
+			main   = "refs/heads/main"
+			branch = "refs/heads/feature"
+		)
+		tests := []struct {
+			name, issuer, subject string
+			claims                map[string]any
+			roles                 []string
+		}{
+			{"api on main", gh, "octo-org/api", map[string]any{"ref": main}, []string{acct + "ApiDeploy", acct + "ApiMigrate"}},
+			{"api off main", gh, "octo-org/api", map[string]any{"ref": branch}, nil},
+			{"web any branch", gh, "octo-org/web", map[string]any{"ref": branch}, []string{acct + "ReadOnly"}},
+			{"pipeline on main", gh, "octo-org/data-pipeline", map[string]any{"ref": main}, []string{acct + "LongDeploy"}},
+			{"reports any branch", gh, "octo-org/reports", map[string]any{"ref": branch}, []string{acct + "ReportsReader"}},
+			{"terraform on main", gh, "octo-org/terraform", map[string]any{"ref": main}, []string{acct + "TerraformApply"}},
+			{"terraform off main", gh, "octo-org/terraform", map[string]any{"ref": branch}, nil},
+			{"gitlab infra on main", gl, "platform/infra", map[string]any{"ref": "main"}, []string{acct + "ReadOnly"}},
+			{"gitlab subject under github", gh, "platform/infra", map[string]any{"ref": "main"}, nil},
+			{"group tool on push", gh, "octo-org/tool-a", map[string]any{"event_name": "push"}, []string{acct + "ReadOnly"}},
+			{"group tool on pull_request", gh, "octo-org/tool-a", map[string]any{"event_name": "pull_request"}, nil},
+			{"unlisted repo", gh, "octo-org/other", map[string]any{"ref": main}, nil},
+			{"batch any branch", gh, "octo-org/batch", map[string]any{"ref": branch}, []string{acct + "BatchRunner"}},
+			{"backup on schedule", gh, "octo-org/nightly-backup", map[string]any{"event_name": "schedule"}, []string{acct + "BackupRunner", acct + "BackupVerify"}},
+			{"backup on push", gh, "octo-org/nightly-backup", map[string]any{"event_name": "push"}, nil},
+			{"etl group on main", gh, "octo-org/etl-orders", map[string]any{"ref": main}, []string{acct + "EtlExtract", acct + "EtlLoad"}},
+			{"etl group off main", gh, "octo-org/etl-billing", map[string]any{"ref": branch}, nil},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				ok, roles := p.Get().AuthorizeRoles(tt.issuer, tt.subject, tt.claims)
+				require.Equal(t, tt.roles != nil, ok)
+				if tt.roles != nil {
+					require.ElementsMatch(t, tt.roles, roles)
+				}
+			})
+		}
+
+		idpTests := []struct {
+			name, subject, role string
+			claims              map[string]any
+			idp                 bool
+			ceiling             time.Duration
+			sessionName         string
+		}{
+			{"api uses AssumeRole", "octo-org/api", acct + "ApiDeploy", map[string]any{"ref": main}, false, time.Hour, ""},
+			{"batch uses the IdP at 1h", "octo-org/batch", acct + "BatchRunner", map[string]any{"ref": main}, true, time.Hour, ""},
+			{"pipeline uses the IdP up to 4h", "octo-org/data-pipeline", acct + "LongDeploy", map[string]any{"ref": main}, true, 4 * time.Hour, ""},
+			{"backup up to 12h, forced name", "octo-org/nightly-backup", acct + "BackupVerify", map[string]any{"event_name": "schedule"}, true, 12 * time.Hour, "nightly-backup"},
+			{"etl group up to 6h", "octo-org/etl-billing", acct + "EtlLoad", map[string]any{"ref": main}, true, 6 * time.Hour, ""},
+			{"terraform forced name", "octo-org/terraform", acct + "TerraformApply", map[string]any{"ref": main}, false, time.Hour, "terraform-apply"},
+		}
+		for _, tt := range idpTests {
+			t.Run(tt.name, func(t *testing.T) {
+				cfg := p.Get()
+				d := cfg.Authorize(gh, tt.subject, tt.role, tt.claims)
+				require.True(t, d.Matched)
+				require.Equal(t, tt.idp, d.IDPTokenAllowed())
+				require.Equal(t, tt.idp, cfg.IdPRoleAllowed(tt.role) && d.IDPTokenAllowed())
+				require.Equal(t, tt.ceiling, d.MaxSessionDuration())
+				require.Equal(t, tt.sessionName, d.RoleSessionName())
+			})
+		}
+
+		policyTests := []struct {
+			name, subject, role, file string
+			inline                    bool
+		}{
+			{"reports gets the inline policy", "octo-org/reports", acct + "ReportsReader", "", true},
+			{"terraform gets the policy file", "octo-org/terraform", acct + "TerraformApply", "session-policies/octo-org/terraform.json", false},
+			{"api has no session policy", "octo-org/api", acct + "ApiDeploy", "", false},
+		}
+		for _, tt := range policyTests {
+			t.Run(tt.name, func(t *testing.T) {
+				inline, file := p.Get().FindSessionPolicy(gh, tt.subject, tt.role, map[string]any{"ref": main})
+				require.Equal(t, tt.inline, inline != nil)
+				if tt.inline {
+					require.Contains(t, *inline, "arn:aws:s3:::octo-reports/*")
+				}
+				if tt.file == "" {
+					require.Nil(t, file)
+				} else {
+					require.Equal(t, tt.file, *file)
+				}
+			})
+		}
+	})
 }

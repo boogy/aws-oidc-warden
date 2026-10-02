@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,11 +58,14 @@ type Provider struct {
 	interval      atomic.Int64 // nanoseconds; <= 0 means disabled
 	format        string       // viper config type ("json"/"yaml"/"toml")
 	lastRefresh   atomic.Int64 // unix nanos of last successful refresh; 0 = never
+	lastAttempt   atomic.Int64 // unix nanos of last refresh attempt, success or failure; 0 = never
+	failures      atomic.Int32 // consecutive failed attempts
 	now           func() time.Time
 	mu            sync.Mutex                 // serializes refreshes
 	fetch         FetchFunc                  // nil if there's no primary remote/S3 config overlay
 	fragmentFetch FragmentFetchFunc          // nil if no remote ("scheme://") fragments are configured
 	fragments     map[string]*cachedFragment // last-applied fragment cache; only touched under mu (in refreshLocked)
+	frozenIdP     *IdPConfig                 // idp config the running service was built from; guarded by mu
 }
 
 // NewStaticProvider returns a Provider that always serves cfg and never reloads.
@@ -87,6 +92,13 @@ func NewProvider(base *Config, interval time.Duration, format string, fetch Fetc
 	return p
 }
 
+// FreezeIdP records the IdP config the running service was built from.
+func (p *Provider) FreezeIdP(c *IdPConfig) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.frozenIdP = c
+}
+
 // Get returns the currently active configuration.
 func (p *Provider) Get() *Config {
 	return p.current.Load()
@@ -95,47 +107,63 @@ func (p *Provider) Get() *Config {
 // IntervalForTest exposes the current effective interval for testing only.
 func (p *Provider) IntervalForTest() int64 { return p.interval.Load() }
 
-// MaybeRefresh reloads if reloading is enabled and the interval has elapsed.
-// Double-checked locking ensures at most one fetch per interval boundary
-// under concurrent load. Errors are logged; the previous config is retained.
+// MaybeRefresh reloads if reloading is enabled and the interval, or the
+// failure backoff, has elapsed. It never waits on an in-flight refresh.
+// Errors are logged; the previous config is retained.
 func (p *Provider) MaybeRefresh(ctx context.Context) {
-	if p.fetch == nil && len(p.base.ConfigFragments) == 0 {
+	if p.fetch == nil && len(p.base.fragmentSources()) == 0 {
 		return
 	}
 	interval := time.Duration(p.interval.Load())
-	if interval <= 0 {
+	if interval <= 0 || !p.due(interval) {
 		return
 	}
-
-	// Fast path: clearly not due (no lock).
-	last := p.lastRefresh.Load()
-	if last != 0 && p.now().UnixNano()-last < int64(interval) {
+	if !p.mu.TryLock() {
 		return
 	}
-
-	// Slow path: re-check under lock so only the first goroutine through fetches.
-	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	last = p.lastRefresh.Load()
-	if last != 0 && p.now().UnixNano()-last < int64(interval) {
+	if !p.due(interval) {
 		return
 	}
-
-	if err := p.refreshLocked(ctx); err != nil {
+	if err := p.attemptLocked(ctx); err != nil {
 		logevent.Error(ctx, nil, logevent.ConfigReloadFailure, "configuration refresh failed; keeping previous configuration", slog.String("error", err.Error()))
 	}
+}
+
+// due reports whether the interval, stretched 2x/4x/8x by consecutive failures, has elapsed since the last attempt.
+func (p *Provider) due(interval time.Duration) bool {
+	last := p.lastAttempt.Load()
+	if last == 0 {
+		return true
+	}
+	shift := min(p.failures.Load(), 3)
+	if _, _, stale := p.Stale(); stale {
+		shift = 0
+	}
+	return p.now().UnixNano()-last >= int64(interval)<<shift
+}
+
+// attemptLocked runs one refresh and records it for backoff. Must be called with p.mu held.
+func (p *Provider) attemptLocked(ctx context.Context) error {
+	p.lastAttempt.Store(p.now().UnixNano())
+	err := p.refreshLocked(ctx)
+	if err != nil {
+		p.failures.Add(1)
+	} else {
+		p.failures.Store(0)
+	}
+	return err
 }
 
 // Refresh fetches, overlays, validates, and atomically swaps in a new config.
 // On any error the active configuration is left unchanged.
 func (p *Provider) Refresh(ctx context.Context) error {
-	if p.fetch == nil && len(p.base.ConfigFragments) == 0 {
+	if p.fetch == nil && len(p.base.fragmentSources()) == 0 {
 		return errors.New("no configuration fetch source configured")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.refreshLocked(ctx)
+	return p.attemptLocked(ctx)
 }
 
 // refreshLocked performs the actual fetch+merge+swap. Must be called with
@@ -160,13 +188,25 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		return fmt.Errorf("invalid base configuration: %w", err)
 	}
 
+	if err := cfg.validateMappingsSplit(); err != nil {
+		return fmt.Errorf("invalid base configuration: %w", err)
+	}
+
 	nextFragments, err := p.applyFragments(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to apply config fragments: %w", err)
 	}
-	if len(cfg.ConfigFragments) > 0 {
+	if len(cfg.fragmentSources()) > 0 {
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("invalid configuration after fragment merge: %w", err)
+		}
+	}
+
+	if p.frozenIdP != nil {
+		if err := p.frozenIdP.checkInbound(cfg.Issuers); err != nil {
+			logevent.Error(ctx, nil, logevent.ConfigIdPIssuerCollision, "reload rejected: inbound issuer collides with the idp issuer",
+				slog.String("issuer", p.frozenIdP.Issuer))
+			return err
 		}
 	}
 
@@ -181,16 +221,17 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 
 	logevent.Info(ctx, nil, logevent.ConfigReloadSuccess, "configuration reloaded",
 		slog.Int("roleMappings", len(cfg.effective)),
-		slog.Int("fragments", len(cfg.ConfigFragments)))
+		slog.Int("fragments", len(cfg.fragmentSources())))
 	return nil
 }
 
-// applyFragments fetches, verifies, and merges every cfg.ConfigFragments
+// applyFragments fetches, verifies, and merges every cfg.fragmentSources()
 // entry (list order) onto cfg. Mutates cfg in place but returns the fragment
 // cache separately; caller only commits it after a nil error, so a
 // failed/invalid fragment can't partially apply into the served config.
 func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]*cachedFragment, error) {
-	if len(cfg.ConfigFragments) == 0 {
+	sources := cfg.fragmentSources()
+	if len(sources) == 0 {
 		return nil, nil
 	}
 
@@ -199,13 +240,13 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 		baseIssuers[iss.Issuer] = true
 	}
 
-	next := make(map[string]*cachedFragment, len(cfg.ConfigFragments))
+	next := make(map[string]*cachedFragment, len(sources))
 	totalMappings := len(cfg.RoleMappings)
 	for _, g := range cfg.RoleGroups {
 		totalMappings += len(g.Subjects)
 	}
 
-	for _, uri := range cfg.ConfigFragments {
+	for _, uri := range sources {
 		prev := p.fragments[uri]
 		prevETag := ""
 		if prev != nil {
@@ -243,6 +284,12 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 			}
 		}
 
+		if uri == cfg.MappingsFile {
+			if name, clash := idpOwnedRoleSet(cfg, frag); clash {
+				return nil, fmt.Errorf("mappings_file %q declares role_set %q referenced by idp.allowed_roles", uri, name)
+			}
+		}
+
 		if err := mergeFragment(cfg, frag, uri, baseIssuers); err != nil {
 			return nil, err
 		}
@@ -258,13 +305,45 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 		logevent.Warn(ctx, nil, logevent.ConfigFragmentsSoftCap, "config_fragments merged mapping count exceeds soft cap",
 			slog.Int("totalMappings", totalMappings),
 			slog.Int("softCap", fragmentMappingSoftCap),
-			slog.Int("fragmentCount", len(cfg.ConfigFragments)))
+			slog.Int("fragmentCount", len(sources)))
 	}
 	logevent.Info(ctx, nil, logevent.ConfigFragmentsMerged, "config_fragments merged",
-		slog.Int("fragmentCount", len(cfg.ConfigFragments)),
+		slog.Int("fragmentCount", len(sources)),
 		slog.Int("totalMappings", totalMappings))
 
 	return next, nil
+}
+
+func idpOwnedRoleSet(cfg *Config, frag *FragmentConfig) (string, bool) {
+	owned := cfg.idpReferencedRoleSets()
+	names := make([]string, 0, len(frag.RoleSets))
+	for name := range frag.RoleSets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if owned[strings.ToLower(name)] {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// Stale reports the last successful refresh's age against mappings_max_stale from one config snapshot.
+func (p *Provider) Stale() (age, limit time.Duration, stale bool) {
+	if p.fetch == nil && p.fragmentFetch == nil {
+		return 0, 0, false
+	}
+	limit = p.Get().effectiveMappingsMaxStale()
+	if limit <= 0 {
+		return 0, 0, false
+	}
+	last := p.lastRefresh.Load()
+	if last == 0 {
+		return 0, limit, true
+	}
+	age = p.now().Sub(time.Unix(0, last))
+	return age, limit, age > limit
 }
 
 // fetchFragment reads local paths directly; remote URIs go through the

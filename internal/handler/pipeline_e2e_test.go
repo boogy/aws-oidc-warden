@@ -56,6 +56,10 @@ func (f *vRecorder) GetS3Object(context.Context, string, string) (io.ReadCloser,
 	}
 	return io.NopCloser(stringReader(f.s3Body)), nil
 }
+
+func (f *vRecorder) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
 func (f *vRecorder) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) { return nil, nil }
 func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, error) {
 	f.tagAuthCalled++
@@ -64,6 +68,10 @@ func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, err
 func (f *vRecorder) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return f.allowAccount, nil
 }
+func (f *vRecorder) AssumeRoleWithWebIdentity(context.Context, string, string, string, *string, int32) (*ststypes.Credentials, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (f *vRecorder) AssumeRole(_ context.Context, roleARN, _ string, policy *string, _ *int32, _ *types.Claims, spec map[string]string) (*ststypes.Credentials, error) {
 	f.assumeCalls++
 	f.assumedRole = roleARN
@@ -114,7 +122,7 @@ func vE2EClaims(subject, ref string) *types.Claims {
 	}
 }
 
-func vRun(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.Claims, role string) (*ststypes.Credentials, error) {
+func vRun(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.Claims, role string) (*handler.IssuedCredentials, error) {
 	t.Helper()
 	p := handler.NewRequestProcessor(
 		config.NewStaticProvider(cfg), rec, &vExtractor{claims: claims}, nil, "test")

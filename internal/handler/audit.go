@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
@@ -39,6 +38,7 @@ type auditRecord struct {
 	JWTMode           string `json:"jwtMode"`
 	Decision          string `json:"decision"`        // "allow" | "deny"
 	Stage             string `json:"stage,omitempty"` // failing stage; deny only
+	Action            string `json:"action,omitempty"`
 
 	// SourceIPFrom: "frontend" (AWS-attested) or "x-forwarded-for" (spoofable).
 	SourceIP     string `json:"sourceIp,omitempty"`
@@ -61,6 +61,15 @@ type auditRecord struct {
 	GrantedRole   string `json:"grantedRole,omitempty"` // allow only
 	AccountID     string `json:"accountId,omitempty"`
 	SessionName   string `json:"sessionName,omitempty"` // actual STS session name used; allow only
+
+	TokenID                  string `json:"tokenId,omitempty"`
+	IdPSessionCapSeconds     *int   `json:"idpSessionCapSeconds,omitempty"`
+	RequestedDurationSeconds int    `json:"requestedDurationSeconds,omitempty"`
+	DurationSeconds          int    `json:"durationSeconds,omitempty"`
+	SourceIdentity           string `json:"sourceIdentity,omitempty"`
+	SourceIdentityTruncated  bool   `json:"sourceIdentityTruncated,omitempty"`
+	AccessKeyID              string `json:"accessKeyId,omitempty"`
+	SessionNameSource        string `json:"sessionNameSource,omitempty"`
 
 	// SessionTagKeys (names) are always safe to record. SessionTags (values)
 	// only when LogClaimValues is on and a role was actually granted.
@@ -89,6 +98,7 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.Audience = nil
 	rec.SessionTags = nil
 	rec.Claims = nil
+	rec.SourceIdentity = ""
 	rec.Reason = rec.effectiveReason(logClaimValues) // replaced, not cleared
 	rec.reasonFromError = false
 }
@@ -130,6 +140,12 @@ func stageSummary(stage string) string {
 		return "session policy read failed"
 	case "assume_role":
 		return "role assumption failed"
+	case "idp":
+		return "identity provider request refused"
+	case "idp_mint":
+		return "token minting failed"
+	case "idp_exchange":
+		return "web identity exchange failed"
 	default:
 		return "request denied"
 	}
@@ -164,6 +180,14 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []slog.Attr {
 	appendIf("accountId", rec.AccountID)
 	appendIf("sessionName", rec.SessionName)
 	appendIf("stage", rec.Stage)
+	appendIf("action", rec.Action)
+	appendIf("tokenId", rec.TokenID)
+	appendIf("sourceIdentity", rec.SourceIdentity)
+	appendIf("sessionNameSource", rec.SessionNameSource)
+	appendIf("accessKeyId", rec.AccessKeyID)
+	if rec.DurationSeconds > 0 {
+		attrs = append(attrs, slog.Int("durationSeconds", rec.DurationSeconds))
+	}
 	appendIf("reason", rec.effectiveReason(logClaimValues))
 	if logClaimValues {
 		appendIf("jwtSub", rec.JWTSub)
@@ -252,15 +276,10 @@ func (r *RequestProcessor) finalizeDeny(ctx context.Context, log *slog.Logger, c
 	return origErr
 }
 
-// finalizeAllow records an allow decision. The write happens synchronously
-// before this returns, so a required write failure yields (nil, error) —
-// credentials are never handed back without a durable record.
-func (r *RequestProcessor) finalizeAllow(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord, credentials *ststypes.Credentials) (*ststypes.Credentials, error) {
+// finalizeAllow records an allow decision synchronously: credentials are never handed back without a durable record.
+func (r *RequestProcessor) finalizeAllow(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.Decision = "allow"
-	if auditErr := r.recordDecision(ctx, log, cfg, rec); auditErr != nil {
-		return nil, auditErr
-	}
-	return credentials, nil
+	return r.recordDecision(ctx, log, cfg, rec)
 }
 
 // inputMode classifies which extraction path a request used, for the "jwtMode" field.

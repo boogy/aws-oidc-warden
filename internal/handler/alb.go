@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
@@ -47,6 +47,11 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		slog.String("targetGroupArn", event.RequestContext.ELB.TargetGroupArn),
 		slog.String("userAgent", headerValue(headers, "user-agent")),
 	)
+
+	kind := h.processor.route(event.HTTPMethod, event.Path)
+	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, event.Path, log, h.newResponse, h.newResponseWithHeaders); ok {
+		return resp, nil
+	}
 
 	oidcData := headerValue(headers, "x-amzn-oidc-data")
 	region := h.region
@@ -125,12 +130,29 @@ func (h *AwsApplicationLoadBalancer) newResponse(statusCode int, body string) ev
 	}
 }
 
+// newResponseWithHeaders sets both header maps: ALB reads only MultiValueHeaders when multi-value headers are enabled.
+func (h *AwsApplicationLoadBalancer) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.ALBTargetGroupResponse {
+	resp := h.newResponse(statusCode, body)
+	resp.Headers = mergeHeaders(extra)
+	resp.MultiValueHeaders = make(map[string][]string, len(resp.Headers))
+	for k, v := range resp.Headers {
+		resp.MultiValueHeaders[k] = []string{v}
+	}
+	return resp
+}
+
+// WithIdP enables the IdP routes and returns the handler.
+func (h *AwsApplicationLoadBalancer) WithIdP(s *idp.Service) *AwsApplicationLoadBalancer {
+	h.processor.WithIdP(s)
+	return h
+}
+
 // respondError formats a response with an error message
 func (h *AwsApplicationLoadBalancer) respondError(ctx context.Context, err error, statusCode int) (events.ALBTargetGroupResponse, error) {
 	return errorResponse(ctx, err, statusCode, h.newResponse), nil
 }
 
 // respondJSON formats a successful response with credentials
-func (h *AwsApplicationLoadBalancer) respondJSON(ctx context.Context, credentials *types.Credentials) (events.ALBTargetGroupResponse, error) {
+func (h *AwsApplicationLoadBalancer) respondJSON(ctx context.Context, credentials *IssuedCredentials) (events.ALBTargetGroupResponse, error) {
 	return successResponse(ctx, credentials, h.newResponse), nil
 }

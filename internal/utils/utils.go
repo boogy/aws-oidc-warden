@@ -1,10 +1,13 @@
 package utils
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"math"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -104,3 +107,34 @@ func SortedKeys[V any](m map[string]V) []string {
 	slices.Sort(keys)
 	return keys
 }
+
+var invalidSTSNameChars = regexp.MustCompile(`[^\w=,.@-]`)
+
+const MaxSTSNameLen = 64
+
+// SanitizeSTSName maps every char outside [\w=,.@-] to '='; '+' is reserved for hash tails.
+func SanitizeSTSName(s string) string {
+	return invalidSTSNameChars.ReplaceAllLiteralString(s, "=")
+}
+
+// SanitizeSTSNameHashed sanitizes and appends "+<16 hex of sha256(s)>" when sanitizing changed s.
+func SanitizeSTSNameHashed(s string) string {
+	out := SanitizeSTSName(s)
+	if out == s {
+		return out
+	}
+	sum := sha256.Sum256([]byte(s))
+	return out + "+" + hex.EncodeToString(sum[:8])
+}
+
+// FitSanitizedSTSName caps an already-sanitized name at MaxSTSNameLen with a hash tail.
+func FitSanitizedSTSName(s string) string {
+	if len(s) <= MaxSTSNameLen {
+		return s
+	}
+	sum := sha256.Sum256([]byte(s))
+	return s[:47] + "+" + hex.EncodeToString(sum[:8])
+}
+
+// FitSTSName sanitizes then caps at MaxSTSNameLen.
+func FitSTSName(s string) string { return FitSanitizedSTSName(SanitizeSTSName(s)) }

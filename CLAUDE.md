@@ -18,6 +18,8 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 - **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-resolved `sessionTags` (built by `BuildSessionTags(ctx, rawClaims, tagSpec)` from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
 
+- **`internal/idp/`** → [CLAUDE.md](internal/idp/CLAUDE.md) — optional warden-as-IdP: KMS/PEM signer, self-verified token mint, JWKS/discovery documents; the handler exchanges the minted token via unsigned `AssumeRoleWithWebIdentity`. Operator guide: `docs/IDP.md`. _Go here when_ touching minting, signing keys, or the `idp` config.
+
 ## Other folders (no CLAUDE.md of their own)
 
 - `internal/utils/` — helpers. `FormatClaimValue` is the single formatter for a verified claim value on its way into an audit record or an STS session tag; both `handler.auditClaims` and `aws.BuildSessionTags` must go through it, or the documented guarantee that a claim reported in `claims` and the same claim attached as a session tag can never disagree breaks. `RedactToken` is the redaction helper to use if a log site ever needs to carry token material. No current log site does — the pipeline keeps tokens out of logs entirely rather than logging them redacted (see `ParseRequestBody`, which deliberately logs no body preview), so `RedactToken` has no callers by design.

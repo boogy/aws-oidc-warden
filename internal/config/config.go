@@ -61,16 +61,37 @@ var (
 	}
 )
 
+const (
+	idpMinSessionCap = 15 * time.Minute
+	idpMaxSessionCap = 12 * time.Hour
+)
+
+// validateIdPSessionCap accepts 0 (unset) or 15m..12h in whole seconds.
+func validateIdPSessionCap(field string, d time.Duration) error {
+	if d == 0 {
+		return nil
+	}
+	if d < idpMinSessionCap || d > idpMaxSessionCap {
+		return fmt.Errorf("%s must be 0 or between %s and %s", field, idpMinSessionCap, idpMaxSessionCap)
+	}
+	if d%time.Second != 0 {
+		return fmt.Errorf("%s must be a whole number of seconds", field)
+	}
+	return nil
+}
+
 // RoleMapping binds a subject (pattern) to a set of assumable roles, scoped
 // to a single issuer, optionally gated by conditions on the raw claims.
 type RoleMapping struct {
-	Subject           Patterns   `mapstructure:"subject"             json:"subject"`                       // One subject pattern or a list of them (OR'd); each element anchored and validated independently
-	Issuer            string     `mapstructure:"issuer"              json:"issuer,omitempty"`              // Trusted issuer this mapping applies to; resolved at Validate() (see resolveIssuer)
-	SessionPolicy     string     `mapstructure:"session_policy"      json:"session_policy,omitempty"`      // Inline session policy (JSON string)
-	SessionPolicyFile string     `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"` // S3 session policy file
-	Roles             []string   `mapstructure:"roles"               json:"roles"`                         // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
-	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`          // Conditions for role assumption
-	RoleSessionName   string     `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`   // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
+	Subject            Patterns      `mapstructure:"subject"             json:"subject"`                         // One subject pattern or a list of them (OR'd); each element anchored and validated independently
+	Issuer             string        `mapstructure:"issuer"              json:"issuer,omitempty"`                // Trusted issuer this mapping applies to; resolved at Validate() (see resolveIssuer)
+	SessionPolicy      string        `mapstructure:"session_policy"      json:"session_policy,omitempty"`        // Inline session policy (JSON string)
+	SessionPolicyFile  string        `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`   // S3 session policy file
+	Roles              []string      `mapstructure:"roles"               json:"roles"`                           // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
+	Conditions         *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`            // Conditions for role assumption
+	RoleSessionName    string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`     // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
+	IDPToken           bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`             // Allow minting an IdP token for roles granted by THIS mapping
+	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"` // Ceiling for the caller's durationSeconds; 0 = 1h
 
 	// SessionTags are STS tags ADDED to the issuer's session_tags for roles
 	// granted by this mapping. Additive only: a key the issuer already defines
@@ -95,6 +116,9 @@ type RoleGroupDefaults struct {
 	SessionPolicyFile string            `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
 	RoleSessionName   string            `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
 	SessionTags       map[string]string `mapstructure:"session_tags"  json:"session_tags,omitempty"`
+
+	IDPToken           bool          `mapstructure:"idp_token"                json:"idp_token,omitempty"`
+	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"`
 }
 
 // RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
@@ -262,6 +286,15 @@ type Config struct {
 	// not by this field's type.
 	ConfigFragments []string `mapstructure:"config_fragments" json:"config_fragments,omitempty"`
 
+	// MappingsFile is a local path or s3:// URI of the role-mappings file (fragment #0); base-only.
+	MappingsFile string `mapstructure:"mappings_file" json:"mappings_file,omitempty"`
+
+	// MappingsMaxStale refuses requests once mappings are older than this; nil = unset.
+	MappingsMaxStale *time.Duration `mapstructure:"mappings_max_stale" json:"mappings_max_stale,omitempty"`
+
+	// S3ConfigBucketOwner is sent as ExpectedBucketOwner on every S3 config read.
+	S3ConfigBucketOwner string `mapstructure:"s3_config_bucket_owner" json:"s3_config_bucket_owner,omitempty"`
+
 	// ConfigFragmentChecksums optionally pins an expected integrity value
 	// (etag, or sha256 content hash for local paths) per config_fragments
 	// entry; a mismatch on fetch is rejected. Unpinned entries use their etag
@@ -312,6 +345,11 @@ type Config struct {
 	// CrossAccount enables the hub-and-spoke transport for assuming roles in
 	// other AWS accounts.
 	CrossAccount *CrossAccount `mapstructure:"cross_account" json:"cross_account,omitempty"`
+
+	// Optional token-minting IdP; frozen at cold start except the live fields
+	IdP *IdPConfig `mapstructure:"idp" json:"idp,omitempty"`
+
+	idpAllowedRoles map[string]bool `mapstructure:"-" json:"-"`
 
 	// JWTValidation controls whether the service validates JWT signatures itself
 	// or trusts pre-validation by an upstream AWS service.
@@ -467,6 +505,9 @@ var envBindings = []envBinding{
 	{"jwt_leeway", func(c *Config, v string) {
 		envDuration("jwt_leeway", v, func(d time.Duration) { c.JWTLeeway = &d })
 	}},
+	{"mappings_max_stale", func(c *Config, v string) {
+		envDuration("mappings_max_stale", v, func(d time.Duration) { c.MappingsMaxStale = &d })
+	}},
 
 	// Int (warn-and-skip on parse error).
 	{"max_token_bytes", func(c *Config, v string) {
@@ -475,6 +516,8 @@ var envBindings = []envBinding{
 
 	// Comma-separated list.
 	{"config_fragments", func(c *Config, v string) { c.ConfigFragments = splitCommaList(v) }},
+	{"mappings_file", func(c *Config, v string) { c.MappingsFile = v }},
+	{"s3_config_bucket_owner", func(c *Config, v string) { c.S3ConfigBucketOwner = v }},
 
 	// Cache knobs (c.Cache is guaranteed non-nil before these run).
 	{"cache.type", func(c *Config, v string) { c.Cache.Type = v }},
@@ -520,6 +563,59 @@ var envBindings = []envBinding{
 	{"cross_account.allowed_accounts", func(c *Config, v string) { ensureCrossAccount(c).AllowedAccounts = splitCommaList(v) }},
 	{"cross_account.spoke_session_duration", func(c *Config, v string) {
 		envDuration("cross_account.spoke_session_duration", v, func(d time.Duration) { ensureCrossAccount(c).SpokeSessionDuration = d })
+	}},
+
+	// IdP knobs apply only when the idp block already exists; signing keys and
+	// allowed_roles are file/S3 only.
+	{"idp.enabled", func(c *Config, v string) {
+		if c.IdP != nil {
+			envBool("idp.enabled", v, func(b bool) { c.IdP.Enabled = b })
+		}
+	}},
+	{"idp.issuer", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.Issuer = v
+		}
+	}},
+	{"idp.audience", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.Audience = v
+		}
+	}},
+	{"idp.token_ttl", func(c *Config, v string) {
+		if c.IdP != nil {
+			envDuration("idp.token_ttl", v, func(d time.Duration) { c.IdP.TokenTTL = d })
+		}
+	}},
+	{"idp.audience_mode", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.AudienceMode = v
+		}
+	}},
+	{"idp.source_identity", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SourceIdentity = v
+		}
+	}},
+	{"idp.source_identity_overflow", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SourceIdentityOverflow = v
+		}
+	}},
+	{"idp.include_source_identity", func(c *Config, v string) {
+		if c.IdP != nil {
+			envBool("idp.include_source_identity", v, func(b bool) { c.IdP.IncludeSourceIdentity = &b })
+		}
+	}},
+	{"idp.jwks_uri", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.JWKSURI = v
+		}
+	}},
+	{"idp.subject_template", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SubjectTemplate = v
+		}
 	}},
 
 	// JWT validation settings (value struct, always present).
@@ -576,7 +672,9 @@ func (c *Config) LoadConfig() error {
 	// envBindings (see below) so this list and reapplyEnvOverrides cannot
 	// drift apart.
 	for _, b := range envBindings {
-		_ = viper.BindEnv(b.key)
+		if !strings.HasPrefix(b.key, "idp.") {
+			_ = viper.BindEnv(b.key)
+		}
 	}
 
 	configFileFound := true
@@ -585,6 +683,15 @@ func (c *Config) LoadConfig() error {
 			configFileFound = false // No config file; rely on defaults/env
 		} else {
 			return fmt.Errorf("problem reading config file: %w", err)
+		}
+	}
+
+	// A bound idp.* key would let env alone create the block.
+	if viper.InConfig("idp") {
+		for _, b := range envBindings {
+			if strings.HasPrefix(b.key, "idp.") {
+				_ = viper.BindEnv(b.key)
+			}
 		}
 	}
 
@@ -600,7 +707,10 @@ func (c *Config) LoadConfig() error {
 		c.Issuers = []IssuerConfig{defaultGitHubIssuer()}
 	}
 
-	return c.Validate()
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // MergeBytes overlays serialized configuration onto c using the same snake_case
@@ -666,6 +776,23 @@ var clearOnDeclare = map[string]func(*Config){
 	"role_mappings":             func(c *Config) { c.RoleMappings = nil },
 	"role_groups":               func(c *Config) { c.RoleGroups = nil },
 	"config_fragment_checksums": func(c *Config) { c.ConfigFragmentChecksums = nil },
+	"idp.signing_keys": func(c *Config) {
+		if c.IdP != nil {
+			c.IdP.SigningKeys = nil
+		}
+	},
+	"idp.allowed_roles": func(c *Config) {
+		if c.IdP != nil {
+			c.IdP.AllowedRoles = nil
+		}
+	},
+	// re-derive jwks_uri and paths from the new issuer
+	"idp.issuer": func(c *Config) {
+		if c.IdP != nil {
+			c.IdP.JWKSURI = ""
+			c.IdP.Paths = IdPPaths{}
+		}
+	},
 }
 
 // lostFragmentPins returns fragments still listed after a merge that were
@@ -677,7 +804,7 @@ func lostFragmentPins(prev, next *Config) []string {
 		if _, pinned := next.fragmentChecksum(p.URI); pinned {
 			continue
 		}
-		if slices.Contains(next.ConfigFragments, p.URI) {
+		if slices.Contains(next.fragmentSources(), p.URI) {
 			dropped = append(dropped, p.URI)
 		}
 	}
@@ -824,6 +951,19 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(uri) == "" {
 			return fmt.Errorf("config_fragments[%d]: must not be empty", i)
 		}
+		if err := validateRemoteScheme(uri); err != nil {
+			return fmt.Errorf("config_fragments[%d]: %w", i, err)
+		}
+	}
+	if err := validateRemoteScheme(c.MappingsFile); err != nil {
+		return fmt.Errorf("mappings_file: %w", err)
+	}
+
+	if err := c.validateMaxStale(); err != nil {
+		return err
+	}
+	if err := c.validateS3ConfigOwner(); err != nil {
+		return err
 	}
 
 	// Hardening knobs: apply defaults, then enforce bounds.
@@ -883,6 +1023,24 @@ func (c *Config) Validate() error {
 			slog.String("warning", "transitive_session_tags_deprecated"))
 	}
 
+	if c.IdP != nil {
+		c.IdP.applyDefaults()
+		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
+			return err
+		}
+		c.idpAllowedRoles = nil
+		if len(c.IdP.AllowedRoles) > 0 {
+			roles, err := c.resolveRoleSet(c.IdP.AllowedRoles)
+			if err != nil {
+				return fmt.Errorf("idp.allowed_roles: %w", err)
+			}
+			c.idpAllowedRoles = make(map[string]bool, len(roles))
+			for _, r := range roles {
+				c.idpAllowedRoles[r] = true
+			}
+		}
+	}
+
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {
 		return fmt.Errorf("default_issuer %q is not a configured issuer", c.DefaultIssuer)
 	}
@@ -940,6 +1098,15 @@ func (c *Config) Validate() error {
 			if err := validateRoleSessionName(m.RoleSessionName); err != nil {
 				return fmt.Errorf("%s[%d] (%s): role_session_name: %w", source, i, subject, err)
 			}
+		}
+		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): max_session_duration", source, i, subject), m.MaxSessionDuration); err != nil {
+			return err
+		}
+		if m.MaxSessionDuration != 0 && !m.IDPToken {
+			return fmt.Errorf("%s[%d] (%s): max_session_duration requires idp_token", source, i, subject)
+		}
+		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
+			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
 		}
 		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
@@ -1037,6 +1204,9 @@ func (c *Config) Validate() error {
 				SessionPolicyFile: group.Defaults.SessionPolicyFile,
 				RoleSessionName:   group.Defaults.RoleSessionName,
 				SessionTags:       group.Defaults.SessionTags,
+
+				IDPToken:           group.Defaults.IDPToken,
+				MaxSessionDuration: group.Defaults.MaxSessionDuration,
 			}
 			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
 				return err
@@ -1164,6 +1334,109 @@ func (c *Config) fragmentChecksum(uri string) (string, bool) {
 	return "", false
 }
 
+// fragmentSources lists mappings_file (first) and config_fragments in merge order.
+func (c *Config) fragmentSources() []string {
+	if c.MappingsFile == "" {
+		return c.ConfigFragments
+	}
+	return append([]string{c.MappingsFile}, c.ConfigFragments...)
+}
+
+var bucketOwnerPattern = regexp.MustCompile(`^\d{12}$`)
+
+func isS3URI(uri string) bool { return strings.HasPrefix(uri, "s3://") }
+
+// validateRemoteScheme keeps the owner-pin and max-stale checks in step with the case-insensitive fetch path.
+func validateRemoteScheme(uri string) error {
+	if strings.Contains(uri, "://") && !isS3URI(uri) {
+		return fmt.Errorf("remote source %q must use the lowercase s3:// scheme", uri)
+	}
+	return nil
+}
+
+func (c *Config) validateMaxStale() error {
+	if c.MappingsMaxStale == nil {
+		return nil
+	}
+	switch d := *c.MappingsMaxStale; {
+	case d < 0:
+		return errors.New("mappings_max_stale must not be negative")
+	case d == 0:
+		return nil
+	case !isS3URI(c.MappingsFile):
+		return errors.New("mappings_max_stale requires an s3:// mappings_file")
+	case c.ConfigReloadInterval <= 0:
+		return errors.New("mappings_max_stale requires config_reload_interval > 0")
+	case d < 2*c.ConfigReloadInterval:
+		return errors.New("mappings_max_stale must be at least twice config_reload_interval")
+	}
+	return nil
+}
+
+// effectiveMappingsMaxStale resolves the unset default: 3x the reload interval for an s3:// mappings_file.
+func (c *Config) effectiveMappingsMaxStale() time.Duration {
+	if c.MappingsMaxStale != nil {
+		return *c.MappingsMaxStale
+	}
+	if !isS3URI(c.MappingsFile) || c.ConfigReloadInterval <= 0 {
+		return 0
+	}
+	return 3 * c.ConfigReloadInterval
+}
+
+func (c *Config) validateS3ConfigOwner() error {
+	needsOwner := isS3URI(c.MappingsFile)
+	for _, uri := range c.ConfigFragments {
+		if isS3URI(uri) {
+			needsOwner = true
+		}
+	}
+	if needsOwner && c.S3ConfigBucketOwner == "" {
+		return errors.New("s3_config_bucket_owner is required when mappings_file or config_fragments use s3://")
+	}
+	if c.S3ConfigBucketOwner != "" && !bucketOwnerPattern.MatchString(c.S3ConfigBucketOwner) {
+		return errors.New("s3_config_bucket_owner must be exactly 12 digits")
+	}
+	return nil
+}
+
+// validateMappingsSplit rejects service configs that inline mappings while mappings_file owns them.
+func (c *Config) validateMappingsSplit() error {
+	if c.MappingsFile == "" {
+		return nil
+	}
+	if c.MappingsFile != strings.TrimSpace(c.MappingsFile) {
+		return errors.New("mappings_file must not have leading or trailing whitespace")
+	}
+	if slices.Contains(c.ConfigFragments, c.MappingsFile) {
+		return errors.New("mappings_file must not also be listed in config_fragments")
+	}
+	if len(c.RoleMappings) > 0 || len(c.RoleGroups) > 0 {
+		return errors.New("mappings_file is set: role_mappings and role_groups belong in the mappings file, not the service config")
+	}
+	owned := c.idpReferencedRoleSets()
+	for name := range c.RoleSets {
+		if !owned[strings.ToLower(name)] {
+			return fmt.Errorf("mappings_file is set: role_sets %q must live in the mappings file unless idp.allowed_roles references it", name)
+		}
+	}
+	return nil
+}
+
+// idpReferencedRoleSets returns the lower-cased @name entries of idp.allowed_roles.
+func (c *Config) idpReferencedRoleSets() map[string]bool {
+	out := map[string]bool{}
+	if c.IdP == nil {
+		return out
+	}
+	for _, r := range c.IdP.AllowedRoles {
+		if name, ok := strings.CutPrefix(r, "@"); ok {
+			out[strings.ToLower(name)] = true
+		}
+	}
+	return out
+}
+
 // validateFragmentChecksums rejects malformed or inert pins: a pin naming a
 // URI absent from config_fragments would look integrity-checked while
 // nothing is ever verified against it — fail at boot instead.
@@ -1177,12 +1450,17 @@ func (c *Config) validateFragmentChecksums() error {
 			return fmt.Errorf("config_fragment_checksums[%d] (%s): checksum is required", i, p.URI)
 		case seen[p.URI]:
 			return fmt.Errorf("config_fragment_checksums[%d]: duplicate pin for %q", i, p.URI)
-		case !slices.Contains(c.ConfigFragments, p.URI):
-			return fmt.Errorf("config_fragment_checksums[%d]: %q is not listed in config_fragments, so nothing would ever be checked against it", i, p.URI)
+		case !slices.Contains(c.fragmentSources(), p.URI):
+			return fmt.Errorf("config_fragment_checksums[%d]: %q is not listed in config_fragments or mappings_file, so nothing would ever be checked against it", i, p.URI)
 		}
 		seen[p.URI] = true
 	}
 	return nil
+}
+
+// IdPRoleAllowed reports whether role may receive an IdP token under idp.allowed_roles.
+func (c *Config) IdPRoleAllowed(role string) bool {
+	return c.idpAllowedRoles == nil || c.idpAllowedRoles[role]
 }
 
 // resolveRoleSet expands any "@name" alias in roles to c.RoleSets[name],
@@ -1457,6 +1735,22 @@ func (d Decision) sessionTags() map[string]string {
 		return nil
 	}
 	return d.authorizing.SessionTags
+}
+
+// IDPTokenAllowed reports whether the mapping that authorized the role opted into IdP token minting.
+func (d Decision) IDPTokenAllowed() bool {
+	return d.authorizing != nil && d.authorizing.IDPToken
+}
+
+// MaxSessionDuration is the authorizing mapping's session ceiling, 1h when unset; 0 when nothing authorized.
+func (d Decision) MaxSessionDuration() time.Duration {
+	if d.authorizing == nil {
+		return 0
+	}
+	if d.authorizing.MaxSessionDuration == 0 {
+		return IdPDefaultMaxSessionDuration
+	}
+	return d.authorizing.MaxSessionDuration
 }
 
 // RoleSessionName returns the authorizing mapping's session-name override, or

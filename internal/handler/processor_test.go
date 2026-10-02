@@ -148,21 +148,60 @@ type fakeConsumer struct {
 	allowAccount    bool
 	allowAccountErr error
 	assumeErr       error
+
+	assumeCalls int
+	tagCalls    int
+	wiCalls     int
+	lastWI      struct {
+		role, name, token string
+		policy            *string
+		duration          int32
+	}
+	wiErr          error
+	wiCreds        *ststypes.Credentials
+	wiErrEchoToken bool // AssumeRoleWithWebIdentity fails with an error that quotes the token
 }
 
 func (f *fakeConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("not used")
 }
+
+func (f *fakeConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
 func (f *fakeConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
 	return nil, nil
 }
 func (f *fakeConsumer) GetRoleTags(context.Context, string) (map[string]string, error) {
+	f.tagCalls++
 	return f.tags, f.tagsErr
 }
 func (f *fakeConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return f.allowAccount, f.allowAccountErr
 }
+func (f *fakeConsumer) AssumeRoleWithWebIdentity(_ context.Context, role, name, token string, policy *string, duration int32) (*ststypes.Credentials, error) {
+	f.wiCalls++
+	f.lastWI.role, f.lastWI.name, f.lastWI.token, f.lastWI.policy, f.lastWI.duration = role, name, token, policy, duration
+	if f.wiErrEchoToken {
+		return nil, fmt.Errorf("InvalidIdentityToken: %s", token)
+	}
+	if f.wiErr != nil {
+		return nil, f.wiErr
+	}
+	if f.wiCreds != nil {
+		return f.wiCreds, nil
+	}
+	exp := time.Now().Add(time.Hour)
+	return &ststypes.Credentials{
+		AccessKeyId:     aws.String("AKIAEXAMPLE"),
+		SecretAccessKey: aws.String("SECRETEXAMPLEwJalr"),
+		SessionToken:    aws.String("SESSIONTOKENEXAMPLEFwoG"),
+		Expiration:      &exp,
+	}, nil
+}
+
 func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, _ *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
+	f.assumeCalls++
 	f.assumed = roleARN
 	f.gotSessionName = sessionName
 	f.gotClaims = claims

@@ -6,12 +6,16 @@ package handler_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
+	"github.com/boogy/aws-oidc-warden/internal/idp/idptest"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
@@ -255,4 +259,256 @@ func TestALBHandler_NoXFF_OmitsEmptySourceIPKeys(t *testing.T) {
 		assert.NotContains(t, line, `"sourceIpFrom":""`, "sourceIpFrom must be omitted, not emitted empty, on the real ALB adapter: %s", line)
 	}
 	require.NotZero(t, lines, "expected at least one captured log line")
+}
+
+// idpFrontResp is a frontend response reduced to what the IdP routing tests assert on.
+type idpFrontResp struct {
+	status  int
+	body    string
+	headers map[string]string
+	multi   map[string][]string
+}
+
+func (r idpFrontResp) code(t *testing.T) string {
+	t.Helper()
+	var env struct {
+		ErrorCode string `json:"errorCode"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(r.body), &env))
+	return env.ErrorCode
+}
+
+type idpFrontend struct {
+	name  string
+	build func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(method, path, body string) idpFrontResp
+}
+
+func idpFrontends() []idpFrontend {
+	return []idpFrontend{
+		{"apigateway", func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(string, string, string) idpFrontResp {
+			h := handler.NewAwsApiGateway(p, c, ex, nil)
+			if svc != nil {
+				h.WithIdP(svc)
+			}
+			return func(m, path, body string) idpFrontResp {
+				r, err := h.Handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: m, Path: path, Body: body})
+				require.NoError(t, err)
+				return idpFrontResp{status: r.StatusCode, body: r.Body, headers: r.Headers}
+			}
+		}},
+		{"apigatewayv2", func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(string, string, string) idpFrontResp {
+			h := handler.NewAwsApiGatewayV2(p, c, ex, nil)
+			if svc != nil {
+				h.WithIdP(svc)
+			}
+			return func(m, path, body string) idpFrontResp {
+				ev := events.APIGatewayV2HTTPRequest{RawPath: path, Body: body}
+				ev.RequestContext.HTTP.Method = m
+				r, err := h.Handler(context.Background(), ev)
+				require.NoError(t, err)
+				return idpFrontResp{status: r.StatusCode, body: r.Body, headers: r.Headers}
+			}
+		}},
+		{"alb", func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(string, string, string) idpFrontResp {
+			h := handler.NewAwsApplicationLoadBalancer(p, c, ex, nil)
+			if svc != nil {
+				h.WithIdP(svc)
+			}
+			return func(m, path, body string) idpFrontResp {
+				ev := albEvent(nil, body)
+				ev.HTTPMethod, ev.Path = m, path
+				r, err := h.Handler(context.Background(), ev)
+				require.NoError(t, err)
+				return idpFrontResp{status: r.StatusCode, body: r.Body, headers: r.Headers, multi: r.MultiValueHeaders}
+			}
+		}},
+		{"lambdaurl", func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(string, string, string) idpFrontResp {
+			h := handler.NewAwsLambdaUrl(p, c, ex, nil)
+			if svc != nil {
+				h.WithIdP(svc)
+			}
+			return func(m, path, body string) idpFrontResp {
+				ev := events.LambdaFunctionURLRequest{RawPath: path, Body: body}
+				ev.RequestContext.HTTP.Method = m
+				r, err := h.Handler(context.Background(), ev)
+				require.NoError(t, err)
+				return idpFrontResp{status: r.StatusCode, body: r.Body, headers: r.Headers}
+			}
+		}},
+	}
+}
+
+const (
+	idpTokenPath = "/verify"
+	idpDiscPath  = "/.well-known/openid-configuration"
+	idpJWKSPath  = "/.well-known/jwks.json"
+)
+
+func TestIdPFrontends(t *testing.T) {
+	mintBody := func(extra string) string {
+		return `{"token":"x","role":"` + testRoleARN + `"` + extra + `}`
+	}
+	disabled := func(c *config.Config) { c.IdP.Enabled = false }
+
+	tests := []struct {
+		name         string
+		mutate       []func(*config.Config)
+		loadErr      error
+		noIdP        bool
+		denyExtract  bool
+		method, path string
+		body         string
+		wantStatus   int
+		wantCode     string
+		wantHeaders  map[string]string
+		wantEmpty    bool
+		multi        bool
+		check        func(t *testing.T, r idpFrontResp, cons *fakeConsumer, logs string)
+	}{
+		{
+			name: "discovery", multi: true, method: "GET", path: idpDiscPath, wantStatus: 200,
+			wantHeaders: map[string]string{"Content-Type": "application/json", "Cache-Control": "public, max-age=300"},
+			check: func(t *testing.T, r idpFrontResp, _ *fakeConsumer, _ string) {
+				assert.Contains(t, r.body, `"issuer"`)
+			},
+		},
+		{
+			name: "jwks", method: "GET", path: idpJWKSPath, wantStatus: 200,
+			wantHeaders: map[string]string{"Content-Type": "application/json", "Cache-Control": "public, max-age=300"},
+			check: func(t *testing.T, r idpFrontResp, _ *fakeConsumer, _ string) {
+				var doc struct{ Keys []any }
+				require.NoError(t, json.Unmarshal([]byte(r.body), &doc))
+				assert.NotEmpty(t, doc.Keys)
+			},
+		},
+		{
+			name: "head jwks", multi: true, method: "HEAD", path: idpJWKSPath, wantStatus: 200, wantEmpty: true,
+			wantHeaders: map[string]string{"Content-Type": "application/json", "Cache-Control": "public, max-age=300"},
+		},
+		{
+			name: "mint", method: "POST", path: idpTokenPath, body: mintBody(""), wantStatus: 200,
+			wantHeaders: map[string]string{"Cache-Control": "no-store"},
+			check: func(t *testing.T, r idpFrontResp, cons *fakeConsumer, _ string) {
+				var env struct {
+					Success bool
+					Data    struct{ AccessKeyId string }
+				}
+				require.NoError(t, json.Unmarshal([]byte(r.body), &env))
+				assert.True(t, env.Success)
+				assert.Equal(t, "AKIAEXAMPLE", env.Data.AccessKeyId)
+				assert.NotContains(t, r.body, "eyJ")
+				assert.Equal(t, 1, cons.wiCalls)
+				assert.Zero(t, cons.assumeCalls)
+			},
+		},
+		{
+			name: "mint over cap", method: "POST", path: idpTokenPath, body: mintBody(`,"durationSeconds":7200`),
+			wantStatus: 400, wantCode: "duration_exceeds_cap",
+		},
+		{
+			name: "jwks wrong method", multi: true, method: "POST", path: idpJWKSPath, wantStatus: 405, wantCode: "method_not_allowed",
+			wantHeaders: map[string]string{"Allow": "GET, HEAD"},
+		},
+		{
+			name: "kill switch over 1h", mutate: []func(*config.Config){disabled}, method: "POST", path: idpTokenPath, body: mintBody(`,"durationSeconds":7200`),
+			wantStatus: 503, wantCode: "idp_signing_unavailable",
+			check: func(t *testing.T, _ idpFrontResp, cons *fakeConsumer, _ string) {
+				assert.Zero(t, cons.wiCalls)
+				assert.Zero(t, cons.assumeCalls)
+			},
+		},
+		{name: "kill switch jwks", mutate: []func(*config.Config){disabled}, method: "GET", path: idpJWKSPath, wantStatus: 200},
+		{
+			name: "stage prefixed path", method: "GET", path: "/prod" + idpJWKSPath,
+			wantStatus: 404, wantCode: "idp_path_not_found",
+			check: func(t *testing.T, _ idpFrontResp, _ *fakeConsumer, logs string) {
+				assert.Equal(t, 1, countEventLines(logs, "idp.path.not_found"))
+			},
+		},
+		{name: "no idp jwks path", noIdP: true, denyExtract: true, method: "GET", path: idpJWKSPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
+		{name: "no idp credential path", noIdP: true, denyExtract: true, method: "POST", path: idpTokenPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
+		{
+			name: "loader failure", loadErr: errBoom, method: "GET", path: idpJWKSPath, wantStatus: 503, wantCode: "idp_signing_unavailable",
+			wantHeaders: map[string]string{"Content-Type": "application/json"},
+		},
+	}
+
+	for _, fe := range idpFrontends() {
+		for _, tt := range tests {
+			t.Run(fe.name+"/"+tt.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				prev := slog.Default()
+				slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+				defer slog.SetDefault(prev)
+
+				cfg := idpConfig(t, true, "", tt.mutate...)
+				cons := mockWI(t)
+				var ex validator.ClaimsExtractorInterface = idpClaims(nil)
+				if tt.denyExtract {
+					ex = &stubExtractor{err: handler.ErrTokenValidationFailed}
+				}
+				var svc *idp.Service
+				if !tt.noIdP {
+					svc = idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, tt.loadErr)
+				}
+				r := fe.build(t, config.NewStaticProvider(cfg), cons, ex, svc)(tt.method, tt.path, tt.body)
+
+				assert.Equal(t, tt.wantStatus, r.status, r.body)
+				if tt.wantCode != "" {
+					assert.Equal(t, tt.wantCode, r.code(t))
+				}
+				for k, v := range tt.wantHeaders {
+					assert.Equal(t, v, r.headers[k], k)
+					if fe.name == "alb" && tt.multi {
+						assert.Equal(t, []string{v}, r.multi[k], "multi "+k)
+					}
+				}
+				if tt.wantEmpty {
+					assert.Empty(t, r.body)
+				}
+				if tt.check != nil {
+					tt.check(t, r, cons, buf.String())
+				}
+			})
+		}
+	}
+}
+
+func TestIdPDocuments(t *testing.T) {
+	cfg := idpConfig(t, true, "")
+	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
+	ks, err := svc.KeySet(context.Background())
+	require.NoError(t, err)
+	paths := svc.Config().Paths
+
+	for _, fe := range idpFrontends() {
+		t.Run(fe.name, func(t *testing.T) {
+			call := fe.build(t, config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), svc)
+
+			disc := call("GET", paths.Discovery, "")
+			require.Equal(t, 200, disc.status)
+			var d struct {
+				Issuer  string `json:"issuer"`
+				JWKSURI string `json:"jwks_uri"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(disc.body), &d))
+			assert.Equal(t, d.Issuer+paths.JWKS, d.JWKSURI)
+
+			jwks := call("GET", paths.JWKS, "")
+			require.Equal(t, 200, jwks.status)
+			var want, got struct {
+				Keys []struct {
+					Kid string `json:"kid"`
+				} `json:"keys"`
+			}
+			require.NoError(t, json.Unmarshal(ks.JWKS(), &want))
+			require.NoError(t, json.Unmarshal([]byte(jwks.body), &got))
+			assert.Equal(t, want, got)
+			assert.NotEmpty(t, got.Keys)
+
+			for _, b := range []string{disc.body, jwks.body} {
+				assert.NotContains(t, b, `"d":`)
+			}
+		})
+	}
 }

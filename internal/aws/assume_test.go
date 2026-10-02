@@ -37,6 +37,10 @@ type vFake struct {
 func (f *vFake) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("nope")
 }
+
+func (f *vFake) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
 func (f *vFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
 	f.lastAssume = in
 	f.assumeCalls++
@@ -45,6 +49,9 @@ func (f *vFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.Ass
 		SecretAccessKey: aws.String("secret"),
 		SessionToken:    aws.String("token"),
 	}}, nil
+}
+func (f *vFake) AssumeRoleWithWebIdentity(context.Context, *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	return &sts.AssumeRoleWithWebIdentityOutput{}, nil
 }
 func (f *vFake) GetRole(context.Context, *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
 	return &iam.GetRoleOutput{Role: &iamtypes.Role{Tags: f.roleTags}}, nil

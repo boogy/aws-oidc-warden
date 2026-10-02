@@ -29,3 +29,15 @@ var ConfigWarning = newEvent("config.warning")
 // ConfigJWTValidationDelegated is emitted when jwt_validation.mode delegates
 // token verification upstream (Warn).
 var ConfigJWTValidationDelegated = newEvent("config.jwt_validation.delegated")
+
+// ConfigIdPReloadIgnored is emitted once per config generation whose frozen idp settings differ from cold start (Warn).
+var ConfigIdPReloadIgnored = newEvent("config.idp.reload_ignored")
+
+// ConfigIdPIssuerCollision is emitted when a reload is rejected because an inbound issuer equals the frozen IdP issuer (Error).
+var ConfigIdPIssuerCollision = newEvent("config.idp.issuer_collision")
+
+// ConfigMappingsStale is emitted when role mappings are older than mappings_max_stale and requests are refused (Error).
+var ConfigMappingsStale = newEvent("config.mappings_stale")
+
+// ConfigS3OwnerUnpinned is emitted once at startup when the S3 config overlay is read without ExpectedBucketOwner (Warn).
+var ConfigS3OwnerUnpinned = newEvent("config.s3_owner_unpinned")

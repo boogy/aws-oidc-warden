@@ -28,6 +28,8 @@ func baseConfig(t *testing.T) *Config {
 		Issuers:         singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
 		RoleSessionName: "aws-oidc-warden",
 		Cache:           &Cache{Type: "memory", TTL: time.Hour},
+
+		S3ConfigBucketOwner: "123456789012",
 	}
 	require.NoError(t, c.Validate())
 	return c
@@ -602,4 +604,47 @@ role_mappings:
 	time.Sleep(50 * time.Millisecond)
 	close(stop)
 	wg.Wait()
+}
+
+func TestProviderRefreshRejectsIdPIssuerCollision(t *testing.T) {
+	const idpIssuer = "https://idp.example.com"
+	overlay := func(issuers ...string) []byte {
+		out := "issuers:\n"
+		for _, i := range issuers {
+			out += "  - issuer: \"" + i + "\"\n    provider: github\n    audiences: [\"sts.amazonaws.com\"]\n"
+		}
+		return []byte(out)
+	}
+	tests := []struct {
+		name    string
+		freeze  bool
+		overlay []byte
+		wantErr bool
+		errHas  string
+	}{
+		{"inbound equals idp issuer", true, overlay(idpIssuer), true, "must differ"},
+		{"inbound contains hash", true, overlay("https://other.example.com/a#b"), true, "must not contain #"},
+		{"unrelated inbound issuer", true, overlay("https://other.example.com"), false, ""},
+		{"collision with frozen only", true, overlay("https://token.actions.githubusercontent.com", idpIssuer), true, "must differ"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := baseConfig(t)
+			p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) { return tt.overlay, nil })
+			if tt.freeze {
+				p.FreezeIdP(&IdPConfig{Issuer: idpIssuer})
+			}
+			before := p.lastRefresh.Load()
+
+			err := p.Refresh(context.Background())
+			if !tt.wantErr {
+				require.NoError(t, err)
+				assert.NotSame(t, base, p.Get())
+				return
+			}
+			require.ErrorContains(t, err, tt.errHas)
+			assert.Same(t, base, p.Get())
+			assert.Equal(t, before, p.lastRefresh.Load())
+		})
+	}
 }

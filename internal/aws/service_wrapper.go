@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -13,20 +14,31 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
 
 // AwsServiceWrapperInterface allows to test AWS specific code based on the AWS services
 type AwsServiceWrapperInterface interface {
 	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+	GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error)
 	AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
+	AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error)
 	GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
 	GetCallerAccount(ctx context.Context) (string, error)
 	GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error)
 	GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
 	RefreshClients()
+}
+
+// MaxS3ConfigBytes caps a config object read by GetS3ObjectIfChanged.
+const MaxS3ConfigBytes = 1 << 20
+
+type s3GetObjectAPI interface {
+	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }
 
 var (
@@ -38,9 +50,10 @@ var (
 // it wraps the actual AWS service call but has no additional functionality implemented
 type AwsServiceWrapper struct {
 	cfg       aws.Config
-	s3Client  *s3.Client
+	s3Client  s3GetObjectAPI
 	stsClient *sts.Client
 	iamClient *iam.Client
+	kms       *kms.Client
 
 	maxS3ObjectSize int64
 	defaultTimeout  time.Duration
@@ -72,6 +85,7 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 			s3Client:        s3.NewFromConfig(cfg),
 			stsClient:       sts.NewFromConfig(cfg),
 			iamClient:       iam.NewFromConfig(cfg),
+			kms:             kms.NewFromConfig(cfg),
 			maxS3ObjectSize: 5 * 1024 * 1024,
 			defaultTimeout:  30 * time.Second,
 		}
@@ -79,6 +93,9 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 
 	return wrapper
 }
+
+// KMS returns the KMS client.
+func (s *AwsServiceWrapper) KMS() *kms.Client { return s.kms }
 
 // RefreshClients recreates AWS service clients, useful for long-running Lambda environments
 // where clients might need refreshing periodically
@@ -97,6 +114,7 @@ func (s *AwsServiceWrapper) RefreshClients() {
 	s.s3Client = s3.NewFromConfig(cfg)
 	s.stsClient = sts.NewFromConfig(cfg)
 	s.iamClient = iam.NewFromConfig(cfg)
+	s.kms = kms.NewFromConfig(cfg)
 
 	logevent.Info(context.Background(), nil, logevent.AWSClientsRefreshSuccess, "AWS clients successfully refreshed")
 }
@@ -163,7 +181,7 @@ func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRol
 	if err != nil {
 		logevent.Error(ctx, nil, logevent.STSAssumeRoleFailure, "error assuming role",
 			slog.String("roleArn", *input.RoleArn),
-			slog.String("stsErrorCode", stsErrorCode(err)),
+			slog.String("stsErrorCode", STSErrorCode(err)),
 			slog.String("error", err.Error()),
 			slog.Int64("durationMs", time.Since(start).Milliseconds()),
 		)
@@ -180,6 +198,13 @@ func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRol
 	logevent.Info(ctx, nil, logevent.STSAssumeRoleSuccess, "assumed role", attrs...)
 
 	return output, nil
+}
+
+// AssumeRoleWithWebIdentity calls STS unsigned; the SDK selects the anonymous auth scheme for this operation.
+func (s *AwsServiceWrapper) AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
+	defer cancel()
+	return s.stsClient.AssumeRoleWithWebIdentity(ctx, in)
 }
 
 // validateRoleNameLength enforces IAM's 64-character cap on a role NAME,
@@ -271,4 +296,43 @@ func (s *AwsServiceWrapper) GetRoleAs(ctx context.Context, input *iam.GetRoleInp
 	defer cancel()
 	client := iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
 	return client.GetRole(ctx, input)
+}
+
+// GetS3ObjectIfChanged reads an owner-pinned object; a 304 returns (nil, prevETag, nil).
+func (s *AwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error) {
+	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
+	defer cancel()
+
+	in := &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), ExpectedBucketOwner: aws.String(expectedOwner)}
+	if prevETag != "" {
+		in.IfNoneMatch = aws.String(prevETag)
+	}
+
+	out, err := s.s3Client.GetObject(ctx, in)
+	if err != nil {
+		var re *smithyhttp.ResponseError
+		if prevETag != "" && errors.As(err, &re) && re.HTTPStatusCode() == http.StatusNotModified {
+			return nil, prevETag, nil
+		}
+		logevent.Error(ctx, nil, logevent.AWSS3GetFailure, "error fetching S3 object",
+			slog.String("bucket", bucket),
+			slog.String("key", key),
+			slog.String("error", err.Error()),
+		)
+		return nil, "", err
+	}
+	defer func() {
+		if cerr := out.Body.Close(); cerr != nil && err == nil {
+			data, etag, err = nil, "", cerr
+		}
+	}()
+
+	data, err = io.ReadAll(io.LimitReader(out.Body, MaxS3ConfigBytes+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) > MaxS3ConfigBytes {
+		return nil, "", fmt.Errorf("s3://%s/%s exceeds %d bytes", bucket, key, MaxS3ConfigBytes)
+	}
+	return data, aws.ToString(out.ETag), nil
 }

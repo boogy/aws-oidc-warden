@@ -1,0 +1,111 @@
+# mappings.yaml: who may assume which role, owned by the workload teams.
+# Allowed top-level keys: default_issuer, role_sets, role_mappings, role_groups.
+# Any other key rejects the whole file; the warden keeps the last good version.
+# Set issuer on every entry: with several issuers, one omitted falls back to default_issuer.
+#
+# Every caller POSTs to /verify with optional durationSeconds and sessionName.
+# - Without idp_token a role is issued by AssumeRole: 900-3600s, default 3600.
+# - With idp_token (and the role in idp.allowed_roles) it is issued through the
+#   warden's IdP at any duration, up to the mapping's max_session_duration
+#   (default 1h, max 12h). Over 1h without idp_token is refused.
+# - Session name: the mapping's role_session_name if set (the caller's sessionName
+#   is then ignored), else the caller's sessionName, else role_session_name in
+#   service.yaml.
+
+role_sets:
+  api-deployers:
+    - "arn:aws:iam::111122223333:role/ApiDeploy"
+    - "arn:aws:iam::111122223333:role/ApiMigrate"
+  readonly:
+    - "arn:aws:iam::111122223333:role/ReadOnly"
+  etl:
+    - "arn:aws:iam::111122223333:role/EtlExtract"
+    - "arn:aws:iam::111122223333:role/EtlLoad"
+
+role_mappings:
+  # AssumeRole, up to 1h. Session name: the caller's sessionName or the global default.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/api"
+    roles: ["@api-deployers"]
+    conditions:
+      ref: "refs/heads/main"
+
+  # AssumeRole, up to 1h, two repos sharing one grant, any branch. A caller can send
+  # sessionName (e.g. "docs-preview-42") to tell its sessions apart in CloudTrail.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: ["octo-org/web", "octo-org/docs"]
+    roles: ["@readonly"]
+
+  # IdP-issued at the default 1h ceiling: the role trusts only the warden's OIDC
+  # provider, so idp_token is what makes it reachable at all.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/batch"
+    roles: ["arn:aws:iam::111122223333:role/BatchRunner"]
+    idp_token: true
+
+  # IdP-issued, one role, up to 4h.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/data-pipeline"
+    roles: ["arn:aws:iam::111122223333:role/LongDeploy"]
+    conditions:
+      ref: "refs/heads/main"
+    idp_token: true
+    max_session_duration: 4h
+
+  # IdP-issued, two roles, up to 12h, forced session name: a sessionName sent by
+  # the caller is ignored and CloudTrail always shows "nightly-backup".
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/nightly-backup"
+    roles:
+      - "arn:aws:iam::111122223333:role/BackupRunner"
+      - "arn:aws:iam::111122223333:role/BackupVerify"
+    conditions:
+      event_name: "schedule"
+    idp_token: true
+    max_session_duration: 12h
+    role_session_name: "nightly-backup"
+
+  # Inline session policy: the session gets the intersection of the role's
+  # permissions and this policy, here read-only on one bucket.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/reports"
+    roles: ["arn:aws:iam::111122223333:role/ReportsReader"]
+    session_policy: >
+      {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:GetObject","s3:ListBucket"],"Resource":["arn:aws:s3:::octo-reports","arn:aws:s3:::octo-reports/*"]}]}
+
+  # Session policy from a file (key in session_policy_bucket), AssumeRole up to 1h,
+  # forced session name.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/terraform"
+    roles: ["arn:aws:iam::111122223333:role/TerraformApply"]
+    session_policy_file: "session-policies/octo-org/terraform.json"
+    role_session_name: "terraform-apply"
+    conditions:
+      ref: "refs/heads/main"
+
+  # GitLab project, bound to the GitLab issuer explicitly.
+  - issuer: "https://gitlab.com"
+    subject: "platform/infra"
+    roles: ["@readonly"]
+    conditions:
+      ref: "main"
+
+# Many repos with identical access: one entry, expanded per subject.
+role_groups:
+  # AssumeRole, up to 1h.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subjects: ["octo-org/tool-a", "octo-org/tool-b"]
+    defaults:
+      roles: ["@readonly"]
+      conditions:
+        event_name: "push"
+
+  # IdP-issued, a role set, up to 6h for every listed repo.
+  - issuer: "https://token.actions.githubusercontent.com"
+    subjects: ["octo-org/etl-orders", "octo-org/etl-billing"]
+    defaults:
+      roles: ["@etl"]
+      conditions:
+        ref: "refs/heads/main"
+      idp_token: true
+      max_session_duration: 6h
