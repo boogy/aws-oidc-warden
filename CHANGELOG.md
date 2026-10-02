@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`idp-export` command** writes the static discovery and JWKS documents for hosting on S3/CloudFront, the production default.
 - **Session ceiling**: `max_session_duration` on a mapping (or `role_groups[].defaults`) bounds the caller's `durationSeconds` for the roles it grants through the IdP, 15m to 12h, default 1h. There is no service-level ceiling.
 - **Source identity** is derived from the template and immutable.
-- **Audit records** carry `action` and `tokenId` for IdP mints.
+- **Audit records** carry `action` (`assume_role` or `mint_token`) and, for IdP-issued sessions, `tokenId`. A caller-supplied `durationSeconds` or `sessionName` is recorded as `requestedDurationSeconds`/`durationSeconds` and `sessionNameSource`.
 - **12 new error codes** for IdP mode, documented in the README and `GITHUB_ACTIONS.md` retry tables.
 - **`mappings_file`** (`AOW_MAPPINGS_FILE`, `-mappings` on the local server) loads role mappings from a separate local or `s3://` file, hot-reloaded and restricted to mapping keys. See `docs/CONFIGURATION.md` § Split configuration.
 - **`mappings_max_stale`** (`AOW_MAPPINGS_MAX_STALE`) refuses requests with `503 config_stale` once mappings are older than this. Defaults to 3x `config_reload_interval` for an `s3://` file; `0` disables.
@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **`s3://` entries in `config_fragments` are fetched** (conditional GET, 1 MiB cap, owner pin, `sha256:` pins) instead of failing every refresh.
+- **The local dev server (`cmd/local`) caps request bodies and sets read timeouts**, and without an `idp` block it serves only `/verify` again instead of routing every path to the credential flow.
 - **A remote `mappings_file` or `config_fragments` entry must use the lowercase `s3://` scheme.** `S3://…` was fetched from S3 but skipped the `s3_config_bucket_owner` requirement and the default `mappings_max_stale` gate. S3 fragment reads also refuse to run without an owner in the service config.
 
 ### Dependencies
@@ -36,8 +37,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Documentation
 
-- `docs/IDP.md` setup guide; `CONFIGURATION.md` `idp` reference and `AOW_IDP_*` variables; `ARCHITECTURE.md` IdP infrastructure contract; commented `idp:` block in `example-config.yaml`.
-- `docs/examples/split-config/`: annotated `service.yaml` and `mappings.yaml` with session policy and IdP examples, and a README covering ownership, per-caller outcomes, rejected files, staleness and S3 deployment.
+- `docs/IDP.md` setup guide; `CONFIGURATION.md` `idp` reference and `AOW_IDP_*` variables; `ARCHITECTURE.md` IdP infrastructure contract; commented `idp:` block and IdP mapping examples in `example-config.yaml`.
+- `docs/examples/split-config/`: annotated `service.yaml` and `mappings.yaml` showing AssumeRole roles up to 1h, IdP roles at the default 1h and at 4h/6h/12h (one role, a role list, a role group), caller-chosen and forced session names, and session policies; a README with per-caller outcomes, sample request bodies, rejected files, staleness and S3 deployment.
+- `GITHUB_ACTIONS.md`: the composite action gains `duration-seconds` (default 3600, always sent) and `session-name` inputs and builds its request body with `jq`.
 
 ## [3.5.2] - 2026-09-26
 
