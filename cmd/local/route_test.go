@@ -72,3 +72,17 @@ func TestLocalHandlerVerifyRejectsNonPost(t *testing.T) {
 		t.Errorf("code = %d, called = %v", rec.Code, called)
 	}
 }
+
+func TestLocalHandlerCapsBody(t *testing.T) {
+	called := false
+	stub := func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+		called = true
+		return events.APIGatewayProxyResponse{StatusCode: http.StatusOK}, nil
+	}
+	h := localHandler(slog.New(slog.NewTextHandler(io.Discard, nil)), 0, stub)
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodPost, "/verify", strings.NewReader(strings.Repeat("a", maxLocalBodyBytes+1))))
+	if rec.Code != http.StatusBadRequest || called {
+		t.Errorf("code = %d, called = %v", rec.Code, called)
+	}
+}

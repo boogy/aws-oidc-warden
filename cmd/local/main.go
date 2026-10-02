@@ -89,8 +89,12 @@ func main() {
 	// Create the handler function. No audit sink for the local dev server.
 	h := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).WithIdP(svc)
 
-	// Every path goes through the shared router; unknown paths get its 404.
-	http.HandleFunc("/", localHandler(logger, settings.SimulateLatency, h.Handler))
+	// With IdP configured every path goes through the shared router, which 404s unknown paths.
+	if svc != nil {
+		http.HandleFunc("/", localHandler(logger, settings.SimulateLatency, h.Handler))
+	} else {
+		http.HandleFunc("/verify", localHandler(logger, settings.SimulateLatency, h.Handler))
+	}
 
 	// Add a health check endpoint
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -106,8 +110,11 @@ func main() {
 	// Start the server
 	addr := fmt.Sprintf(":%d", settings.Port)
 	server := &http.Server{
-		Addr:    addr,
-		Handler: nil, // Use the default mux
+		Addr:              addr,
+		Handler:           nil, // Use the default mux
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Handle graceful shutdown
@@ -139,6 +146,9 @@ func main() {
 	logevent.Info(ctx, logger, logevent.AppStop, "server stopped")
 }
 
+// maxLocalBodyBytes sits one byte above the handler's 1 MiB cap so its own size check still answers.
+const maxLocalBodyBytes = 1<<20 + 1
+
 // localHandler adapts the Lambda handler to net/http.
 func localHandler(logger *slog.Logger, latency time.Duration, handlerFunc func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -157,7 +167,7 @@ func localHandler(logger *slog.Logger, latency time.Duration, handlerFunc func(c
 			return
 		}
 
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLocalBodyBytes))
 		if err != nil {
 			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
 				slog.String("reason", "body read failed"), slog.String("error", err.Error()))
