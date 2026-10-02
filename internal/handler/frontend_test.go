@@ -406,8 +406,8 @@ func TestIdPFrontends(t *testing.T) {
 			wantStatus: 400, wantCode: "duration_exceeds_cap",
 		},
 		{
-			name: "duration on credential path", method: "POST", path: "/verify", body: mintBody(`,"durationSeconds":900`),
-			wantStatus: 400, wantCode: "field_not_supported",
+			name: "duration over 1h on credential path", method: "POST", path: "/verify", body: mintBody(`,"durationSeconds":7200`),
+			wantStatus: 400, wantCode: "duration_exceeds_cap",
 		},
 		{
 			name: "token wrong method", multi: true, method: "GET", path: idpTokenPath, wantStatus: 405, wantCode: "method_not_allowed",

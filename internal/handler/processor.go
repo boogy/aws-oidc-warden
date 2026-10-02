@@ -230,9 +230,11 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	requestedRole := requestData.Role
 
-	if requestData.DurationSeconds != 0 || requestData.SessionName != "" {
-		rec.Stage, rec.Reason = "field_check", "field_not_supported"
-		return nil, r.deny(ctx, o, "field not supported", ErrFieldNotSupported)
+	// AssumeRole from the warden's own role is role chaining, which STS caps at 1h.
+	duration, err := resolveDuration(requestData.DurationSeconds, time.Hour)
+	if err != nil {
+		rec.Stage, rec.Reason = "duration", "invalid or excessive duration"
+		return nil, r.deny(ctx, o, "Duration refused", err)
 	}
 
 	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, o.decision)
@@ -247,9 +249,16 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if override := o.decision.RoleSessionName(); override != "" {
 		sessionName = override
 	}
+	if requestData.SessionName != "" {
+		sessionName, rec.SessionNameSource, err = resolveSessionName(o.decision.RoleSessionName(), true, requestData.SessionName, "", "")
+		if err != nil {
+			rec.Stage, rec.Reason = "session_name", "session name refused"
+			return nil, r.deny(ctx, o, "Session name refused", err)
+		}
+	}
 
 	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, o.decision)
-	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
+	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, claims, sessionTagSpec)
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
 		// A trust-policy/IAM refusal is the caller's answer (403); anything else
@@ -263,6 +272,10 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 
 	rec.GrantedRole = requestedRole
 	rec.SessionName = sessionName
+	if requestData.DurationSeconds != 0 {
+		rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
+		rec.DurationSeconds = int(duration)
+	}
 	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
 	if cfg.LogClaimValues {
 		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, sessionTagSpec)

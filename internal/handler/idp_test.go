@@ -286,7 +286,7 @@ func TestProcessMintSessionName(t *testing.T) {
 		err        error
 	}{
 		{"fixed", "fixed", false, false, "", "org/repo", "fixed", "mapping", nil},
-		{"fixed_plus_request", "fixed", true, true, "asked", "org/repo", "", "", handler.ErrSessionNameNotPermitted},
+		{"fixed_overrides_request", "fixed", true, true, "asked", "org/repo", "fixed", "mapping", nil},
 		{"opt_in_request", "", true, true, "asked", "org/repo", "asked", "request", nil},
 		{"no_opt_in_request", "", false, false, "asked", "org/repo", "", "", handler.ErrSessionNameNotPermitted},
 		{"bad_charset", "", true, true, "bad name!", "org/repo", "", "", handler.ErrInvalidSessionName},

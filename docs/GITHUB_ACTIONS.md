@@ -75,14 +75,13 @@ The status code tells your client whether retrying is worth anything:
 | `500 policy_error`                | The mapping's S3 session policy is missing, unreadable or invalid                                      | **No** — deterministic²                              |
 | `500 audit_write_failed`          | `audit_required` is on and the audit write to S3 failed                                                | **No** — deterministic²                              |
 | `403 idp_not_permitted`           | Mapping lacks `idp_token`, role outside `idp.allowed_roles`, or the minted subject was invalid         | **No** — deterministic                               |
-| `403 session_name_not_permitted`  | `sessionName` sent without both `allow_session_name` flags, or alongside a mapping `role_session_name` | **No** — deterministic                               |
+| `403 session_name_not_permitted`  | IdP path: `sessionName` sent without both `allow_session_name` flags                                   | **No** — deterministic                               |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                   | **No** — deterministic                               |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider              | **No** — deterministic                               |
 | `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                   | **No** — deterministic                               |
-| `400 duration_exceeds_cap`        | `durationSeconds` above the mapping or `idp.max_session_duration` ceiling                              | **No** — deterministic                               |
+| `400 duration_exceeds_cap`        | `durationSeconds` above 3600 (`/verify`) or the IdP ceiling                                            | **No** — deterministic                               |
 | `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                | **No** — deterministic                               |
 | `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                   | **No** — deterministic                               |
-| `400 field_not_supported`         | `durationSeconds` or `sessionName` sent to the `AssumeRole` path                                       | **No** — deterministic                               |
 | `404 idp_path_not_found`          | An IdP-shaped path that is not a configured `idp.paths.*`                                              | **No** — deterministic                               |
 | `405 method_not_allowed`          | Wrong HTTP method on an IdP path                                                                       | **No** — deterministic                               |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                  | **No** — deterministic                               |
@@ -402,6 +401,12 @@ inputs:
   mode:
     description: "`self` (token in body) or `apigw` (token in the Authorization header)."
     default: self
+  duration-seconds:
+    description: Session duration, 900-3600 on /verify. Always sent.
+    default: "3600"
+  session-name:
+    description: STS role session name, 2-64 chars of [A-Za-z0-9_+=,.@-]. Empty uses the warden's configured name; a mapping role_session_name always wins.
+    default: ""
   endpoints:
     description: >-
       Comma-separated warden endpoints, tried in order. Defaulted HERE so that adding, moving or reordering a region needs no change in any caller.
@@ -431,6 +436,8 @@ runs:
         ROLE_ARN: ${{ inputs.role }}
         AUDIENCE: ${{ inputs.audience }}
         MODE: ${{ inputs.mode }}
+        DURATION: ${{ inputs.duration-seconds }}
+        SESSION_NAME: ${{ inputs.session-name }}
         CONNECT_TIMEOUT: ${{ inputs.connect-timeout }}
         MAX_TIME: ${{ inputs.max-time }}
       run: |
@@ -448,11 +455,18 @@ runs:
           -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
           "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r .value)
 
+        [[ "$DURATION" =~ ^[0-9]+$ ]] || { echo "::error::duration-seconds must be an integer"; exit 1; }
+        if [ -n "$SESSION_NAME" ] && ! [[ "$SESSION_NAME" =~ ^[A-Za-z0-9_+=,.@-]{2,64}$ ]]; then
+          echo "::error::session-name must be 2-64 characters of [A-Za-z0-9_+=,.@-]"; exit 1
+        fi
+        REQ=$(jq -nc --arg role "$ROLE_ARN" --argjson dur "$DURATION" --arg name "$SESSION_NAME" \
+          '{role: $role, durationSeconds: $dur} + (if $name == "" then {} else {sessionName: $name} end)')
+
         # The one place the wire contract is encoded. Switching the fleet from
         # self to apigw mode is this branch, not fifty workflow edits.
         case "$MODE" in
-          apigw) ARGS=(-H "Authorization: Bearer $TOKEN" -d "{\"role\":\"$ROLE_ARN\"}") ;;
-          self)  ARGS=(-d "{\"token\":\"$TOKEN\",\"role\":\"$ROLE_ARN\"}") ;;
+          apigw) ARGS=(-H "Authorization: Bearer $TOKEN" -d "$REQ") ;;
+          self)  ARGS=(-d "$(jq -c --arg t "$TOKEN" '. + {token: $t}' <<< "$REQ")") ;;
           *)     echo "::error::unknown mode '$MODE' (expected self or apigw)"; exit 1 ;;
         esac
 
@@ -508,6 +522,9 @@ jobs:
       - uses: my-org/aws-oidc-warden-action@v1
         with:
           role: arn:aws:iam::123456789012:role/gha-payments
+          # Optional, like aws-actions/configure-aws-credentials:
+          # duration-seconds: 1800
+          # session-name: deploy-payments
 
       - run: aws sts get-caller-identity
 ```

@@ -309,7 +309,7 @@ Everything else a mapping can specify — session policy, `role_session_name`, e
 
 |                    |                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Precedence**     | Per-mapping wins; global is the fallback. An override applies only where declared                                                                      |
+| **Precedence**     | Per-mapping wins, even over a caller `sessionName`; then the caller `sessionName`; global is the fallback. An override applies only where declared     |
 | **Empty value**    | Indistinguishable from absent                                                                                                                          |
 | **Valid charset**  | STS accepts 2–64 chars from `[\w+=,.@-]`. **`/` is excluded**, so a GitHub `owner/repo` subject cannot be used verbatim                                |
 | **Invalid value**  | Fails the service at boot, rather than being silently reshaped by the runtime sanitizer                                                                |
@@ -389,7 +389,7 @@ The IdP token path takes the same body as `/verify`, plus:
 | `durationSeconds` | 900..43200; omitted = `min(3600, ceiling)`; above the ceiling is refused, never clamped |
 | `sessionName`     | Needs both `allow_session_name` flags; `^[\w+=,.@-]{2,64}$`                             |
 
-Both are refused on the `AssumeRole` path with 400 `field_not_supported`. The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`) plus `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
+The `AssumeRole` path (`/verify`) accepts both too: `durationSeconds` is 900..3600 (STS caps role chaining at 1h; omitted = 3600), and `sessionName` must match `^[\w+=,.@-]{2,64}$` but needs no `allow_session_name` flag. A mapping `role_session_name` overrides a requested `sessionName` on both paths. The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`) plus `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
 ## Environment Variable Reference
 

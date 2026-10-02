@@ -41,10 +41,10 @@ func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 	return requested, nil
 }
 
-// resolveSessionName picks the role session name and reports its source: mapping, request or subject/default.
+// resolveSessionName picks the role session name and reports its source; a mapping's fixed name overrides the request.
 func resolveSessionName(fixed string, allow bool, requested, subject, fallback string) (name, source string, err error) {
-	if fixed != "" && requested != "" {
-		return "", "", ErrSessionNameNotPermitted
+	if requested != "" && !sessionNamePattern.MatchString(requested) {
+		return "", "", ErrInvalidSessionName
 	}
 	if fixed != "" {
 		return fixed, "mapping", nil
@@ -52,9 +52,6 @@ func resolveSessionName(fixed string, allow bool, requested, subject, fallback s
 	if requested != "" {
 		if !allow {
 			return "", "", ErrSessionNameNotPermitted
-		}
-		if !sessionNamePattern.MatchString(requested) {
-			return "", "", ErrInvalidSessionName
 		}
 		return requested, "request", nil
 	}

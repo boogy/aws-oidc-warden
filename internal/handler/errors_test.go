@@ -14,6 +14,7 @@ import (
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,7 +47,6 @@ func TestClassifyError(t *testing.T) {
 		{ErrDurationExceedsRoleMax, "duration_exceeds_role_max", http.StatusBadRequest},
 		{ErrInvalidSessionName, "invalid_session_name", http.StatusBadRequest},
 		{ErrSessionNameNotPermitted, "session_name_not_permitted", http.StatusForbidden},
-		{ErrFieldNotSupported, "field_not_supported", http.StatusBadRequest},
 		{ErrIdPSourceIdentityInvalid, "idp_source_identity_invalid", http.StatusForbidden},
 		{ErrIdPExchangeDenied, "idp_exchange_denied", http.StatusForbidden},
 		{ErrIdPExchangeUnavailable, "idp_exchange_unavailable", http.StatusServiceUnavailable},
@@ -80,7 +80,7 @@ func TestClassifyErrorIdPSentinelsDistinct(t *testing.T) {
 	all := []error{
 		ErrIdPNotPermitted, ErrIdPUnavailable, ErrMethodNotAllowed, ErrIdPPathNotFound,
 		ErrIdPTokenTooLarge, ErrInvalidDuration, ErrDurationExceedsCap, ErrDurationExceedsRoleMax,
-		ErrInvalidSessionName, ErrSessionNameNotPermitted, ErrFieldNotSupported,
+		ErrInvalidSessionName, ErrSessionNameNotPermitted,
 		ErrIdPSourceIdentityInvalid, ErrIdPExchangeDenied, ErrIdPExchangeUnavailable,
 		ErrAssumeRoleDenied, ErrAssumeRoleFailed,
 	}
@@ -96,6 +96,8 @@ func TestClassifyErrorIdPSentinelsDistinct(t *testing.T) {
 type stubConsumer struct {
 	aws.AwsConsumerInterface
 	assumeCalls int
+	sessionName string
+	duration    int32
 }
 
 func (s *stubConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
@@ -107,8 +109,12 @@ func (s *stubConsumer) GetRoleTags(context.Context, string) (map[string]string, 
 	return nil, nil
 }
 
-func (s *stubConsumer) AssumeRole(context.Context, string, string, *string, *int32, *gtypes.Claims, map[string]string) (*types.Credentials, error) {
+func (s *stubConsumer) AssumeRole(_ context.Context, _, sessionName string, _ *string, duration *int32, _ *gtypes.Claims, _ map[string]string) (*types.Credentials, error) {
 	s.assumeCalls++
+	s.sessionName = sessionName
+	if duration != nil {
+		s.duration = *duration
+	}
 	return &types.Credentials{}, nil
 }
 
@@ -118,15 +124,28 @@ func (e *stubExtractor) Extract(context.Context, validator.ExtractionInput) (*gt
 	return e.claims, nil
 }
 
-func TestCredentialPathRejectsIdPFields(t *testing.T) {
+func TestCredentialPathSessionFields(t *testing.T) {
 	const issuer = "https://token.actions.githubusercontent.com"
 	const role = "arn:aws:iam::123456789012:role/MyRole"
 	tests := []struct {
-		name string
-		req  *RequestData
+		name         string
+		fixed        string
+		req          *RequestData
+		wantErr      error
+		wantName     string
+		wantDuration int32
 	}{
-		{"durationSeconds", &RequestData{Role: role, DurationSeconds: 7200}},
-		{"sessionName", &RequestData{Role: role, SessionName: "asked"}},
+		{"defaults", "", &RequestData{Role: role}, nil, "test", 3600},
+		{"mapping name default", "mapped", &RequestData{Role: role}, nil, "mapped", 3600},
+		{"requested name", "", &RequestData{Role: role, SessionName: "asked"}, nil, "asked", 3600},
+		{"mapping name overrides request", "mapped", &RequestData{Role: role, SessionName: "asked"}, nil, "mapped", 3600},
+		{"invalid name", "", &RequestData{Role: role, SessionName: "bad name!"}, ErrInvalidSessionName, "", 0},
+		{"invalid name with mapping name", "mapped", &RequestData{Role: role, SessionName: "a"}, ErrInvalidSessionName, "", 0},
+		{"duration honoured", "", &RequestData{Role: role, DurationSeconds: 900}, nil, "test", 900},
+		{"duration at 1h", "", &RequestData{Role: role, DurationSeconds: 3600}, nil, "test", 3600},
+		{"duration over 1h", "", &RequestData{Role: role, DurationSeconds: 3601}, ErrDurationExceedsCap, "", 0},
+		{"duration below minimum", "", &RequestData{Role: role, DurationSeconds: 899}, ErrInvalidDuration, "", 0},
+		{"negative duration", "", &RequestData{Role: role, DurationSeconds: -1}, ErrInvalidDuration, "", 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -139,8 +158,9 @@ func TestCredentialPathRejectsIdPFields(t *testing.T) {
 				RoleSessionName: "test",
 				Cache:           &config.Cache{TTL: 0},
 				RoleMappings: []config.RoleMapping{{
-					Subject: config.Patterns{"org/repo"},
-					Roles:   []string{role},
+					Subject:         config.Patterns{"org/repo"},
+					Roles:           []string{role},
+					RoleSessionName: tc.fixed,
 				}},
 			}
 			require.NoError(t, cfg.Validate())
@@ -151,8 +171,14 @@ func TestCredentialPathRejectsIdPFields(t *testing.T) {
 			}}
 			proc := NewRequestProcessor(config.NewStaticProvider(cfg), consumer, ex, nil, "test")
 			_, err := proc.ProcessRequest(context.Background(), tc.req, validator.ExtractionInput{}, "req-1", slog.Default())
-			require.ErrorIs(t, err, ErrFieldNotSupported)
-			require.Zero(t, consumer.assumeCalls)
+			if tc.wantErr != nil {
+				require.ErrorIs(t, err, tc.wantErr)
+				require.Zero(t, consumer.assumeCalls)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantName, consumer.sessionName)
+			assert.Equal(t, tc.wantDuration, consumer.duration)
 		})
 	}
 }

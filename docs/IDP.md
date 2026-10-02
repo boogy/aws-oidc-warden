@@ -239,13 +239,13 @@ Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-pr
 
 Ceiling = `min(mapping idp_max_session_duration, idp.max_session_duration)`. When `role_sets` expansion yields several mappings, the lowest-order mapping wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
-The `AssumeRole` path takes no `durationSeconds` (400 `field_not_supported`) and always issues 1h.
+The `AssumeRole` path (`/verify`) accepts `durationSeconds` from 900 to 3600 (STS caps role chaining at 1h); above that it answers 400 `duration_exceeds_cap`.
 
 ## Session name
 
 Resolved in this order:
 
-1. The mapping's `role_session_name`, if set. A request `sessionName` alongside it is refused with 403 `session_name_not_permitted`.
+1. The mapping's `role_session_name`, if set. It overrides a request `sessionName`, which is still validated.
 2. Request `sessionName`, only when both `idp.allow_session_name` and the mapping's `allow_session_name` are true; otherwise 403 `session_name_not_permitted`. It must match `^[\w+=,.@-]{2,64}$`, else 400 `invalid_session_name`.
 3. The canonical subject, sanitized and fitted to 64 characters.
 4. The global `role_session_name`.
@@ -371,7 +371,6 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | `duration_exceeds_cap`        | 400    | No    | Above the mapping or `idp.max_session_duration` ceiling                          |
 | `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                            |
 | `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                  |
-| `field_not_supported`         | 400    | No    | `durationSeconds` or `sessionName` on the `AssumeRole` path                      |
 | `idp_path_not_found`          | 404    | No    | IdP-shaped path that is not configured                                           |
 | `method_not_allowed`          | 405    | No    | Wrong method on an IdP path                                                      |
 | `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags            |

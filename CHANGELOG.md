@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Session ceilings**: `idp.max_session_duration` and `idp.allow_session_name` bound the caller's `durationSeconds` and `sessionName`.
 - **Source identity** is derived from the template and immutable.
 - **Audit records** carry `action` and `tokenId` for IdP mints.
-- **14 new error codes** for IdP mode, documented in the README and `GITHUB_ACTIONS.md` retry tables.
+- **13 new error codes** for IdP mode, documented in the README and `GITHUB_ACTIONS.md` retry tables.
 - **`mappings_file`** (`AOW_MAPPINGS_FILE`, `-mappings` on the local server) loads role mappings from a separate local or `s3://` file, hot-reloaded and restricted to mapping keys. See `docs/CONFIGURATION.md` § Split configuration.
 - **`mappings_max_stale`** (`AOW_MAPPINGS_MAX_STALE`) refuses requests with `503 config_stale` once mappings are older than this. Defaults to 3x `config_reload_interval` for an `s3://` file; `0` disables.
 - **`s3_config_bucket_owner`** (`AOW_S3_CONFIG_BUCKET_OWNER`) is the expected owner account, sent as `ExpectedBucketOwner` on S3 config reads. Required for an `s3://` `mappings_file` or fragment. Optional for `s3_config_bucket`; a startup warning is logged when unset.
@@ -21,7 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Failed config refreshes back off exponentially** (up to 8x `config_reload_interval`), and requests no longer wait on an in-flight refresh.
-- **The classic credential path rejects `durationSeconds` and `sessionName`** with `400 field_not_supported`, even when IdP mode is off; they were previously ignored. A non-integer `durationSeconds` (e.g. `"3600"`) is now `400 invalid_request`. Drop these fields from requests that do not target `idp.paths.token`.
+- **`/verify` accepts `durationSeconds` and `sessionName`**, like `aws-actions/configure-aws-credentials`. `durationSeconds` is 900..3600 (role chaining caps at 1h; omitted = 3600); outside that is 400 `invalid_duration` / `duration_exceeds_cap`. `sessionName` must match `^[\w+=,.@-]{2,64}$` (else 400 `invalid_session_name`). A mapping `role_session_name` overrides a requested name on both paths instead of refusing it. A non-integer `durationSeconds` (e.g. `"3600"`) is 400 `invalid_request`.
 - **A mapping that sets both `session_policy` and `session_policy_file` fails to load.** Previously the file was used and the inline policy silently ignored. Keep the one you intend.
 
 ### Fixed

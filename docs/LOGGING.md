@@ -184,7 +184,7 @@ Added by `auditLogAttrs` for the decision itself:
 Two fields are worth calling out:
 
 - **`matchedRole` is synthesized, not stored** — the granted role once one was assumed, otherwise the requested role. It is the **only** role field on the decision line: key queries on it, never on `requestedRole`/`grantedRole`, which are record-only.
-- **`sessionName` is not claim-derived.** It is the STS session name actually used — the global `role_session_name`, or the per-mapping override that authorized the role ([CONFIGURATION.md](CONFIGURATION.md#per-mapping-role_session_name)). It is recorded because that override exists purely for CloudTrail attribution, so the trail must say which name the CloudTrail entry will carry. Being operator-declared static config, it is **not** suppressed by `log_claim_values=false`.
+- **`sessionName` is not claim-derived.** It is the STS session name actually used — the per-mapping override that authorized the role, the caller's validated `sessionName`, or the global `role_session_name` ([CONFIGURATION.md](CONFIGURATION.md#per-mapping-role_session_name)). It is recorded because that override exists purely for CloudTrail attribution, so the trail must say which name the CloudTrail entry will carry. Being operator config or a caller-chosen `[\w+=,.@-]` label, never a claim, it is **not** suppressed by `log_claim_values=false`.
 
 Empty attributes are omitted rather than emitted blank. `sourceIpFrom` is present only when the IP was **not** platform-attested — absent for the common `frontend` case, so a reader sees provenance called out only when the value is client-supplied and spoofable.
 

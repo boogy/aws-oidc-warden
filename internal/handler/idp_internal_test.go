@@ -62,7 +62,8 @@ func TestResolveSessionName(t *testing.T) {
 		wantErr    error
 	}{
 		{"fixed mapping name", "fixed", false, "", "org/repo", "fallback", "fixed", "mapping", nil},
-		{"fixed and requested conflict", "fixed", true, "asked", "org/repo", "fallback", "", "", ErrSessionNameNotPermitted},
+		{"fixed overrides request", "fixed", true, "asked", "org/repo", "fallback", "fixed", "mapping", nil},
+		{"fixed with invalid request", "fixed", true, "bad name!", "org/repo", "fallback", "", "", ErrInvalidSessionName},
 		{"request without opt-in", "", false, "asked", "org/repo", "fallback", "", "", ErrSessionNameNotPermitted},
 		{"opt-in valid", "", true, "asked", "org/repo", "fallback", "asked", "request", nil},
 		{"opt-in invalid chars", "", true, "no spaces!", "org/repo", "fallback", "", "", ErrInvalidSessionName},

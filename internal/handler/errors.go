@@ -88,10 +88,6 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		errCode = "session_name_not_permitted"
 		errMsg = "sessionName is not permitted for this role"
 		*statusCode = http.StatusForbidden
-	case errors.Is(err, ErrFieldNotSupported):
-		errCode = "field_not_supported"
-		errMsg = "Request field is not supported on this path"
-		*statusCode = http.StatusBadRequest
 	case errors.Is(err, ErrIdPSourceIdentityInvalid):
 		errCode = "idp_source_identity_invalid"
 		errMsg = "Source identity could not be derived for this request"
