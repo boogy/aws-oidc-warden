@@ -83,7 +83,7 @@ func TestMappingsFileRejectsBaseOnlyKeys(t *testing.T) {
 
 func TestMappingsFileAcceptsMappingIdPFields(t *testing.T) {
 	content := "role_mappings:\n  - subject: org/repo\n    roles: [\"" + mapRoleARN + "\"]\n" +
-		"    idp_token: true\n    idp_max_session_duration: 4h\n"
+		"    idp_token: true\n    max_session_duration: 4h\n"
 	p := NewProvider(mappingsCfg(t, content), 0, "", nil)
 	require.NoError(t, p.Refresh(context.Background()))
 }

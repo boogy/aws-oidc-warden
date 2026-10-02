@@ -79,6 +79,9 @@ issuers:
 ## boot rather than being silently reshaped. A role_mappings/role_groups entry
 ## may set its own role_session_name to override this for the roles it
 ## grants — see role_mappings below.
+## Session name precedence on every request: the mapping's role_session_name
+## (forced: a caller's sessionName is ignored), else the caller's sessionName
+## (validated against the same charset), else this value.
 role_session_name: aws-oidc-warden
 
 ## default_issuer: the issuer a role_mapping/role_group inherits when it does
@@ -259,6 +262,8 @@ role_sets:
 ####################################################################################
 role_mappings:
   # Simple mapping, main branch only (inherits default_issuer = GitHub).
+  # AssumeRole: the caller may send durationSeconds 900-3600 (default 3600) and
+  # a sessionName; with no role_session_name here, the caller's name is used.
   - subject: "org/some-repo-name"
     roles: ["@deployers"] # role_set alias
     conditions:
@@ -518,8 +523,9 @@ jwt_validation:
 ####################################################################################
 # IDP MODE (optional, default off) — mint a warden-signed OIDC token and exchange it
 # with AssumeRoleWithWebIdentity so sessions can exceed the 1h role-chaining cap.
-# Opt each mapping in with `idp_token: true` (optionally `idp_max_session_duration`);
-# its roles are then issued through the IdP on /verify at any duration.
+# Opt each mapping in with `idp_token: true`; its roles are then issued through
+# the IdP on /verify at any duration, up to the mapping's `max_session_duration`
+# (15m-12h, default 1h). There is no service-wide ceiling.
 # See docs/IDP.md.
 ####################################################################################
 # idp:
@@ -528,9 +534,41 @@ jwt_validation:
 #   audience: "idp-audience-example"
 #   audience_mode: "static" # or "role_arn"
 #   token_ttl: "2m" # minted token lifetime, 1m..5m
-#   max_session_duration: 1h # base ceiling for every mapping and request, 15m..12h
 #   allowed_roles: [] # role ARNs or @role_set; empty = no extra cap
 #   signing_keys:
 #     - kms_key_id: "arn:aws:kms:REGION:ACCOUNT:key/KEY_ID" # full key ARN; aliases are rejected
 #       algorithm: "ES256" # ES256 for ECC_NIST_P256, RS256 for RSA keys
 #       status: "active" # exactly one active; use verify_only while rotating
+#
+# Mappings using it (role_mappings / role_groups entries; uncomment with idp):
+#
+# role_mappings:
+#   # IdP at the default 1h ceiling (the role trusts only the warden's provider).
+#   - subject: "org/batch"
+#     roles: ["arn:aws:iam::123456789012:role/batch-runner"]
+#     idp_token: true
+#
+#   # IdP, one role, up to 4h; the caller's sessionName is used if sent.
+#   - subject: "org/data-pipeline"
+#     roles: ["arn:aws:iam::123456789012:role/long-deploy"]
+#     conditions: { ref: "refs/heads/main" }
+#     idp_token: true
+#     max_session_duration: 4h
+#
+#   # IdP, several roles, up to 12h, forced session name.
+#   - subject: "org/nightly-backup"
+#     roles:
+#       - "arn:aws:iam::123456789012:role/backup-runner"
+#       - "arn:aws:iam::123456789012:role/backup-verify"
+#     conditions: { event_name: "schedule" }
+#     idp_token: true
+#     max_session_duration: 12h
+#     role_session_name: "nightly-backup"
+#
+# role_groups:
+#   # IdP for a fleet of repos sharing a role set, up to 6h.
+#   - subjects: ["org/etl-orders", "org/etl-billing"]
+#     defaults:
+#       roles: ["@etl"]
+#       idp_token: true
+#       max_session_duration: 6h

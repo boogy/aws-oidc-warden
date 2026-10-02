@@ -212,7 +212,6 @@ func TestProcessMintDuration(t *testing.T) {
 	tests := []struct {
 		name      string
 		mapCap    time.Duration
-		base      time.Duration
 		requested int32
 		exchErr   error
 		want      int32
@@ -220,26 +219,20 @@ func TestProcessMintDuration(t *testing.T) {
 		err       error
 		signed    bool
 	}{
-		{"omitted", 0, 0, 0, nil, 3600, 3600, nil, true},
-		{"omitted_30m_cap", 30 * time.Minute, 0, 0, nil, 1800, 1800, nil, true},
-		{"7200_4h_cap_base_12h", 4 * h, 12 * h, 7200, nil, 7200, 14400, nil, true},
-		{"over_cap", 4 * h, 12 * h, 18000, nil, 0, 0, handler.ErrDurationExceedsCap, false},
-		{"default_ceiling", 0, 0, 7200, nil, 0, 0, handler.ErrDurationExceedsCap, false},
-		{"no_cap_43200_base_12h", 0, 12 * h, 43200, nil, 43200, 43200, nil, true},
-		{"no_cap_43200_default_base", 0, 0, 43200, nil, 0, 0, handler.ErrDurationExceedsCap, false},
-		{"too_short", 0, 12 * h, 600, nil, 0, 0, handler.ErrInvalidDuration, false},
-		{"too_long", 0, 12 * h, 43201, nil, 0, 0, handler.ErrInvalidDuration, false},
-		{"negative", 0, 12 * h, -1, nil, 0, 0, handler.ErrInvalidDuration, false},
-		{"role_max", 0, 0, 3600, roleMax, 0, 0, handler.ErrDurationExceedsRoleMax, true},
+		{"omitted", 0, 0, nil, 3600, 3600, nil, true},
+		{"omitted_30m_cap", 30 * time.Minute, 0, nil, 1800, 1800, nil, true},
+		{"7200_4h_cap", 4 * h, 7200, nil, 7200, 14400, nil, true},
+		{"over_cap", 4 * h, 18000, nil, 0, 0, handler.ErrDurationExceedsCap, false},
+		{"default_ceiling", 0, 7200, nil, 0, 0, handler.ErrDurationExceedsCap, false},
+		{"43200_12h_cap", 12 * h, 43200, nil, 43200, 43200, nil, true},
+		{"too_short", 12 * h, 600, nil, 0, 0, handler.ErrInvalidDuration, false},
+		{"too_long", 12 * h, 43201, nil, 0, 0, handler.ErrInvalidDuration, false},
+		{"negative", 12 * h, -1, nil, 0, 0, handler.ErrInvalidDuration, false},
+		{"role_max", 0, 3600, roleMax, 0, 0, handler.ErrDurationExceedsRoleMax, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpConfig(t, true, "", func(c *config.Config) {
-				c.RoleMappings[0].IdPMaxSessionDuration = tt.mapCap
-				if tt.base != 0 {
-					c.IdP.MaxSessionDuration = tt.base
-				}
-			})
+			cfg := idpConfig(t, true, "", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = tt.mapCap })
 			cons := mockWI(t)
 			cons.wiErr = tt.exchErr
 			proc, sink, signer := idpProcessorFor(t, cfg, cons, idpClaims(nil))

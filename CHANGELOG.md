@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **IdP mode (`idp`, optional).** The warden mints its own KMS-signed OIDC token and exchanges it in-process through an unsigned `sts:AssumeRoleWithWebIdentity`, so sessions are not bound by the 1-hour role-chaining cap. Per-mapping opt-in via `idp_token`. There is no separate endpoint: `/verify` issues an opted-in role through the IdP while `idp.enabled`, and refuses a request over 1h it cannot serve that way. See `docs/IDP.md`.
 - **`idp-export` command** writes the static discovery and JWKS documents for hosting on S3/CloudFront, the production default.
-- **Session ceiling**: `idp.max_session_duration` bounds the caller's `durationSeconds` for IdP-issued sessions.
+- **Session ceiling**: `max_session_duration` on a mapping (or `role_groups[].defaults`) bounds the caller's `durationSeconds` for the roles it grants through the IdP, 15m to 12h, default 1h. There is no service-level ceiling.
 - **Source identity** is derived from the template and immutable.
 - **Audit records** carry `action` and `tokenId` for IdP mints.
 - **12 new error codes** for IdP mode, documented in the README and `GITHUB_ACTIONS.md` retry tables.

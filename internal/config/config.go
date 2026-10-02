@@ -83,15 +83,15 @@ func validateIdPSessionCap(field string, d time.Duration) error {
 // RoleMapping binds a subject (pattern) to a set of assumable roles, scoped
 // to a single issuer, optionally gated by conditions on the raw claims.
 type RoleMapping struct {
-	Subject               Patterns      `mapstructure:"subject"             json:"subject"`                                 // One subject pattern or a list of them (OR'd); each element anchored and validated independently
-	Issuer                string        `mapstructure:"issuer"              json:"issuer,omitempty"`                        // Trusted issuer this mapping applies to; resolved at Validate() (see resolveIssuer)
-	SessionPolicy         string        `mapstructure:"session_policy"      json:"session_policy,omitempty"`                // Inline session policy (JSON string)
-	SessionPolicyFile     string        `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`           // S3 session policy file
-	Roles                 []string      `mapstructure:"roles"               json:"roles"`                                   // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
-	Conditions            *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`                    // Conditions for role assumption
-	RoleSessionName       string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`             // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
-	IDPToken              bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`                     // Allow minting an IdP token for roles granted by THIS mapping
-	IdPMaxSessionDuration time.Duration `mapstructure:"idp_max_session_duration" json:"idp_max_session_duration,omitempty"` // Ceiling for the caller's durationSeconds; 0 = use idp.max_session_duration
+	Subject            Patterns      `mapstructure:"subject"             json:"subject"`                         // One subject pattern or a list of them (OR'd); each element anchored and validated independently
+	Issuer             string        `mapstructure:"issuer"              json:"issuer,omitempty"`                // Trusted issuer this mapping applies to; resolved at Validate() (see resolveIssuer)
+	SessionPolicy      string        `mapstructure:"session_policy"      json:"session_policy,omitempty"`        // Inline session policy (JSON string)
+	SessionPolicyFile  string        `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`   // S3 session policy file
+	Roles              []string      `mapstructure:"roles"               json:"roles"`                           // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
+	Conditions         *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`            // Conditions for role assumption
+	RoleSessionName    string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`     // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
+	IDPToken           bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`             // Allow minting an IdP token for roles granted by THIS mapping
+	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"` // Ceiling for the caller's durationSeconds; 0 = 1h
 
 	// SessionTags are STS tags ADDED to the issuer's session_tags for roles
 	// granted by this mapping. Additive only: a key the issuer already defines
@@ -117,8 +117,8 @@ type RoleGroupDefaults struct {
 	RoleSessionName   string            `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
 	SessionTags       map[string]string `mapstructure:"session_tags"  json:"session_tags,omitempty"`
 
-	IDPToken              bool          `mapstructure:"idp_token"                json:"idp_token,omitempty"`
-	IdPMaxSessionDuration time.Duration `mapstructure:"idp_max_session_duration" json:"idp_max_session_duration,omitempty"`
+	IDPToken           bool          `mapstructure:"idp_token"                json:"idp_token,omitempty"`
+	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"`
 }
 
 // RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
@@ -617,11 +617,6 @@ var envBindings = []envBinding{
 			c.IdP.SubjectTemplate = v
 		}
 	}},
-	{"idp.max_session_duration", func(c *Config, v string) {
-		if c.IdP != nil {
-			envDuration("idp.max_session_duration", v, func(d time.Duration) { c.IdP.MaxSessionDuration = d })
-		}
-	}},
 
 	// JWT validation settings (value struct, always present).
 	{"jwt_validation.mode", func(c *Config, v string) { c.JWTValidation.Mode = v }},
@@ -715,17 +710,7 @@ func (c *Config) LoadConfig() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	c.warnIdPUncapped()
 	return nil
-}
-
-// warnIdPUncapped logs once at cold start; Validate also runs on every refresh.
-func (c *Config) warnIdPUncapped() {
-	if c.IdP != nil && c.IdP.Enabled && c.IdP.MaxSessionDuration > time.Hour {
-		logevent.Warn(context.Background(), nil, logevent.ConfigIdPUncapped,
-			"idp.max_session_duration exceeds 1h",
-			slog.Duration("maxSessionDuration", c.IdP.MaxSessionDuration))
-	}
 }
 
 // MergeBytes overlays serialized configuration onto c using the same snake_case
@@ -1114,11 +1099,11 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("%s[%d] (%s): role_session_name: %w", source, i, subject, err)
 			}
 		}
-		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): idp_max_session_duration", source, i, subject), m.IdPMaxSessionDuration); err != nil {
+		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): max_session_duration", source, i, subject), m.MaxSessionDuration); err != nil {
 			return err
 		}
-		if m.IdPMaxSessionDuration != 0 && !m.IDPToken {
-			return fmt.Errorf("%s[%d] (%s): idp_max_session_duration requires idp_token", source, i, subject)
+		if m.MaxSessionDuration != 0 && !m.IDPToken {
+			return fmt.Errorf("%s[%d] (%s): max_session_duration requires idp_token", source, i, subject)
 		}
 		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
 			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
@@ -1220,8 +1205,8 @@ func (c *Config) Validate() error {
 				RoleSessionName:   group.Defaults.RoleSessionName,
 				SessionTags:       group.Defaults.SessionTags,
 
-				IDPToken:              group.Defaults.IDPToken,
-				IdPMaxSessionDuration: group.Defaults.IdPMaxSessionDuration,
+				IDPToken:           group.Defaults.IDPToken,
+				MaxSessionDuration: group.Defaults.MaxSessionDuration,
 			}
 			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
 				return err
@@ -1726,8 +1711,6 @@ type Decision struct {
 	// Lowest-order matched mapping granting the requested role; nil when no
 	// role was requested or none granted it.
 	authorizing *RoleMapping
-
-	idpCeiling time.Duration
 }
 
 // SessionPolicy returns the (inline, file) session policy from the mapping
@@ -1759,16 +1742,15 @@ func (d Decision) IDPTokenAllowed() bool {
 	return d.authorizing != nil && d.authorizing.IDPToken
 }
 
-// IdPMaxSessionDuration is the authorizing mapping's cap clamped to idp.max_session_duration; 0 when nothing authorized.
-func (d Decision) IdPMaxSessionDuration() time.Duration {
+// MaxSessionDuration is the authorizing mapping's session ceiling, 1h when unset; 0 when nothing authorized.
+func (d Decision) MaxSessionDuration() time.Duration {
 	if d.authorizing == nil {
 		return 0
 	}
-	c := d.authorizing.IdPMaxSessionDuration
-	if c == 0 || c > d.idpCeiling {
-		return d.idpCeiling
+	if d.authorizing.MaxSessionDuration == 0 {
+		return IdPDefaultMaxSessionDuration
 	}
-	return c
+	return d.authorizing.MaxSessionDuration
 }
 
 // RoleSessionName returns the authorizing mapping's session-name override, or
@@ -1789,9 +1771,6 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 		capacity = 4
 	}
 	d := Decision{Roles: make([]string, 0, capacity)}
-	if c.IdP != nil {
-		d.idpCeiling = c.IdP.MaxSessionDuration
-	}
 
 	idx, ok := c.index[issuer]
 	if !ok {

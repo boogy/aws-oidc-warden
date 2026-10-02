@@ -214,7 +214,6 @@ idp:
     - kms_key_id: "arn:aws:kms:eu-west-1:123456789012:key/00000000-0000-0000-0000-000000000000"
       algorithm: ES256
       status: active
-  max_session_duration: 1h
   allowed_roles:
     - "arn:aws:iam::123456789012:role/LongDeploy"
 
@@ -223,14 +222,13 @@ role_mappings:
     subject: "octo-org/long-job"
     roles: ["arn:aws:iam::123456789012:role/LongDeploy"]
     idp_token: true
-    idp_max_session_duration: 4h
+    max_session_duration: 4h
 ```
 
 Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-provider).
 
-- `idp.max_session_duration`: base-only ceiling, default `1h`, range 15m to 12h. It caps every mapping's `idp_max_session_duration` and every request. Above `1h` the warden logs `config.idp_uncapped` at Warn.
-- It is read per request (live) and rejected in config fragments, which cannot carry an `idp` block at all.
-- Unset `idp_max_session_duration` on a mapping means the base ceiling (1h unless raised).
+- `max_session_duration` is set per mapping (or in `role_groups[].defaults`) and applies to every role that mapping grants: 15m to 12h, default `1h`, and it needs `idp_token`. There is no service-wide ceiling; the platform team bounds the IdP with `idp.allowed_roles`, and each role's own IAM `MaxSessionDuration` is the hard limit.
+- `idp` is base-only: config fragments and the mappings file cannot carry it.
 
 ## Session duration
 
@@ -241,7 +239,7 @@ Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-pr
 | above the ceiling                     | 400 `duration_exceeds_cap` (never clamped) |
 | above the role's `MaxSessionDuration` | 400 `duration_exceeds_role_max`            |
 
-Ceiling = `min(mapping idp_max_session_duration, idp.max_session_duration)`. When `role_sets` expansion yields several mappings, the lowest-order mapping wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
+Ceiling = the authorizing mapping's `max_session_duration` (1h when unset). When several mappings grant the role, the lowest-order one wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
 A role served by `AssumeRole` accepts `durationSeconds` from 900 to 3600 (omitted = 3600). Above that see [Why](#why).
 
@@ -317,9 +315,9 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 
 ## Hot reload and the kill switch
 
-| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                                                      |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `allowed_roles`, `max_session_duration`, plus per-mapping `idp_token`, `idp_max_session_duration` |
+| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `allowed_roles`, plus per-mapping `idp_token`, `max_session_duration` |
 
 A reload that changes a frozen field logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected (`config.idp.issuer_collision`).
 
@@ -340,14 +338,14 @@ Discovery and JWKS keep serving while disabled.
 - `idp.allowed_roles` is base-only (ARNs or `@role_set` names); empty means no extra cap.
 - PEM key files are dev-only; they are refused on Lambda unless `allow_insecure_issuers` is set.
 
-| Risk                                                          | Control                                                                     |
-| ------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, single-region check, tamper Deny, SCP, alarms             |
-| A mapping writer widening sessions                            | `idp.max_session_duration` (base-only) caps every mapping and every request |
-| Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                 |
-| Half-rotated keys                                             | All-or-nothing loader; rotation order above                                 |
-| Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`            |
-| Session-name spoofing                                         | Off by default; two-level opt-in                                            |
+| Risk                                                          | Control                                                                                   |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, single-region check, tamper Deny, SCP, alarms                           |
+| A mapping writer widening sessions                            | `idp.allowed_roles` (base-only) and the role's IAM `MaxSessionDuration`                   |
+| Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                               |
+| Half-rotated keys                                             | All-or-nothing loader; rotation order above                                               |
+| Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`                          |
+| Session-name spoofing                                         | Validated charset; a mapping `role_session_name` forces it; `SourceIdentity` is immutable |
 
 ## Incident response
 

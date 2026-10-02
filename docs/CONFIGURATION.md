@@ -332,7 +332,7 @@ See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefin
 | Field                      | Default | Notes                                                                                                                                 |
 | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `idp_token`                | `false` | Issue this mapping's roles through the IdP (any duration) while `idp.enabled`; needed for over 1h                                     |
-| `idp_max_session_duration` | unset   | Ceiling for the caller's `durationSeconds`, 15m to 12h; the effective cap is `min(this, idp.max_session_duration)`. Needs `idp_token` |
+| `max_session_duration`     | `1h`    | Ceiling for the caller's `durationSeconds` on every role this mapping grants, 15m to 12h. Needs `idp_token`                           |
 
 With `role_sets`, the lowest-order mapping that grants the role decides.
 
@@ -366,7 +366,6 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 | `include_source_identity`  | `true`                                               |                                                                                                                | Adds the AWS source-identity claim to the minted token                                                                                    |
 | `source_identity`          | `{issuer}:{subject}`                                 | placeholders `{request_id}`, `{subject}`, `{issuer}` (inbound issuer host, not `idp.issuer`), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer                                                                                         |
 | `source_identity_overflow` | `truncate`                                           | `truncate`, `reject`                                                                                           | Over 64 characters                                                                                                                        |
-| `max_session_duration`     | `1h`                                                 | 15m to 12h, whole seconds                                                                                      | Live, base-only. Above `1h` logs `config.idp_uncapped`                                                                                    |
 | `allowed_roles`            | empty (no cap)                                       | role ARNs or `@role_set`                                                                                       | Live, base-only; roles outside it get 403 `idp_not_permitted`                                                                             |
 | `sign_timeout`             | `2s`                                                 | > 0                                                                                                            | Per KMS `Sign` call                                                                                                                       |
 | `jwks_cache_max_age`       | `5m`                                                 | >= 0                                                                                                           | `Cache-Control` max-age of served documents                                                                                               |
@@ -491,7 +490,6 @@ Applied only when the config file or S3 object already carries an `idp:` block; 
 | `AOW_IDP_INCLUDE_SOURCE_IDENTITY`  | `idp.include_source_identity`  | `true`                               |
 | `AOW_IDP_SOURCE_IDENTITY`          | `idp.source_identity`          | `{issuer}:{subject}`                 |
 | `AOW_IDP_SOURCE_IDENTITY_OVERFLOW` | `idp.source_identity_overflow` | `truncate`                           |
-| `AOW_IDP_MAX_SESSION_DURATION`     | `idp.max_session_duration`     | `1h`                                 |
 
 ### JWT Validation Mode Settings
 
@@ -534,7 +532,7 @@ With `mappings_file` set, the service config may not carry inline `role_mappings
 
 ### What the mappings file may contain
 
-Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `idp_max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment". It may not redefine a `role_sets` name referenced by `idp.allowed_roles`.
+Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment". It may not redefine a `role_sets` name referenced by `idp.allowed_roles`.
 
 The mappings file is a layer beside the base config and the S3 overlay (`s3_config_bucket`/`s3_config_path`). It merges first, then `config_fragments` in order; fragments are rejected inside it. A `role_sets` name defined twice across layers is an error.
 

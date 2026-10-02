@@ -36,9 +36,6 @@ var ConfigIdPReloadIgnored = newEvent("config.idp.reload_ignored")
 // ConfigIdPIssuerCollision is emitted when a reload is rejected because an inbound issuer equals the frozen IdP issuer (Error).
 var ConfigIdPIssuerCollision = newEvent("config.idp.issuer_collision")
 
-// ConfigIdPUncapped is emitted when idp.max_session_duration exceeds 1h (Warn).
-var ConfigIdPUncapped = newEvent("config.idp_uncapped")
-
 // ConfigMappingsStale is emitted when role mappings are older than mappings_max_stale and requests are refused (Error).
 var ConfigMappingsStale = newEvent("config.mappings_stale")
 

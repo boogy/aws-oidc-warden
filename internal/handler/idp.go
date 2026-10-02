@@ -68,7 +68,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		return nil, r.deny(ctx, o, msg, ret)
 	}
 
-	ceiling := o.decision.IdPMaxSessionDuration()
+	ceiling := o.decision.MaxSessionDuration()
 	capSecs := int(ceiling / time.Second)
 	rec.IdPSessionCapSeconds = &capSecs
 	rec.RequestedDurationSeconds = int(requestData.DurationSeconds)

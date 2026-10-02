@@ -56,7 +56,6 @@ type IdPConfig struct {
 	Paths                  IdPPaths        `mapstructure:"paths"                    json:"paths"`
 	SignTimeout            time.Duration   `mapstructure:"sign_timeout"             json:"sign_timeout,omitempty"`
 	JWKSCacheMaxAge        time.Duration   `mapstructure:"jwks_cache_max_age"       json:"jwks_cache_max_age,omitempty"`
-	MaxSessionDuration     time.Duration   `mapstructure:"max_session_duration"     json:"max_session_duration,omitempty"`
 	SigningKeys            []IdPSigningKey `mapstructure:"signing_keys"             json:"signing_keys"`
 }
 
@@ -89,7 +88,7 @@ func (c IdPConfig) IncludeSourceIdentityClaim() bool {
 
 // Fingerprint identifies the cold-start-frozen settings (everything but the live fields).
 func (c IdPConfig) Fingerprint() string {
-	c.Enabled, c.AllowedRoles, c.MaxSessionDuration = false, nil, 0
+	c.Enabled, c.AllowedRoles = false, nil
 	b, _ := json.Marshal(c)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -116,9 +115,6 @@ func (c *IdPConfig) applyDefaults() {
 	}
 	if c.JWKSCacheMaxAge == 0 {
 		c.JWKSCacheMaxAge = 5 * time.Minute
-	}
-	if c.MaxSessionDuration == 0 {
-		c.MaxSessionDuration = IdPDefaultMaxSessionDuration
 	}
 	base := ""
 	if u, err := url.Parse(c.Issuer); err == nil {
@@ -156,12 +152,6 @@ func (c *IdPConfig) validate(allowInsecure bool, inbound []IssuerConfig) error {
 	}
 	if c.TokenTTL < idpMinTTL || c.TokenTTL > idpMaxTTL {
 		return fmt.Errorf("idp.token_ttl must be between %s and %s", idpMinTTL, idpMaxTTL)
-	}
-	if c.MaxSessionDuration < idpMinSessionCap || c.MaxSessionDuration > idpMaxSessionCap {
-		return fmt.Errorf("idp.max_session_duration must be between %s and %s", idpMinSessionCap, idpMaxSessionCap)
-	}
-	if c.MaxSessionDuration%time.Second != 0 {
-		return errors.New("idp.max_session_duration must be a whole number of seconds")
 	}
 	if c.SignTimeout <= 0 || c.JWKSCacheMaxAge < 0 {
 		return errors.New("idp.sign_timeout must be > 0 and idp.jwks_cache_max_age >= 0")

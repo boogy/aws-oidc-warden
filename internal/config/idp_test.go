@@ -157,14 +157,12 @@ func TestIdPDefaults(t *testing.T) {
 	require.Equal(t, IdPAudienceStatic, c.AudienceMode)
 	require.True(t, c.IncludeSourceIdentityClaim())
 	require.Empty(t, c.AllowedRoles)
-	require.Equal(t, time.Hour, c.MaxSessionDuration)
 }
 
 func TestIdPFingerprintIgnoresReloadableFields(t *testing.T) {
 	a, b := validIdP(), validIdP()
 	b.Enabled = false
 	b.AllowedRoles = []string{"@idp"}
-	b.MaxSessionDuration = 12 * time.Hour
 	require.Equal(t, a.Fingerprint(), b.Fingerprint())
 	b.TokenTTL = time.Minute
 	require.NotEqual(t, a.Fingerprint(), b.Fingerprint())

@@ -535,6 +535,11 @@ func TestSplitConfigExamplesLoad(t *testing.T) {
 			{"group tool on push", gh, "octo-org/tool-a", map[string]any{"event_name": "push"}, []string{acct + "ReadOnly"}},
 			{"group tool on pull_request", gh, "octo-org/tool-a", map[string]any{"event_name": "pull_request"}, nil},
 			{"unlisted repo", gh, "octo-org/other", map[string]any{"ref": main}, nil},
+			{"batch any branch", gh, "octo-org/batch", map[string]any{"ref": branch}, []string{acct + "BatchRunner"}},
+			{"backup on schedule", gh, "octo-org/nightly-backup", map[string]any{"event_name": "schedule"}, []string{acct + "BackupRunner", acct + "BackupVerify"}},
+			{"backup on push", gh, "octo-org/nightly-backup", map[string]any{"event_name": "push"}, nil},
+			{"etl group on main", gh, "octo-org/etl-orders", map[string]any{"ref": main}, []string{acct + "EtlExtract", acct + "EtlLoad"}},
+			{"etl group off main", gh, "octo-org/etl-billing", map[string]any{"ref": branch}, nil},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -548,20 +553,27 @@ func TestSplitConfigExamplesLoad(t *testing.T) {
 
 		idpTests := []struct {
 			name, subject, role string
+			claims              map[string]any
 			idp                 bool
 			ceiling             time.Duration
+			sessionName         string
 		}{
-			{"pipeline may mint for 4h", "octo-org/data-pipeline", acct + "LongDeploy", true, 4 * time.Hour},
-			{"api may not mint", "octo-org/api", acct + "ApiDeploy", false, 0},
+			{"api uses AssumeRole", "octo-org/api", acct + "ApiDeploy", map[string]any{"ref": main}, false, time.Hour, ""},
+			{"batch uses the IdP at 1h", "octo-org/batch", acct + "BatchRunner", map[string]any{"ref": main}, true, time.Hour, ""},
+			{"pipeline uses the IdP up to 4h", "octo-org/data-pipeline", acct + "LongDeploy", map[string]any{"ref": main}, true, 4 * time.Hour, ""},
+			{"backup up to 12h, forced name", "octo-org/nightly-backup", acct + "BackupVerify", map[string]any{"event_name": "schedule"}, true, 12 * time.Hour, "nightly-backup"},
+			{"etl group up to 6h", "octo-org/etl-billing", acct + "EtlLoad", map[string]any{"ref": main}, true, 6 * time.Hour, ""},
+			{"terraform forced name", "octo-org/terraform", acct + "TerraformApply", map[string]any{"ref": main}, false, time.Hour, "terraform-apply"},
 		}
 		for _, tt := range idpTests {
 			t.Run(tt.name, func(t *testing.T) {
-				d := p.Get().Authorize(gh, tt.subject, tt.role, map[string]any{"ref": main})
+				cfg := p.Get()
+				d := cfg.Authorize(gh, tt.subject, tt.role, tt.claims)
 				require.True(t, d.Matched)
 				require.Equal(t, tt.idp, d.IDPTokenAllowed())
-				if tt.idp {
-					require.Equal(t, tt.ceiling, d.IdPMaxSessionDuration())
-				}
+				require.Equal(t, tt.idp, cfg.IdPRoleAllowed(tt.role) && d.IDPTokenAllowed())
+				require.Equal(t, tt.ceiling, d.MaxSessionDuration())
+				require.Equal(t, tt.sessionName, d.RoleSessionName())
 			})
 		}
 

@@ -13,17 +13,16 @@ Both files load in CI: `TestSplitConfigExamplesLoad` (`internal/config/docs_yaml
 
 ## service.yaml
 
-| Key                        | Meaning                                                                                                           |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `issuers`                  | Inbound token issuers. GitHub's canonical subject is the repository (`octo-org/api`); GitLab's is `project_path`. |
-| `default_issuer`           | Issuer a mapping binds to when it omits `issuer`. Set `issuer` on every mapping anyway.                           |
-| `mappings_file`            | `s3://bucket/key` or a local path. With it set, `role_mappings`/`role_groups` may not appear in this file.        |
-| `s3_config_bucket_owner`   | Required for `s3://`. The read fails unless the bucket belongs to this account.                                   |
-| `config_reload_interval`   | Re-read the mappings at most once per interval (conditional GET; unchanged file = 304, no re-parse).              |
-| `mappings_max_stale`       | Default 3x the interval. Past it, requests get `503 config_stale`.                                                |
-| `idp.max_session_duration` | Hard ceiling for any IdP-issued session.                                                                          |
-| `idp.allowed_roles`        | The only roles any mapping may have issued through the IdP.                                                       |
-| `session_policy_bucket`    | Bucket holding the files named by a mapping's `session_policy_file`.                                              |
+| Key                      | Meaning                                                                                                           |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `issuers`                | Inbound token issuers. GitHub's canonical subject is the repository (`octo-org/api`); GitLab's is `project_path`. |
+| `default_issuer`         | Issuer a mapping binds to when it omits `issuer`. Set `issuer` on every mapping anyway.                           |
+| `mappings_file`          | `s3://bucket/key` or a local path. With it set, `role_mappings`/`role_groups` may not appear in this file.        |
+| `s3_config_bucket_owner` | Required for `s3://`. The read fails unless the bucket belongs to this account.                                   |
+| `config_reload_interval` | Re-read the mappings at most once per interval (conditional GET; unchanged file = 304, no re-parse).              |
+| `mappings_max_stale`     | Default 3x the interval. Past it, requests get `503 config_stale`.                                                |
+| `idp.allowed_roles`      | The only roles any mapping may have issued through the IdP.                                                       |
+| `session_policy_bucket`  | Bucket holding the files named by a mapping's `session_policy_file`.                                              |
 
 ## mappings.yaml
 
@@ -44,26 +43,41 @@ The building blocks in `mappings.yaml`:
 - **`role_mappings`**: one grant per entry. `subject` may be a list; each element gets the same roles and conditions.
 - **`role_groups`**: many subjects, one shared `defaults` block. Use it for fleets of repos with identical access.
 - **Session policies** (`session_policy`, `session_policy_file`): narrow what one mapping's session may do. The session gets the intersection of the role's permissions and the policy, so one broad role can serve several callers with different scopes. `session_policy` is inline JSON; `session_policy_file` is a key in `session_policy_bucket`. Set one per mapping. They apply to `AssumeRole` and IdP-issued sessions alike.
-- **IdP fields** (`idp_token`, `idp_max_session_duration`): issue a mapping's roles through the warden's IdP, which allows sessions longer than 1h. Without `idp_token`, the mapping gets `AssumeRole`, capped at 1h.
+- **IdP fields** (`idp_token`, `max_session_duration`): issue a mapping's roles through the warden's IdP, which allows sessions longer than 1h. Without `idp_token`, the mapping gets `AssumeRole`, capped at 1h.
 
 ## What each caller gets
 
-| Caller (issuer, subject, claims)                    | Matching entry                  | `/verify` up to 1h                           | `/verify` over 1h       |
-| --------------------------------------------------- | ------------------------------- | -------------------------------------------- | ----------------------- |
-| GitHub `octo-org/api`, `ref=refs/heads/main`        | `@api-deployers`                | `ApiDeploy`, `ApiMigrate`                    | denied (no `idp_token`) |
-| GitHub `octo-org/api`, `ref=refs/heads/feature`     | none (condition fails)          | denied                                       | denied                  |
-| GitHub `octo-org/web`, any ref                      | `@readonly` (list subject)      | `ReadOnly`                                   | denied (no `idp_token`) |
-| GitHub `octo-org/data-pipeline`, main               | `LongDeploy`, `idp_token`       | `LongDeploy` (via IdP)                       | `LongDeploy`, up to 4h  |
-| GitHub `octo-org/reports`, any ref                  | `ReportsReader` + inline policy | `ReportsReader`, read-only on `octo-reports` | denied (no `idp_token`) |
-| GitHub `octo-org/terraform`, main                   | `TerraformApply` + policy file  | `TerraformApply`, scoped by `terraform.json` | denied (no `idp_token`) |
-| GitHub `octo-org/terraform`, other ref              | none (condition fails)          | denied                                       | denied                  |
-| GitLab `platform/infra`, `ref=main`                 | `@readonly`                     | `ReadOnly`                                   | denied (no `idp_token`) |
-| GitHub token claiming `platform/infra`              | none (bound to GitLab)          | denied                                       | denied                  |
-| GitHub `octo-org/tool-a`, `event_name=push`         | `role_groups` entry             | `ReadOnly`                                   | denied (no `idp_token`) |
-| GitHub `octo-org/tool-a`, `event_name=pull_request` | none (condition fails)          | denied                                       | denied                  |
-| GitHub `octo-org/other`                             | none                            | denied                                       | denied                  |
+| Caller (issuer, subject, claims)                        | Matching entry                  | `/verify` up to 1h                           | `/verify` over 1h       | Session name                                   |
+| ------------------------------------------------------- | ------------------------------- | -------------------------------------------- | ----------------------- | ---------------------------------------------- |
+| GitHub `octo-org/api`, `ref=refs/heads/main`            | `@api-deployers`                | `ApiDeploy`, `ApiMigrate` (AssumeRole)       | denied (no `idp_token`) | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/api`, `ref=refs/heads/feature`         | none (condition fails)          | denied                                       | denied                  |                                                |
+| GitHub `octo-org/web`, any ref                          | `@readonly` (list subject)      | `ReadOnly` (AssumeRole)                      | denied (no `idp_token`) | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/batch`, any ref                        | `BatchRunner`, `idp_token`      | `BatchRunner` (IdP)                          | denied (1h ceiling)     | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/data-pipeline`, main                   | `LongDeploy`, `idp_token`, 4h   | `LongDeploy` (IdP)                           | `LongDeploy`, up to 4h  | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/nightly-backup`, `event_name=schedule` | two roles, `idp_token`, 12h     | `BackupRunner`, `BackupVerify` (IdP)         | either role, up to 12h  | always `nightly-backup`                        |
+| GitHub `octo-org/nightly-backup`, `event_name=push`     | none (condition fails)          | denied                                       | denied                  |                                                |
+| GitHub `octo-org/reports`, any ref                      | `ReportsReader` + inline policy | `ReportsReader`, read-only on `octo-reports` | denied (no `idp_token`) | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/terraform`, main                       | `TerraformApply` + policy file  | `TerraformApply`, scoped by `terraform.json` | denied (no `idp_token`) | always `terraform-apply`                       |
+| GitHub `octo-org/terraform`, other ref                  | none (condition fails)          | denied                                       | denied                  |                                                |
+| GitLab `platform/infra`, `ref=main`                     | `@readonly`                     | `ReadOnly` (AssumeRole)                      | denied (no `idp_token`) | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub token claiming `platform/infra`                  | none (bound to GitLab)          | denied                                       | denied                  |                                                |
+| GitHub `octo-org/tool-a`, `event_name=push`             | `role_groups` entry             | `ReadOnly` (AssumeRole)                      | denied (no `idp_token`) | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/tool-a`, `event_name=pull_request`     | none (condition fails)          | denied                                       | denied                  |                                                |
+| GitHub `octo-org/etl-orders`, main                      | `role_groups` entry, `@etl`, 6h | `EtlExtract`, `EtlLoad` (IdP)                | either role, up to 6h   | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/other`                                 | none                            | denied                                       | denied                  |                                                |
 
-The `LongDeploy` row is IdP-issued at every duration because `LongDeploy` is in `idp.allowed_roles` and the role trusts the warden's own OIDC provider ([IDP.md § Trust policy](../../IDP.md)). The 4h is the smaller of the mapping's `idp_max_session_duration` and `idp.max_session_duration`.
+The `idp_token` rows are IdP-issued at every duration because their roles are in `idp.allowed_roles` and trust the warden's own OIDC provider ([IDP.md § Trust policy](../../IDP.md)). Each ceiling (4h, 12h, 6h) comes from the mapping's own `max_session_duration`; `octo-org/batch` sets none, so it is capped at 1h. A forced `role_session_name` replaces whatever `sessionName` the caller sends.
+
+Every request goes to `/verify`; `durationSeconds` and `sessionName` are optional:
+
+```json
+{ "token": "<oidc>", "role": "arn:aws:iam::111122223333:role/ApiDeploy" }
+{ "token": "<oidc>", "role": "arn:aws:iam::111122223333:role/ApiDeploy", "durationSeconds": 1800, "sessionName": "api-release-42" }
+{ "token": "<oidc>", "role": "arn:aws:iam::111122223333:role/LongDeploy", "durationSeconds": 14400 }
+{ "token": "<oidc>", "role": "arn:aws:iam::111122223333:role/BackupRunner", "durationSeconds": 43200, "sessionName": "ignored" }
+```
+
+The first gets 1h under `aws-oidc-warden`; the second 30m named `api-release-42`; the third 4h through the IdP; the fourth 12h named `nightly-backup`, because that mapping forces its name. `"durationSeconds": 7200` for `ApiDeploy` gets `403 idp_not_permitted`.
 
 A session policy comes from the first mapping, in file order, that matches the caller and grants the requested role. Give scoped grants their own roles (`ReportsReader`, `TerraformApply`). If a role's first grant has no policy and a later grant does, the later policy is never applied, and the warden logs a warning at load.
 
@@ -75,7 +89,7 @@ A key other than `default_issuer`, `role_sets`, `role_mappings`, `role_groups`:
 
 ```text
 idp:
-  max_session_duration: 12h
+  allowed_roles: ["arn:aws:iam::111122223333:role/Admin"]
 ```
 
 ```text
@@ -91,7 +105,7 @@ role_mappings:
     roles: ["@readonly"]
 ```
 
-An `idp_max_session_duration` without `idp_token: true`.
+A `max_session_duration` without `idp_token: true`.
 
 Not a load error: `idp_token: true` on a role missing from `idp.allowed_roles` loads, but is served by `AssumeRole`: up to 1h works, more gets `403 idp_not_permitted`. The platform team's `allowed_roles` always wins over the mappings file.
 
