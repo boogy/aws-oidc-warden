@@ -14,7 +14,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `audit.go` — `AuditSink` and the allow/deny audit record, including `auditClaims` (claim values formatted through `utils.FormatClaimValue`).
 - `route.go` — classifies IdP-shaped paths (mint, discovery, JWKS) before the normal pipeline; unknown IdP paths and wrong methods map to `idp_path_not_found` / `method_not_allowed`.
 - `idp.go` — `ProcessMint`: token validation, `idp_token` authorization, then mint and in-process `AssumeRoleWithWebIdentity`. `idp_helpers.go` — duration, session-name and source-identity resolution. `idp_document.go` — serves discovery/JWKS.
-- `bootstrap.go` `NewIdPService` — builds the `idp.Service` only when `idp.enabled`; the KMS client is read through a func so `RefreshClients` is honoured.
+- `bootstrap.go` `NewIdPService` — builds the `idp.Service` whenever an `idp` block exists (keys warm only when `idp.enabled`); the KMS client is read through a func so `RefreshClients` is honoured.
 - `apigateway.go` — REST API v1 adapter (`events.APIGatewayProxyRequest`). Passes `ExtractionInput{Token: requestData.Token}`; always self mode.
 - `apigatewayv2.go` — HTTP API v2 adapter (`events.APIGatewayV2HTTPRequest`). Reads authorizer claims from `event.RequestContext.Authorizer.JWT.Claims`; use with `jwt_validation.mode: "apigw"`.
 - `alb.go` — ALB adapter. Reads `x-amzn-oidc-data` header when present (delegated ALB mode); falls back to token-in-body (self mode).
