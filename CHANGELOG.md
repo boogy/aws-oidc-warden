@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **`s3://` entries in `config_fragments` are fetched** (conditional GET, 1 MiB cap, owner pin, `sha256:` pins) instead of failing every refresh.
+- **A remote `mappings_file` or `config_fragments` entry must use the lowercase `s3://` scheme.** `S3://…` was fetched from S3 but skipped the `s3_config_bucket_owner` requirement and the default `mappings_max_stale` gate. S3 fragment reads also refuse to run without an owner in the service config.
 
 ### Dependencies
 

@@ -101,6 +101,7 @@ func TestParseS3URI(t *testing.T) {
 		{uri: "s3://b:80/k", wantErr: true},
 		{uri: "s3://u@b/k", wantErr: true},
 		{uri: "https://b/k", wantErr: true},
+		{uri: "S3://b/k", wantErr: true},
 		{uri: "s3://b/k?x=1", wantErr: true},
 		{uri: "s3://b/k#f", wantErr: true},
 		{uri: "", wantErr: true},
@@ -165,6 +166,13 @@ func TestFragmentFetchErrorPropagates(t *testing.T) {
 
 	_, _, err = s3FragmentFetcher(&s3Fake{}, fetchOwner)(context.Background(), "https://b/k.yaml", "")
 	require.Error(t, err)
+}
+
+func TestFragmentFetchRefusesUnpinnedOwner(t *testing.T) {
+	f := &s3Fake{body: fetchMappings, etag: `"e"`}
+	_, _, err := s3FragmentFetcher(f, "")(context.Background(), "s3://b/k.yaml", "")
+	require.ErrorContains(t, err, "s3_config_bucket_owner")
+	assert.Empty(t, f.ifChanged)
 }
 
 func TestBuildConfigProviderOwnerMismatchFailsClosed(t *testing.T) {

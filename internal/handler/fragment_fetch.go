@@ -20,7 +20,7 @@ func parseS3URI(uri string) (bucket, key string, err error) {
 		return "", "", fmt.Errorf("invalid s3 uri %q: %w", uri, err)
 	}
 	switch {
-	case u.Scheme != "s3":
+	case u.Scheme != "s3" || !strings.HasPrefix(uri, "s3://"):
 		return "", "", fmt.Errorf("invalid s3 uri %q: scheme must be s3", uri)
 	case u.Host == "" || u.Port() != "" || strings.Contains(u.Host, ":"):
 		return "", "", fmt.Errorf("invalid s3 uri %q: bucket missing or has a port", uri)
@@ -44,6 +44,9 @@ func s3FragmentFetcher(consumer aws.AwsConsumerInterface, owner string) config.F
 	seen := map[string]fetchedETag{}
 
 	return func(ctx context.Context, uri, prevETag string) ([]byte, string, error) {
+		if owner == "" {
+			return nil, "", fmt.Errorf("s3 fragment %q: s3_config_bucket_owner must be set in the service config", uri)
+		}
 		bucket, key, err := parseS3URI(uri)
 		if err != nil {
 			return nil, "", err

@@ -973,6 +973,12 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(uri) == "" {
 			return fmt.Errorf("config_fragments[%d]: must not be empty", i)
 		}
+		if err := validateRemoteScheme(uri); err != nil {
+			return fmt.Errorf("config_fragments[%d]: %w", i, err)
+		}
+	}
+	if err := validateRemoteScheme(c.MappingsFile); err != nil {
+		return fmt.Errorf("mappings_file: %w", err)
 	}
 
 	if err := c.validateMaxStale(); err != nil {
@@ -1364,6 +1370,16 @@ func (c *Config) fragmentSources() []string {
 
 var bucketOwnerPattern = regexp.MustCompile(`^\d{12}$`)
 
+func isS3URI(uri string) bool { return strings.HasPrefix(uri, "s3://") }
+
+// validateRemoteScheme keeps the owner-pin and max-stale checks in step with the case-insensitive fetch path.
+func validateRemoteScheme(uri string) error {
+	if strings.Contains(uri, "://") && !isS3URI(uri) {
+		return fmt.Errorf("remote source %q must use the lowercase s3:// scheme", uri)
+	}
+	return nil
+}
+
 func (c *Config) validateMaxStale() error {
 	if c.MappingsMaxStale == nil {
 		return nil
@@ -1373,7 +1389,7 @@ func (c *Config) validateMaxStale() error {
 		return errors.New("mappings_max_stale must not be negative")
 	case d == 0:
 		return nil
-	case !strings.HasPrefix(c.MappingsFile, "s3://"):
+	case !isS3URI(c.MappingsFile):
 		return errors.New("mappings_max_stale requires an s3:// mappings_file")
 	case c.ConfigReloadInterval <= 0:
 		return errors.New("mappings_max_stale requires config_reload_interval > 0")
@@ -1388,16 +1404,16 @@ func (c *Config) effectiveMappingsMaxStale() time.Duration {
 	if c.MappingsMaxStale != nil {
 		return *c.MappingsMaxStale
 	}
-	if !strings.HasPrefix(c.MappingsFile, "s3://") || c.ConfigReloadInterval <= 0 {
+	if !isS3URI(c.MappingsFile) || c.ConfigReloadInterval <= 0 {
 		return 0
 	}
 	return 3 * c.ConfigReloadInterval
 }
 
 func (c *Config) validateS3ConfigOwner() error {
-	needsOwner := strings.HasPrefix(c.MappingsFile, "s3://")
+	needsOwner := isS3URI(c.MappingsFile)
 	for _, uri := range c.ConfigFragments {
-		if strings.HasPrefix(uri, "s3://") {
+		if isS3URI(uri) {
 			needsOwner = true
 		}
 	}

@@ -316,6 +316,9 @@ func TestS3BucketOwnerRequired(t *testing.T) {
 		}, "12 digits"},
 		{"local only without owner", func(c *Config) { c.MappingsFile = "/m.yaml" }, ""},
 		{"s3 with valid owner", func(c *Config) { c.MappingsFile, c.S3ConfigBucketOwner = "s3://b/k", mapOwner }, ""},
+		{"uppercase scheme mappings_file", func(c *Config) { c.MappingsFile = "S3://b/k" }, "lowercase s3://"},
+		{"mixed-case scheme fragment", func(c *Config) { c.ConfigFragments = []string{"s3://b/a", "S3://b/k"} }, "config_fragments[1]"},
+		{"non-s3 remote fragment", func(c *Config) { c.ConfigFragments = []string{"https://b/k"} }, "lowercase s3://"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
