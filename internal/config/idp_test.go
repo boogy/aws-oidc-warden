@@ -90,9 +90,9 @@ func TestIdPValidate(t *testing.T) {
 		{name: "kms alias rejected", mutate: func(c *IdPConfig) { c.SigningKeys[0].KMSKeyID = "alias/my-key" }, wantErr: "key ARN"},
 		{name: "kms key id bare uuid rejected", mutate: func(c *IdPConfig) { c.SigningKeys[0].KMSKeyID = "1234abcd-12ab-34cd-56ef-1234567890ab" }, wantErr: "key ARN"},
 		{name: "kms alias arn rejected", mutate: func(c *IdPConfig) { c.SigningKeys[0].KMSKeyID = "arn:aws:kms:eu-west-1:111122223333:alias/k" }, wantErr: "key ARN"},
-		{name: "kms mrk arn ok", mutate: func(c *IdPConfig) {
+		{name: "kms mrk arn rejected", mutate: func(c *IdPConfig) {
 			c.SigningKeys[0].KMSKeyID = "arn:aws:kms:eu-west-1:111122223333:key/mrk-0123456789abcdef0123456789abcdef"
-		}},
+		}, wantErr: "multi-region"},
 		{name: "kms govcloud arn ok", mutate: func(c *IdPConfig) {
 			c.SigningKeys[0].KMSKeyID = "arn:aws-us-gov:kms:us-gov-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
 		}},

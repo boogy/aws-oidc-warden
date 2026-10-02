@@ -38,7 +38,7 @@ const (
 	idpJWKSSufx      = "/.well-known/jwks.json"
 )
 
-var idpKMSKeyARN = regexp.MustCompile(`^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key/(mrk-[0-9a-f]{32}|[0-9a-f-]{36})$`)
+var idpKMSKeyARN = regexp.MustCompile(`^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key/[0-9a-f-]{36}$`)
 
 // IdPConfig configures the optional token-minting identity provider.
 type IdPConfig struct {
@@ -249,6 +249,9 @@ func (c *IdPConfig) validateKeys(allowInsecure bool) error {
 	for i, k := range c.SigningKeys {
 		if (k.KMSKeyID == "") == (k.File == "") {
 			return fmt.Errorf("idp.signing_keys[%d]: exactly one of kms_key_id or file", i)
+		}
+		if strings.Contains(k.KMSKeyID, ":key/mrk-") {
+			return fmt.Errorf("idp.signing_keys[%d]: kms_key_id is a multi-region key; use a single-region key", i)
 		}
 		if k.KMSKeyID != "" && !idpKMSKeyARN.MatchString(k.KMSKeyID) {
 			return fmt.Errorf("idp.signing_keys[%d]: kms_key_id must be a full key ARN (aliases and bare IDs are rejected)", i)
