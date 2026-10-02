@@ -136,7 +136,7 @@ IAM ignores thumbprints for providers served by a CA-trusted certificate.
 
 ## Trust policy
 
-Every target role trusts the warden's IAM OIDC provider (not GitHub's or any other inbound issuer's) and needs these actions: `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity`. The examples use `idp.issuer: https://idp.example.com`, so the provider is `oidc-provider/idp.example.com` and the condition keys are `idp.example.com:aud` / `idp.example.com:sub`.
+Every target role trusts the warden's IAM OIDC provider (not GitHub's or any other inbound issuer's) and needs these actions: `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity`. The examples use `idp.issuer: https://idp.example.com`, so the provider is `oidc-provider/idp.example.com` and the condition keys are `idp.example.com:aud` / `idp.example.com:sub`. With a path in the issuer (`https://example.com/idp`), both carry it: `oidc-provider/example.com/idp` and `example.com/idp:aud` / `example.com/idp:sub`.
 
 `aud` is always pinned with `StringEquals`. The minted `sub` is `idp.subject_template` with its placeholders filled, and always ends with the role ARN:
 
