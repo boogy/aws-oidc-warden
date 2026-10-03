@@ -2,7 +2,10 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"time"
+
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 const (
@@ -46,7 +49,7 @@ var (
 	ErrMethodNotAllowed         = errors.New("method not allowed")
 	ErrIdPPathNotFound          = errors.New("IdP path not found")
 	ErrIdPTokenTooLarge         = errors.New("IdP token exceeds the STS size limit")
-	ErrInvalidDuration          = errors.New("durationSeconds must be between 900 and 43200")
+	ErrInvalidDuration          = fmt.Errorf("durationSeconds must be between %d and %d", utils.MinSTSSessionSecs, utils.MaxSTSSessionSecs)
 	ErrDurationExceedsCap       = errors.New("durationSeconds exceeds the configured cap")
 	ErrDurationExceedsRoleMax   = errors.New("durationSeconds exceeds the role's MaxSessionDuration")
 	ErrInvalidSessionName       = errors.New(`sessionName must match [\w+=,.@-]{2,64}`)

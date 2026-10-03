@@ -47,11 +47,6 @@ var (
 	// dimension suffix still fits inside IAM's 128-char key limit.
 	tagPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9_.:/=+@-]{1,64}$`)
 
-	// sessionNameCharset is STS's accepted RoleSessionName charset. Note the
-	// absence of "/": a GitHub canonical subject ("owner/repo") is NOT a valid
-	// session name, which is the most likely thing an operator will try.
-	sessionNameCharset = regexp.MustCompile(`^[\w+=,.@-]+$`)
-
 	// nonIdentityClaims are claims claim_mappings.subject may never target:
 	// each is either identical for every token (iss, aud) or carries no
 	// identity (exp, nbf, iat), so using one collapses every caller to one
@@ -62,8 +57,8 @@ var (
 )
 
 const (
-	idpMinSessionCap = 15 * time.Minute
-	idpMaxSessionCap = 12 * time.Hour
+	idpMinSessionCap = utils.MinSTSSessionSecs * time.Second
+	idpMaxSessionCap = utils.MaxSTSSessionSecs * time.Second
 )
 
 // validateIdPSessionCap accepts 0 (unset) or 15m..12h in whole seconds.
@@ -1517,10 +1512,10 @@ func compileAnchoredSubject(pattern string, rc regexCache) (*regexp.Regexp, erro
 // conditions on sts:RoleSessionName), so a silently-mangled name is a mystery
 // to debug later instead of a config error caught at boot.
 func validateRoleSessionName(name string) error {
-	if len(name) < 2 || len(name) > 64 {
-		return fmt.Errorf("must be 2-64 characters, got %d", len(name))
+	if len(name) < 2 || len(name) > utils.MaxSTSNameLen {
+		return fmt.Errorf("must be 2-%d characters, got %d", utils.MaxSTSNameLen, len(name))
 	}
-	if !sessionNameCharset.MatchString(name) {
+	if !utils.ValidSTSName(name) {
 		return fmt.Errorf("%q contains characters STS does not accept; allowed: letters, digits, and +=,.@-_ (note: \"/\" is not allowed, so a repository name cannot be used verbatim)", name)
 	}
 	return nil

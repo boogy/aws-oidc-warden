@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
 	"sync/atomic"
@@ -226,7 +225,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if err != nil {
 		return nil, err
 	}
-	if d := requestData.DurationSeconds; d != 0 && (d < minDurationSecs || d > maxDurationSecs) {
+	if d := requestData.DurationSeconds; d != 0 && !utils.ValidSTSSessionSecs(d) {
 		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
 		return nil, r.deny(ctx, o, "Duration refused", ErrInvalidDuration)
 	}
@@ -252,7 +251,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	requestedRole := requestData.Role
 
-	duration, err := resolveDuration(requestData.DurationSeconds, assumeRoleMaxSecs*time.Second)
+	duration, err := resolveDuration(requestData.DurationSeconds, utils.RoleChainingMaxSecs*time.Second)
 	if err != nil {
 		rec.Stage, rec.Reason = "duration", "invalid or excessive duration"
 		return nil, r.deny(ctx, o, "Duration refused", err)
@@ -343,7 +342,7 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 			}
 		}()
 
-		policyBytes, err := io.ReadAll(io.LimitReader(sessionPolicyData, 1024*1024)) // 1MB limit
+		policyBytes, err := utils.ReadAllCapped(sessionPolicyData, utils.MaxConfigBytes, "session policy")
 		if err != nil {
 			logPolicyErr("failed to read session policy data", err)
 			return nil, "", fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)

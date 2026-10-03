@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 // FetchFunc retrieves the raw configuration bytes from a remote source.
@@ -257,8 +258,8 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 		if err != nil {
 			return nil, fmt.Errorf("config_fragments: %w", err)
 		}
-		if len(data) > maxFragmentBytes {
-			return nil, fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, maxFragmentBytes)
+		if len(data) > utils.MaxConfigBytes {
+			return nil, fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, utils.MaxConfigBytes)
 		}
 
 		// Checked on EVERY cycle, before the cache-hit branch: a pin added/rotated

@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
@@ -28,8 +28,6 @@ var (
 	ErrTokenTooLarge = errors.New("idp token exceeds the STS web-identity token size limit")
 	// ErrInvalidSourceIdentity is returned when the source identity is not a valid STS value.
 	ErrInvalidSourceIdentity = errors.New("idp source identity must match [\\w+=,.@-]{2,64}")
-
-	sourceIdentityPattern = regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
 )
 
 func maxSigLen(alg string) int {
@@ -104,7 +102,7 @@ func mint(ctx context.Context, cfg config.IdPConfig, ks *KeySet, req MintRequest
 		SrcIss: req.SourceIssuer, SrcSub: req.SourceSubject, RequestID: req.RequestID,
 	}
 	if cfg.IncludeSourceIdentityClaim() && req.SourceIdentity != "" {
-		if !sourceIdentityPattern.MatchString(req.SourceIdentity) {
+		if !utils.ValidSTSName(req.SourceIdentity) {
 			return nil, ErrInvalidSourceIdentity
 		}
 		c.SourceID = req.SourceIdentity

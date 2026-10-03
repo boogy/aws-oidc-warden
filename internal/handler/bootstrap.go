@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"slices"
@@ -81,8 +80,7 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 	}
 
 	consumer := aws.NewAwsConsumer(cfg)
-	kms := func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }
-	return newBootstrap(adapter, logger, cfg, consumer, kms)
+	return newBootstrap(adapter, logger, cfg, consumer, aws.IdPKMS)
 }
 
 // bootstrapConsumer is the AWS consumer newBootstrap wires into the provider and handlers.
@@ -246,7 +244,7 @@ func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 						slog.String("resource", "s3_config_object"), slog.String("error", cerr.Error()))
 				}
 			}()
-			return io.ReadAll(io.LimitReader(body, maxRemoteConfigSize))
+			return utils.ReadAllCapped(body, utils.MaxConfigBytes, fmt.Sprintf("s3://%s/%s", bucket, key))
 		}
 	}
 
@@ -265,9 +263,6 @@ func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 
 	return provider, nil
 }
-
-// maxRemoteConfigSize bounds the bytes read from the S3 config object.
-const maxRemoteConfigSize = 1024 * 1024 // 1MB
 
 // Cleanup flushes buffered audit records and stops the S3 logger's batch timer.
 func (b *Bootstrap) Cleanup() {

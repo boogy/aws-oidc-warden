@@ -96,13 +96,13 @@ func (a *AwsConsumer) SessionName(ctx context.Context, name string) string {
 	original := name
 	name = invalidSessionNameChars.ReplaceAllLiteralString(name, "-")
 
-	if len(name) > 64 {
+	if len(name) > utils.MaxSTSNameLen {
 		// Keep the tail: two names sharing a 64-char suffix still collide, so warn.
 		logevent.Warn(ctx, nil, logevent.STSSessionNameTruncated,
 			"session name exceeds STS's 64-character limit and was truncated; CloudTrail will show the truncated name",
 			slog.String("original", original),
 			slog.Int("originalLength", len(original)))
-		return name[len(name)-64:]
+		return name[len(name)-utils.MaxSTSNameLen:]
 	}
 	return name
 }
@@ -138,16 +138,16 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ca.SpokeRoleName)
 	sessionName := "aow-broker"
 	dur := int32(ca.SpokeSessionDuration.Seconds())
-	if dur < 900 {
-		dur = 900
+	if dur < utils.MinSTSSessionSecs {
+		dur = utils.MinSTSSessionSecs
 	}
 	// Role chaining caps chained sessions at 1h and STS fails rather than
 	// clamps, so cap unconditionally (spoke sessions are short-lived anyway).
-	if dur > 3600 {
+	if dur > utils.RoleChainingMaxSecs {
 		logevent.Warn(ctx, nil, logevent.STSDurationClamped, "spoke_session_duration exceeds the 1h role-chaining cap; clamping",
 			slog.Int64("requestedSeconds", int64(dur)),
 			slog.String("clampReason", "role_chaining_cap"))
-		dur = 3600
+		dur = utils.RoleChainingMaxSecs
 	}
 	input := &sts.AssumeRoleInput{
 		RoleArn:         &spokeArn,
@@ -228,19 +228,18 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 
 	cleanSessionName := a.SessionName(ctx, sessionName)
 
-	var durationSeconds int32 = 3600
+	var durationSeconds int32 = utils.DefaultSTSSessionSecs
 	if duration != nil && *duration > 0 {
-		// STS bounds: 900s (15min) minimum, 43200s (12h) maximum.
-		if *duration < 900 {
-			logevent.Warn(ctx, nil, logevent.STSDurationClamped, "duration is below the STS minimum; using 900 seconds",
+		if *duration < utils.MinSTSSessionSecs {
+			logevent.Warn(ctx, nil, logevent.STSDurationClamped, "duration is below the STS minimum; using the minimum",
 				slog.Int64("requestedSeconds", int64(*duration)),
 				slog.String("clampReason", "below_minimum"))
-			durationSeconds = 900
-		} else if *duration > 43200 {
-			logevent.Warn(ctx, nil, logevent.STSDurationClamped, "duration exceeds the STS maximum; using 43200 seconds",
+			durationSeconds = utils.MinSTSSessionSecs
+		} else if *duration > utils.MaxSTSSessionSecs {
+			logevent.Warn(ctx, nil, logevent.STSDurationClamped, "duration exceeds the STS maximum; using the maximum",
 				slog.Int64("requestedSeconds", int64(*duration)),
 				slog.String("clampReason", "above_maximum"))
-			durationSeconds = 43200
+			durationSeconds = utils.MaxSTSSessionSecs
 		} else {
 			durationSeconds = *duration
 		}
@@ -294,11 +293,11 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 
 	// Role chaining caps sessions at 1h regardless of account == hub: it's a
 	// property of the source creds, and STS fails rather than clamps.
-	if isRoleSession && durationSeconds > 3600 {
+	if isRoleSession && durationSeconds > utils.RoleChainingMaxSecs {
 		logevent.Warn(ctx, nil, logevent.STSDurationClamped, "source credentials are a role session; role chaining caps sessions at 1h; clamping duration",
 			slog.Int64("requestedSeconds", int64(durationSeconds)),
 			slog.String("clampReason", "role_chaining_cap"))
-		durationSeconds = 3600
+		durationSeconds = utils.RoleChainingMaxSecs
 		assumeRoleInput.DurationSeconds = &durationSeconds
 	}
 

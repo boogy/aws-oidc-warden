@@ -5,17 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strings"
 
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/spf13/viper"
 )
-
-// maxFragmentBytes mirrors the 1 MiB cap applied elsewhere to remote/S3-sourced
-// documents (internal/handler's maxRemoteConfigSize, S3 session policy reads).
-const maxFragmentBytes = 1024 * 1024
 
 // fragmentAllowedKeys is the config_fragments merge allowlist. Everything
 // else (issuers, hardening knobs, tag_auth, ...) is base-only and rejected by
@@ -129,9 +125,13 @@ func isRemoteFragment(uri string) bool {
 	return strings.Contains(uri, "://")
 }
 
-// readLocalFragment reads a fragment from the local filesystem, bounded at
-// maxFragmentBytes, with a sha256 content hash as its etag (local files have
-// no native ETag; lets Provider.applyFragments skip re-parsing when unchanged).
+// ContentDigest is the fragment etag: "sha256:" plus the hex digest of data.
+func ContentDigest(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// readLocalFragment reads a fragment bounded at utils.MaxConfigBytes, with ContentDigest as its etag.
 func readLocalFragment(path string) ([]byte, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -141,14 +141,9 @@ func readLocalFragment(path string) ([]byte, string, error) {
 		_ = f.Close()
 	}()
 
-	data, err := io.ReadAll(io.LimitReader(f, maxFragmentBytes+1))
+	data, err := utils.ReadAllCapped(f, utils.MaxConfigBytes, "config fragment")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read config fragment %q: %w", path, err)
 	}
-	if len(data) > maxFragmentBytes {
-		return nil, "", fmt.Errorf("config fragment %q exceeds %d byte cap", path, maxFragmentBytes)
-	}
-
-	sum := sha256.Sum256(data)
-	return data, "sha256:" + hex.EncodeToString(sum[:]), nil
+	return data, ContentDigest(data), nil
 }

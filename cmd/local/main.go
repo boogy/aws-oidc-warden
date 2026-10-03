@@ -19,7 +19,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
-	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
@@ -84,7 +83,7 @@ func main() {
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 	extractor := validator.NewSelfExtractor(tokenValidator)
 
-	svc := handler.NewIdPService(provider, func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }, logger)
+	svc := handler.NewIdPService(provider, aws.IdPKMS, logger)
 
 	// Create the handler function. No audit sink for the local dev server.
 	h := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).WithIdP(svc)
@@ -248,16 +247,8 @@ func parseCliFlags() (ServerSettings, error) {
 
 	flag.Parse()
 
-	if settings.ConfigPath != "" {
-		dir, name := config.SplitConfigPath(settings.ConfigPath)
-		if err := os.Setenv("CONFIG_PATH", dir); err != nil {
-			return settings, err
-		}
-		if name != "" {
-			if err := os.Setenv("CONFIG_NAME", name); err != nil {
-				return settings, err
-			}
-		}
+	if err := config.UseConfigFile(settings.ConfigPath); err != nil {
+		return settings, err
 	}
 
 	if settings.MappingsPath != "" {

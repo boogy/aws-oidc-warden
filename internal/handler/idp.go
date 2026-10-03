@@ -12,6 +12,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 const msgMinted = "Token validation successful and IdP credentials issued"
@@ -44,7 +45,7 @@ func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, role
 	if eligible && r.idpEnabled(cfg) {
 		return true, nil
 	}
-	if requested <= assumeRoleMaxSecs {
+	if requested <= utils.RoleChainingMaxSecs {
 		return false, nil
 	}
 	switch {

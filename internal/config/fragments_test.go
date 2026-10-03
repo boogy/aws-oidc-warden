@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -159,7 +160,7 @@ func TestReadLocalFragment_ReadsAndHashes(t *testing.T) {
 func TestReadLocalFragment_BoundedRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "big.yaml")
-	big := make([]byte, maxFragmentBytes+10)
+	big := make([]byte, utils.MaxConfigBytes+10)
 	require.NoError(t, os.WriteFile(path, big, 0o600))
 
 	_, _, err := readLocalFragment(path)

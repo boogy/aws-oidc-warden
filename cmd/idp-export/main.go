@@ -33,16 +33,8 @@ func main() {
 	if *outDir == "" {
 		fail("flags", errors.New("-out is required"))
 	}
-	if *configPath != "" {
-		dir, name := config.SplitConfigPath(*configPath)
-		if err := os.Setenv("CONFIG_PATH", dir); err != nil {
-			fail("flags", err)
-		}
-		if name != "" {
-			if err := os.Setenv("CONFIG_NAME", name); err != nil {
-				fail("flags", err)
-			}
-		}
+	if err := config.UseConfigFile(*configPath); err != nil {
+		fail("flags", err)
 	}
 
 	c := &config.Config{}
@@ -50,8 +42,7 @@ func main() {
 		fail("config", err)
 	}
 
-	kms := func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }
-	if err := run(ctx, c, kms, *outDir); err != nil {
+	if err := run(ctx, c, aws.IdPKMS, *outDir); err != nil {
 		fail("export", err)
 	}
 }

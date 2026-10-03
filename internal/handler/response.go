@@ -74,13 +74,17 @@ func buildSuccessResponse(ctx context.Context, data any, message string) Respons
 // response type via newResp(status, body). Shared by every adapter's
 // respondError.
 func errorResponse[T any](ctx context.Context, err error, statusCode int, newResp func(int, string) T) T {
-	response, statusCode := buildErrorResponse(ctx, err, statusCode)
+	return newResp(errorBody(ctx, err, statusCode))
+}
 
+// errorBody renders the standard error envelope as JSON.
+func errorBody(ctx context.Context, err error, statusCode int) (int, string) {
+	response, status := buildErrorResponse(ctx, err, statusCode)
 	body, jsonErr := json.Marshal(response)
 	if jsonErr != nil {
-		return newResp(http.StatusInternalServerError, fallbackErrorBody)
+		return http.StatusInternalServerError, fallbackErrorBody
 	}
-	return newResp(statusCode, string(body))
+	return status, string(body)
 }
 
 // successResponse renders the shared success Response the same way, falling

@@ -2,23 +2,12 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
-
-// errorBody renders the standard error envelope as JSON.
-func errorBody(ctx context.Context, err error, statusCode int) (int, string) {
-	response, status := buildErrorResponse(ctx, err, statusCode)
-	body, jsonErr := json.Marshal(response)
-	if jsonErr != nil {
-		return http.StatusInternalServerError, fallbackErrorBody
-	}
-	return status, string(body)
-}
 
 // idpDocument serves the discovery or JWKS document; the 503 uses the standard error envelope.
 func (r *RequestProcessor) idpDocument(ctx context.Context, kind routeKind, head bool, log *slog.Logger) (status int, body string, headers map[string]string) {

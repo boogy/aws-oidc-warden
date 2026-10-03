@@ -333,3 +333,51 @@ func TestFitSanitizedSTSName(t *testing.T) {
 		assert.Len(t, utils.FitSanitizedSTSName(strings.Repeat("a", 100)), utils.MaxSTSNameLen)
 	})
 }
+
+func TestReadAllCapped(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"under cap", 9, false},
+		{"at cap", 10, false},
+		{"over cap", 11, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := utils.ReadAllCapped(strings.NewReader(strings.Repeat("a", tt.size)), 10, "doc")
+			if tt.wantErr {
+				require.ErrorContains(t, err, "doc exceeds 10 bytes")
+				assert.Nil(t, data)
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, data, tt.size)
+		})
+	}
+}
+
+func TestValidSTSName(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"ab", true},
+		{"a", false},
+		{strings.Repeat("a", 64), true},
+		{strings.Repeat("a", 65), false},
+		{"user+tag=v,x.y@z-w_1", true},
+		{"owner/repo", false},
+		{"has space", false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, utils.ValidSTSName(tt.in), tt.in)
+	}
+}
+
+func TestValidSTSSessionSecs(t *testing.T) {
+	for secs, want := range map[int32]bool{899: false, 900: true, 43200: true, 43201: false, 0: false} {
+		assert.Equal(t, want, utils.ValidSTSSessionSecs(secs), secs)
+	}
+}

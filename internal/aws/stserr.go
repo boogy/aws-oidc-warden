@@ -60,7 +60,11 @@ const (
 func classifyWebIdentityError(err error) error {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
-	switch strings.ToLower(STSErrorCode(err)) {
+	code := strings.ToLower(STSErrorCode(err))
+	if _, denied := deniedCodes[code]; denied {
+		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
+	}
+	switch code {
 	case "idpcommunicationerror":
 		return fmt.Errorf("%w: %w", ErrWebIdentityUnavailable, err)
 	case "invalididentitytoken":
@@ -68,7 +72,7 @@ func classifyWebIdentityError(err error) error {
 			return fmt.Errorf("%w: %w", ErrWebIdentityUnavailable, err)
 		}
 		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
-	case "accessdenied", "accessdeniedexception", "idprejectedclaim", "expiredtokenexception":
+	case "idprejectedclaim", "expiredtokenexception":
 		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
 	case "validationerror":
 		if strings.Contains(msg, durationSecondsHint) && strings.Contains(msg, roleMaxDurationHint) {

@@ -70,7 +70,7 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		*statusCode = http.StatusInternalServerError
 	case errors.Is(err, ErrInvalidDuration):
 		errCode = "invalid_duration"
-		errMsg = "durationSeconds must be between 900 and 43200"
+		errMsg = ErrInvalidDuration.Error()
 		*statusCode = http.StatusBadRequest
 	case errors.Is(err, ErrDurationExceedsCap):
 		errCode = "duration_exceeds_cap"

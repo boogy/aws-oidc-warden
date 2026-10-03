@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/types"
 )
 
 // mintedClaims is every claim the minter can emit; discovery advertises exactly this set.
@@ -29,9 +30,7 @@ type KeySet struct {
 // NewKeySet validates keys and precomputes the JWKS and discovery documents.
 func NewKeySet(cfg config.IdPConfig, keys []LoadedKey) (*KeySet, error) {
 	var ks KeySet
-	jwks := struct {
-		Keys []JWK `json:"keys"`
-	}{}
+	var jwks types.JWKS
 	seen := map[string]bool{}
 	var algs []string
 	for _, k := range keys {
@@ -45,8 +44,8 @@ func NewKeySet(cfg config.IdPConfig, keys []LoadedKey) (*KeySet, error) {
 			return nil, err
 		}
 		jwks.Keys = append(jwks.Keys, j)
-		if !slices.Contains(algs, j.Alg) {
-			algs = append(algs, j.Alg)
+		if !slices.Contains(algs, j.Algorithm) {
+			algs = append(algs, j.Algorithm)
 		}
 		if k.Status == config.IdPKeyActive {
 			if ks.active != nil {

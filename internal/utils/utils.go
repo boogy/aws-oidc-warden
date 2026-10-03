@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"os"
@@ -108,9 +109,43 @@ func SortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-var invalidSTSNameChars = regexp.MustCompile(`[^\w=,.@-]`)
+var (
+	invalidSTSNameChars = regexp.MustCompile(`[^\w=,.@-]`)
+	stsNamePattern      = regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
+)
 
-const MaxSTSNameLen = 64
+const (
+	MaxSTSNameLen = 64
+
+	MinSTSSessionSecs     = 900
+	MaxSTSSessionSecs     = 43200
+	DefaultSTSSessionSecs = 3600
+	// RoleChainingMaxSecs is STS's cap on a session assumed from role-session credentials.
+	RoleChainingMaxSecs = 3600
+
+	// MaxConfigBytes caps any config document or fragment read from disk or S3.
+	MaxConfigBytes = 1 << 20
+)
+
+// ValidSTSName reports whether s is a valid STS RoleSessionName or SourceIdentity.
+func ValidSTSName(s string) bool { return stsNamePattern.MatchString(s) }
+
+// ValidSTSSessionSecs reports whether secs is within STS's DurationSeconds bounds.
+func ValidSTSSessionSecs(secs int32) bool {
+	return secs >= MinSTSSessionSecs && secs <= MaxSTSSessionSecs
+}
+
+// ReadAllCapped reads r fully, failing rather than truncating when it exceeds limit bytes.
+func ReadAllCapped(r io.Reader, limit int64, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s exceeds %d bytes", what, limit)
+	}
+	return data, nil
+}
 
 // SanitizeSTSName maps every char outside [\w=,.@-] to '='; '+' is reserved for hash tails.
 func SanitizeSTSName(s string) string {

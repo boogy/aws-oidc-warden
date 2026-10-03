@@ -12,28 +12,18 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
-const (
-	minDurationSecs   = 900
-	maxDurationSecs   = 43200
-	defDurationSecs   = 3600
-	assumeRoleMaxSecs = 3600 // STS caps role chaining at 1h
-)
-
-var (
-	sessionNamePattern  = regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
-	sourceIDPlaceholder = regexp.MustCompile(`\{(request_id|subject|issuer|claim:[^{}]*)\}`)
-)
+var sourceIDPlaceholder = regexp.MustCompile(`\{(request_id|subject|issuer|claim:[^{}]*)\}`)
 
 // resolveDuration returns the session duration in seconds; a non-positive ceiling falls back to the default.
 func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 	ceilingSecs := int32(ceiling / time.Second)
 	if ceilingSecs <= 0 {
-		ceilingSecs = defDurationSecs
+		ceilingSecs = utils.DefaultSTSSessionSecs
 	}
 	if requested == 0 {
-		return min(int32(defDurationSecs), ceilingSecs), nil
+		return min(int32(utils.DefaultSTSSessionSecs), ceilingSecs), nil
 	}
-	if requested < minDurationSecs || requested > maxDurationSecs {
+	if !utils.ValidSTSSessionSecs(requested) {
 		return 0, ErrInvalidDuration
 	}
 	if requested > ceilingSecs {
@@ -44,7 +34,7 @@ func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 
 // resolveSessionName applies mapping > request > global; a requested name is validated even when the mapping overrides it.
 func resolveSessionName(fixed, requested, fallback string) (name, source string, err error) {
-	if requested != "" && !sessionNamePattern.MatchString(requested) {
+	if requested != "" && !utils.ValidSTSName(requested) {
 		return "", "", ErrInvalidSessionName
 	}
 	switch {

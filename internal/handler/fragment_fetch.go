@@ -2,8 +2,6 @@ package handler
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/url"
 	"strings"
@@ -67,8 +65,7 @@ func s3FragmentFetcher(consumer aws.AwsConsumerInterface, owner string) config.F
 			return nil, prevETag, nil
 		}
 
-		sum := sha256.Sum256(data)
-		digest := "sha256:" + hex.EncodeToString(sum[:])
+		digest := config.ContentDigest(data)
 		mu.Lock()
 		seen[uri] = fetchedETag{digest: digest, s3ETag: s3ETag}
 		mu.Unlock()

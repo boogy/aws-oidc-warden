@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,14 +51,14 @@ func TestKeySetDocuments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, a.KeyID(), ks.Active().KeyID())
 
-	var jwks struct{ Keys []JWK }
+	var jwks types.JWKS
 	require.NoError(t, json.Unmarshal(ks.JWKS(), &jwks))
 	require.Len(t, jwks.Keys, 2)
 	require.Equal(t, "sig", jwks.Keys[0].Use)
-	require.Equal(t, a.KeyID(), jwks.Keys[0].Kid)
+	require.Equal(t, a.KeyID(), jwks.Keys[0].KeyID)
 	for _, k := range jwks.Keys {
-		require.Equal(t, "ES256", k.Alg)
-		require.Equal(t, "EC", k.Kty)
+		require.Equal(t, "ES256", k.Algorithm)
+		require.Equal(t, "EC", k.KeyType)
 	}
 
 	var raw struct {
@@ -122,7 +123,7 @@ func TestKeySetJWKSIncludesVerifyOnly(t *testing.T) {
 		{Signer: newTestSigner(t), Status: config.IdPKeyVerifyOnly},
 	})
 	require.NoError(t, err)
-	var jwks struct{ Keys []JWK }
+	var jwks types.JWKS
 	require.NoError(t, json.Unmarshal(ks.JWKS(), &jwks))
 	require.Len(t, jwks.Keys, 3)
 }

@@ -22,6 +22,7 @@ import (
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -802,8 +803,8 @@ func TestGetS3ObjectIfChanged(t *testing.T) {
 		{name: "other error", prev: `"e1"`, err: s3HTTPErr(500), wantErr: "s3 error", wantINM: `"e1"`},
 		{name: "changed", prev: `"e1"`, out: s3Out("xyz", aws.String(`"e2"`)), wantData: "xyz", wantETag: `"e2"`, wantINM: `"e1"`},
 		{name: "200 with nil etag", out: s3Out("abc", nil), wantData: "abc"},
-		{name: "at cap", out: s3Out(strings.Repeat("a", MaxS3ConfigBytes), nil), wantData: strings.Repeat("a", MaxS3ConfigBytes)},
-		{name: "oversize", out: s3Out(strings.Repeat("a", MaxS3ConfigBytes+1), nil), wantErr: "exceeds", wantNilData: true},
+		{name: "at cap", out: s3Out(strings.Repeat("a", utils.MaxConfigBytes), nil), wantData: strings.Repeat("a", utils.MaxConfigBytes)},
+		{name: "oversize", out: s3Out(strings.Repeat("a", utils.MaxConfigBytes+1), nil), wantErr: "exceeds", wantNilData: true},
 		{name: "close error", out: &s3.GetObjectOutput{Body: closeErrBody{strings.NewReader("abc")}, ETag: aws.String(`"e1"`)}, wantErr: "close failed", wantNilData: true},
 	}
 	for _, tt := range tests {

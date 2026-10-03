@@ -18,7 +18,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 // AwsServiceWrapperInterface allows to test AWS specific code based on the AWS services
@@ -33,9 +35,6 @@ type AwsServiceWrapperInterface interface {
 	GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
 	RefreshClients()
 }
-
-// MaxS3ConfigBytes caps a config object read by GetS3ObjectIfChanged.
-const MaxS3ConfigBytes = 1 << 20
 
 type s3GetObjectAPI interface {
 	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
@@ -96,6 +95,9 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 
 // KMS returns the KMS client.
 func (s *AwsServiceWrapper) KMS() *kms.Client { return s.kms }
+
+// IdPKMS builds the KMS client used by the IdP's KMS signer.
+func IdPKMS() idp.KMSAPI { return NewAwsServiceWrapper().KMS() }
 
 // RefreshClients recreates AWS service clients, useful for long-running Lambda environments
 // where clients might need refreshing periodically
@@ -327,12 +329,9 @@ func (s *AwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, ke
 		}
 	}()
 
-	data, err = io.ReadAll(io.LimitReader(out.Body, MaxS3ConfigBytes+1))
+	data, err = utils.ReadAllCapped(out.Body, utils.MaxConfigBytes, fmt.Sprintf("s3://%s/%s", bucket, key))
 	if err != nil {
 		return nil, "", err
-	}
-	if len(data) > MaxS3ConfigBytes {
-		return nil, "", fmt.Errorf("s3://%s/%s exceeds %d bytes", bucket, key, MaxS3ConfigBytes)
 	}
 	return data, aws.ToString(out.ETag), nil
 }

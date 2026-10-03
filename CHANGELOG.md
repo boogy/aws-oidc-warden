@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`s3://` entries in `config_fragments` are fetched** (conditional GET, 1 MiB cap, owner pin, `sha256:` pins) instead of failing every refresh.
 - **The local dev server (`cmd/local`) caps request bodies and sets read timeouts**, and without an `idp` block it serves only `/verify` again instead of routing every path to the credential flow.
 - **A remote `mappings_file` or `config_fragments` entry must use the lowercase `s3://` scheme.** `S3://…` was fetched from S3 but skipped the `s3_config_bucket_owner` requirement and the default `mappings_max_stale` gate. S3 fragment reads also refuse to run without an owner in the service config.
+- **An `s3_config_bucket` object or S3 session policy over 1 MiB is rejected** instead of silently truncated at the cap. Every config read now shares one 1 MiB limit.
 
 ### Dependencies
 

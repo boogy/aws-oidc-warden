@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,16 +46,16 @@ func TestPublicJWK(t *testing.T) {
 		name  string
 		alg   string
 		pub   any
-		check func(t *testing.T, j JWK)
+		check func(t *testing.T, j types.JSONWebKey)
 	}{
-		{"es256", "ES256", &ec.PublicKey, func(t *testing.T, j JWK) {
-			require.Equal(t, "EC", j.Kty)
+		{"es256", "ES256", &ec.PublicKey, func(t *testing.T, j types.JSONWebKey) {
+			require.Equal(t, "EC", j.KeyType)
 			require.Equal(t, "P-256", j.Crv)
 			require.Len(t, j.X, 43)
 			require.Len(t, j.Y, 43)
 		}},
-		{"rs256", "RS256", &rsa2k.PublicKey, func(t *testing.T, j JWK) {
-			require.Equal(t, "RSA", j.Kty)
+		{"rs256", "RS256", &rsa2k.PublicKey, func(t *testing.T, j types.JSONWebKey) {
+			require.Equal(t, "RSA", j.KeyType)
 			require.Equal(t, "AQAB", j.E)
 			require.NotEmpty(t, j.N)
 		}},
@@ -64,10 +65,10 @@ func TestPublicJWK(t *testing.T) {
 			j, err := PublicJWK(tt.alg, tt.pub)
 			require.NoError(t, err)
 			require.Equal(t, "sig", j.Use)
-			require.Equal(t, tt.alg, j.Alg)
+			require.Equal(t, tt.alg, j.Algorithm)
 			kid, err := Thumbprint(tt.pub)
 			require.NoError(t, err)
-			require.Equal(t, kid, j.Kid)
+			require.Equal(t, kid, j.KeyID)
 			tt.check(t, j)
 		})
 	}
