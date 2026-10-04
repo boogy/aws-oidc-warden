@@ -80,8 +80,8 @@ The status code tells your client whether retrying is worth anything:
 | `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                   | **No** — deterministic                               |
 | `400 duration_exceeds_cap`        | `durationSeconds` above the IdP ceiling, or over 1h with no `idp` block                                | **No** — deterministic                               |
 | `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                | **No** — deterministic                               |
-| `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                   | **No** — deterministic                               |
-| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path                                                        | **No** — deterministic                               |
+| `400 invalid_session_name`        | A used `sessionName` (`allow_session_name`) is not 2-64 characters of `[\w+=,.@-]`                     | **No** — deterministic                               |
+| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false         | **No** — deterministic                               |
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                              | **No** — deterministic                               |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                  | **No** — deterministic                               |
 | `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                              | **Yes** — transient                                  |
@@ -404,7 +404,7 @@ inputs:
     description: Session duration in seconds. Always sent. 900-3600, or up to the IdP ceiling for a role the warden issues through its IdP.
     default: "3600"
   session-name:
-    description: STS role session name, 2-64 chars of [A-Za-z0-9_+=,.@-]. Empty uses the warden's configured name; a mapping role_session_name always wins.
+    description: STS role session name, 2-64 chars of [A-Za-z0-9_+=,.@-]. Used only if the mapping sets allow_session_name, else ignored; a mapping role_session_name always wins.
     default: ""
   endpoints:
     description: >-

@@ -997,6 +997,17 @@ role_mappings:
 	}
 }
 
+func TestAllowSessionNameAndRoleSessionNameAreMutuallyExclusive(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/R"
+
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, AllowSessionName: true, RoleSessionName: "forced"})
+	require.ErrorContains(t, cfg.Validate(), "set allow_session_name or role_session_name, not both")
+
+	cfg = idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{role}})
+	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{role}, AllowSessionName: true, RoleSessionName: "forced"}}}
+	require.ErrorContains(t, cfg.Validate(), "set allow_session_name or role_session_name, not both")
+}
+
 func TestSessionPolicyAndFileAreMutuallyExclusive(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/R"
 	const inline = `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"iam:*","Resource":"*"}]}`

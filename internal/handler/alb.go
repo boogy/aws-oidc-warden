@@ -48,7 +48,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		slog.String("userAgent", headerValue(headers, "user-agent")),
 	)
 
-	kind := h.processor.route(event.HTTPMethod, event.Path)
+	kind := h.processor.route(ctx, event.HTTPMethod, event.Path)
 	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, event.Path, log, h.newResponse, h.newResponseWithHeaders); ok {
 		return resp, nil
 	}

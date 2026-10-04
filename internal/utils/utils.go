@@ -109,12 +109,8 @@ func SortedKeys[V any](m map[string]V) []string {
 	return keys
 }
 
-var (
-	invalidSTSNameChars = regexp.MustCompile(`[^\w=,.@-]`)
-	stsNamePattern      = regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
-)
-
 const (
+	MinSTSNameLen = 2
 	MaxSTSNameLen = 64
 
 	MinSTSSessionSecs     = 900
@@ -125,6 +121,14 @@ const (
 
 	// MaxConfigBytes caps any config document or fragment read from disk or S3.
 	MaxConfigBytes = 1 << 20
+)
+
+// STSNameRule is the pattern a RoleSessionName or SourceIdentity must match.
+var STSNameRule = fmt.Sprintf(`[\w+=,.@-]{%d,%d}`, MinSTSNameLen, MaxSTSNameLen)
+
+var (
+	invalidSTSNameChars = regexp.MustCompile(`[^\w=,.@-]`)
+	stsNamePattern      = regexp.MustCompile(`^` + STSNameRule + `$`)
 )
 
 // ValidSTSName reports whether s is a valid STS RoleSessionName or SourceIdentity.

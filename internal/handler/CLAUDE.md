@@ -12,7 +12,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `response.go` — shared success/error response construction.
 - `reqcontext.go` — `resolveRequestID` / `clientIP`; the only supported way for an adapter to derive `requestId`, `frontendRequestId`, and `sourceIp`.
 - `audit.go` — `AuditSink` and the allow/deny audit record, including `auditClaims` (claim values formatted through `utils.FormatClaimValue`).
-- `route.go` — classifies the IdP discovery/JWKS paths before the normal pipeline; near misses and wrong methods map to `idp_path_not_found` / `method_not_allowed`. Credentials always go through `/verify`.
+- `route.go` — classifies the IdP discovery/JWKS paths before the normal pipeline; near misses and wrong methods map to `idp_path_not_found` / `method_not_allowed`; the exact paths refresh config and answer `idp_path_not_found` while `idp.enabled` is false. Credentials always go through `/verify`.
 - `idp.go` — `selectIdP` routes an `idp_token` role (in `idp.allowed_roles`) to `issueIdP` while `idp.enabled`; over 1h without it is refused. `issueIdP` mints and runs an in-process `AssumeRoleWithWebIdentity`; `ProcessRequest` (`processor.go`) is the single entry for both. `idp_helpers.go` — duration, session-name and source-identity resolution. `idp_document.go` — serves discovery/JWKS.
 - `bootstrap.go` `NewIdPService` — builds the `idp.Service` whenever an `idp` block exists (keys warm only when `idp.enabled`); the KMS client is read through a func so `RefreshClients` is honoured.
 - `apigateway.go` — REST API v1 adapter (`events.APIGatewayProxyRequest`). Passes `ExtractionInput{Token: requestData.Token}`; always self mode.
@@ -43,4 +43,4 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - A mapping sets `session_policy` or `session_policy_file`, never both; `Validate()` rejects both.
 - S3 policy reads are bounded (`io.LimitReader`, 1 MB).
 - Start time is carried in context (`StartTimeContextKey`).
-- IdP kill switch: `idp.enabled` is live; when off, mint answers `503 idp_signing_unavailable`. Env overrides S3 config. A stale remote config past max-stale fails closed the same way.
+- IdP kill switch: `idp.enabled` is live; when off, mint answers `503 idp_signing_unavailable` and discovery/JWKS answer 404 (after the 405 method check). Those routes call `RefreshIfDue`, never `MaybeRefresh`, so they never wait on a refresh. Env overrides S3 config. Past max-stale, `/verify` and mint answer `503 config_stale`; discovery/JWKS keep serving.

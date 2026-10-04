@@ -86,7 +86,7 @@ func (r *RequestProcessor) deny(ctx context.Context, o *authzOutcome, msg string
 }
 
 // authorizeRequest runs refresh, extraction, account check and authorization; it records the deny itself on failure.
-func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger, action string) (*authzOutcome, error) {
+func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*authzOutcome, error) {
 	startTime, _ := ctx.Value(StartTimeContextKey).(time.Time)
 
 	r.provider.MaybeRefresh(ctx)
@@ -117,7 +117,10 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		return time.Since(startTime).Milliseconds()
 	}
 
-	rec.Action = action
+	// Unset until the issuance path is chosen, except over 1h where only the IdP can serve.
+	if requestData.DurationSeconds > utils.RoleChainingMaxSecs {
+		rec.Action = actionMintToken
+	}
 	o := &authzOutcome{cfg: cfg, rec: rec, log: log, elapsed: elapsed}
 
 	if age, limit, stale := r.provider.Stale(); stale {
@@ -194,7 +197,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	if explicitlyAllowed {
 		rec.MatchedVia = "explicit"
 	}
-	if action == actionAssumeRole && !allowed && cfg.TagAuth != nil && cfg.TagAuth.Enabled {
+	if !allowed && cfg.TagAuth != nil && cfg.TagAuth.Enabled {
 		roleTags, terr := r.consumer.GetRoleTags(ctx, requestedRole)
 		if terr != nil {
 			logevent.Warn(ctx, log, logevent.AuthzTagAuthLookupFailure, "role tag lookup failed",
@@ -221,7 +224,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 
 // ProcessRequest authorizes once, then issues credentials through the IdP for an IdP-enabled role or AssumeRole otherwise.
 func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*IssuedCredentials, error) {
-	o, err := r.authorizeRequest(ctx, requestData, input, requestID, log, actionAssumeRole)
+	o, err := r.authorizeRequest(ctx, requestData, input, requestID, log)
 	if err != nil {
 		return nil, err
 	}
@@ -231,23 +234,38 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 	useIdP, err := r.selectIdP(o.cfg, o.decision, requestData.Role, requestData.DurationSeconds)
 	if err != nil {
-		o.rec.Stage, o.rec.Reason = "duration", "over 1h without idp"
-		if errors.Is(err, ErrIdPNotPermitted) {
+		o.rec.Stage = "duration"
+		switch {
+		case errors.Is(err, ErrDurationExceedsCap):
+			o.rec.Reason = "over 1h without idp"
+		case errors.Is(err, ErrIdPNotPermitted):
 			o.rec.Reason = "over 1h but role not idp-enabled"
-		} else if errors.Is(err, ErrIdPUnavailable) {
+		default:
 			o.rec.Reason = "over 1h but idp disabled"
 		}
 		return nil, r.deny(ctx, o, "Duration refused", err)
 	}
+	o.rec.Action = actionAssumeRole
 	if useIdP {
 		o.rec.Action = actionMintToken
-		return r.issueIdP(ctx, o, requestData, requestID)
 	}
-	return r.issueAssumeRole(ctx, o, requestData)
+	sessionName, nameSource, err := resolveSessionName(o.decision.RoleSessionName(), requestData.SessionName, o.cfg.RoleSessionName, o.decision.SessionNameAllowed())
+	if err != nil {
+		o.rec.Stage, o.rec.Reason = "session_name", "session name refused"
+		return nil, r.deny(ctx, o, "Session name refused", err)
+	}
+	o.rec.SessionNameSource, o.rec.RequestedSessionName = nameSource, requestData.SessionName
+	if requestData.SessionName != "" && nameSource != "request" {
+		logevent.Warn(ctx, o.log, logevent.AuthzSessionNameIgnored, "requested session name ignored", slog.String("sessionNameSource", nameSource))
+	}
+	if useIdP {
+		return r.issueIdP(ctx, o, requestData, sessionName, requestID)
+	}
+	return r.issueAssumeRole(ctx, o, requestData, sessionName)
 }
 
 // issueAssumeRole assumes the role from the warden's own credentials.
-func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestData *RequestData) (*IssuedCredentials, error) {
+func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestData *RequestData, sessionName string) (*IssuedCredentials, error) {
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	requestedRole := requestData.Role
 
@@ -261,15 +279,6 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	if err != nil {
 		rec.setErrorReason("session_policy", err)
 		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
-	}
-
-	sessionName, nameSource, err := resolveSessionName(o.decision.RoleSessionName(), requestData.SessionName, cfg.RoleSessionName)
-	if err != nil {
-		rec.Stage, rec.Reason = "session_name", "session name refused"
-		return nil, r.deny(ctx, o, "Session name refused", err)
-	}
-	if requestData.SessionName != "" {
-		rec.SessionNameSource = nameSource
 	}
 
 	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, o.decision)

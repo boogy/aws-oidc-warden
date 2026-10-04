@@ -40,7 +40,7 @@ func staleProvider(t *testing.T, maxStale *time.Duration) (*config.Provider, *at
 		c.MappingsMaxStale = maxStale
 	})
 	var fail atomic.Bool
-	fn := func(context.Context, string, string) ([]byte, string, error) {
+	fn := func(context.Context, string, string, string) ([]byte, string, error) {
 		if fail.Load() {
 			return nil, "", errors.New("s3 unavailable")
 		}

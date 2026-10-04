@@ -55,20 +55,23 @@ func TestResolveSessionName(t *testing.T) {
 		requested  string
 		want       string
 		wantSource string
+		allow      bool
 		wantErr    error
 	}{
-		{"mapping name", "fixed", "", "fixed", "mapping", nil},
-		{"mapping overrides request", "fixed", "asked", "fixed", "mapping", nil},
-		{"invalid request with mapping name", "fixed", "bad name!", "", "", ErrInvalidSessionName},
-		{"request", "", "asked", "asked", "request", nil},
-		{"invalid chars", "", "no spaces!", "", "", ErrInvalidSessionName},
-		{"too short", "", "a", "", "", ErrInvalidSessionName},
-		{"too long", "", strings.Repeat("a", 65), "", "", ErrInvalidSessionName},
-		{"global default", "", "", "fallback", "default", nil},
+		{"mapping name", "fixed", "", "fixed", "mapping", true, nil},
+		{"mapping overrides request", "fixed", "asked", "fixed", "mapping", true, nil},
+		{"invalid request ignored for mapping name", "fixed", "bad name!", "fixed", "mapping", true, nil},
+		{"request", "", "asked", "asked", "request", true, nil},
+		{"request ignored without opt-in", "", "asked", "fallback", "default", false, nil},
+		{"invalid request ignored without opt-in", "", "bad name!", "fallback", "default", false, nil},
+		{"invalid chars", "", "no spaces!", "", "", true, ErrInvalidSessionName},
+		{"too short", "", "a", "", "", true, ErrInvalidSessionName},
+		{"too long", "", strings.Repeat("a", 65), "", "", true, ErrInvalidSessionName},
+		{"global default", "", "", "fallback", "default", true, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, source, err := resolveSessionName(tt.fixed, tt.requested, "fallback")
+			got, source, err := resolveSessionName(tt.fixed, tt.requested, "fallback", tt.allow)
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return

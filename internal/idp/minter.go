@@ -27,7 +27,7 @@ var (
 	// ErrTokenTooLarge is returned when the estimated token exceeds maxTokenBytes.
 	ErrTokenTooLarge = errors.New("idp token exceeds the STS web-identity token size limit")
 	// ErrInvalidSourceIdentity is returned when the source identity is not a valid STS value.
-	ErrInvalidSourceIdentity = errors.New("idp source identity must match [\\w+=,.@-]{2,64}")
+	ErrInvalidSourceIdentity = errors.New("idp source identity must match " + utils.STSNameRule)
 )
 
 func maxSigLen(alg string) int {

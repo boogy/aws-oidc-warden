@@ -131,15 +131,15 @@ func TestFragmentFetchDigestETag(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := &s3Fake{body: fetchMappings, etag: tt.s3ETag}
-			fetch := s3FragmentFetcher(f, fetchOwner)
+			fetch := s3FragmentFetcher(f)
 
-			data, digest, err := fetch(context.Background(), "s3://b/k.yaml", "")
+			data, digest, err := fetch(context.Background(), "s3://b/k.yaml", "", fetchOwner)
 			require.NoError(t, err)
 			assert.Equal(t, fetchMappings, string(data))
 			assert.Equal(t, digestOf(fetchMappings), digest)
 			assert.Empty(t, f.ifChanged[0].prevETag)
 
-			data, digest2, err := fetch(context.Background(), "s3://b/k.yaml", digest)
+			data, digest2, err := fetch(context.Background(), "s3://b/k.yaml", digest, fetchOwner)
 			require.NoError(t, err)
 			assert.Equal(t, digest, digest2)
 			assert.Equal(t, tt.s3ETag, f.ifChanged[1].prevETag)
@@ -154,23 +154,23 @@ func TestFragmentFetchDigestETag(t *testing.T) {
 
 func TestFragmentFetchPassesOwner(t *testing.T) {
 	f := &s3Fake{body: fetchMappings, etag: `"e"`}
-	_, _, err := s3FragmentFetcher(f, fetchOwner)(context.Background(), "s3://bkt/dir/k.yaml", "")
+	_, _, err := s3FragmentFetcher(f)(context.Background(), "s3://bkt/dir/k.yaml", "", fetchOwner)
 	require.NoError(t, err)
 	assert.Equal(t, ifChangedCall{"bkt", "dir/k.yaml", "", fetchOwner}, f.ifChanged[0])
 }
 
 func TestFragmentFetchErrorPropagates(t *testing.T) {
 	boom := errors.New("boom")
-	_, _, err := s3FragmentFetcher(&s3Fake{err: boom}, fetchOwner)(context.Background(), "s3://b/k.yaml", "")
+	_, _, err := s3FragmentFetcher(&s3Fake{err: boom})(context.Background(), "s3://b/k.yaml", "", fetchOwner)
 	require.ErrorIs(t, err, boom)
 
-	_, _, err = s3FragmentFetcher(&s3Fake{}, fetchOwner)(context.Background(), "https://b/k.yaml", "")
+	_, _, err = s3FragmentFetcher(&s3Fake{})(context.Background(), "https://b/k.yaml", "", fetchOwner)
 	require.Error(t, err)
 }
 
 func TestFragmentFetchRefusesUnpinnedOwner(t *testing.T) {
 	f := &s3Fake{body: fetchMappings, etag: `"e"`}
-	_, _, err := s3FragmentFetcher(f, "")(context.Background(), "s3://b/k.yaml", "")
+	_, _, err := s3FragmentFetcher(f)(context.Background(), "s3://b/k.yaml", "", "")
 	require.ErrorContains(t, err, "s3_config_bucket_owner")
 	assert.Empty(t, f.ifChanged)
 }

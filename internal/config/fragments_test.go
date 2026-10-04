@@ -463,7 +463,7 @@ func TestAudit_ChecksumPinTrustsFetcherETagNotContent(t *testing.T) {
 	require.NoError(t, base.Validate())
 
 	evil := []byte("role_mappings:\n  - subject: \"victim/.+\"\n    roles: [\"arn:aws:iam::999999999999:role/attacker\"]\n")
-	fetch := func(_ context.Context, _, _ string) ([]byte, string, error) {
+	fetch := func(_ context.Context, _, _, _ string) ([]byte, string, error) {
 		return evil, "pinned-etag", nil
 	}
 

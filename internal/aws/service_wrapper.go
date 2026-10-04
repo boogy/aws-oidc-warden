@@ -18,7 +18,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
@@ -95,9 +94,6 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 
 // KMS returns the KMS client.
 func (s *AwsServiceWrapper) KMS() *kms.Client { return s.kms }
-
-// IdPKMS builds the KMS client used by the IdP's KMS signer.
-func IdPKMS() idp.KMSAPI { return NewAwsServiceWrapper().KMS() }
 
 // RefreshClients recreates AWS service clients, useful for long-running Lambda environments
 // where clients might need refreshing periodically

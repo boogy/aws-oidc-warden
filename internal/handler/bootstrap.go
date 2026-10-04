@@ -80,7 +80,7 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 	}
 
 	consumer := aws.NewAwsConsumer(cfg)
-	return newBootstrap(adapter, logger, cfg, consumer, aws.IdPKMS)
+	return newBootstrap(adapter, logger, cfg, consumer, DefaultIdPKMS)
 }
 
 // bootstrapConsumer is the AWS consumer newBootstrap wires into the provider and handlers.
@@ -146,6 +146,9 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 	}, nil
 }
 
+// DefaultIdPKMS returns the shared KMS client for the IdP's KMS signer.
+func DefaultIdPKMS() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }
+
 // NewIdPService builds the frozen IdP service from the provider's post-Refresh config and warms it.
 func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.Logger) *idp.Service {
 	cfg := provider.Get().IdP
@@ -204,7 +207,7 @@ func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfi
 // only with no mappings file, S3 overlay or config_fragments; otherwise it refreshes at startup (failing fast).
 func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
 	ctx := context.Background()
-	opt := config.WithFragmentFetcher(s3FragmentFetcher(consumer, cfg.S3ConfigBucketOwner))
+	opt := config.WithFragmentFetcher(s3FragmentFetcher(consumer))
 	hasOverlay := cfg.S3ConfigBucket != "" && cfg.S3ConfigPath != ""
 
 	if !hasOverlay {

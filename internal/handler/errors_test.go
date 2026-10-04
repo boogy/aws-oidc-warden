@@ -129,22 +129,25 @@ func TestCredentialPathSessionFields(t *testing.T) {
 	tests := []struct {
 		name         string
 		fixed        string
+		allow        bool
 		req          *RequestData
 		wantErr      error
 		wantName     string
 		wantDuration int32
 	}{
-		{"defaults", "", &RequestData{Role: role}, nil, "test", 3600},
-		{"mapping name default", "mapped", &RequestData{Role: role}, nil, "mapped", 3600},
-		{"requested name", "", &RequestData{Role: role, SessionName: "asked"}, nil, "asked", 3600},
-		{"mapping name overrides request", "mapped", &RequestData{Role: role, SessionName: "asked"}, nil, "mapped", 3600},
-		{"invalid name", "", &RequestData{Role: role, SessionName: "bad name!"}, ErrInvalidSessionName, "", 0},
-		{"invalid name with mapping name", "mapped", &RequestData{Role: role, SessionName: "a"}, ErrInvalidSessionName, "", 0},
-		{"duration honoured", "", &RequestData{Role: role, DurationSeconds: 900}, nil, "test", 900},
-		{"duration at 1h", "", &RequestData{Role: role, DurationSeconds: 3600}, nil, "test", 3600},
-		{"duration over 1h", "", &RequestData{Role: role, DurationSeconds: 3601}, ErrDurationExceedsCap, "", 0},
-		{"duration below minimum", "", &RequestData{Role: role, DurationSeconds: 899}, ErrInvalidDuration, "", 0},
-		{"negative duration", "", &RequestData{Role: role, DurationSeconds: -1}, ErrInvalidDuration, "", 0},
+		{"defaults", "", true, &RequestData{Role: role}, nil, "test", 3600},
+		{"mapping name default", "mapped", false, &RequestData{Role: role}, nil, "mapped", 3600},
+		{"requested name", "", true, &RequestData{Role: role, SessionName: "asked"}, nil, "asked", 3600},
+		{"requested name ignored without opt-in", "", false, &RequestData{Role: role, SessionName: "asked"}, nil, "test", 3600},
+		{"invalid name ignored without opt-in", "", false, &RequestData{Role: role, SessionName: "bad name!"}, nil, "test", 3600},
+		{"mapping name overrides request", "mapped", false, &RequestData{Role: role, SessionName: "asked"}, nil, "mapped", 3600},
+		{"invalid name", "", true, &RequestData{Role: role, SessionName: "bad name!"}, ErrInvalidSessionName, "", 0},
+		{"invalid name ignored for mapping name", "mapped", false, &RequestData{Role: role, SessionName: "a"}, nil, "mapped", 3600},
+		{"duration honoured", "", true, &RequestData{Role: role, DurationSeconds: 900}, nil, "test", 900},
+		{"duration at 1h", "", true, &RequestData{Role: role, DurationSeconds: 3600}, nil, "test", 3600},
+		{"duration over 1h", "", true, &RequestData{Role: role, DurationSeconds: 3601}, ErrDurationExceedsCap, "", 0},
+		{"duration below minimum", "", true, &RequestData{Role: role, DurationSeconds: 899}, ErrInvalidDuration, "", 0},
+		{"negative duration", "", true, &RequestData{Role: role, DurationSeconds: -1}, ErrInvalidDuration, "", 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,9 +160,10 @@ func TestCredentialPathSessionFields(t *testing.T) {
 				RoleSessionName: "test",
 				Cache:           &config.Cache{TTL: 0},
 				RoleMappings: []config.RoleMapping{{
-					Subject:         config.Patterns{"org/repo"},
-					Roles:           []string{role},
-					RoleSessionName: tc.fixed,
+					Subject:          config.Patterns{"org/repo"},
+					Roles:            []string{role},
+					RoleSessionName:  tc.fixed,
+					AllowSessionName: tc.allow,
 				}},
 			}
 			require.NoError(t, cfg.Validate())

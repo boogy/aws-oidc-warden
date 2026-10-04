@@ -309,11 +309,13 @@ Everything else a mapping can specify — session policy, `role_session_name`, e
 
 |                    |                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Precedence**     | Per-mapping wins, even over a caller `sessionName`; then the caller `sessionName`; global is the fallback. An override applies only where declared     |
+| **Precedence**     | Per-mapping wins; then the caller `sessionName` if the mapping sets `allow_session_name: true` (else it is ignored); global is the fallback             |
 | **Empty value**    | Indistinguishable from absent                                                                                                                          |
 | **Valid charset**  | STS accepts 2–64 chars from `[\w+=,.@-]`. **`/` is excluded**, so a GitHub `owner/repo` subject cannot be used verbatim                                |
 | **Invalid value**  | Fails the service at boot, rather than being silently reshaped by the runtime sanitizer                                                                |
 | **Not a template** | A `subject` regex matching many repos (or a subject list, or a `role_groups` entry) gets **one** name for the whole set — the field is a static string |
+
+`allow_session_name: true` (on `role_mappings[]` or `role_groups[].defaults`) lets a caller name its own session for roles granted by that mapping. Off by default: another mapping's caller could otherwise reuse a name CloudTrail attributes to someone else. A role granted by tag-based authorization has no mapping, so its caller's `sessionName` is always ignored. A mapping that sets both `allow_session_name: true` and `role_session_name` fails to load.
 
 #### Per-mapping `session_tags`
 
@@ -359,7 +361,7 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 | `audience`                 |                                                      | required                                                                                                       | Token `aud` (`audience_mode: static`)                                                                                                     |
 | `audience_mode`            | `static`                                             | `static`, `role_arn`                                                                                           | `role_arn` sets `aud` to the target role ARN                                                                                              |
 | `token_ttl`                | `2m`                                                 | 1m to 5m                                                                                                       | Lifetime of the minted token only, not of the credentials                                                                                 |
-| `jwks_uri`                 | `<idp.issuer>/.well-known/jwks.json`                 | https URL                                                                                                      | Advertised in discovery                                                                                                                   |
+| `jwks_uri`                 | issuer origin + `paths.jwks`                         | https URL                                                                                                      | Advertised in discovery                                                                                                                   |
 | `paths.discovery`          | `<idp.issuer path>/.well-known/openid-configuration` | must end with that suffix                                                                                      |                                                                                                                                           |
 | `paths.jwks`               | `<idp.issuer path>/.well-known/jwks.json`            |                                                                                                                |                                                                                                                                           |
 | `subject_template`         | `{role_arn}`                                         | must end with `{role_arn}`; also `{account_id}`, `{role_name}`, `{source_issuer}`, `{source_subject}`          | `{source_subject}` needs `{source_issuer}#` before it                                                                                     |
@@ -383,7 +385,7 @@ Every request goes to `/verify`. The body takes `token` and `role`, plus:
 | Field             | Notes                                                                                                                                   |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `durationSeconds` | 900..43200. `AssumeRole` roles: up to 3600, omitted = 3600. IdP roles: up to the ceiling, omitted = `min(3600, ceiling)`; never clamped |
-| `sessionName`     | `^[\w+=,.@-]{2,64}$`. A mapping `role_session_name` overrides it; omitted = the global `role_session_name`                              |
+| `sessionName`     | `^[\w+=,.@-]{2,64}$`. Used only with the mapping's `allow_session_name: true`, else ignored; a `role_session_name` overrides it         |
 
 An `idp_token` role (in `idp.allowed_roles`) is issued through the IdP while `idp.enabled`; any other role uses `AssumeRole`. Over 1h without the IdP is refused ([IDP.md § Why](IDP.md#why)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
@@ -485,7 +487,7 @@ Applied only when the config file or S3 object already carries an `idp:` block; 
 | `AOW_IDP_AUDIENCE`                 | `idp.audience`                 |                                      |
 | `AOW_IDP_AUDIENCE_MODE`            | `idp.audience_mode`            | `static`                             |
 | `AOW_IDP_TOKEN_TTL`                | `idp.token_ttl`                | `2m` (1m to 5m)                      |
-| `AOW_IDP_JWKS_URI`                 | `idp.jwks_uri`                 | `<idp.issuer>/.well-known/jwks.json` |
+| `AOW_IDP_JWKS_URI`                 | `idp.jwks_uri`                 | issuer origin + `idp.paths.jwks`     |
 | `AOW_IDP_SUBJECT_TEMPLATE`         | `idp.subject_template`         | `{role_arn}`                         |
 | `AOW_IDP_INCLUDE_SOURCE_IDENTITY`  | `idp.include_source_identity`  | `true`                               |
 | `AOW_IDP_SOURCE_IDENTITY`          | `idp.source_identity`          | `{issuer}:{subject}`                 |
@@ -538,14 +540,14 @@ The mappings file is a layer beside the base config and the S3 overlay (`s3_conf
 
 ### Bucket owner
 
-`s3_config_bucket_owner` is sent as `ExpectedBucketOwner` on config reads only: the mappings file, `s3://` fragments and the S3 overlay. JWKS-cache and audit S3 calls do not use it.
+`s3_config_bucket_owner` is sent as `ExpectedBucketOwner` on config reads only: the mappings file, `s3://` fragments and the S3 overlay. JWKS-cache and audit S3 calls do not use it. The service config (env or file) value wins: an S3 overlay cannot change it, and may only fill it when the service config leaves it unset.
 
 - Required for an `s3://` `mappings_file` or `s3://` fragment; a missing value fails `Validate()`.
 - Recommended for the S3 overlay. Unset, the overlay still loads and startup logs `config.s3_owner_unpinned` (Warn).
 
 ### Reload
 
-With `config_reload_interval` > 0, the mappings are re-read lazily at most once per interval, with a conditional GET: a 304 means no re-parse. A failed or invalid refresh keeps the last good config. A refresh that fails backs off: the next attempt waits 2x, 4x, then 8x the interval, resetting on success. Requests never wait on a refresh. Once mappings are stale, backoff pauses and refreshes retry at the plain interval. A missing or invalid file at cold start fails startup.
+With `config_reload_interval` > 0, the mappings are re-read lazily at most once per interval, with a conditional GET: a 304 means no re-parse. A failed or invalid refresh keeps the last good config. A refresh that fails backs off: the next attempt waits 2x, 4x, then 8x the interval, resetting on success; a refresh that times out counts as a failure. Requests do not wait on a refresh in progress, except once mappings are stale: then backoff pauses, refreshes retry at the plain interval, and a request waits for the refresh in progress, up to its own deadline, rather than failing at once. A missing or invalid file at cold start fails startup.
 
 ### Freshness
 
@@ -556,7 +558,7 @@ With `config_reload_interval` > 0, the mappings are re-read lazily at most once 
 - An explicit value must be at least 2x `config_reload_interval`.
 - A local-path `mappings_file` rejects any value > 0.
 
-Past the limit every request gets `503 config_stale`, audited with `stage: config` and logged as `config.mappings_stale`. This covers `/verify` and the IdP mint path; static providers are never stale. The status is transient: retry with backoff or fail over ([GITHUB_ACTIONS.md](GITHUB_ACTIONS.md#request--response-contract)).
+Past the limit every request gets `503 config_stale`, audited with `stage: config` and logged as `config.mappings_stale`. This covers `/verify` and the IdP mint path; the IdP discovery and JWKS documents keep serving. Static providers are never stale. The status is transient: retry with backoff or fail over ([GITHUB_ACTIONS.md](GITHUB_ACTIONS.md#request--response-contract)).
 
 ### Integrity
 

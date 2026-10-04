@@ -42,7 +42,7 @@ func main() {
 		fail("config", err)
 	}
 
-	if err := run(ctx, c, aws.IdPKMS, *outDir); err != nil {
+	if err := run(ctx, c, func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }, *outDir); err != nil {
 		fail("export", err)
 	}
 }

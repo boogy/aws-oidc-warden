@@ -417,7 +417,7 @@ func TestIdPFrontends(t *testing.T) {
 				assert.Zero(t, cons.assumeCalls)
 			},
 		},
-		{name: "kill switch jwks", mutate: []func(*config.Config){disabled}, method: "GET", path: idpJWKSPath, wantStatus: 200},
+		{name: "kill switch jwks", mutate: []func(*config.Config){disabled}, method: "GET", path: idpJWKSPath, wantStatus: 404, wantCode: "idp_path_not_found"},
 		{
 			name: "stage prefixed path", method: "GET", path: "/prod" + idpJWKSPath,
 			wantStatus: 404, wantCode: "idp_path_not_found",

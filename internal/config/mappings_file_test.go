@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -332,5 +333,63 @@ func TestS3BucketOwnerRequired(t *testing.T) {
 			}
 			require.ErrorContains(t, err, tt.wantErr)
 		})
+	}
+}
+
+func TestMaxStaleMaybeRefreshWaitsOnInFlightRefresh(t *testing.T) {
+	c, st := s3MappingsCfg(t, time.Minute)
+	c.MappingsMaxStale = dur(10 * time.Minute)
+	require.NoError(t, c.Validate())
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	fetch := func(ctx context.Context, uri, prev, owner string) ([]byte, string, error) {
+		once.Do(func() { close(entered); <-release })
+		return st.fetch(ctx, uri, prev, owner)
+	}
+	p := NewProvider(c, time.Minute, "", nil, WithFragmentFetcher(fetch))
+
+	go p.MaybeRefresh(context.Background())
+	<-entered
+
+	done := make(chan struct{})
+	go func() { p.MaybeRefresh(context.Background()); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("stale MaybeRefresh returned before the in-flight refresh finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	<-done
+	_, _, stale := p.Stale()
+	require.False(t, stale)
+}
+
+func TestMaxStaleMaybeRefreshWaitHonoursContext(t *testing.T) {
+	c, st := s3MappingsCfg(t, time.Minute)
+	c.MappingsMaxStale = dur(10 * time.Minute)
+	require.NoError(t, c.Validate())
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	fetch := func(ctx context.Context, uri, prev, owner string) ([]byte, string, error) {
+		once.Do(func() { close(entered); <-release })
+		return st.fetch(ctx, uri, prev, owner)
+	}
+	p := NewProvider(c, time.Minute, "", nil, WithFragmentFetcher(fetch))
+
+	go p.MaybeRefresh(context.Background())
+	<-entered
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { p.MaybeRefresh(ctx); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stale MaybeRefresh ignored a cancelled context")
 	}
 }

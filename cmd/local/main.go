@@ -77,13 +77,14 @@ func main() {
 			slog.String("component", "remote_config"), slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	awsClient.SetConfigSource(provider.Get)
 
 	// Initialize the token validator and wrap it in a SelfExtractor so the local
 	// server always validates JWT signatures itself (no delegated mode).
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 	extractor := validator.NewSelfExtractor(tokenValidator)
 
-	svc := handler.NewIdPService(provider, aws.IdPKMS, logger)
+	svc := handler.NewIdPService(provider, handler.DefaultIdPKMS, logger)
 
 	// Create the handler function. No audit sink for the local dev server.
 	h := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).WithIdP(svc)

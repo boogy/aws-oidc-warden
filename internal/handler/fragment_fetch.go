@@ -37,11 +37,11 @@ func parseS3URI(uri string) (bucket, key string, err error) {
 type fetchedETag struct{ digest, s3ETag string }
 
 // s3FragmentFetcher reads fragments through the owner-pinned conditional GET and reports a sha256 content digest as the etag.
-func s3FragmentFetcher(consumer aws.AwsConsumerInterface, owner string) config.FragmentFetchFunc {
+func s3FragmentFetcher(consumer aws.AwsConsumerInterface) config.FragmentFetchFunc {
 	var mu sync.Mutex
 	seen := map[string]fetchedETag{}
 
-	return func(ctx context.Context, uri, prevETag string) ([]byte, string, error) {
+	return func(ctx context.Context, uri, prevETag, owner string) ([]byte, string, error) {
 		if owner == "" {
 			return nil, "", fmt.Errorf("s3 fragment %q: s3_config_bucket_owner must be set in the service config", uri)
 		}

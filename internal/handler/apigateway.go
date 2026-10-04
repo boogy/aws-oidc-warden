@@ -42,7 +42,7 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
 
-	kind := h.processor.route(event.HTTPMethod, event.Path)
+	kind := h.processor.route(ctx, event.HTTPMethod, event.Path)
 	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, event.Path, log, h.newResponse, h.newResponseWithHeaders); ok {
 		return resp, nil
 	}

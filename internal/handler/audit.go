@@ -70,6 +70,7 @@ type auditRecord struct {
 	SourceIdentityTruncated  bool   `json:"sourceIdentityTruncated,omitempty"`
 	AccessKeyID              string `json:"accessKeyId,omitempty"`
 	SessionNameSource        string `json:"sessionNameSource,omitempty"`
+	RequestedSessionName     string `json:"requestedSessionName,omitempty"`
 
 	// SessionTagKeys (names) are always safe to record. SessionTags (values)
 	// only when LogClaimValues is on and a role was actually granted.
@@ -99,6 +100,7 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.SessionTags = nil
 	rec.Claims = nil
 	rec.SourceIdentity = ""
+	rec.RequestedSessionName = ""
 	rec.Reason = rec.effectiveReason(logClaimValues) // replaced, not cleared
 	rec.reasonFromError = false
 }
@@ -190,6 +192,7 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []slog.Attr {
 	}
 	appendIf("reason", rec.effectiveReason(logClaimValues))
 	if logClaimValues {
+		appendIf("requestedSessionName", rec.RequestedSessionName)
 		appendIf("jwtSub", rec.JWTSub)
 		appendIf("subject", rec.Subject)
 		if len(rec.Audience) > 0 {

@@ -159,6 +159,12 @@ func TestIdPDefaults(t *testing.T) {
 	require.Empty(t, c.AllowedRoles)
 }
 
+func TestIdPDefaultJWKSURIFollowsCustomPath(t *testing.T) {
+	c := &IdPConfig{Issuer: "https://h.example.com/warden", Paths: IdPPaths{JWKS: "/warden/keys"}}
+	c.applyDefaults()
+	require.Equal(t, "https://h.example.com/warden/keys", c.JWKSURI)
+}
+
 func TestIdPFingerprintIgnoresReloadableFields(t *testing.T) {
 	a, b := validIdP(), validIdP()
 	b.Enabled = false

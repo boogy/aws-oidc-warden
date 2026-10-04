@@ -85,6 +85,7 @@ type RoleMapping struct {
 	Roles              []string      `mapstructure:"roles"               json:"roles"`                           // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
 	Conditions         *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`            // Conditions for role assumption
 	RoleSessionName    string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`     // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
+	AllowSessionName   bool          `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`    // Let the caller's sessionName name the session for roles granted by THIS mapping
 	IDPToken           bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`             // Allow minting an IdP token for roles granted by THIS mapping
 	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"` // Ceiling for the caller's durationSeconds; 0 = 1h
 
@@ -110,6 +111,7 @@ type RoleGroupDefaults struct {
 	SessionPolicy     string            `mapstructure:"session_policy"      json:"session_policy,omitempty"`
 	SessionPolicyFile string            `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
 	RoleSessionName   string            `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
+	AllowSessionName  bool              `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`
 	SessionTags       map[string]string `mapstructure:"session_tags"  json:"session_tags,omitempty"`
 
 	IDPToken           bool          `mapstructure:"idp_token"                json:"idp_token,omitempty"`
@@ -1103,6 +1105,9 @@ func (c *Config) Validate() error {
 		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
 			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
 		}
+		if m.AllowSessionName && m.RoleSessionName != "" {
+			return fmt.Errorf("%s[%d] (%s): set allow_session_name or role_session_name, not both", source, i, subject)
+		}
 		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
@@ -1198,6 +1203,7 @@ func (c *Config) Validate() error {
 				SessionPolicy:     group.Defaults.SessionPolicy,
 				SessionPolicyFile: group.Defaults.SessionPolicyFile,
 				RoleSessionName:   group.Defaults.RoleSessionName,
+				AllowSessionName:  group.Defaults.AllowSessionName,
 				SessionTags:       group.Defaults.SessionTags,
 
 				IDPToken:           group.Defaults.IDPToken,
@@ -1755,6 +1761,11 @@ func (d Decision) RoleSessionName() string {
 		return ""
 	}
 	return d.authorizing.RoleSessionName
+}
+
+// SessionNameAllowed reports whether the authorizing mapping lets the caller choose the session name.
+func (d Decision) SessionNameAllowed() bool {
+	return d.authorizing != nil && d.authorizing.AllowSessionName
 }
 
 // Authorize evaluates every mapping bound to issuer whose subject pattern

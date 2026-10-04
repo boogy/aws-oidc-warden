@@ -32,15 +32,15 @@ func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 	return requested, nil
 }
 
-// resolveSessionName applies mapping > request > global; a requested name is validated even when the mapping overrides it.
-func resolveSessionName(fixed, requested, fallback string) (name, source string, err error) {
-	if requested != "" && !utils.ValidSTSName(requested) {
-		return "", "", ErrInvalidSessionName
-	}
+// resolveSessionName applies mapping > request (ignored unless allowed) > global; a requested name is always validated.
+func resolveSessionName(fixed, requested, fallback string, allowRequested bool) (name, source string, err error) {
 	switch {
 	case fixed != "":
 		return fixed, "mapping", nil
-	case requested != "":
+	case requested != "" && allowRequested:
+		if !utils.ValidSTSName(requested) {
+			return "", "", ErrInvalidSessionName
+		}
 		return requested, "request", nil
 	}
 	return fallback, "default", nil

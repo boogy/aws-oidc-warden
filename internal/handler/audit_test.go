@@ -213,6 +213,37 @@ func TestAudit_AllowRecord_HasRequiredFields(t *testing.T) {
 	assert.Contains(t, rec, "processingMs")
 }
 
+func TestAudit_AllowRecord_KeepsIgnoredSessionName(t *testing.T) {
+	cfg := auditTestCfg(t, false, true)
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), &fixedExtractor{claims: allowClaims("org/repo")}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole", SessionName: "asked-name"},
+		validator.ExtractionInput{Token: "t"}, "req-ignored-name", slog.Default())
+	require.NoError(t, err)
+
+	rec := sink.last(t)
+	assert.Equal(t, "default", rec["sessionNameSource"])
+	assert.Equal(t, "asked-name", rec["requestedSessionName"])
+	assert.NotEqual(t, "asked-name", rec["sessionName"])
+}
+
+func TestAudit_RequestedSessionNameSuppressedWithoutClaimValues(t *testing.T) {
+	cfg := auditTestCfg(t, false, false)
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), &fixedExtractor{claims: allowClaims("org/repo")}, sink, "test-frontend")
+
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole", SessionName: "jane.doe@corp.com"},
+		validator.ExtractionInput{Token: "t"}, "req-suppressed-name", slog.Default())
+	require.NoError(t, err)
+
+	rec := sink.last(t)
+	assert.Equal(t, "default", rec["sessionNameSource"])
+	assert.NotContains(t, rec, "requestedSessionName")
+}
+
 func TestAudit_DenyRecord_HasStageAndReason(t *testing.T) {
 	cfg := auditTestCfg(t, false, true)
 	sink := &fakeAuditSink{}

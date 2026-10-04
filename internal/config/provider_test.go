@@ -263,7 +263,7 @@ func etagOf(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-func (s *fakeFragmentStore) fetch(_ context.Context, uri, prevETag string) ([]byte, string, error) {
+func (s *fakeFragmentStore) fetch(_ context.Context, uri, prevETag, _ string) ([]byte, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.checks[uri]++
@@ -407,6 +407,55 @@ func TestProvider_UnchangedFragmentSkipsRefetch(t *testing.T) {
 	require.NoError(t, p.Refresh(context.Background()))
 	assert.Equal(t, 1, store.fetches[uri], "unchanged fragment must not be re-fetched/re-parsed")
 	assert.Equal(t, 2, store.checks[uri])
+}
+
+func TestProvider_FragmentFetchUsesBaseBucketOwner(t *testing.T) {
+	const uri = "s3://bucket/frag.yaml"
+	base := baseConfig(t)
+	base.ConfigFragments = []string{uri}
+	base.S3ConfigBucketOwner = "111122223333"
+	require.NoError(t, base.Validate())
+
+	var got string
+	fetch := func(_ context.Context, _, _, owner string) ([]byte, string, error) {
+		got = owner
+		return []byte(`role_mappings: []`), "sha256:x", nil
+	}
+	overlay := func(context.Context) ([]byte, error) { return []byte(`{}`), nil }
+	p := NewProvider(base, time.Minute, "yaml", overlay, WithFragmentFetcher(fetch))
+
+	require.NoError(t, p.Refresh(context.Background()))
+	assert.Equal(t, "111122223333", got)
+}
+
+func TestProvider_OverlayBucketOwner(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseOwner string
+		overlay   string
+		wantOwner string
+	}{
+		{"base owner wins over overlay", "111122223333", "s3_config_bucket_owner: \"444455556666\"\nconfig_fragments: [\"s3://bucket/frag.yaml\"]", "111122223333"},
+		{"overlay fills unset base owner", "", "s3_config_bucket_owner: \"444455556666\"\nconfig_fragments: [\"s3://bucket/frag.yaml\"]", "444455556666"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := baseConfig(t)
+			base.S3ConfigBucketOwner = tt.baseOwner
+			require.NoError(t, base.Validate())
+			var got string
+			fetch := func(_ context.Context, _, _, owner string) ([]byte, string, error) {
+				got = owner
+				return []byte(`role_mappings: []`), "sha256:x", nil
+			}
+			overlay := func(context.Context) ([]byte, error) { return []byte(tt.overlay), nil }
+			p := NewProvider(base, time.Minute, "yaml", overlay, WithFragmentFetcher(fetch))
+
+			require.NoError(t, p.Refresh(context.Background()))
+			assert.Equal(t, tt.wantOwner, got)
+			assert.Equal(t, tt.wantOwner, p.Get().S3ConfigBucketOwner)
+		})
+	}
 }
 
 func TestProvider_ChangedFragmentTriggersReload(t *testing.T) {

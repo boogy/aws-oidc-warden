@@ -116,9 +116,10 @@ func (c *IdPConfig) applyDefaults() {
 	if c.JWKSCacheMaxAge == 0 {
 		c.JWKSCacheMaxAge = 5 * time.Minute
 	}
-	base := ""
+	base, origin := "", ""
 	if u, err := url.Parse(c.Issuer); err == nil {
 		base = strings.TrimSuffix(u.Path, "/")
+		origin = u.Scheme + "://" + u.Host
 	}
 	if c.Paths.Discovery == "" {
 		c.Paths.Discovery = base + idpDiscoverySufx
@@ -127,7 +128,7 @@ func (c *IdPConfig) applyDefaults() {
 		c.Paths.JWKS = base + idpJWKSSufx
 	}
 	if c.JWKSURI == "" && c.Issuer != "" {
-		c.JWKSURI = c.Issuer + idpJWKSSufx
+		c.JWKSURI = origin + c.Paths.JWKS
 	}
 }
 

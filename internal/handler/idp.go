@@ -59,7 +59,7 @@ func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, role
 }
 
 // issueIdP mints an IdP token in-process for an authorized request and exchanges it for credentials.
-func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, requestData *RequestData, requestID string) (*IssuedCredentials, error) {
+func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, requestData *RequestData, sessionName, requestID string) (*IssuedCredentials, error) {
 	r.warnFrozenDrift(ctx, o.log, o.cfg)
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	role := requestData.Role
@@ -75,12 +75,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
 	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
 	if err != nil {
-		return refuse("idp", "invalid or excessive duration", "Duration refused", err)
-	}
-
-	sessionName, nameSource, err := resolveSessionName(o.decision.RoleSessionName(), requestData.SessionName, cfg.RoleSessionName)
-	if err != nil {
-		return refuse("idp", "session name refused", "Session name refused", err)
+		return refuse("duration", "invalid or excessive duration", "Duration refused", err)
 	}
 
 	var sourceIdentity string
@@ -162,7 +157,6 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	rec.GrantedRole = role
 	rec.AccessKeyID = *creds.AccessKeyId
 	rec.SessionName = sessionName
-	rec.SessionNameSource = nameSource
 	rec.SourceIdentity = sourceIdentity
 	rec.SourceIdentityTruncated = truncated
 	rec.DurationSeconds = int(duration)

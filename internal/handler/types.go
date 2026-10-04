@@ -52,7 +52,7 @@ var (
 	ErrInvalidDuration          = fmt.Errorf("durationSeconds must be between %d and %d", utils.MinSTSSessionSecs, utils.MaxSTSSessionSecs)
 	ErrDurationExceedsCap       = errors.New("durationSeconds exceeds the configured cap")
 	ErrDurationExceedsRoleMax   = errors.New("durationSeconds exceeds the role's MaxSessionDuration")
-	ErrInvalidSessionName       = errors.New(`sessionName must match [\w+=,.@-]{2,64}`)
+	ErrInvalidSessionName       = errors.New("sessionName must match " + utils.STSNameRule)
 	ErrIdPSourceIdentityInvalid = errors.New("source identity could not be derived for this request")
 	ErrIdPExchangeDenied        = errors.New("aws refused the web identity exchange")
 	ErrIdPExchangeUnavailable   = errors.New("aws could not reach the idp")

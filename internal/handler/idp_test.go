@@ -166,12 +166,13 @@ func TestProcessMint(t *testing.T) {
 		duration   int32
 		wantErr    error
 		wantMint   bool
-		wantAction string
+		wantAction any
 	}{
 		{"opted_in_mints", true, testRoleARN, 0, nil, true, "mint_token"},
 		{"opted_in_mints_within_1h", true, testRoleARN, 900, nil, true, "mint_token"},
-		{"not_opted_in_over_1h", false, testRoleARN, 7200, handler.ErrIdPNotPermitted, false, "assume_role"},
-		{"role_not_granted", true, otherRoleARN, 0, handler.ErrRoleNotPermitted, false, "assume_role"},
+		{"not_opted_in_over_1h", false, testRoleARN, 7200, handler.ErrIdPNotPermitted, false, "mint_token"},
+		{"role_not_granted", true, otherRoleARN, 0, handler.ErrRoleNotPermitted, false, nil},
+		{"role_not_granted_over_1h", true, otherRoleARN, 7200, handler.ErrRoleNotPermitted, false, "mint_token"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -272,23 +273,27 @@ func TestProcessMintSessionName(t *testing.T) {
 	tests := []struct {
 		name       string
 		fixed      string
+		allow      bool
 		requested  string
 		wantName   string
 		wantSource string
 		err        error
 	}{
-		{"fixed", "fixed", "", "fixed", "mapping", nil},
-		{"fixed_overrides_request", "fixed", "asked", "fixed", "mapping", nil},
-		{"request", "", "asked", "asked", "request", nil},
-		{"bad_charset", "", "bad name!", "", "", handler.ErrInvalidSessionName},
-		{"too_short", "", "a", "", "", handler.ErrInvalidSessionName},
-		{"bad_request_with_fixed", "fixed", "a", "", "", handler.ErrInvalidSessionName},
-		{"global_default", "", "", "test", "default", nil},
+		{"fixed", "fixed", false, "", "fixed", "mapping", nil},
+		{"fixed_overrides_request", "fixed", false, "asked", "fixed", "mapping", nil},
+		{"request", "", true, "asked", "asked", "request", nil},
+		{"request_ignored_without_opt_in", "", false, "asked", "test", "default", nil},
+		{"bad_charset", "", true, "bad name!", "", "", handler.ErrInvalidSessionName},
+		{"too_short", "", true, "a", "", "", handler.ErrInvalidSessionName},
+		{"bad_request_ignored_for_fixed", "fixed", false, "a", "fixed", "mapping", nil},
+		{"global_default", "", true, "", "test", "default", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := idpConfig(t, true, "", func(c *config.Config) {
 				c.RoleMappings[0].RoleSessionName = tt.fixed
+				c.RoleMappings[0].AllowSessionName = tt.allow
+				c.LogClaimValues = true
 			})
 			cons := mockWI(t)
 			proc, sink, signer := idpProcessorFor(t, cfg, cons, idpClaims(nil))
@@ -302,7 +307,13 @@ func TestProcessMintSessionName(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantName, res.SessionName)
 			assert.Equal(t, tt.wantName, cons.lastWI.name)
-			assert.Equal(t, tt.wantSource, sink.last(t)["sessionNameSource"])
+			rec := sink.last(t)
+			assert.Equal(t, tt.wantSource, rec["sessionNameSource"])
+			if tt.requested == "" {
+				assert.NotContains(t, rec, "requestedSessionName")
+			} else {
+				assert.Equal(t, tt.requested, rec["requestedSessionName"])
+			}
 		})
 	}
 }
@@ -614,7 +625,10 @@ func TestProcessMintRedactsSourceIdentity(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpConfig(t, true, "", func(c *config.Config) { c.LogClaimValues = tt.lcv })
+			cfg := idpConfig(t, true, "", func(c *config.Config) {
+				c.LogClaimValues = tt.lcv
+				c.RoleMappings[0].AllowSessionName = true
+			})
 			proc, sink, _ := idpProcessorFor(t, cfg, mockWI(t), idpClaims(nil))
 			var buf bytes.Buffer
 			_, err := mint(t, proc, handler.RequestData{SessionName: tt.requested}, &buf)

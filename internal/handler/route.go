@@ -19,31 +19,32 @@ const (
 	routeJWKS
 	routeMethodNotAllowed
 	routeNotFound
+	routeIdPDisabled
 )
 
 // route classifies a request by method and exact path; without an IdP service everything is routeAssume.
-func (r *RequestProcessor) route(method, path string) routeKind {
+func (r *RequestProcessor) route(ctx context.Context, method, path string) routeKind {
 	if r.idp == nil {
 		return routeAssume
 	}
 	p := r.idp.Config().Paths
-	switch path {
-	case p.Discovery:
-		return documentRoute(method, routeDiscovery)
-	case p.JWKS:
-		return documentRoute(method, routeJWKS)
+	if path == p.Discovery || path == p.JWKS {
+		if method != http.MethodGet && method != http.MethodHead {
+			return routeMethodNotAllowed
+		}
+		r.provider.RefreshIfDue(ctx)
+		if !r.idpEnabled(r.provider.Get()) {
+			return routeIdPDisabled
+		}
+		if path == p.Discovery {
+			return routeDiscovery
+		}
+		return routeJWKS
 	}
 	if idpShaped(path, p) {
 		return routeNotFound
 	}
 	return routeAssume
-}
-
-func documentRoute(method string, kind routeKind) routeKind {
-	if method == http.MethodGet || method == http.MethodHead {
-		return kind
-	}
-	return routeMethodNotAllowed
 }
 
 // idpShaped reports a near-miss of a configured IdP path: other case, trailing slash, or one extra leading segment.
@@ -86,6 +87,9 @@ func serveIdP[T any](ctx context.Context, r *RequestProcessor, kind routeKind, m
 		return newRespH(status, body, map[string]string{"Allow": "GET, HEAD"}), true
 	case routeNotFound:
 		logevent.Warn(ctx, log, logevent.IdPPathNotFound, "idp path not found", slog.String("path", path))
+		return errorResponse(ctx, ErrIdPPathNotFound, http.StatusNotFound, newResp), true
+	case routeIdPDisabled:
+		logevent.Debug(ctx, log, logevent.IdPPathDisabled, "idp path requested while idp is disabled", slog.String("path", path))
 		return errorResponse(ctx, ErrIdPPathNotFound, http.StatusNotFound, newResp), true
 	}
 	return resp, false

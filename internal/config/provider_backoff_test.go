@@ -87,7 +87,7 @@ func TestProviderBackoffNeverBlocksRequests(t *testing.T) {
 		calls.Add(1)
 		return []byte(`{}`), nil
 	})
-	p.mu.Lock()
+	p.lock()
 	done := make(chan struct{})
 	go func() { p.MaybeRefresh(context.Background()); close(done) }()
 	select {
@@ -95,7 +95,7 @@ func TestProviderBackoffNeverBlocksRequests(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("MaybeRefresh blocked")
 	}
-	p.mu.Unlock()
+	p.unlock()
 	assert.Zero(t, calls.Load())
 }
 
@@ -162,4 +162,95 @@ func TestProviderBackoffDisabledWhenStale(t *testing.T) {
 		p.MaybeRefresh(ctx)
 		assert.Equal(t, i+1, st.checks[c.MappingsFile], "attempt %d", i+1)
 	}
+}
+
+func staleMappingsProvider(t *testing.T, calls *atomic.Int32) *Provider {
+	t.Helper()
+	c, st := s3MappingsCfg(t, time.Minute)
+	fetch := func(ctx context.Context, uri, prevETag, owner string) ([]byte, string, error) {
+		calls.Add(1)
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		return st.fetch(ctx, uri, prevETag, owner)
+	}
+	p := NewProvider(c, time.Minute, "yaml", nil, WithFragmentFetcher(fetch))
+	_, _, stale := p.Stale()
+	require.True(t, stale)
+	return p
+}
+
+func TestProviderStaleWaitsForHeldRefreshLock(t *testing.T) {
+	var calls atomic.Int32
+	p := staleMappingsProvider(t, &calls)
+	p.lock()
+	done := make(chan struct{})
+	go func() { p.MaybeRefresh(context.Background()); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("stale MaybeRefresh returned without waiting for the refresh lock")
+	case <-time.After(50 * time.Millisecond):
+	}
+	require.NoError(t, p.attemptLocked(context.Background()))
+	p.unlock()
+	<-done
+	assert.Equal(t, int32(1), calls.Load(), "waiter reuses the holder's refresh")
+}
+
+func TestProviderStaleWaitEndsWithCallerContext(t *testing.T) {
+	p := staleMappingsProvider(t, new(atomic.Int32))
+	p.lock()
+	defer p.unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	p.MaybeRefresh(ctx)
+	assert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+}
+
+func TestProviderRefreshOutlivesCallerCancellation(t *testing.T) {
+	var calls atomic.Int32
+	p := staleMappingsProvider(t, &calls)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p.MaybeRefresh(ctx)
+	require.Zero(t, p.failures.Load())
+	_, _, stale := p.Stale()
+	require.False(t, stale)
+
+	p.MaybeRefresh(ctx)
+	assert.Equal(t, int32(1), calls.Load(), "a disconnecting caller cannot bypass the reload interval")
+}
+
+func TestProviderCancelledRefreshIsNotAFailure(t *testing.T) {
+	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(ctx context.Context) ([]byte, error) { return nil, ctx.Err() })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, p.Refresh(ctx), context.Canceled)
+	assert.Zero(t, p.failures.Load())
+	assert.NotZero(t, p.lastAttempt.Load())
+}
+
+func TestProviderRefreshIfDueDoesNotWaitWhileStale(t *testing.T) {
+	var calls atomic.Int32
+	p := staleMappingsProvider(t, &calls)
+	p.lock()
+	defer p.unlock()
+	p.RefreshIfDue(context.Background())
+	assert.Zero(t, calls.Load())
+}
+
+func TestProviderTimedOutRefreshCountsAsFailure(t *testing.T) {
+	var calls atomic.Int32
+	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(ctx context.Context) ([]byte, error) {
+		calls.Add(1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	p.MaybeRefresh(ctx)
+	require.Equal(t, int32(1), p.failures.Load())
+
+	p.MaybeRefresh(context.Background())
+	assert.Equal(t, int32(1), calls.Load(), "a hung source is backed off, not retried per request")
 }

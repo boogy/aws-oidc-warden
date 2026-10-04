@@ -236,7 +236,7 @@ The failure modes that actually bite, in rough order of likelihood:
 | `400 duration_exceeds_cap`        | `durationSeconds` above the IdP ceiling, or over 1h with no `idp` block                                                                                |
 | `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                                                                |
 | `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                                                                   |
-| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path                                                                                                        |
+| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                                                         |
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                              |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                                                                  |
 | `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                                                              |

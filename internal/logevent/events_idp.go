@@ -27,6 +27,9 @@ var IdPTokenTooLarge = newEvent("idp.token.too_large")
 // IdPPathNotFound is emitted when an IdP-shaped path matches no configured IdP path (Warn).
 var IdPPathNotFound = newEvent("idp.path.not_found")
 
+// IdPPathDisabled is emitted when a discovery/JWKS path is requested while idp.enabled is false (Debug).
+var IdPPathDisabled = newEvent("idp.path.disabled")
+
 // IdPExchangeFailure is emitted when the unsigned AssumeRoleWithWebIdentity call is refused (Warn).
 var IdPExchangeFailure = newEvent("idp.exchange.failure")
 

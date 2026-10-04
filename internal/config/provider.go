@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,15 +18,9 @@ import (
 // FetchFunc retrieves the raw configuration bytes from a remote source.
 type FetchFunc func(context.Context) ([]byte, error)
 
-// FragmentFetchFunc retrieves one config_fragments entry's current content.
-// prevETag is the etag last successfully applied (empty on first fetch); may
-// return (nil, prevETag, nil) to signal "unchanged" and skip the body fetch.
-// Required for "scheme://" entries; local paths are read directly.
-//
-// etag must be stable and content-derived: Provider treats etag == prevETag
-// as unchanged regardless of data, so a constant/empty etag would silently
-// hide real content changes.
-type FragmentFetchFunc func(ctx context.Context, uri, prevETag string) (data []byte, etag string, err error)
+// FragmentFetchFunc fetches a "scheme://" config_fragments entry; (nil, prevETag, nil) means unchanged.
+// etag must be content-derived: an etag equal to prevETag is treated as unchanged whatever the data.
+type FragmentFetchFunc func(ctx context.Context, uri, prevETag, owner string) (data []byte, etag string, err error)
 
 // cachedFragment is the last-successfully-applied parse of one fragment
 // source, keyed by its config_fragments URI/path.
@@ -38,6 +31,9 @@ type cachedFragment struct {
 
 // fragmentMappingSoftCap: exceeding it only logs a warning, never blocks a reload.
 const fragmentMappingSoftCap = 5000
+
+// refreshTimeout caps a request-triggered refresh, which outlives its caller's cancellation.
+const refreshTimeout = 30 * time.Second
 
 // ProviderOption configures optional Provider behavior at construction.
 type ProviderOption func(*Provider)
@@ -62,16 +58,16 @@ type Provider struct {
 	lastAttempt   atomic.Int64 // unix nanos of last refresh attempt, success or failure; 0 = never
 	failures      atomic.Int32 // consecutive failed attempts
 	now           func() time.Time
-	mu            sync.Mutex                 // serializes refreshes
+	sem           chan struct{}              // 1-slot lock serializing refreshes; a channel so stale callers can wait with ctx
 	fetch         FetchFunc                  // nil if there's no primary remote/S3 config overlay
 	fragmentFetch FragmentFetchFunc          // nil if no remote ("scheme://") fragments are configured
-	fragments     map[string]*cachedFragment // last-applied fragment cache; only touched under mu (in refreshLocked)
-	frozenIdP     *IdPConfig                 // idp config the running service was built from; guarded by mu
+	fragments     map[string]*cachedFragment // last-applied fragment cache; only touched under sem (in refreshLocked)
+	frozenIdP     *IdPConfig                 // idp config the running service was built from; guarded by sem
 }
 
 // NewStaticProvider returns a Provider that always serves cfg and never reloads.
 func NewStaticProvider(cfg *Config, opts ...ProviderOption) *Provider {
-	p := &Provider{base: cfg, now: time.Now, fragments: make(map[string]*cachedFragment)}
+	p := &Provider{base: cfg, now: time.Now, sem: make(chan struct{}, 1), fragments: make(map[string]*cachedFragment)}
 	for _, opt := range opts {
 		opt(p)
 	}
@@ -84,7 +80,7 @@ func NewStaticProvider(cfg *Config, opts ...ProviderOption) *Provider {
 // viper config type of fetched bytes (empty defaults to "json"). The served
 // config is base until the first successful Refresh.
 func NewProvider(base *Config, interval time.Duration, format string, fetch FetchFunc, opts ...ProviderOption) *Provider {
-	p := &Provider{base: base, format: format, fetch: fetch, now: time.Now, fragments: make(map[string]*cachedFragment)}
+	p := &Provider{base: base, format: format, fetch: fetch, now: time.Now, sem: make(chan struct{}, 1), fragments: make(map[string]*cachedFragment)}
 	for _, opt := range opts {
 		opt(p)
 	}
@@ -95,8 +91,8 @@ func NewProvider(base *Config, interval time.Duration, format string, fetch Fetc
 
 // FreezeIdP records the IdP config the running service was built from.
 func (p *Provider) FreezeIdP(c *IdPConfig) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lock()
+	defer p.unlock()
 	p.frozenIdP = c
 }
 
@@ -108,50 +104,99 @@ func (p *Provider) Get() *Config {
 // IntervalForTest exposes the current effective interval for testing only.
 func (p *Provider) IntervalForTest() int64 { return p.interval.Load() }
 
-// MaybeRefresh reloads if reloading is enabled and the interval, or the
-// failure backoff, has elapsed. It never waits on an in-flight refresh.
-// Errors are logged; the previous config is retained.
-func (p *Provider) MaybeRefresh(ctx context.Context) {
+// MaybeRefresh reloads once the interval or failure backoff has elapsed; while stale it waits for an in-flight refresh.
+func (p *Provider) MaybeRefresh(ctx context.Context) { p.maybeRefresh(ctx, true) }
+
+// RefreshIfDue is MaybeRefresh that never waits for an in-flight refresh.
+func (p *Provider) RefreshIfDue(ctx context.Context) { p.maybeRefresh(ctx, false) }
+
+func (p *Provider) maybeRefresh(ctx context.Context, waitIfStale bool) {
 	if p.fetch == nil && len(p.base.fragmentSources()) == 0 {
 		return
 	}
 	interval := time.Duration(p.interval.Load())
-	if interval <= 0 || !p.due(interval) {
+	if interval <= 0 {
 		return
 	}
-	if !p.mu.TryLock() {
+	_, _, stale := p.Stale()
+	if !stale && !p.due(interval, false) {
 		return
 	}
-	defer p.mu.Unlock()
-	if !p.due(interval) {
+	if stale && waitIfStale {
+		if !p.lockCtx(ctx) {
+			return
+		}
+	} else if !p.tryLock() {
 		return
 	}
-	if err := p.attemptLocked(ctx); err != nil {
+	defer p.unlock()
+	_, _, stale = p.Stale()
+	if !p.due(interval, stale) {
+		return
+	}
+	rctx, cancel := detach(ctx)
+	defer cancel()
+	if err := p.attemptLocked(rctx); err != nil {
 		logevent.Error(ctx, nil, logevent.ConfigReloadFailure, "configuration refresh failed; keeping previous configuration", slog.String("error", err.Error()))
 	}
 }
 
-// due reports whether the interval, stretched 2x/4x/8x by consecutive failures, has elapsed since the last attempt.
-func (p *Provider) due(interval time.Duration) bool {
+// due reports whether the interval, stretched 2x/4x/8x by consecutive failures unless stale, has elapsed since the last attempt.
+func (p *Provider) due(interval time.Duration, stale bool) bool {
 	last := p.lastAttempt.Load()
 	if last == 0 {
 		return true
 	}
 	shift := min(p.failures.Load(), 3)
-	if _, _, stale := p.Stale(); stale {
+	if stale {
 		shift = 0
 	}
 	return p.now().UnixNano()-last >= int64(interval)<<shift
 }
 
-// attemptLocked runs one refresh and records it for backoff. Must be called with p.mu held.
+func (p *Provider) lock()   { p.sem <- struct{}{} }
+func (p *Provider) unlock() { <-p.sem }
+
+func (p *Provider) tryLock() bool {
+	select {
+	case p.sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *Provider) lockCtx(ctx context.Context) bool {
+	if p.tryLock() {
+		return true
+	}
+	select {
+	case p.sem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// detach keeps a refresh running when its caller goes away, bounded by the caller's deadline and refreshTimeout.
+func detach(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(refreshTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
+}
+
+// attemptLocked runs one refresh and records it for backoff; a caller cancellation is not a failure. Must be called with p.sem held.
 func (p *Provider) attemptLocked(ctx context.Context) error {
 	p.lastAttempt.Store(p.now().UnixNano())
 	err := p.refreshLocked(ctx)
-	if err != nil {
-		p.failures.Add(1)
-	} else {
+	switch {
+	case err == nil:
 		p.failures.Store(0)
+	case errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled):
+	default:
+		p.failures.Add(1)
 	}
 	return err
 }
@@ -162,13 +207,13 @@ func (p *Provider) Refresh(ctx context.Context) error {
 	if p.fetch == nil && len(p.base.fragmentSources()) == 0 {
 		return errors.New("no configuration fetch source configured")
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.lock()
+	defer p.unlock()
 	return p.attemptLocked(ctx)
 }
 
 // refreshLocked performs the actual fetch+merge+swap. Must be called with
-// p.mu held. On any error cfg and p.fragments are discarded — reload fails safe.
+// p.sem held. On any error cfg and p.fragments are discarded — reload fails safe.
 func (p *Provider) refreshLocked(ctx context.Context) error {
 	cfg, err := cloneConfig(p.base)
 	if err != nil {
@@ -182,6 +227,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		}
 		if err := cfg.MergeBytes(data, p.format); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
+		}
+		if p.base.S3ConfigBucketOwner != "" {
+			cfg.S3ConfigBucketOwner = p.base.S3ConfigBucketOwner
 		}
 	} else if err := cfg.Validate(); err != nil {
 		// No primary overlay: still rebuild transient state cloneConfig
@@ -254,7 +302,7 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 			prevETag = prev.etag
 		}
 
-		data, etag, err := p.fetchFragment(ctx, uri, prevETag)
+		data, etag, err := p.fetchFragment(ctx, uri, prevETag, cfg.S3ConfigBucketOwner)
 		if err != nil {
 			return nil, fmt.Errorf("config_fragments: %w", err)
 		}
@@ -349,14 +397,14 @@ func (p *Provider) Stale() (age, limit time.Duration, stale bool) {
 
 // fetchFragment reads local paths directly; remote URIs go through the
 // injected FragmentFetchFunc (nil is a hard error, never silently skipped).
-func (p *Provider) fetchFragment(ctx context.Context, uri, prevETag string) ([]byte, string, error) {
+func (p *Provider) fetchFragment(ctx context.Context, uri, prevETag, owner string) ([]byte, string, error) {
 	if !isRemoteFragment(uri) {
 		return readLocalFragment(uri)
 	}
 	if p.fragmentFetch == nil {
 		return nil, "", fmt.Errorf("%q requires a fragment fetcher (none configured)", uri)
 	}
-	return p.fragmentFetch(ctx, uri, prevETag)
+	return p.fragmentFetch(ctx, uri, prevETag, owner)
 }
 
 // cloneConfig deep-copies a Config via a JSON round-trip. Unexported caches

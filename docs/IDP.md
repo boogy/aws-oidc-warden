@@ -248,7 +248,7 @@ A role served by `AssumeRole` accepts `durationSeconds` from 900 to 3600 (omitte
 The same rule applies to every request, IdP or `AssumeRole`:
 
 1. The mapping's `role_session_name`, if set. It overrides a request `sessionName`.
-2. The request `sessionName`. It must match `^[\w+=,.@-]{2,64}$`, else 400 `invalid_session_name` (checked even when step 1 overrides it).
+2. The request `sessionName`, only if the mapping sets `allow_session_name: true`; otherwise it is ignored. When used it must match `^[\w+=,.@-]{2,64}$`, else 400 `invalid_session_name`. An ignored or overridden name is not validated; it logs `authz.session_name.ignored` (Warn).
 3. The global `role_session_name`.
 
 ## Source identity
@@ -327,7 +327,7 @@ A reload that changes a frozen field logs `config.idp.reload_ignored` once and k
 2. Confirm a request for more than 1h answers 503 `idp_signing_unavailable`. Requests of 1h or less fall back to `AssumeRole`, which only works where the role also trusts the warden's own role.
 3. Then revoke (remove the client ID from the warden's IAM OIDC provider; add a Deny on `aws:TokenIssueTime`).
 
-Discovery and JWKS keep serving while disabled.
+While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its discovery and JWKS paths (other methods stay 405) (logged at Debug as `idp.path.disabled`, not as a near miss), so STS stops trusting the key once its JWKS cache expires. Statically hosted documents (`idp-export`) keep serving: remove them yourself.
 
 ## Security notes
 
@@ -345,7 +345,7 @@ Discovery and JWKS keep serving while disabled.
 | Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                               |
 | Half-rotated keys                                             | All-or-nothing loader; rotation order above                                               |
 | Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`                          |
-| Session-name spoofing                                         | Validated charset; a mapping `role_session_name` forces it; `SourceIdentity` is immutable |
+| Session-name spoofing                                         | Caller names need `allow_session_name`; validated charset; `SourceIdentity` is immutable  |
 
 ## Incident response
 
@@ -371,10 +371,10 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | `duration_exceeds_cap`        | 400    | No    | Above the IdP ceiling, or over 1h with no `idp` block                          |
 | `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                          |
 | `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                |
-| `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path                                             |
+| `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false |
 | `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                      |
 | `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags          |
 | `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer over 1h              |
 | `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                          |
 
-The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `requestedDurationSeconds`, `durationSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`, `sessionNameSource` (`mapping`, `request` or `default`). Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).
+The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `requestedDurationSeconds`, `durationSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).

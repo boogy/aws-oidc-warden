@@ -8,9 +8,9 @@
 # - With idp_token (and the role in idp.allowed_roles) it is issued through the
 #   warden's IdP at any duration, up to the mapping's max_session_duration
 #   (default 1h, max 12h). Over 1h without idp_token is refused.
-# - Session name: the mapping's role_session_name if set (the caller's sessionName
-#   is then ignored), else the caller's sessionName, else role_session_name in
-#   service.yaml.
+# - Session name: the mapping's role_session_name if set, else the caller's
+#   sessionName when the mapping sets allow_session_name: true (otherwise it is
+#   ignored), else role_session_name in service.yaml.
 
 role_sets:
   api-deployers:
@@ -29,12 +29,14 @@ role_mappings:
     roles: ["@api-deployers"]
     conditions:
       ref: "refs/heads/main"
+    allow_session_name: true
 
   # AssumeRole, up to 1h, two repos sharing one grant, any branch. A caller can send
   # sessionName (e.g. "docs-preview-42") to tell its sessions apart in CloudTrail.
   - issuer: "https://token.actions.githubusercontent.com"
     subject: ["octo-org/web", "octo-org/docs"]
     roles: ["@readonly"]
+    allow_session_name: true
 
   # IdP-issued at the default 1h ceiling: the role trusts only the warden's OIDC
   # provider, so idp_token is what makes it reachable at all.
