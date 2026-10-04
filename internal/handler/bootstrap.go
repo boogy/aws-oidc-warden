@@ -217,9 +217,19 @@ func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 	bucket, key, owner := cfg.S3ConfigBucket, cfg.S3ConfigPath, cfg.S3ConfigBucketOwner
 	var fetch config.FetchFunc
 	if owner != "" {
+		// Refreshes are serialized by the provider, so the cache needs no lock.
+		var lastETag string
+		var lastData []byte
 		fetch = func(ctx context.Context) ([]byte, error) {
-			data, _, err := consumer.GetS3ObjectIfChanged(ctx, bucket, key, "", owner)
-			return data, err
+			data, etag, err := consumer.GetS3ObjectIfChanged(ctx, bucket, key, lastETag, owner)
+			if err != nil {
+				return nil, err
+			}
+			if data == nil && etag != "" && etag == lastETag {
+				return lastData, nil
+			}
+			lastETag, lastData = etag, data
+			return data, nil
 		}
 	} else {
 		logevent.Warn(ctx, nil, logevent.ConfigS3OwnerUnpinned, "s3 config read is not pinned to a bucket owner",

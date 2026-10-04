@@ -5,7 +5,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 ## Files
 
 - `bootstrap.go` — `NewBootstrap(adapter)` wires dependencies (`adapter` is stamped into every log line); constructs the correct `ClaimsExtractorInterface` from `cfg.JWTValidation.Mode`. Holds both `Validator` (kept for external use) and `Extractor` (used by processor). Ends with `warmJWKSCache(mode, validator)`: a best-effort JWKS prefetch during cold start (Lambda INIT), **self mode only** (delegated modes never consult JWKS) and bounded by `jwksWarmPrefetchTimeout` (3s) so an unreachable issuer can't stall INIT — on timeout the first request just pays the fetch as before. It reuses the same fetch/cache/validation path, so it changes only _when_ a key is fetched, never whether it is trusted.
-- `processor.go` — `ProcessRequest(ctx, requestData, input, requestID, log)`. Takes `ExtractionInput` and calls `extractor.Extract()` instead of `validator.Validate()` directly. It captures one `cfg := provider.Get()` after `MaybeRefresh` and sets `input.Config = cfg`, so claim extraction and authorization are decided by the same config generation — the extractors would otherwise read the provider again and a reload landing between the two reads would split one request across two generations.
+- `processor.go` — `ProcessRequest(ctx, requestData, input, requestID, log)`. Takes `ExtractionInput` and calls `extractor.Extract()` instead of `validator.Validate()` directly. It captures one `cfg := provider.Get()` after `RefreshIfDue` and sets `input.Config = cfg`, so claim extraction and authorization are decided by the same config generation — the extractors would otherwise read the provider again and a reload landing between the two reads would split one request across two generations.
 - `types.go` — `RequestData`/response structs and sentinel errors. In delegated modes, `RequestData.Token` may be empty.
 - `validation.go` — `ValidateRequestData` (self mode), `ParseRoleOnlyRequestBody` (delegated modes — only `role` required), shared `validateRole()` helper.
 - `errors.go` — `classifyError`: the single sentinel-error → HTTP status + error-code map every adapter serializes through.
@@ -14,7 +14,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `audit.go` — `AuditSink` and the allow/deny audit record, including `auditClaims` (claim values formatted through `utils.FormatClaimValue`).
 - `route.go` — classifies the IdP discovery/JWKS paths before the normal pipeline; near misses and wrong methods map to `idp_path_not_found` / `method_not_allowed`; the exact paths refresh config and answer `idp_path_not_found` while `idp.enabled` is false. Credentials always go through `/verify`.
 - `idp.go` — `selectIdP` routes an `idp_token` role (in `idp.allowed_roles`) to `issueIdP` while `idp.enabled`; over 1h without it is refused. `issueIdP` mints and runs an in-process `AssumeRoleWithWebIdentity`; `ProcessRequest` (`processor.go`) is the single entry for both. `idp_helpers.go` — duration, session-name and source-identity resolution. `idp_document.go` — serves discovery/JWKS.
-- `bootstrap.go` `NewIdPService` — builds the `idp.Service` whenever an `idp` block exists (keys warm only when `idp.enabled`); the KMS client comes from `DefaultIdPKMS`, its own wrapper, not the consumer's, so `RefreshClients` does not reach it.
+- `bootstrap.go` `NewIdPService` — builds the `idp.Service` whenever an `idp` block exists (keys warm only when `idp.enabled`); the KMS client comes from `DefaultIdPKMS`, the shared `AwsServiceWrapper` singleton the consumer also uses. `RefreshClients` swaps its clients without synchronization, so it must never run while requests are in flight (it has no production caller).
 - `apigateway.go` — REST API v1 adapter (`events.APIGatewayProxyRequest`). Passes `ExtractionInput{Token: requestData.Token}`; always self mode. IdP routes match `requestContext.path` (stage-qualified), not `event.Path`.
 - `apigatewayv2.go` — HTTP API v2 adapter (`events.APIGatewayV2HTTPRequest`). Reads authorizer claims from `event.RequestContext.Authorizer.JWT.Claims`; use with `jwt_validation.mode: "apigw"`.
 - `alb.go` — ALB adapter. Reads `x-amzn-oidc-data` header when present (delegated ALB mode); falls back to token-in-body (self mode).
@@ -22,7 +22,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 
 ## Pipeline
 
-`MaybeRefresh()` → `extractor.Extract(ctx, input)` → account allow-list guard (every request — `IsTargetAccountAllowed` itself encodes disabled-means-hub-only, so it fails closed rather than being skipped) → `cfg.AuthorizeRoles(issuer, subject, claims)` → tag-auth fallback (`cfg.TagAuth.Authorize`) → `cfg.FindSessionPolicy` → `cfg.EffectiveSessionTags` → role assumption → audit record.
+`RefreshIfDue()` → `extractor.Extract(ctx, input)` → stale gate (authenticated callers only: waits on `MaybeRefresh`, re-extracts against the refreshed config, else `503 config_stale`) → account allow-list guard (every request — `IsTargetAccountAllowed` itself encodes disabled-means-hub-only, so it fails closed rather than being skipped) → `cfg.AuthorizeRoles(issuer, subject, claims)` → tag-auth fallback (`cfg.TagAuth.Authorize`) → `cfg.FindSessionPolicy` → `cfg.EffectiveSessionTags` → role assumption → audit record.
 
 ## Conventions
 

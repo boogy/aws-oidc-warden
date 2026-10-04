@@ -436,7 +436,7 @@ func TestProvider_OverlayBucketOwner(t *testing.T) {
 		wantOwner string
 	}{
 		{"base owner wins over overlay", "111122223333", "s3_config_bucket_owner: \"444455556666\"\nconfig_fragments: [\"s3://bucket/frag.yaml\"]", "111122223333"},
-		{"overlay fills unset base owner", "", "s3_config_bucket_owner: \"444455556666\"\nconfig_fragments: [\"s3://bucket/frag.yaml\"]", "444455556666"},
+		{"overlay cannot fill unset base owner", "", "s3_config_bucket_owner: \"444455556666\"\nconfig_fragments: [\"s3://bucket/frag.yaml\"]", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -451,7 +451,13 @@ func TestProvider_OverlayBucketOwner(t *testing.T) {
 			overlay := func(context.Context) ([]byte, error) { return []byte(tt.overlay), nil }
 			p := NewProvider(base, time.Minute, "yaml", overlay, WithFragmentFetcher(fetch))
 
-			require.NoError(t, p.Refresh(context.Background()))
+			err := p.Refresh(context.Background())
+			if tt.wantOwner == "" {
+				require.ErrorContains(t, err, "s3_config_bucket_owner is required")
+				assert.Empty(t, got, "no fragment read may happen with an overlay-chosen owner")
+				return
+			}
+			require.NoError(t, err)
 			assert.Equal(t, tt.wantOwner, got)
 			assert.Equal(t, tt.wantOwner, p.Get().S3ConfigBucketOwner)
 		})

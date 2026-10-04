@@ -393,3 +393,21 @@ func TestMaxStaleMaybeRefreshWaitHonoursContext(t *testing.T) {
 		t.Fatal("stale MaybeRefresh ignored a cancelled context")
 	}
 }
+
+func TestOverlayZeroReloadIntervalKeepsStaleGate(t *testing.T) {
+	c, st := s3MappingsCfg(t, time.Minute)
+	overlay := func(context.Context) ([]byte, error) { return []byte("config_reload_interval: 0\n"), nil }
+	p := NewProvider(c, time.Minute, "yaml", overlay, WithFragmentFetcher(st.fetch))
+	require.NoError(t, p.Refresh(context.Background()))
+	require.Equal(t, 3*time.Minute, p.Get().effectiveMappingsMaxStale())
+}
+
+func TestLoadConfigRejectsInlineMappingsWithMappingsFile(t *testing.T) {
+	dir := t.TempDir()
+	body := "issuers:\n  - issuer: " + mapIssuer + "\n    provider: github\n    audiences: [sts.amazonaws.com]\n" +
+		"mappings_file: /m.yaml\n" + okMappings
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "split.yaml"), []byte(body), 0o600))
+	t.Setenv("CONFIG_PATH", dir)
+	t.Setenv("CONFIG_NAME", "split")
+	require.ErrorContains(t, (&Config{}).LoadConfig(), "mappings_file is set")
+}

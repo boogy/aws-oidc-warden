@@ -73,7 +73,7 @@ func TestConfigStaleDeniesRequest(t *testing.T) {
 		validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))
 
 	require.ErrorIs(t, err, handler.ErrConfigStale)
-	assert.Zero(t, ext.calls.Load())
+	assert.Equal(t, int32(1), ext.calls.Load())
 	assert.Zero(t, cons.assumeCalls)
 	rec := sink.last(t)
 	assert.Equal(t, "deny", rec["decision"])
@@ -92,11 +92,34 @@ func TestConfigStaleDeniesMint(t *testing.T) {
 	_, err := mint(t, proc, handler.RequestData{}, &bytes.Buffer{})
 
 	require.ErrorIs(t, err, handler.ErrConfigStale)
-	assert.Zero(t, ext.calls.Load())
+	assert.Equal(t, int32(1), ext.calls.Load())
 	assert.Zero(t, cons.wiCalls)
 	rec := sink.last(t)
 	assert.Equal(t, "deny", rec["decision"])
 	assert.Equal(t, "config", rec["stage"])
+}
+
+type rejectingExtractor struct{}
+
+func (rejectingExtractor) Extract(context.Context, validator.ExtractionInput) (*types.Claims, error) {
+	return nil, errors.New("bad token")
+}
+
+func TestConfigStaleNotRevealedToUnauthenticatedCaller(t *testing.T) {
+	p, fail := staleProvider(t, new(20*time.Millisecond))
+	cons := mockConsumer(t)
+	ext := &countingExtractor{inner: rejectingExtractor{}}
+	proc, sink := staleProcessor(t, p, cons, ext)
+
+	fail.Store(true)
+	time.Sleep(50 * time.Millisecond)
+
+	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Token: "t", Role: testRoleARN},
+		validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))
+
+	require.ErrorIs(t, err, handler.ErrTokenValidationFailed)
+	assert.NotErrorIs(t, err, handler.ErrConfigStale)
+	assert.Equal(t, "extract", sink.last(t)["stage"])
 }
 
 func TestConfigStaleNotAppliedToFreshOrDisabled(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
@@ -42,7 +43,12 @@ func main() {
 		fail("config", err)
 	}
 
-	if err := run(ctx, c, func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }, logger, *outDir); err != nil {
+	provider, err := handler.BuildConfigProvider(c, aws.NewAwsConsumer(c))
+	if err != nil {
+		fail("config", err)
+	}
+
+	if err := run(ctx, provider.Get(), handler.DefaultIdPKMS, logger, *outDir); err != nil {
 		fail("export", err)
 	}
 }

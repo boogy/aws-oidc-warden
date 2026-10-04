@@ -701,7 +701,7 @@ func (c *Config) LoadConfig() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	return nil
+	return c.validateMappingsSplit()
 }
 
 // MergeBytes overlays serialized configuration onto c using the same snake_case

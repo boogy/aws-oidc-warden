@@ -122,6 +122,8 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 				slog.String("roleArn", role), slog.String("error", err.Error()))
 			ret = ErrIdPTokenTooLarge
 		case errors.Is(err, idp.ErrInvalidSourceIdentity):
+			logevent.Warn(ctx, log, logevent.IdPSourceIdentityInvalid, "IdP source identity rejected",
+				slog.String("roleArn", role), slog.String("error", err.Error()))
 			ret = ErrIdPSourceIdentityInvalid
 		case errors.Is(err, idp.ErrUnavailable):
 			logevent.Warn(ctx, log, logevent.IdPUnavailable, "IdP signing keys unavailable", slog.String("error", err.Error()))

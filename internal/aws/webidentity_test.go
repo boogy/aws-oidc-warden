@@ -118,7 +118,7 @@ func TestClassifyWebIdentityError(t *testing.T) {
 		{"AccessDenied", wiErr("AccessDenied", "Not authorized to perform sts:AssumeRoleWithWebIdentity"), ErrWebIdentityDenied},
 		{"AccessDeniedException", wiErr("AccessDeniedException", "Not authorized"), ErrWebIdentityDenied},
 		{"IDPRejectedClaim", wiErr("IDPRejectedClaim", "Incorrect token audience"), ErrWebIdentityDenied},
-		{"ExpiredToken", wiErr("ExpiredTokenException", "Token expired"), ErrWebIdentityDenied},
+		{"ExpiredToken", wiErr("ExpiredTokenException", "Token expired"), ErrWebIdentityUnavailable},
 		{"verification key retrieve", wiErr("InvalidIdentityToken", "Couldn't retrieve verification key from your identity provider, please reference AssumeRoleWithWebIdentity documentation for requirements"), ErrWebIdentityUnavailable},
 		{"Could not fetch OpenID configuration", wiErr("InvalidIdentityToken", "Could not fetch OpenID configuration"), ErrWebIdentityUnavailable},
 		{"Unable to retrieve JWKS", wiErr("InvalidIdentityToken", "Unable to retrieve JWKS"), ErrWebIdentityUnavailable},

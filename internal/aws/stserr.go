@@ -65,14 +65,14 @@ func classifyWebIdentityError(err error) error {
 		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
 	}
 	switch code {
-	case "idpcommunicationerror":
+	case "idpcommunicationerror", "expiredtokenexception":
 		return fmt.Errorf("%w: %w", ErrWebIdentityUnavailable, err)
 	case "invalididentitytoken":
 		if strings.Contains(lower, idpFetchRetrieveHint) || strings.Contains(lower, idpFetchFetchHint) || strings.Contains(lower, idpFetchKeyHint) {
 			return fmt.Errorf("%w: %w", ErrWebIdentityUnavailable, err)
 		}
 		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
-	case "idprejectedclaim", "expiredtokenexception":
+	case "idprejectedclaim":
 		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
 	case "validationerror":
 		if strings.Contains(msg, durationSecondsHint) && strings.Contains(msg, roleMaxDurationHint) {

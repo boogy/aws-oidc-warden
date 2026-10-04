@@ -152,6 +152,7 @@ type fakeConsumer struct {
 	assumeCalls int
 	tagCalls    int
 	wiCalls     int
+	gotDuration int32
 	lastWI      struct {
 		role, name, token string
 		policy            *string
@@ -200,8 +201,11 @@ func (f *fakeConsumer) AssumeRoleWithWebIdentity(_ context.Context, role, name, 
 	}, nil
 }
 
-func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, _ *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
+func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, duration *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
 	f.assumeCalls++
+	if duration != nil {
+		f.gotDuration = *duration
+	}
 	f.assumed = roleARN
 	f.gotSessionName = sessionName
 	f.gotClaims = claims

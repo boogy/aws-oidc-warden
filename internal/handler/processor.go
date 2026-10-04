@@ -40,12 +40,16 @@ func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
 	return r
 }
 
-// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added idp block.
+// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added or removed idp block.
 func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
-	if cfg.IdP == nil || r.lastChecked.Swap(cfg) == cfg {
+	if r.lastChecked.Swap(cfg) == cfg {
 		return
 	}
-	if cfg.IdP.Fingerprint() != r.frozenFP {
+	fp := ""
+	if cfg.IdP != nil {
+		fp = cfg.IdP.Fingerprint()
+	}
+	if fp != r.frozenFP {
 		logevent.Warn(ctx, log, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")
 	}
 }
@@ -89,7 +93,7 @@ func (r *RequestProcessor) deny(ctx context.Context, o *authzOutcome, msg string
 func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*authzOutcome, error) {
 	startTime, _ := ctx.Value(StartTimeContextKey).(time.Time)
 
-	r.provider.MaybeRefresh(ctx)
+	r.provider.RefreshIfDue(ctx)
 	cfg := r.provider.Get()
 
 	// One config generation for both extraction and authorization.
@@ -117,17 +121,27 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 
 	o := &authzOutcome{cfg: cfg, rec: rec, log: log, elapsed: elapsed}
 
-	if age, limit, stale := r.provider.Stale(); stale {
-		o.rec.Stage, o.rec.Reason = "config", "mappings older than mappings_max_stale"
-		logevent.Error(ctx, log, logevent.ConfigMappingsStale, "role mappings are stale; refusing request",
-			slog.Int64("ageMs", age.Milliseconds()), slog.Int64("maxStaleMs", limit.Milliseconds()))
-		return nil, r.deny(ctx, o, "Configuration stale", ErrConfigStale)
-	}
-
 	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
 		rec.setErrorReason("extract", err)
 		return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
+	}
+
+	// Stale is gated only after authentication so anonymous callers cannot wait on a refresh or trigger the Error log.
+	if _, _, stale := r.provider.Stale(); stale {
+		r.provider.MaybeRefresh(ctx)
+		if age, limit, stale := r.provider.Stale(); stale {
+			o.rec.Stage, o.rec.Reason = "config", "mappings older than mappings_max_stale"
+			logevent.Error(ctx, log, logevent.ConfigMappingsStale, "role mappings are stale; refusing request",
+				slog.Int64("ageMs", age.Milliseconds()), slog.Int64("maxStaleMs", limit.Milliseconds()))
+			return nil, r.deny(ctx, o, "Configuration stale", ErrConfigStale)
+		}
+		cfg = r.provider.Get()
+		input.Config, o.cfg = cfg, cfg
+		if claims, err = r.extractor.Extract(ctx, input); err != nil {
+			rec.setErrorReason("extract", err)
+			return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
+		}
 	}
 	o.claims = claims
 
@@ -254,7 +268,11 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	requestedRole := requestData.Role
 
-	duration, err := resolveDuration(requestData.DurationSeconds, utils.RoleChainingMaxSecs*time.Second)
+	ceiling := time.Duration(utils.RoleChainingMaxSecs) * time.Second
+	if m := o.decision.MaxSessionDuration(); m > 0 && m < ceiling {
+		ceiling = m
+	}
+	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
 	if err != nil {
 		rec.Stage, rec.Reason = "duration", "invalid or excessive duration"
 		return nil, r.deny(ctx, o, "Duration refused", err)

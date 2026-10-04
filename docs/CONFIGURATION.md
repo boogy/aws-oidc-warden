@@ -540,7 +540,7 @@ The mappings file is a layer beside the base config and the S3 overlay (`s3_conf
 
 ### Bucket owner
 
-`s3_config_bucket_owner` is sent as `ExpectedBucketOwner` on config reads only: the mappings file, `s3://` fragments and the S3 overlay. JWKS-cache and audit S3 calls do not use it. The service config (env or file) value wins: an S3 overlay cannot change it, and may only fill it when the service config leaves it unset.
+`s3_config_bucket_owner` is sent as `ExpectedBucketOwner` on config reads only: the mappings file, `s3://` fragments and the S3 overlay. JWKS-cache and audit S3 calls do not use it. Only the service config (env or file) sets it: an S3 overlay can neither set nor change it, so an overlay that adds an `s3://` mappings file or fragment needs the pin in the service config.
 
 - Required for an `s3://` `mappings_file` or `s3://` fragment; a missing value fails `Validate()`.
 - Recommended for the S3 overlay. Unset, the overlay still loads and startup logs `config.s3_owner_unpinned` (Warn).
@@ -610,7 +610,7 @@ Rules enforced on every merge:
 
 ## Hot-reloading
 
-When `s3_config_bucket`/`s3_config_path` are set, the process fetches and overlays that object at startup (failing fast if it's unreachable or invalid). If `config_reload_interval` is also > 0, the running service re-fetches the object at most once per that interval — checked lazily, once per request, via `Provider.MaybeRefresh` — and atomically swaps in a re-validated config; an invalid or unreachable reload is logged and the previous config is kept. `config_fragments` are re-resolved on the same cadence. Everything read per-request off the live `*config.Config` (issuers, `role_mappings`/`role_groups`/`role_sets`, `tag_auth`, session tags, ...) picks up a reload immediately with no restart; the `jwt_validation.mode`-selected extractor is fixed at cold start (see above).
+When `s3_config_bucket`/`s3_config_path` are set, the process fetches and overlays that object at startup (failing fast if it's unreachable or invalid). If `config_reload_interval` is also > 0, the running service re-fetches the object at most once per that interval — checked lazily, once per request, via `Provider.RefreshIfDue` — and atomically swaps in a re-validated config; an invalid or unreachable reload is logged and the previous config is kept. `config_fragments` are re-resolved on the same cadence. Everything read per-request off the live `*config.Config` (issuers, `role_mappings`/`role_groups`/`role_sets`, `tag_auth`, session tags, ...) picks up a reload immediately with no restart; the `jwt_validation.mode`-selected extractor is fixed at cold start (see above).
 
 ### Overlay merge semantics
 

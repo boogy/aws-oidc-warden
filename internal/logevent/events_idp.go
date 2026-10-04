@@ -27,7 +27,10 @@ var IdPTokenTooLarge = newEvent("idp.token.too_large")
 // IdPSubjectInvalid is emitted when subject_template renders an unusable sub for a request (Warn).
 var IdPSubjectInvalid = newEvent("idp.subject.invalid")
 
-// IdPPathNotFound is emitted when an IdP-shaped path matches no configured IdP path (Warn).
+// IdPSourceIdentityInvalid is emitted when the minter rejects the rendered source identity (Warn).
+var IdPSourceIdentityInvalid = newEvent("idp.source_identity.invalid")
+
+// IdPPathNotFound is emitted when an IdP-shaped path matches no configured IdP path (Debug).
 var IdPPathNotFound = newEvent("idp.path.not_found")
 
 // IdPPathDisabled is emitted when a discovery/JWKS path is requested while idp.enabled is false (Debug).

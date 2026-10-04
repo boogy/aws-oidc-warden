@@ -364,3 +364,43 @@ func TestBootstrapAdaptersAttachIdP(t *testing.T) {
 		}
 	}
 }
+
+func TestWarnFrozenDriftOnRemovedIdPBlock(t *testing.T) {
+	svc := idp.NewService(*bootstrapIdPConfig("https://idp.example.com", false), nil)
+	var buf bytes.Buffer
+	logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil)))
+
+	r := NewRequestProcessor(nil, nil, nil, nil, "test").WithIdP(svc)
+	r.warnFrozenDrift(context.Background(), logger, bootstrapBaseConfig(t, nil))
+	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
+
+	buf.Reset()
+	NewRequestProcessor(nil, nil, nil, nil, "test").warnFrozenDrift(context.Background(), logger, bootstrapBaseConfig(t, nil))
+	assert.Zero(t, strings.Count(buf.String(), "config.idp.reload_ignored"))
+}
+
+type etagOverlayConsumer struct {
+	aws.AwsConsumerInterface
+	prevETags []string
+}
+
+func (c *etagOverlayConsumer) GetS3ObjectIfChanged(_ context.Context, _, _, prevETag, _ string) ([]byte, string, error) {
+	c.prevETags = append(c.prevETags, prevETag)
+	if prevETag == `"e1"` {
+		return nil, prevETag, nil
+	}
+	return []byte("log_claim_values: true\n"), `"e1"`, nil
+}
+
+func TestOverlayFetchUsesConditionalGet(t *testing.T) {
+	base := bootstrapBaseConfig(t, nil)
+	base.S3ConfigBucket, base.S3ConfigPath, base.S3ConfigBucketOwner = "bucket", "config.yaml", "123456789012"
+	consumer := &etagOverlayConsumer{}
+
+	p, err := BuildConfigProvider(base, consumer)
+	require.NoError(t, err)
+	require.NoError(t, p.Refresh(context.Background()))
+
+	assert.Equal(t, []string{"", `"e1"`}, consumer.prevETags)
+	assert.True(t, p.Get().LogClaimValues, "an unchanged overlay must still be applied")
+}

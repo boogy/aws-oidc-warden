@@ -131,9 +131,9 @@ func (p *Provider) maybeRefresh(ctx context.Context, waitIfStale bool) {
 	if !p.due(interval, stale) {
 		return
 	}
-	rctx, cancel := detach(ctx)
+	rctx, cancel, callerBound := detach(ctx)
 	defer cancel()
-	if err := p.attemptLocked(rctx); err != nil {
+	if err := p.attemptLocked(rctx, callerBound); err != nil {
 		logevent.Error(ctx, nil, logevent.ConfigReloadFailure, "configuration refresh failed; keeping previous configuration", slog.String("error", err.Error()))
 	}
 }
@@ -175,23 +175,26 @@ func (p *Provider) lockCtx(ctx context.Context) bool {
 	}
 }
 
-// detach keeps a refresh running when its caller goes away, bounded by the caller's deadline and refreshTimeout.
-func detach(ctx context.Context) (context.Context, context.CancelFunc) {
+// detach keeps a refresh running when its caller goes away, bounded by the caller's deadline and refreshTimeout; callerBound reports the caller's deadline won.
+func detach(ctx context.Context) (context.Context, context.CancelFunc, bool) {
 	deadline := time.Now().Add(refreshTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+	d, ok := ctx.Deadline()
+	callerBound := ok && d.Before(deadline)
+	if callerBound {
 		deadline = d
 	}
-	return context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	rctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), deadline)
+	return rctx, cancel, callerBound
 }
 
-// attemptLocked runs one refresh and records it for backoff; a caller cancellation is not a failure. Must be called with p.sem held.
-func (p *Provider) attemptLocked(ctx context.Context) error {
+// attemptLocked runs one refresh and records it for backoff; a caller-imposed ctx end is not a failure. Must be called with p.sem held.
+func (p *Provider) attemptLocked(ctx context.Context, callerBound bool) error {
 	p.lastAttempt.Store(p.now().UnixNano())
 	err := p.refreshLocked(ctx)
 	switch {
 	case err == nil:
 		p.failures.Store(0)
-	case errors.Is(err, context.Canceled) && errors.Is(ctx.Err(), context.Canceled):
+	case callerBound && ctx.Err() != nil:
 	default:
 		p.failures.Add(1)
 	}
@@ -205,7 +208,7 @@ func (p *Provider) Refresh(ctx context.Context) error {
 	}
 	p.lock()
 	defer p.unlock()
-	return p.attemptLocked(ctx)
+	return p.attemptLocked(ctx, true)
 }
 
 // refreshLocked performs the fetch, merge and swap. Must be called with p.sem held.
@@ -223,8 +226,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		if err := cfg.MergeBytes(data, p.format); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
-		if p.base.S3ConfigBucketOwner != "" {
-			cfg.S3ConfigBucketOwner = p.base.S3ConfigBucketOwner
+		cfg.S3ConfigBucketOwner = p.base.S3ConfigBucketOwner
+		if err := cfg.validateS3ConfigOwner(); err != nil {
+			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
 	} else if err := cfg.Validate(); err != nil {
 		// No primary overlay: still rebuild transient state cloneConfig
@@ -252,6 +256,10 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 				slog.String("issuer", p.frozenIdP.Issuer), slog.String("error", err.Error()))
 			return err
 		}
+	}
+
+	if cfg.ConfigReloadInterval <= 0 {
+		cfg.ConfigReloadInterval = time.Duration(p.interval.Load())
 	}
 
 	p.current.Store(cfg)

@@ -191,7 +191,7 @@ func TestProviderStaleWaitsForHeldRefreshLock(t *testing.T) {
 		t.Fatal("stale MaybeRefresh returned without waiting for the refresh lock")
 	case <-time.After(50 * time.Millisecond):
 	}
-	require.NoError(t, p.attemptLocked(context.Background()))
+	require.NoError(t, p.attemptLocked(context.Background(), false))
 	p.unlock()
 	<-done
 	assert.Equal(t, int32(1), calls.Load(), "waiter reuses the holder's refresh")
@@ -239,7 +239,7 @@ func TestProviderRefreshIfDueDoesNotWaitWhileStale(t *testing.T) {
 	assert.Zero(t, calls.Load())
 }
 
-func TestProviderTimedOutRefreshCountsAsFailure(t *testing.T) {
+func TestProviderCallerDeadlineRefreshIsNotAFailure(t *testing.T) {
 	var calls atomic.Int32
 	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(ctx context.Context) ([]byte, error) {
 		calls.Add(1)
@@ -249,10 +249,10 @@ func TestProviderTimedOutRefreshCountsAsFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	p.MaybeRefresh(ctx)
-	require.Equal(t, int32(1), p.failures.Load())
+	require.Zero(t, p.failures.Load())
 
 	p.MaybeRefresh(context.Background())
-	assert.Equal(t, int32(1), calls.Load(), "a hung source is backed off, not retried per request")
+	assert.Equal(t, int32(1), calls.Load(), "a hung source is retried per interval, not per request")
 }
 
 func TestProviderStaleWaitIsCapped(t *testing.T) {

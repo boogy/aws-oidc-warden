@@ -87,7 +87,7 @@ func serveIdP[T any](ctx context.Context, r *RequestProcessor, kind routeKind, m
 		status, body := errorBody(ctx, ErrMethodNotAllowed, http.StatusMethodNotAllowed)
 		return newResp(status, body, map[string]string{"Allow": "GET, HEAD"}), true
 	case routeNotFound:
-		logevent.Warn(ctx, log, logevent.IdPPathNotFound, "idp path not found", slog.String("path", path))
+		logevent.Debug(ctx, log, logevent.IdPPathNotFound, "idp path not found", slog.String("path", path))
 		status, body := errorBody(ctx, ErrIdPPathNotFound, http.StatusNotFound)
 		return newResp(status, body, nil), true
 	case routeIdPDisabled:

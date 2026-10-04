@@ -262,6 +262,39 @@ func TestProcessMintDuration(t *testing.T) {
 	}
 }
 
+func TestAssumeRoleHonoursMappingSessionCap(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested int32
+		want      int32
+		err       error
+	}{
+		{"omitted_defaults_to_cap", 0, 900, nil},
+		{"at_cap", 900, 900, nil},
+		{"over_cap", 3600, 0, handler.ErrDurationExceedsCap},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := idpConfig(t, true, "", func(c *config.Config) {
+				c.RoleMappings[0].MaxSessionDuration = 15 * time.Minute
+				c.IdP.Enabled = false
+			})
+			cons := mockWI(t)
+			proc, _, signer := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+			_, err := mint(t, proc, handler.RequestData{DurationSeconds: tt.requested}, &bytes.Buffer{})
+
+			assert.Zero(t, signer.calls)
+			if tt.err != nil {
+				require.ErrorIs(t, err, tt.err)
+				assert.Zero(t, cons.assumeCalls)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cons.gotDuration)
+		})
+	}
+}
+
 func orZero(v any) any {
 	if v == nil {
 		return float64(0)
