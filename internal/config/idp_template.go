@@ -17,13 +17,6 @@ var (
 	idpClaimPlaceholder    = regexp.MustCompile(`^\{claim:([^{}]*)\}$`)
 )
 
-func (c *IdPConfig) validateTemplates(issuerCount int) error {
-	if err := validateSubjectTemplate(c.SubjectTemplate); err != nil {
-		return err
-	}
-	return validateSourceIdentityTemplate(c.SourceIdentity, issuerCount)
-}
-
 // validateSourceIdentityTemplate checks placeholders, the literal charset, and issuer binding.
 func validateSourceIdentityTemplate(t string, issuerCount int) error {
 	for _, p := range idpPlaceholder.FindAllString(t, -1) {

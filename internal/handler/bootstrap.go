@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/aws"
@@ -155,11 +154,10 @@ func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.L
 	if cfg == nil {
 		return nil
 	}
-	provider.FreezeIdP(cfg)
-	c := *cfg
-	c.SigningKeys = slices.Clone(c.SigningKeys)
-	svc := idp.NewService(c, idp.NewLoader(c, kms, log))
-	if c.Enabled {
+	svc := idp.NewService(*cfg, idp.NewLoader(*cfg, kms, log))
+	frozen := svc.Config()
+	provider.FreezeIdP(&frozen)
+	if frozen.Enabled {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := svc.Warm(ctx); err != nil {

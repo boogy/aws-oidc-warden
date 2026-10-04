@@ -157,7 +157,7 @@ func (c *IdPConfig) validate(allowInsecure bool, inbound []IssuerConfig) error {
 	if c.SignTimeout <= 0 || c.JWKSCacheMaxAge < 0 {
 		return errors.New("idp.sign_timeout must be > 0 and idp.jwks_cache_max_age >= 0")
 	}
-	if err := c.validateTemplates(len(inbound)); err != nil {
+	if err := validateSubjectTemplate(c.SubjectTemplate); err != nil {
 		return err
 	}
 	if c.SourceIdentityOverflow != IdPOverflowTruncate && c.SourceIdentityOverflow != IdPOverflowReject {
@@ -181,7 +181,7 @@ func (c *IdPConfig) validateAllowedRoles() error {
 	return nil
 }
 
-// checkInbound rejects inbound issuers that collide with the IdP issuer or break the # sub separator.
+// checkInbound rejects inbound issuers that collide with the IdP issuer, break the # sub separator, or outnumber an issuer-less source_identity.
 func (c *IdPConfig) checkInbound(inbound []IssuerConfig) error {
 	for _, in := range inbound {
 		if in.Issuer == c.Issuer {
@@ -191,7 +191,7 @@ func (c *IdPConfig) checkInbound(inbound []IssuerConfig) error {
 			return fmt.Errorf("issuers[] %q must not contain # when idp is configured", in.Issuer)
 		}
 	}
-	return nil
+	return validateSourceIdentityTemplate(c.SourceIdentity, len(inbound))
 }
 
 func (c *IdPConfig) validatePaths() error {

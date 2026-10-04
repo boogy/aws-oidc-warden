@@ -63,7 +63,7 @@ STS fetches `idp.issuer` + `/.well-known/openid-configuration` (here `https://id
 idp-export -config config.yaml -out ./site
 ```
 
-The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.jwks`. `idp-export` reads only the local config file (no S3 overlay); run it against the config that carries the effective `idp` block. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
+The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.jwks`. `idp-export` reads only the local config file (no S3 overlay); run it against the config that carries the effective `idp` block. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
 
 **Dev and low volume: warden-served.** The warden answers `GET`/`HEAD` on `idp.paths.discovery` and `idp.paths.jwks` with `Cache-Control: public, max-age=<jwks_cache_max_age>`. If you use this:
 
@@ -259,14 +259,14 @@ The same rule applies to every request, IdP or `AssumeRole`:
 | ---------------- | ------------------------------------------------------------------------------------------------------ |
 | `{request_id}`   | the warden request ID                                                                                  |
 | `{subject}`      | the canonical subject                                                                                  |
-| `{issuer}`       | the **host** of the inbound issuer (not `idp.issuer`), so two issuers sharing a subject cannot collide |
+| `{issuer}`       | the inbound issuer's host and path (not `idp.issuer`), so two issuers sharing a subject cannot collide |
 | `{claim:<name>}` | a verified inbound claim; a missing claim fails with 403 `idp_source_identity_invalid`                 |
 
 The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. A substituted value that needed sanitizing also gets `+` and 16 hex characters of its SHA-256, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<16 hex>`.
 
 Over 64 characters, `idp.source_identity_overflow` decides: `truncate` (default; 47 characters, `+`, 16 hex of the SHA-256) or `reject` (403 `idp_source_identity_invalid`). The audit field `sourceIdentityTruncated` flags truncation. Truncation is attribution, not an access boundary.
 
-`{issuer}` renders only the issuer URL host, so two inbound issuers on the same host render the same prefix. Pair `{issuer}` with `{subject}`, or use distinct hosts, when that matters.
+`{issuer}` renders the issuer URL host plus its path (trailing `/` dropped). A path issuer such as `https://kc.example.com/realms/a` contains `/`, so it is sanitized and hashed; issuers sharing a host still render distinctly.
 
 `aws:SourceIdentity` is the key for downstream ABAC and CloudTrail attribution. `idp.include_source_identity: false` omits it from the minted token. The template is then not rendered, so a bad template cannot fail the mint.
 
@@ -319,7 +319,7 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `allowed_roles`, plus per-mapping `idp_token`, `max_session_duration` |
 
-A reload that changes a frozen field logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected (`config.idp.issuer_collision`).
+A reload that changes a frozen field logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer, or adds a second issuer while the frozen `source_identity` lacks `{issuer}`, is rejected (`config.idp.issuer_collision`).
 
 **Kill switch:** set `idp.enabled: false` in the layer that set it. Environment beats S3: `AOW_IDP_ENABLED` is re-applied after every S3 merge, so never set `AOW_IDP_ENABLED` on Lambda if the S3 overlay is your switch. Order of operations:
 

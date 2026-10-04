@@ -14,7 +14,15 @@ import (
 
 var sourceIDPlaceholder = regexp.MustCompile(`\{(request_id|subject|issuer|claim:[^{}]*)\}`)
 
-// resolveDuration returns the session duration in seconds; a non-positive ceiling falls back to the default.
+// checkDuration rejects a requested duration outside STS bounds; 0 means omitted.
+func checkDuration(requested int32) error {
+	if requested != 0 && !utils.ValidSTSSessionSecs(requested) {
+		return ErrInvalidDuration
+	}
+	return nil
+}
+
+// resolveDuration returns the session duration for a checkDuration-valid request; a non-positive ceiling falls back to the default.
 func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 	ceilingSecs := int32(ceiling / time.Second)
 	if ceilingSecs <= 0 {
@@ -23,16 +31,13 @@ func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 	if requested == 0 {
 		return min(int32(utils.DefaultSTSSessionSecs), ceilingSecs), nil
 	}
-	if !utils.ValidSTSSessionSecs(requested) {
-		return 0, ErrInvalidDuration
-	}
 	if requested > ceilingSecs {
 		return 0, ErrDurationExceedsCap
 	}
 	return requested, nil
 }
 
-// resolveSessionName applies mapping > request (ignored unless allowed) > global; a requested name is always validated.
+// resolveSessionName applies mapping > request (ignored unless allowed) > global; a used requested name is validated.
 func resolveSessionName(fixed, requested, fallback string, allowRequested bool) (name, source string, err error) {
 	switch {
 	case fixed != "":
@@ -44,6 +49,14 @@ func resolveSessionName(fixed, requested, fallback string, allowRequested bool) 
 		return requested, "request", nil
 	}
 	return fallback, "default", nil
+}
+
+// auditSessionName returns a requested session name as-is when STS-valid, else sanitized and capped.
+func auditSessionName(requested string) string {
+	if requested == "" || utils.ValidSTSName(requested) {
+		return requested
+	}
+	return utils.FitSTSName(requested)
 }
 
 // renderSourceIdentity expands tmpl into an STS-safe SourceIdentity; truncated reports an overflow cut.
@@ -66,7 +79,7 @@ func renderSourceIdentity(tmpl, overflow, requestID, issuer, subject string, cla
 			if perr != nil || u.Host == "" {
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
-			v = u.Host
+			v = u.Host + strings.TrimSuffix(u.Path, "/")
 		default:
 			raw, ok := claims[strings.TrimPrefix(key, "claim:")]
 			if !ok {

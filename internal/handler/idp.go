@@ -179,9 +179,10 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		slog.String("tokenId", tok.ID),
 		slog.String("accessKeyId", *creds.AccessKeyId),
 		slog.Int("durationSeconds", int(duration)),
+		slog.String("sessionName", sessionName),
 	}
 	if cfg.LogClaimValues {
-		attrs = append(attrs, slog.String("sessionName", sessionName), slog.String("sourceIdentity", sourceIdentity))
+		attrs = append(attrs, slog.String("sourceIdentity", sourceIdentity))
 	}
 	logevent.Info(ctx, log, logevent.IdPCredentialsSuccess, msgMinted, attrs...)
 

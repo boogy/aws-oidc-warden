@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Settings for the local server
+// ServerSettings holds the local server CLI flags.
 type ServerSettings struct {
 	Port            int
 	ConfigPath      string
@@ -44,7 +44,6 @@ func main() {
 			slog.String("component", "config"), slog.String("error", cliErr.Error()))
 	}
 
-	// Log version information
 	versionInfo := version.Get()
 	logevent.Info(ctx, logger, logevent.AppStart, "starting AWS OIDC Warden local server",
 		slog.String("version", versionInfo.Version),
@@ -52,7 +51,6 @@ func main() {
 		slog.String("date", versionInfo.Date),
 	)
 
-	// Load configuration
 	cfg, err := config.NewConfig()
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to load config",
@@ -60,7 +58,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize the cache
 	jwksCache, err := cache.NewCache(cfg)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to initialize cache",
@@ -79,45 +76,30 @@ func main() {
 	}
 	awsClient.SetConfigSource(provider.Get)
 
-	// Initialize the token validator and wrap it in a SelfExtractor so the local
-	// server always validates JWT signatures itself (no delegated mode).
+	// The local server always validates JWT signatures itself (no delegated mode).
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 	extractor := validator.NewSelfExtractor(tokenValidator)
 
 	svc := handler.NewIdPService(provider, handler.DefaultIdPKMS, logger)
 
-	// Create the handler function. No audit sink for the local dev server.
+	// No audit sink for the local dev server.
 	h := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).WithIdP(svc)
 
-	// With IdP configured every path goes through the shared router, which 404s unknown paths.
+	var idpPaths []string
 	if svc != nil {
-		http.HandleFunc("/", localHandler(logger, settings.SimulateLatency, h.Handler))
-	} else {
-		http.HandleFunc("/verify", localHandler(logger, settings.SimulateLatency, h.Handler))
+		p := svc.Config().Paths
+		idpPaths = []string{p.Discovery, p.JWKS}
 	}
 
-	// Add a health check endpoint
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: uuid.New().String(), SourceIP: remoteIP(r.RemoteAddr)})
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
-			logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error encoding health check response",
-				slog.String("error", err.Error()))
-		}
-	})
-
-	// Start the server
 	addr := fmt.Sprintf(":%d", settings.Port)
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           nil, // Use the default mux
+		Handler:           newMux(logger, settings.SimulateLatency, h.Handler, idpPaths...),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Handle graceful shutdown
 	go func() {
 		stop := make(chan os.Signal, 1)
 		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -144,6 +126,33 @@ func main() {
 	}
 
 	logevent.Info(ctx, logger, logevent.AppStop, "server stopped")
+}
+
+// newMux serves /verify, the exact IdP document paths and /health; every other path is 404.
+func newMux(logger *slog.Logger, latency time.Duration, handlerFunc func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error), idpPaths ...string) *http.ServeMux {
+	allowed := map[string]bool{"/verify": true}
+	for _, p := range idpPaths {
+		allowed[p] = true
+	}
+	serve := localHandler(logger, latency, handlerFunc)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !allowed[r.URL.Path] {
+			http.NotFound(w, r)
+			return
+		}
+		serve(w, r)
+	})
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: uuid.New().String(), SourceIP: remoteIP(r.RemoteAddr)})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error encoding health check response",
+				slog.String("error", err.Error()))
+		}
+	})
+	return mux
 }
 
 // maxLocalBodyBytes sits one byte above the handler's 1 MiB cap so its own size check still answers.

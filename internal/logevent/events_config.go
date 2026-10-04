@@ -33,7 +33,7 @@ var ConfigJWTValidationDelegated = newEvent("config.jwt_validation.delegated")
 // ConfigIdPReloadIgnored is emitted once per config generation whose frozen idp settings differ from cold start (Warn).
 var ConfigIdPReloadIgnored = newEvent("config.idp.reload_ignored")
 
-// ConfigIdPIssuerCollision is emitted when a reload is rejected because an inbound issuer equals the frozen IdP issuer (Error).
+// ConfigIdPIssuerCollision is emitted when a reload's inbound issuers conflict with the frozen IdP config (Error).
 var ConfigIdPIssuerCollision = newEvent("config.idp.issuer_collision")
 
 // ConfigMappingsStale is emitted when role mappings are older than mappings_max_stale and requests are refused (Error).

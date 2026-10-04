@@ -35,6 +35,9 @@ const fragmentMappingSoftCap = 5000
 // refreshTimeout caps a request-triggered refresh, which outlives its caller's cancellation.
 const refreshTimeout = 30 * time.Second
 
+// staleWaitTimeout caps how long a stale request waits on an in-flight refresh before failing fast.
+var staleWaitTimeout = 5 * time.Second
+
 // ProviderOption configures optional Provider behavior at construction.
 type ProviderOption func(*Provider)
 
@@ -123,7 +126,10 @@ func (p *Provider) maybeRefresh(ctx context.Context, waitIfStale bool) {
 		return
 	}
 	if stale && waitIfStale {
-		if !p.lockCtx(ctx) {
+		wctx, cancel := context.WithTimeout(ctx, staleWaitTimeout)
+		locked := p.lockCtx(wctx)
+		cancel()
+		if !locked {
 			return
 		}
 	} else if !p.tryLock() {
@@ -253,8 +259,8 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 
 	if p.frozenIdP != nil {
 		if err := p.frozenIdP.checkInbound(cfg.Issuers); err != nil {
-			logevent.Error(ctx, nil, logevent.ConfigIdPIssuerCollision, "reload rejected: inbound issuer collides with the idp issuer",
-				slog.String("issuer", p.frozenIdP.Issuer))
+			logevent.Error(ctx, nil, logevent.ConfigIdPIssuerCollision, "reload rejected: inbound issuers conflict with the frozen idp config",
+				slog.String("issuer", p.frozenIdP.Issuer), slog.String("error", err.Error()))
 			return err
 		}
 	}

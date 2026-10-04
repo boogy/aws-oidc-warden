@@ -37,7 +37,11 @@ func TestResolveDuration(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveDuration(tt.requested, tt.ceiling)
+			var got int32
+			err := checkDuration(tt.requested)
+			if err == nil {
+				got, err = resolveDuration(tt.requested, tt.ceiling)
+			}
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -136,6 +140,14 @@ func TestRenderSourceIdentity(t *testing.T) {
 		require.NotEqual(t,
 			render("{issuer}:{subject}", "https://a.example", "org/repo"),
 			render("{issuer}:{subject}", "https://b.example", "org/repo"))
+	})
+	t.Run("same host different path differ", func(t *testing.T) {
+		require.NotEqual(t,
+			render("{issuer}:{subject}", "https://kc.example.com/realms/a", "x"),
+			render("{issuer}:{subject}", "https://kc.example.com/realms/b", "x"))
+	})
+	t.Run("trailing slash ignored", func(t *testing.T) {
+		require.Equal(t, render("{issuer}", "https://a.example/", "x"), render("{issuer}", "https://a.example", "x"))
 	})
 	t.Run("a/b vs a=b differ", func(t *testing.T) {
 		require.NotEqual(t, render("{subject}", gh, "a/b"), render("{subject}", gh, "a=b"))

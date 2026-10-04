@@ -42,17 +42,17 @@ func main() {
 		fail("config", err)
 	}
 
-	if err := run(ctx, c, func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }, *outDir); err != nil {
+	if err := run(ctx, c, func() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }, logger, *outDir); err != nil {
 		fail("export", err)
 	}
 }
 
-// run writes the discovery and JWKS documents under outDir at the configured IdP paths.
-func run(ctx context.Context, cfg *config.Config, kmsAPI func() idp.KMSAPI, outDir string) error {
-	if cfg.IdP == nil || !cfg.IdP.Enabled {
-		return errors.New("idp is not enabled in config")
+// run writes the discovery and JWKS documents under outDir at the configured IdP paths, whether or not idp.enabled is set.
+func run(ctx context.Context, cfg *config.Config, kmsAPI func() idp.KMSAPI, log *slog.Logger, outDir string) error {
+	if cfg.IdP == nil {
+		return errors.New("config has no idp block")
 	}
-	keys, err := idp.NewLoader(*cfg.IdP, kmsAPI, slog.Default())(ctx)
+	keys, err := idp.NewLoader(*cfg.IdP, kmsAPI, log)(ctx)
 	if err != nil {
 		return err
 	}

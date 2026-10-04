@@ -170,9 +170,9 @@ func TestProcessMint(t *testing.T) {
 	}{
 		{"opted_in_mints", true, testRoleARN, 0, nil, true, "mint_token"},
 		{"opted_in_mints_within_1h", true, testRoleARN, 900, nil, true, "mint_token"},
-		{"not_opted_in_over_1h", false, testRoleARN, 7200, handler.ErrIdPNotPermitted, false, "mint_token"},
+		{"not_opted_in_over_1h", false, testRoleARN, 7200, handler.ErrIdPNotPermitted, false, nil},
 		{"role_not_granted", true, otherRoleARN, 0, handler.ErrRoleNotPermitted, false, nil},
-		{"role_not_granted_over_1h", true, otherRoleARN, 7200, handler.ErrRoleNotPermitted, false, "mint_token"},
+		{"role_not_granted_over_1h", true, otherRoleARN, 7200, handler.ErrRoleNotPermitted, false, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

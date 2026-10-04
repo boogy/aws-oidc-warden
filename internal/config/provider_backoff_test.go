@@ -254,3 +254,20 @@ func TestProviderTimedOutRefreshCountsAsFailure(t *testing.T) {
 	p.MaybeRefresh(context.Background())
 	assert.Equal(t, int32(1), calls.Load(), "a hung source is backed off, not retried per request")
 }
+
+func TestProviderStaleWaitIsCapped(t *testing.T) {
+	prev := staleWaitTimeout
+	staleWaitTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { staleWaitTimeout = prev })
+
+	p := staleMappingsProvider(t, new(atomic.Int32))
+	p.lock()
+	defer p.unlock()
+	done := make(chan struct{})
+	go func() { p.MaybeRefresh(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stale MaybeRefresh waited past staleWaitTimeout")
+	}
+}

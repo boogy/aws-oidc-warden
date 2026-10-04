@@ -547,7 +547,7 @@ The mappings file is a layer beside the base config and the S3 overlay (`s3_conf
 
 ### Reload
 
-With `config_reload_interval` > 0, the mappings are re-read lazily at most once per interval, with a conditional GET: a 304 means no re-parse. A failed or invalid refresh keeps the last good config. A refresh that fails backs off: the next attempt waits 2x, 4x, then 8x the interval, resetting on success; a refresh that times out counts as a failure. Requests do not wait on a refresh in progress, except once mappings are stale: then backoff pauses, refreshes retry at the plain interval, and a request waits for the refresh in progress, up to its own deadline, rather than failing at once. A missing or invalid file at cold start fails startup.
+With `config_reload_interval` > 0, the mappings are re-read lazily at most once per interval, with a conditional GET: a 304 means no re-parse. A failed or invalid refresh keeps the last good config. A refresh that fails backs off: the next attempt waits 2x, 4x, then 8x the interval, resetting on success; a refresh that times out counts as a failure. Requests do not wait on a refresh in progress, except once mappings are stale: then backoff pauses, refreshes retry at the plain interval, and a request waits for the refresh in progress, up to 5s or its own deadline, whichever is sooner, rather than failing at once. A missing or invalid file at cold start fails startup.
 
 ### Freshness
 

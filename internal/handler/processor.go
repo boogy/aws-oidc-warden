@@ -21,30 +21,31 @@ import (
 
 // RequestProcessor contains the core business logic for processing authentication requests
 type RequestProcessor struct {
-	provider  *config.Provider
-	consumer  aws.AwsConsumerInterface
-	extractor validator.ClaimsExtractorInterface
-	audit     AuditSink // structured audit trail sink; nil is a safe no-op (see audit.go)
-	frontend  string    // adapter name (apigateway/apigatewayv2/alb/lambdaurl), for the audit record
-	idp       *idp.Service
-	lastDrift atomic.Pointer[config.Config]
+	provider    *config.Provider
+	consumer    aws.AwsConsumerInterface
+	extractor   validator.ClaimsExtractorInterface
+	audit       AuditSink // structured audit trail sink; nil is a safe no-op (see audit.go)
+	frontend    string    // adapter name (apigateway/apigatewayv2/alb/lambdaurl), for the audit record
+	idp         *idp.Service
+	frozenFP    string
+	lastChecked atomic.Pointer[config.Config]
 }
 
 // WithIdP enables the IdP mint path; a nil service leaves it disabled.
 func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
 	r.idp = s
+	if s != nil {
+		r.frozenFP = s.Config().Fingerprint()
+	}
 	return r
 }
 
 // warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start.
 func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
-	if r.idp == nil || cfg.IdP == nil {
+	if r.idp == nil || cfg.IdP == nil || r.lastChecked.Swap(cfg) == cfg {
 		return
 	}
-	if cfg.IdP.Fingerprint() == r.idp.Config().Fingerprint() {
-		return
-	}
-	if r.lastDrift.Swap(cfg) != cfg {
+	if cfg.IdP.Fingerprint() != r.frozenFP {
 		logevent.Warn(ctx, log, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")
 	}
 }
@@ -117,10 +118,6 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		return time.Since(startTime).Milliseconds()
 	}
 
-	// Unset until the issuance path is chosen, except over 1h where only the IdP can serve.
-	if requestData.DurationSeconds > utils.RoleChainingMaxSecs {
-		rec.Action = actionMintToken
-	}
 	o := &authzOutcome{cfg: cfg, rec: rec, log: log, elapsed: elapsed}
 
 	if age, limit, stale := r.provider.Stale(); stale {
@@ -228,9 +225,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if err != nil {
 		return nil, err
 	}
-	if d := requestData.DurationSeconds; d != 0 && !utils.ValidSTSSessionSecs(d) {
+	if err := checkDuration(requestData.DurationSeconds); err != nil {
 		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
-		return nil, r.deny(ctx, o, "Duration refused", ErrInvalidDuration)
+		return nil, r.deny(ctx, o, "Duration refused", err)
 	}
 	useIdP, err := r.selectIdP(o.cfg, o.decision, requestData.Role, requestData.DurationSeconds)
 	if err != nil {
@@ -254,7 +251,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		o.rec.Stage, o.rec.Reason = "session_name", "session name refused"
 		return nil, r.deny(ctx, o, "Session name refused", err)
 	}
-	o.rec.SessionNameSource, o.rec.RequestedSessionName = nameSource, requestData.SessionName
+	o.rec.SessionNameSource, o.rec.RequestedSessionName = nameSource, auditSessionName(requestData.SessionName)
 	if requestData.SessionName != "" && nameSource != "request" {
 		logevent.Warn(ctx, o.log, logevent.AuthzSessionNameIgnored, "requested session name ignored", slog.String("sessionNameSource", nameSource))
 	}

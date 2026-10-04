@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,7 +75,7 @@ func TestRunWritesDocuments(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg, _ := testConfig(t, tt.issuer, tt.jwksURI, tt.paths)
 			out := t.TempDir()
-			if err := run(context.Background(), cfg, nil, out); err != nil {
+			if err := run(context.Background(), cfg, nil, slog.Default(), out); err != nil {
 				t.Fatal(err)
 			}
 			dir := filepath.Join(out, filepath.FromSlash(tt.wantDir))
@@ -114,21 +115,23 @@ func TestRunWritesDocuments(t *testing.T) {
 	}
 }
 
-func TestRunRequiresEnabledIdP(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  *config.Config
-	}{
-		{"no idp block", &config.Config{}},
-		{"disabled idp", &config.Config{IdP: &config.IdPConfig{Enabled: false}}},
+func TestRunRequiresIdPBlock(t *testing.T) {
+	err := run(context.Background(), &config.Config{}, nil, slog.Default(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "idp") {
+		t.Fatalf("err = %v, want idp error", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := run(context.Background(), tt.cfg, nil, t.TempDir())
-			if err == nil || !strings.Contains(err.Error(), "idp") {
-				t.Fatalf("err = %v, want idp error", err)
-			}
-		})
+}
+
+func TestRunExportsWhileIdPDisabled(t *testing.T) {
+	cfg, _ := testConfig(t, "https://idp.example.com", "https://idp.example.com/.well-known/jwks.json",
+		config.IdPPaths{Discovery: "/.well-known/openid-configuration", JWKS: "/.well-known/jwks.json"})
+	cfg.IdP.Enabled = false
+	out := t.TempDir()
+	if err := run(context.Background(), cfg, nil, slog.Default(), out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, ".well-known", "jwks.json")); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -136,7 +139,7 @@ func TestRunWritesOnlyPublicMaterial(t *testing.T) {
 	cfg, pemBytes := testConfig(t, "https://idp.example.com", "https://idp.example.com/.well-known/jwks.json",
 		config.IdPPaths{Discovery: "/.well-known/openid-configuration", JWKS: "/.well-known/jwks.json"})
 	out := t.TempDir()
-	if err := run(context.Background(), cfg, nil, out); err != nil {
+	if err := run(context.Background(), cfg, nil, slog.Default(), out); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"jwks.json", "openid-configuration"} {

@@ -86,3 +86,33 @@ func TestLocalHandlerCapsBody(t *testing.T) {
 		t.Errorf("code = %d, called = %v", rec.Code, called)
 	}
 }
+
+func TestNewMuxServesOnlyKnownPaths(t *testing.T) {
+	stub := func(_ context.Context, ev events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+		return events.APIGatewayProxyResponse{StatusCode: http.StatusOK, Body: ev.Path}, nil
+	}
+	tests := []struct {
+		name     string
+		idpPaths []string
+		method   string
+		target   string
+		want     int
+	}{
+		{"verify", nil, http.MethodPost, "/verify", http.StatusOK},
+		{"health", nil, http.MethodGet, "/health", http.StatusOK},
+		{"unknown path without idp", nil, http.MethodPost, "/foo", http.StatusNotFound},
+		{"jwks without idp", nil, http.MethodGet, "/.well-known/jwks.json", http.StatusNotFound},
+		{"jwks with idp", []string{"/.well-known/openid-configuration", "/.well-known/jwks.json"}, http.MethodGet, "/.well-known/jwks.json", http.StatusOK},
+		{"unknown path with idp", []string{"/.well-known/openid-configuration", "/.well-known/jwks.json"}, http.MethodPost, "/anything", http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := newMux(slog.New(slog.NewTextHandler(io.Discard, nil)), 0, stub, tt.idpPaths...)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.target, strings.NewReader("")))
+			if rec.Code != tt.want {
+				t.Errorf("code = %d, want %d", rec.Code, tt.want)
+			}
+		})
+	}
+}
