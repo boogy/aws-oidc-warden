@@ -485,7 +485,7 @@ func TestProcessMintSignErrors(t *testing.T) {
 		{name: "sign_failure", signErr: errBoom, want: handler.ErrIdPUnavailable, signed: 1},
 		{name: "too_large", spec: bigSpec, raw: bigRaw, want: handler.ErrIdPTokenTooLarge},
 		{name: "loader_error", loadErr: errBoom, want: handler.ErrIdPUnavailable},
-		{name: "invalid_subject", subTmpl: "{source_issuer}#{source_subject}#{role_arn}", subject: "org/my repo", want: handler.ErrIdPNotPermitted},
+		{name: "invalid_subject", subTmpl: "{source_issuer}#{source_subject}#{role_arn}", subject: "org/my repo", want: handler.ErrIdPSubjectInvalid},
 		{name: "source_identity", tmpl: "{claim:nope}", want: handler.ErrIdPSourceIdentityInvalid},
 	}
 	for _, tt := range tests {
@@ -844,4 +844,20 @@ func asStrings(v any) []string {
 		out = append(out, i.(string))
 	}
 	return out
+}
+
+func TestProcessWarnsWhenReloadAddsIdPBlock(t *testing.T) {
+	cfg := idpConfig(t, false, "")
+	cfg.IdP = nil
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), &fakeAuditSink{}, "apigatewayv2")
+	var buf bytes.Buffer
+	_, err := mint(t, proc, handler.RequestData{}, &buf)
+	require.NoError(t, err)
+	assert.Zero(t, strings.Count(buf.String(), "config.idp.reload_ignored"))
+
+	added := idpConfig(t, false, "")
+	proc = handler.NewRequestProcessor(config.NewStaticProvider(added), mockWI(t), idpClaims(nil), &fakeAuditSink{}, "apigatewayv2")
+	_, err = mint(t, proc, handler.RequestData{}, &buf)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
 }

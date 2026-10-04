@@ -512,3 +512,33 @@ func TestIdPDocuments(t *testing.T) {
 		})
 	}
 }
+
+func TestAPIGatewayRoutesIdPOnStageQualifiedPath(t *testing.T) {
+	cfg := idpConfig(t, true, "", func(c *config.Config) { c.IdP.Issuer = "https://idp.example.com/prod" })
+	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
+	h := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), nil).WithIdP(svc)
+
+	ev := events.APIGatewayProxyRequest{HTTPMethod: "GET", Path: idpJWKSPath}
+	ev.RequestContext.Path = "/prod" + idpJWKSPath
+	r, err := h.Handler(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, 200, r.StatusCode, r.Body)
+	assert.Contains(t, r.Body, `"keys"`)
+}
+
+func TestIdPDocumentRouteWarnsOnFrozenDrift(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil))))
+	defer slog.SetDefault(prev)
+
+	cfg := idpConfig(t, true, "")
+	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
+	cfg.IdP.Audience = "drifted.example.com"
+	h := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), nil).WithIdP(svc)
+
+	r, err := h.Handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: "GET", Path: idpJWKSPath})
+	require.NoError(t, err)
+	require.Equal(t, 200, r.StatusCode, r.Body)
+	assert.Equal(t, 1, countEventLines(buf.String(), "config.idp.reload_ignored"))
+}

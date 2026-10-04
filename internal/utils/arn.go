@@ -7,9 +7,7 @@ import (
 	awsarn "github.com/aws/aws-sdk-go-v2/aws/arn"
 )
 
-// ParseRoleARN extracts the account ID and IAM role name from a role ARN.
-// The role name is the final path segment (iam:GetRole takes the name without
-// path). Returns an error for non-IAM-role ARNs.
+// ParseRoleARN returns the account ID and role name (final path segment) of an IAM role ARN.
 func ParseRoleARN(roleARN string) (account, roleName string, err error) {
 	a, err := awsarn.Parse(roleARN)
 	if err != nil {

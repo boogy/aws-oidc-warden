@@ -42,8 +42,9 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
 
-	kind := h.processor.route(ctx, event.HTTPMethod, event.Path)
-	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, event.Path, log, h.newResponse, h.newResponseWithHeaders); ok {
+	path := idpRoutePath(event)
+	kind := h.processor.route(ctx, event.HTTPMethod, path)
+	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, path, log, h.newResponseWithHeaders); ok {
 		return resp, nil
 	}
 
@@ -61,6 +62,14 @@ func (h *AwsApiGateway) Handler(ctx context.Context, event events.APIGatewayProx
 	}
 
 	return h.respondJSON(ctx, credentials)
+}
+
+// idpRoutePath is the caller-visible path: requestContext.path keeps the stage or base path that event.Path drops.
+func idpRoutePath(event events.APIGatewayProxyRequest) string {
+	if event.RequestContext.Path != "" {
+		return event.RequestContext.Path
+	}
+	return event.Path
 }
 
 // createRequestContext creates an enhanced context with request tracking information

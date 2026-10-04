@@ -19,6 +19,7 @@ const (
 	maxSubjectBytes = 255
 	maxTokenBytes   = 20000 // STS WebIdentityToken max length
 	maxSigBytes     = 512   // RS256 up to 4096 bits; ES256 uses 64
+	nbfSkew         = 30 * time.Second
 )
 
 var (
@@ -67,7 +68,7 @@ type awsTags struct {
 	TransitiveTagKeys []string            `json:"transitive_tag_keys,omitempty"`
 }
 
-// Only claim source: never copy inbound claims.
+// mintClaims is the only claim source; inbound claims are never copied.
 type mintClaims struct {
 	Iss       string   `json:"iss"`
 	Sub       string   `json:"sub"`
@@ -97,7 +98,7 @@ func mint(ctx context.Context, cfg config.IdPConfig, ks *KeySet, req MintRequest
 	exp := now.Add(cfg.TokenTTL)
 	c := mintClaims{
 		Iss: cfg.Issuer, Sub: sub, Aud: aud,
-		Iat: now.Unix(), Nbf: now.Unix(), Exp: exp.Unix(),
+		Iat: now.Unix(), Nbf: now.Add(-nbfSkew).Unix(), Exp: exp.Unix(),
 		Jti:    uuid.NewString(),
 		SrcIss: req.SourceIssuer, SrcSub: req.SourceSubject, RequestID: req.RequestID,
 	}

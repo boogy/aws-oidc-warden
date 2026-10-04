@@ -207,7 +207,7 @@ func TestMintTimes(t *testing.T) {
 	require.True(t, tok.IssuedAt.Equal(now.Truncate(time.Second)))
 	c := decodeClaims(t, tok.Value)
 	iat, nbf, exp := c["iat"].(float64), c["nbf"].(float64), c["exp"].(float64)
-	require.Equal(t, iat, nbf)
+	require.Equal(t, nbfSkew, time.Duration(iat-nbf)*time.Second)
 	require.Equal(t, cfg.TokenTTL, time.Duration(exp-iat)*time.Second)
 }
 

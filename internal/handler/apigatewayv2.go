@@ -41,7 +41,7 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 	)
 
 	kind := h.processor.route(ctx, event.RequestContext.HTTP.Method, event.RawPath)
-	if resp, ok := serveIdP(ctx, h.processor, kind, event.RequestContext.HTTP.Method, event.RawPath, log, h.newResponse, h.newResponseWithHeaders); ok {
+	if resp, ok := serveIdP(ctx, h.processor, kind, event.RequestContext.HTTP.Method, event.RawPath, log, h.newResponseWithHeaders); ok {
 		return resp, nil
 	}
 

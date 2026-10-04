@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -240,7 +239,7 @@ func (c *IdPConfig) validateKeys(allowInsecure bool) error {
 		if k.KMSKeyID != "" && !idpKMSKeyARN.MatchString(k.KMSKeyID) {
 			return fmt.Errorf("idp.signing_keys[%d]: kms_key_id must be a full key ARN (aliases and bare IDs are rejected)", i)
 		}
-		if k.File != "" && os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" && !allowInsecure {
+		if k.File != "" && utils.OnLambda() && !allowInsecure {
 			return fmt.Errorf("idp.signing_keys[%d]: file keys are not allowed on Lambda (the key would ship in the deployment package); use kms_key_id", i)
 		}
 		if k.Algorithm != "RS256" && k.Algorithm != "ES256" {

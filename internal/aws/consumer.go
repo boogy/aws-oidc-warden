@@ -271,7 +271,7 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 
 	// Always goes direct hub -> target (1 hop); the spoke role is only used
 	// for cross-account GetRoleTags reads.
-	account, _, err := ParseRoleARN(roleArn)
+	account, _, err := utils.ParseRoleARN(roleArn)
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +409,7 @@ func (a *AwsConsumer) accountAllowed(account, hub string) bool {
 // any other account); otherwise the account must be the hub or in the
 // allow-list (empty allow-list permits any account).
 func (a *AwsConsumer) IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error) {
-	account, _, err := ParseRoleARN(roleArn)
+	account, _, err := utils.ParseRoleARN(roleArn)
 	if err != nil {
 		return false, err
 	}
@@ -462,7 +462,7 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 	}
 	a.mu.Unlock()
 
-	account, roleName, err := ParseRoleARN(roleARN)
+	account, roleName, err := utils.ParseRoleARN(roleARN)
 	if err != nil {
 		return nil, err
 	}

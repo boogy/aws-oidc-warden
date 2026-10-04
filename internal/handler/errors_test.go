@@ -38,6 +38,7 @@ func TestClassifyError(t *testing.T) {
 		{ErrConfigStale, "config_stale", http.StatusServiceUnavailable},
 		{fmt.Errorf("%w: %w", ErrConfigStale, ErrAuditWriteFailed), "audit_write_failed", http.StatusInternalServerError},
 		{ErrIdPNotPermitted, "idp_not_permitted", http.StatusForbidden},
+		{ErrIdPSubjectInvalid, "idp_subject_invalid", http.StatusForbidden},
 		{ErrIdPUnavailable, "idp_signing_unavailable", http.StatusServiceUnavailable},
 		{ErrMethodNotAllowed, "method_not_allowed", http.StatusMethodNotAllowed},
 		{ErrIdPPathNotFound, "idp_path_not_found", http.StatusNotFound},
@@ -80,7 +81,7 @@ func TestClassifyErrorIdPSentinelsDistinct(t *testing.T) {
 		ErrIdPNotPermitted, ErrIdPUnavailable, ErrMethodNotAllowed, ErrIdPPathNotFound,
 		ErrIdPTokenTooLarge, ErrInvalidDuration, ErrDurationExceedsCap, ErrDurationExceedsRoleMax,
 		ErrInvalidSessionName,
-		ErrIdPSourceIdentityInvalid, ErrIdPExchangeDenied, ErrIdPExchangeUnavailable,
+		ErrIdPSourceIdentityInvalid, ErrIdPSubjectInvalid, ErrIdPExchangeDenied, ErrIdPExchangeUnavailable,
 		ErrAssumeRoleDenied, ErrAssumeRoleFailed,
 	}
 	for i, a := range all {

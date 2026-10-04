@@ -78,26 +78,21 @@ func validateIdPSessionCap(field string, d time.Duration) error {
 // RoleMapping binds a subject (pattern) to a set of assumable roles, scoped
 // to a single issuer, optionally gated by conditions on the raw claims.
 type RoleMapping struct {
-	Subject            Patterns      `mapstructure:"subject"             json:"subject"`                         // One subject pattern or a list of them (OR'd); each element anchored and validated independently
-	Issuer             string        `mapstructure:"issuer"              json:"issuer,omitempty"`                // Trusted issuer this mapping applies to; resolved at Validate() (see resolveIssuer)
-	SessionPolicy      string        `mapstructure:"session_policy"      json:"session_policy,omitempty"`        // Inline session policy (JSON string)
-	SessionPolicyFile  string        `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`   // S3 session policy file
-	Roles              []string      `mapstructure:"roles"               json:"roles"`                           // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
-	Conditions         *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`            // Conditions for role assumption
-	RoleSessionName    string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`     // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
-	AllowSessionName   bool          `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`    // Let the caller's sessionName name the session for roles granted by THIS mapping
-	IDPToken           bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`             // Allow minting an IdP token for roles granted by THIS mapping
-	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"` // Ceiling for the caller's durationSeconds; 0 = 1h
+	Subject            Patterns      `mapstructure:"subject"             json:"subject"` // One pattern or an OR'd list
+	Issuer             string        `mapstructure:"issuer"              json:"issuer,omitempty"`
+	SessionPolicy      string        `mapstructure:"session_policy"      json:"session_policy,omitempty"`
+	SessionPolicyFile  string        `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
+	Roles              []string      `mapstructure:"roles"               json:"roles"` // ARNs or "@role_set" aliases
+	Conditions         *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`
+	RoleSessionName    string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
+	AllowSessionName   bool          `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`
+	IDPToken           bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`
+	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"` // 0 = 1h
 
-	// SessionTags are STS tags ADDED to the issuer's session_tags for roles
-	// granted by this mapping. Additive only: a key the issuer already defines
-	// is rejected by Validate(), never silently overridden.
+	// Additive to the issuer's session_tags; overlapping keys are rejected.
 	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
 
-	// Resolved state, rebuilt by Validate() and not serialized. An effective
-	// mapping carries exactly ONE resolvedSubject (Validate() fans a Subject
-	// list out into one mapping per element); index.go and the warnings read it,
-	// never the list. order preserves first-match-wins for FindSessionPolicy.
+	// Rebuilt by Validate(): one resolvedSubject per effective mapping; order keeps first-match-wins.
 	resolvedSubject string         `mapstructure:"-" json:"-"`
 	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
 	order           int            `mapstructure:"-" json:"-"`
@@ -562,8 +557,7 @@ var envBindings = []envBinding{
 		envDuration("cross_account.spoke_session_duration", v, func(d time.Duration) { ensureCrossAccount(c).SpokeSessionDuration = d })
 	}},
 
-	// IdP knobs apply only when the idp block already exists; signing keys and
-	// allowed_roles are file/S3 only.
+	// IdP env knobs apply only to an existing idp block.
 	{"idp.enabled", func(c *Config, v string) {
 		if c.IdP != nil {
 			envBool("idp.enabled", v, func(b bool) { c.IdP.Enabled = b })
@@ -1464,11 +1458,7 @@ func (c *Config) IdPRoleAllowed(role string) bool {
 	return c.idpAllowedRoles == nil || c.idpAllowedRoles[role]
 }
 
-// resolveRoleSet expands any "@name" alias in roles to c.RoleSets[name],
-// leaving literal role ARNs untouched. Resolution happens once, at Validate()
-// time, before AuthorizeRoles' role∈roles security gate ever runs, so an
-// alias can never widen a request beyond what's statically configured
-// (the token never selects the role set, config does).
+// resolveRoleSet expands "@name" aliases to c.RoleSets[name] at Validate() time.
 func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 	out := make([]string, 0, len(roles))
 	for _, r := range roles {
@@ -1477,9 +1467,7 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 			continue
 		}
 		name := strings.TrimPrefix(r, "@")
-		// Exact first, then case-folded: viper lower-cases the role_set's map
-		// KEY but not this reference (a map VALUE), so a mixed-case name needs
-		// the folded retry to resolve at all. Same order as condition keys.
+		// Viper lower-cases map keys but not this reference.
 		set, ok := c.RoleSets[name]
 		if !ok {
 			set, ok = c.RoleSets[strings.ToLower(name)]

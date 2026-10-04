@@ -22,8 +22,7 @@ type FetchFunc func(context.Context) ([]byte, error)
 // etag must be content-derived: an etag equal to prevETag is treated as unchanged whatever the data.
 type FragmentFetchFunc func(ctx context.Context, uri, prevETag, owner string) (data []byte, etag string, err error)
 
-// cachedFragment is the last-successfully-applied parse of one fragment
-// source, keyed by its config_fragments URI/path.
+// cachedFragment is the last applied parse of one config_fragments entry.
 type cachedFragment struct {
 	etag   string
 	parsed *FragmentConfig
@@ -41,17 +40,12 @@ var staleWaitTimeout = 5 * time.Second
 // ProviderOption configures optional Provider behavior at construction.
 type ProviderOption func(*Provider)
 
-// WithFragmentFetcher installs the fetch function for "scheme://" fragment
-// entries. Without one, a refresh hitting a remote entry fails (and retains
-// the last-good config) rather than silently skipping it.
+// WithFragmentFetcher installs the fetcher for "scheme://" fragments; without one, remote fragments fail the refresh.
 func WithFragmentFetcher(fetch FragmentFetchFunc) ProviderOption {
 	return func(p *Provider) { p.fragmentFetch = fetch }
 }
 
-// Provider holds the active configuration behind an atomic pointer and can
-// lazily refresh it from a remote source without redeploying. Each refresh
-// clones the pristine base, overlays fetched bytes, merges config_fragments,
-// re-validates, then atomically swaps in the result.
+// Provider serves the active configuration and lazily refreshes it, swapping atomically from a pristine base.
 type Provider struct {
 	current       atomic.Pointer[Config]
 	base          *Config      // pristine env/file/defaults config, cloned on each refresh
@@ -78,10 +72,7 @@ func NewStaticProvider(cfg *Config, opts ...ProviderOption) *Provider {
 	return p
 }
 
-// NewProvider returns a reloadable Provider. fetch may be nil if base only
-// carries config_fragments; interval <= 0 disables reloading; format is the
-// viper config type of fetched bytes (empty defaults to "json"). The served
-// config is base until the first successful Refresh.
+// NewProvider returns a reloadable Provider; interval <= 0 disables reloading and format defaults to "json".
 func NewProvider(base *Config, interval time.Duration, format string, fetch FetchFunc, opts ...ProviderOption) *Provider {
 	p := &Provider{base: base, format: format, fetch: fetch, now: time.Now, sem: make(chan struct{}, 1), fragments: make(map[string]*cachedFragment)}
 	for _, opt := range opts {
@@ -114,7 +105,7 @@ func (p *Provider) MaybeRefresh(ctx context.Context) { p.maybeRefresh(ctx, true)
 func (p *Provider) RefreshIfDue(ctx context.Context) { p.maybeRefresh(ctx, false) }
 
 func (p *Provider) maybeRefresh(ctx context.Context, waitIfStale bool) {
-	if p.fetch == nil && len(p.base.fragmentSources()) == 0 {
+	if !p.refreshable() {
 		return
 	}
 	interval := time.Duration(p.interval.Load())
@@ -207,10 +198,9 @@ func (p *Provider) attemptLocked(ctx context.Context) error {
 	return err
 }
 
-// Refresh fetches, overlays, validates, and atomically swaps in a new config.
-// On any error the active configuration is left unchanged.
+// Refresh fetches, validates and swaps in a new config; on error the active config is unchanged.
 func (p *Provider) Refresh(ctx context.Context) error {
-	if p.fetch == nil && len(p.base.fragmentSources()) == 0 {
+	if !p.refreshable() {
 		return errors.New("no configuration fetch source configured")
 	}
 	p.lock()
@@ -218,8 +208,7 @@ func (p *Provider) Refresh(ctx context.Context) error {
 	return p.attemptLocked(ctx)
 }
 
-// refreshLocked performs the actual fetch+merge+swap. Must be called with
-// p.sem held. On any error cfg and p.fragments are discarded — reload fails safe.
+// refreshLocked performs the fetch, merge and swap. Must be called with p.sem held.
 func (p *Provider) refreshLocked(ctx context.Context) error {
 	cfg, err := cloneConfig(p.base)
 	if err != nil {
@@ -280,10 +269,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	return nil
 }
 
-// applyFragments fetches, verifies, and merges every cfg.fragmentSources()
-// entry (list order) onto cfg. Mutates cfg in place but returns the fragment
-// cache separately; caller only commits it after a nil error, so a
-// failed/invalid fragment can't partially apply into the served config.
+// applyFragments merges every fragment onto cfg in list order; the caller commits the returned cache only on success.
 func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]*cachedFragment, error) {
 	sources := cfg.fragmentSources()
 	if len(sources) == 0 {
@@ -384,9 +370,14 @@ func idpOwnedRoleSet(cfg *Config, frag *FragmentConfig) (string, bool) {
 	return "", false
 }
 
+// refreshable reports whether any reload source (remote config or fragments) is configured.
+func (p *Provider) refreshable() bool {
+	return p.fetch != nil || len(p.base.fragmentSources()) > 0
+}
+
 // Stale reports the last successful refresh's age against mappings_max_stale from one config snapshot.
 func (p *Provider) Stale() (age, limit time.Duration, stale bool) {
-	if p.fetch == nil && p.fragmentFetch == nil {
+	if !p.refreshable() {
 		return 0, 0, false
 	}
 	limit = p.Get().effectiveMappingsMaxStale()
@@ -401,8 +392,7 @@ func (p *Provider) Stale() (age, limit time.Duration, stale bool) {
 	return age, limit, age > limit
 }
 
-// fetchFragment reads local paths directly; remote URIs go through the
-// injected FragmentFetchFunc (nil is a hard error, never silently skipped).
+// fetchFragment reads local paths directly and remote URIs through the fragment fetcher.
 func (p *Provider) fetchFragment(ctx context.Context, uri, prevETag, owner string) ([]byte, string, error) {
 	if !isRemoteFragment(uri) {
 		return readLocalFragment(uri)
@@ -413,8 +403,7 @@ func (p *Provider) fetchFragment(ctx context.Context, uri, prevETag, owner strin
 	return p.fragmentFetch(ctx, uri, prevETag, owner)
 }
 
-// cloneConfig deep-copies a Config via a JSON round-trip. Unexported caches
-// (compiled regex, estimatedRolesPerRepo) aren't copied; Validate() rebuilds them.
+// cloneConfig deep-copies a Config via JSON; Validate() rebuilds the unexported caches.
 func cloneConfig(c *Config) (*Config, error) {
 	data, err := json.Marshal(c)
 	if err != nil {

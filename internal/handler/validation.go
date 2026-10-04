@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/boogy/aws-oidc-warden/internal/aws"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 const maxBodyBytes = 1024 * 1024
@@ -20,7 +20,7 @@ func validateRole(role string) error {
 	}
 	for _, prefix := range ValidPrefixes {
 		if strings.HasPrefix(role, prefix) {
-			if _, _, err := aws.ParseRoleARN(role); err != nil {
+			if _, _, err := utils.ParseRoleARN(role); err != nil {
 				return fmt.Errorf("%w: %w", ErrInvalidRoleFormat, err)
 			}
 			return nil

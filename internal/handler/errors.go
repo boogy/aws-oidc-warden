@@ -88,6 +88,10 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		errCode = "idp_source_identity_invalid"
 		errMsg = "Source identity could not be derived for this request"
 		*statusCode = http.StatusForbidden
+	case errors.Is(err, ErrIdPSubjectInvalid):
+		errCode = "idp_subject_invalid"
+		errMsg = "IdP subject could not be derived for this request"
+		*statusCode = http.StatusForbidden
 	case errors.Is(err, ErrIdPExchangeDenied):
 		errCode = "idp_exchange_denied"
 		errMsg = "AWS refused the web identity exchange; check the role trust policy"

@@ -49,7 +49,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	)
 
 	kind := h.processor.route(ctx, event.HTTPMethod, event.Path)
-	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, event.Path, log, h.newResponse, h.newResponseWithHeaders); ok {
+	if resp, ok := serveIdP(ctx, h.processor, kind, event.HTTPMethod, event.Path, log, h.newResponseWithHeaders); ok {
 		return resp, nil
 	}
 

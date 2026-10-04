@@ -69,7 +69,7 @@ The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.j
 
 - Throttle the discovery/JWKS routes separately from `/verify`.
 - The routes must carry **no authorizer** (required in `apigw` delegated mode; STS cannot present a token).
-- `idp.paths.*` must match the path the front end actually delivers. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`) and returns 404 unless configured that way.
+- `idp.paths.*` must match the path the caller requests. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`) and returns 404 unless configured that way. A REST API (v1) routes on `requestContext.path`, which keeps the stage on the `execute-api` domain and the base-path mapping on a custom domain.
 - Only the two `idp.paths.*` are exposed. Any other near miss of them (other case, trailing slash, one extra leading segment) returns 404 `idp_path_not_found`. A method other than `GET`/`HEAD` returns 405 `method_not_allowed` with an `Allow` header.
 
 One issuer URL and one KMS key per deployment; never shared between stages.
@@ -319,7 +319,7 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `allowed_roles`, plus per-mapping `idp_token`, `max_session_duration` |
 
-A reload that changes a frozen field logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer, or adds a second issuer while the frozen `source_identity` lacks `{issuer}`, is rejected (`config.idp.issuer_collision`).
+A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer, or adds a second issuer while the frozen `source_identity` lacks `{issuer}`, is rejected (`config.idp.issuer_collision`).
 
 **Kill switch:** set `idp.enabled: false` in the layer that set it. Environment beats S3: `AOW_IDP_ENABLED` is re-applied after every S3 merge, so never set `AOW_IDP_ENABLED` on Lambda if the S3 overlay is your switch. Order of operations:
 
@@ -364,8 +364,9 @@ Every response uses the standard error envelope. "Retry" means the same request 
 
 | Code                          | Status | Retry | Cause                                                                          |
 | ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------ |
-| `idp_not_permitted`           | 403    | No    | Over 1h without `idp_token` or outside `idp.allowed_roles`, or invalid subject |
+| `idp_not_permitted`           | 403    | No    | Over 1h without `idp_token` or outside `idp.allowed_roles`                     |
 | `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`               |
+| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or with non-printable ASCII |
 | `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider            |
 | `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                           |
 | `duration_exceeds_cap`        | 400    | No    | Above the IdP ceiling, or over 1h with no `idp` block                          |
@@ -377,4 +378,4 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer over 1h              |
 | `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                          |
 
-The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `requestedDurationSeconds`, `durationSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).
+The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `durationSeconds`, `requestedDurationSeconds` when the caller sent one, `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).

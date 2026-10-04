@@ -207,7 +207,7 @@ func (s *AwsServiceWrapper) AssumeRoleWithWebIdentity(ctx context.Context, in *s
 
 // validateRoleNameLength enforces IAM's 64-character cap on a role NAME,
 // measured after the last '/' since the cap excludes any path prefix
-// (`/team/sub/Name`, up to 512 chars) — matching ParseRoleARN. Rejects rather
+// (`/team/sub/Name`, up to 512 chars) — matching utils.ParseRoleARN. Rejects rather
 // than truncating, since truncating would silently look up a different role.
 func validateRoleNameLength(roleName string) error {
 	name := roleName

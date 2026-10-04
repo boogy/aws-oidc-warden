@@ -177,3 +177,6 @@ func FitSanitizedSTSName(s string) string {
 
 // FitSTSName sanitizes then caps at MaxSTSNameLen.
 func FitSTSName(s string) string { return FitSanitizedSTSName(SanitizeSTSName(s)) }
+
+// OnLambda reports whether the process runs inside AWS Lambda.
+func OnLambda() bool { return os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" }

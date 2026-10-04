@@ -24,6 +24,9 @@ var IdPDocumentServed = newEvent("idp.document.served")
 // IdPTokenTooLarge is emitted when a minted token exceeds the STS web-identity token limit (Error).
 var IdPTokenTooLarge = newEvent("idp.token.too_large")
 
+// IdPSubjectInvalid is emitted when subject_template renders an unusable sub for a request (Warn).
+var IdPSubjectInvalid = newEvent("idp.subject.invalid")
+
 // IdPPathNotFound is emitted when an IdP-shaped path matches no configured IdP path (Warn).
 var IdPPathNotFound = newEvent("idp.path.not_found")
 

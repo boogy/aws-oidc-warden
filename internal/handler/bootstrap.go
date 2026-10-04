@@ -106,8 +106,7 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 		return nil, fmt.Errorf("failed to load remote configuration: %w", err)
 	}
 
-	// Wired so hot-reloaded changes (allowed accounts, tag-auth, spoke role)
-	// take effect here too, not just on the processor's config reads.
+	// Hot-reloaded account, tag-auth and spoke-role changes reach the consumer too.
 	consumer.SetConfigSource(provider.Get)
 
 	s3log := s3logger.NewS3Logger(provider.Get())
@@ -115,8 +114,7 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 
-	// jwt_validation.mode itself is fixed at cold start (requires redeploy to
-	// change); delegated extractors still read live config per Extract() call.
+	// jwt_validation.mode is fixed at cold start.
 	extractor, err := newClaimsExtractor(provider, tokenValidator)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
@@ -158,8 +156,7 @@ func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.L
 	frozen := svc.Config()
 	provider.FreezeIdP(&frozen)
 	if frozen.Enabled {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
+		ctx := context.Background()
 		if err := svc.Warm(ctx); err != nil {
 			logevent.Error(ctx, log, logevent.IdPKeyLoadFailure, "idp keys not loaded at startup; retrying lazily",
 				slog.String("error", err.Error()))
@@ -168,12 +165,7 @@ func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.L
 	return svc
 }
 
-// newClaimsExtractor creates the ClaimsExtractorInterface for the configured
-// mode. Delegated modes ("apigw"/"alb") trust an upstream that already
-// verified the signature and re-validate against the matched issuer's spec
-// for defense-in-depth. "apigw" supports multiple issuers (one JWT
-// Authorizer per route); "alb" trusts a single OIDC IdP, so multi-issuer
-// config is rejected fail-fast there.
+// newClaimsExtractor creates the extractor for jwt_validation.mode; alb mode requires exactly one issuer.
 func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
 	cfg := provider.Get()
 	mode := cfg.JWTValidation.Mode
@@ -192,8 +184,7 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 	}
 }
 
-// singleDelegatedIssuer returns the sole configured issuer for alb mode
-// (fails if more than one is configured; apigw resolves per request instead).
+// singleDelegatedIssuer returns the sole configured issuer for alb mode.
 func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfig, error) {
 	if len(cfg.Issuers) != 1 {
 		return nil, fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
@@ -201,8 +192,7 @@ func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfi
 	return &cfg.Issuers[0], nil
 }
 
-// BuildConfigProvider wires the config provider shared by every front-end. It stays static
-// only with no mappings file, S3 overlay or config_fragments; otherwise it refreshes at startup (failing fast).
+// BuildConfigProvider builds the config provider; any reload source triggers a fail-fast initial refresh.
 func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
 	ctx := context.Background()
 	opt := config.WithFragmentFetcher(s3FragmentFetcher(consumer))
@@ -316,31 +306,23 @@ func validateAdapterMode(bootstrap *Bootstrap, allowed ...string) {
 // NewAwsApiGatewayFromBootstrap creates a new API Gateway handler using bootstrap
 func NewAwsApiGatewayFromBootstrap(bootstrap *Bootstrap) *AwsApiGateway {
 	validateAdapterMode(bootstrap, "self")
-	h := NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
-	h.processor.WithIdP(bootstrap.IdP)
-	return h
+	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger).WithIdP(bootstrap.IdP)
 }
 
 // NewAwsLambdaUrlFromBootstrap creates a new Lambda URL handler using bootstrap
 func NewAwsLambdaUrlFromBootstrap(bootstrap *Bootstrap) *AwsLambdaUrl {
 	validateAdapterMode(bootstrap, "self")
-	h := NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
-	h.processor.WithIdP(bootstrap.IdP)
-	return h
+	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger).WithIdP(bootstrap.IdP)
 }
 
 // NewAwsApplicationLoadBalancerFromBootstrap creates a new ALB handler using bootstrap
 func NewAwsApplicationLoadBalancerFromBootstrap(bootstrap *Bootstrap) *AwsApplicationLoadBalancer {
 	validateAdapterMode(bootstrap, "alb", "self")
-	h := NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
-	h.processor.WithIdP(bootstrap.IdP)
-	return h
+	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger).WithIdP(bootstrap.IdP)
 }
 
 // NewAwsApiGatewayV2FromBootstrap creates a new HTTP API v2 handler using bootstrap
 func NewAwsApiGatewayV2FromBootstrap(bootstrap *Bootstrap) *AwsApiGatewayV2 {
 	validateAdapterMode(bootstrap, "apigw")
-	h := NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
-	h.processor.WithIdP(bootstrap.IdP)
-	return h
+	return NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger).WithIdP(bootstrap.IdP)
 }

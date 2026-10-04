@@ -24,8 +24,8 @@ type RequestProcessor struct {
 	provider    *config.Provider
 	consumer    aws.AwsConsumerInterface
 	extractor   validator.ClaimsExtractorInterface
-	audit       AuditSink // structured audit trail sink; nil is a safe no-op (see audit.go)
-	frontend    string    // adapter name (apigateway/apigatewayv2/alb/lambdaurl), for the audit record
+	audit       AuditSink // nil is a no-op
+	frontend    string
 	idp         *idp.Service
 	frozenFP    string
 	lastChecked atomic.Pointer[config.Config]
@@ -40,9 +40,9 @@ func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
 	return r
 }
 
-// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start.
+// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added idp block.
 func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
-	if r.idp == nil || cfg.IdP == nil || r.lastChecked.Swap(cfg) == cfg {
+	if cfg.IdP == nil || r.lastChecked.Swap(cfg) == cfg {
 		return
 	}
 	if cfg.IdP.Fingerprint() != r.frozenFP {
@@ -50,8 +50,7 @@ func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger
 	}
 }
 
-// NewRequestProcessor creates a new instance of request processor. audit may
-// be nil (audit trail becomes a no-op; standardized logging still happens).
+// NewRequestProcessor creates a request processor; a nil audit sink disables the audit trail.
 func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink, frontend string) *RequestProcessor {
 	return &RequestProcessor{
 		provider:  provider,
@@ -93,8 +92,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	r.provider.MaybeRefresh(ctx)
 	cfg := r.provider.Get()
 
-	// Pin this snapshot for extraction too, so a reload landing mid-request
-	// can't validate and authorize against different config generations.
+	// One config generation for both extraction and authorization.
 	input.Config = cfg
 
 	jwtMode := inputMode(input)
@@ -109,8 +107,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	rec.SourceIP, _ = ctx.Value(SourceIPContextKey).(string)
 	rec.SourceIPFrom, _ = ctx.Value(SourceIPSourceContextKey).(string)
 	rec.FrontendRequestID, _ = ctx.Value(FrontendRequestIDContextKey).(string)
-	// Single source for every ms timing here; guards the zero case since
-	// time.Since(time.Time{}) would otherwise read as ~64000 years.
+	// time.Since(time.Time{}) would read as ~64000 years.
 	elapsed := func() int64 {
 		if startTime.IsZero() {
 			return 0
@@ -141,8 +138,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	rec.JWTSub = claims.Sub
 	rec.Subject = claims.Subject
 	rec.Audience = claimsAudience(claims)
-	// Attached before the authorization stages too, so a deny record still
-	// carries "who did this"; redact() drops these when log_claim_values is off.
+	// Set before authorization so deny records carry identity; redact() honours log_claim_values.
 	if cfg.LogClaimValues {
 		rec.Claims = auditClaims(cfg, claims.Issuer, claims.Raw)
 	}
@@ -170,8 +166,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
 	}
 
-	// claims.Raw, not the typed struct: generic issuers' claims have no
-	// struct field, and a JSON round-trip of the struct drops claims.Raw (json:"-").
+	// claims.Raw: generic issuers' claims have no typed struct field.
 	claimsMap := claims.Raw
 	if claimsMap == nil {
 		claimsMap = map[string]any{}
@@ -225,21 +220,14 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if err != nil {
 		return nil, err
 	}
+	r.warnFrozenDrift(ctx, o.log, o.cfg)
 	if err := checkDuration(requestData.DurationSeconds); err != nil {
 		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
 		return nil, r.deny(ctx, o, "Duration refused", err)
 	}
-	useIdP, err := r.selectIdP(o.cfg, o.decision, requestData.Role, requestData.DurationSeconds)
+	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requestData.Role, requestData.DurationSeconds)
 	if err != nil {
-		o.rec.Stage = "duration"
-		switch {
-		case errors.Is(err, ErrDurationExceedsCap):
-			o.rec.Reason = "over 1h without idp"
-		case errors.Is(err, ErrIdPNotPermitted):
-			o.rec.Reason = "over 1h but role not idp-enabled"
-		default:
-			o.rec.Reason = "over 1h but idp disabled"
-		}
+		o.rec.Stage, o.rec.Reason = "duration", reason
 		return nil, r.deny(ctx, o, "Duration refused", err)
 	}
 	o.rec.Action = actionAssumeRole
@@ -282,8 +270,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, claims, sessionTagSpec)
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
-		// A trust-policy/IAM refusal is the caller's answer (403); anything else
-		// (throttling, expired hub creds, bad policy document) is ours (500).
+		// IAM refusal is 403; any other failure is ours (500).
 		ret := ErrAssumeRoleFailed
 		if errors.Is(err, aws.ErrAssumeRoleDenied) {
 			ret = ErrAssumeRoleDenied
@@ -293,16 +280,14 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 
 	rec.GrantedRole = requestedRole
 	rec.SessionName = sessionName
-	if requestData.DurationSeconds != 0 {
-		rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
-		rec.DurationSeconds = int(duration)
-	}
+	rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
+	rec.DurationSeconds = int(duration)
 	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
 	if cfg.LogClaimValues {
 		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, sessionTagSpec)
 	}
 	rec.SessionPolicyRef = policyRef
-	if account, _, aerr := aws.ParseRoleARN(requestedRole); aerr == nil {
+	if account, _, aerr := utils.ParseRoleARN(requestedRole); aerr == nil {
 		rec.AccountID = account
 	}
 	if credentials.Expiration != nil {
@@ -316,9 +301,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	return &IssuedCredentials{Credentials: *credentials}, nil
 }
 
-// getSessionPolicy retrieves the session policy for an (issuer, subject) pair
-// (config inline or S3 file), plus a policyRef label ("inline", the S3 key,
-// or "") for the audit record's SessionPolicyRef field.
+// getSessionPolicy returns the session policy and its audit label ("inline", the S3 key, or "").
 func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Config, log *slog.Logger, subject string, decision config.Decision) (sessionPolicyString *string, policyRef string, err error) {
 	opStart := time.Now()
 	durationMs := func() int64 { return time.Since(opStart).Milliseconds() }
@@ -386,9 +369,7 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 	return sessionPolicyString, policyRef, nil
 }
 
-// identityAttrs builds "who made this request" log attributes for a verified
-// token. repository/ref/actor are GitHub-native and omitted (not emitted
-// empty) for other providers. Callers must gate on cfg.LogClaimValues.
+// identityAttrs builds caller-identity log attributes; callers must gate on cfg.LogClaimValues.
 func identityAttrs(claims *gtypes.Claims) []slog.Attr {
 	if claims == nil {
 		return nil

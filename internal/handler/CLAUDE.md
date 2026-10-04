@@ -15,7 +15,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `route.go` — classifies the IdP discovery/JWKS paths before the normal pipeline; near misses and wrong methods map to `idp_path_not_found` / `method_not_allowed`; the exact paths refresh config and answer `idp_path_not_found` while `idp.enabled` is false. Credentials always go through `/verify`.
 - `idp.go` — `selectIdP` routes an `idp_token` role (in `idp.allowed_roles`) to `issueIdP` while `idp.enabled`; over 1h without it is refused. `issueIdP` mints and runs an in-process `AssumeRoleWithWebIdentity`; `ProcessRequest` (`processor.go`) is the single entry for both. `idp_helpers.go` — duration, session-name and source-identity resolution. `idp_document.go` — serves discovery/JWKS.
 - `bootstrap.go` `NewIdPService` — builds the `idp.Service` whenever an `idp` block exists (keys warm only when `idp.enabled`); the KMS client comes from `DefaultIdPKMS`, its own wrapper, not the consumer's, so `RefreshClients` does not reach it.
-- `apigateway.go` — REST API v1 adapter (`events.APIGatewayProxyRequest`). Passes `ExtractionInput{Token: requestData.Token}`; always self mode.
+- `apigateway.go` — REST API v1 adapter (`events.APIGatewayProxyRequest`). Passes `ExtractionInput{Token: requestData.Token}`; always self mode. IdP routes match `requestContext.path` (stage-qualified), not `event.Path`.
 - `apigatewayv2.go` — HTTP API v2 adapter (`events.APIGatewayV2HTTPRequest`). Reads authorizer claims from `event.RequestContext.Authorizer.JWT.Claims`; use with `jwt_validation.mode: "apigw"`.
 - `alb.go` — ALB adapter. Reads `x-amzn-oidc-data` header when present (delegated ALB mode); falls back to token-in-body (self mode).
 - `lambdaurl.go` — Lambda URL adapter. Always self mode.

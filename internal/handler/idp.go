@@ -39,28 +39,27 @@ func (r *RequestProcessor) idpEnabled(cfg *config.Config) bool {
 	return r.idp != nil && cfg.IdP != nil && cfg.IdP.Enabled
 }
 
-// selectIdP routes an IdP-eligible role to the IdP when enabled; otherwise only a session within the AssumeRole cap is servable.
-func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, role string, requested int32) (bool, error) {
+// selectIdP routes an IdP-eligible role to the IdP when enabled, else allows only sessions within the AssumeRole cap; refusals carry their audit reason.
+func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, role string, requested int32) (useIdP bool, reason string, err error) {
 	eligible := d.IDPTokenAllowed() && cfg.IdPRoleAllowed(role)
 	if eligible && r.idpEnabled(cfg) {
-		return true, nil
+		return true, "", nil
 	}
 	if requested <= utils.RoleChainingMaxSecs {
-		return false, nil
+		return false, "", nil
 	}
 	switch {
 	case r.idp == nil || cfg.IdP == nil:
-		return false, ErrDurationExceedsCap
+		return false, "over 1h without idp", ErrDurationExceedsCap
 	case !eligible:
-		return false, ErrIdPNotPermitted
+		return false, "over 1h but role not idp-enabled", ErrIdPNotPermitted
 	default:
-		return false, ErrIdPUnavailable
+		return false, "over 1h but idp disabled", ErrIdPUnavailable
 	}
 }
 
 // issueIdP mints an IdP token in-process for an authorized request and exchanges it for credentials.
 func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, requestData *RequestData, sessionName, requestID string) (*IssuedCredentials, error) {
-	r.warnFrozenDrift(ctx, o.log, o.cfg)
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	role := requestData.Role
 
@@ -115,7 +114,9 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		var ret error
 		switch {
 		case errors.Is(err, idp.ErrInvalidSubject):
-			ret = ErrIdPNotPermitted
+			logevent.Warn(ctx, log, logevent.IdPSubjectInvalid, "IdP subject could not be rendered",
+				slog.String("roleArn", role), slog.String("error", err.Error()))
+			ret = ErrIdPSubjectInvalid
 		case errors.Is(err, idp.ErrTokenTooLarge):
 			logevent.Error(ctx, log, logevent.IdPTokenTooLarge, "IdP token exceeds the STS size limit",
 				slog.String("roleArn", role), slog.String("error", err.Error()))
@@ -165,7 +166,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	if cfg.LogClaimValues {
 		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, spec)
 	}
-	if account, _, aerr := aws.ParseRoleARN(role); aerr == nil {
+	if account, _, aerr := utils.ParseRoleARN(role); aerr == nil {
 		rec.AccountID = account
 	}
 	rec.Expiry = creds.Expiration

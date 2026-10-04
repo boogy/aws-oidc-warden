@@ -52,8 +52,7 @@ func buildErrorResponse(ctx context.Context, err error, statusCode int) (Respons
 	}, statusCode
 }
 
-// buildSuccessResponse builds the shared Response for a successful request
-// and logs it. Shared by every adapter's respondJSON.
+// buildSuccessResponse builds and logs the shared success Response.
 func buildSuccessResponse(ctx context.Context, data any, message string) Response {
 	requestID, processingMS := requestMeta(ctx)
 
@@ -70,9 +69,7 @@ func buildSuccessResponse(ctx context.Context, data any, message string) Respons
 	}
 }
 
-// errorResponse renders the shared error Response into a frontend's own
-// response type via newResp(status, body). Shared by every adapter's
-// respondError.
+// errorResponse renders the shared error Response into a frontend's response type.
 func errorResponse[T any](ctx context.Context, err error, statusCode int, newResp func(int, string) T) T {
 	return newResp(errorBody(ctx, err, statusCode))
 }
@@ -87,8 +84,7 @@ func errorBody(ctx context.Context, err error, statusCode int) (int, string) {
 	return status, string(body)
 }
 
-// successResponse renders the shared success Response the same way, falling
-// back to errorResponse when the credentials themselves fail to marshal.
+// successResponse renders issued credentials into a frontend's response type.
 func successResponse[T any](ctx context.Context, credentials *IssuedCredentials, newResp func(int, string) T) T {
 	return successResponseMsg(ctx, credentials, credentials.message(), newResp)
 }
