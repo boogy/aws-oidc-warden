@@ -181,15 +181,17 @@ func TestAssumeRoleWithWebIdentityRequiresArgs(t *testing.T) {
 	}
 }
 
-func TestAssumeRoleWithWebIdentityRejectsDisallowedAccount(t *testing.T) {
+func TestAssumeRoleWithWebIdentityAccountCheck(t *testing.T) {
 	const memberRole = "arn:aws:iam::222222222222:role/Target"
 	tests := []struct {
-		name string
-		cfg  *gtvcfg.Config
+		name    string
+		cfg     *gtvcfg.Config
+		allowed bool
 	}{
-		{"cross_account unset", &gtvcfg.Config{}},
-		{"cross_account disabled", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{AllowedAccounts: []string{"222222222222"}}}},
-		{"account not listed", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"333333333333"}}}},
+		{"cross_account unset", &gtvcfg.Config{}, false},
+		{"cross_account disabled", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{AllowedAccounts: []string{"222222222222"}}}, false},
+		{"account not listed", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"333333333333"}}}, false},
+		{"account listed", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"222222222222"}}}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -198,10 +200,15 @@ func TestAssumeRoleWithWebIdentityRejectsDisallowedAccount(t *testing.T) {
 				calls.Add(1)
 				xmlHandler(webIdentityOK)(rw, r)
 			})
-			c := NewAwsConsumer(tc.cfg)
-			c.AWS = w
-			_, err := c.AssumeRoleWithWebIdentity(context.Background(), memberRole, "s", "t", nil, 3600)
-			require.Error(t, err)
+			c := &AwsConsumer{AWS: w, Config: tc.cfg}
+			creds, err := c.AssumeRoleWithWebIdentity(context.Background(), memberRole, "s", "t", nil, 3600)
+			if tc.allowed {
+				require.NoError(t, err)
+				assert.NotNil(t, creds)
+				assert.EqualValues(t, 1, calls.Load())
+				return
+			}
+			require.ErrorIs(t, err, ErrAccountNotAllowed)
 			assert.Zero(t, calls.Load())
 		})
 	}

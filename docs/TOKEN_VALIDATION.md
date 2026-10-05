@@ -257,13 +257,13 @@ Validation failures propagate as sentinel errors mapped to HTTP status by the fr
 | IdP mode: the source identity could not be derived (missing claim) or overflowed with `reject`                     | `ErrIdPSourceIdentityInvalid` | 403  | `idp_source_identity_invalid` |
 | IdP mode: STS refused the minted token: fix the role trust policy or the IAM OIDC provider                         | `ErrIdPExchangeDenied`        | 403  | `idp_exchange_denied`         |
 | IdP mode: `durationSeconds` outside 900..43200                                                                     | `ErrInvalidDuration`          | 400  | `invalid_duration`            |
-| `durationSeconds` above the IdP ceiling, or over 1h with no `idp` block at startup                                 | `ErrDurationExceedsCap`       | 400  | `duration_exceeds_cap`        |
+| `durationSeconds` above the mapping's `max_session_duration` (1h for `AssumeRole`), or over 1h with no `idp` block | `ErrDurationExceedsCap`       | 400  | `duration_exceeds_cap`        |
 | IdP mode: `durationSeconds` above the role's `MaxSessionDuration`                                                  | `ErrDurationExceedsRoleMax`   | 400  | `duration_exceeds_role_max`   |
 | IdP mode: `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                     | `ErrInvalidSessionName`       | 400  | `invalid_session_name`        |
-| IdP mode: a near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false            | `ErrIdPPathNotFound`          | 404  | `idp_path_not_found`          |
+| IdP mode: a near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false             | `ErrIdPPathNotFound`          | 404  | `idp_path_not_found`          |
 | IdP mode: not `GET`/`HEAD` on a discovery/JWKS path                                                                | `ErrMethodNotAllowed`         | 405  | `method_not_allowed`          |
 | IdP mode: minted token or packed policy over the STS limit; reduce session tags                                    | `ErrIdPTokenTooLarge`         | 500  | `idp_token_too_large`         |
-| IdP mode: KMS signing unavailable or throttled; also over 1h with the IdP disabled or removed on reload            | `ErrIdPUnavailable`           | 503  | `idp_signing_unavailable`     |
+| IdP mode: KMS signing unavailable or throttled; also the kill-switch answer over 1h                                | `ErrIdPUnavailable`           | 503  | `idp_signing_unavailable`     |
 | IdP mode: STS could not reach the IdP discovery or JWKS document                                                   | `ErrIdPExchangeUnavailable`   | 503  | `idp_exchange_unavailable`    |
 
 ---

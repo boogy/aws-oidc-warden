@@ -49,7 +49,7 @@ func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, role
 		return false, "", nil
 	}
 	switch {
-	case r.idp == nil:
+	case r.idp == nil || cfg.IdP == nil:
 		return false, "over 1h without idp", ErrDurationExceedsCap
 	case !eligible:
 		return false, "over 1h but role not idp-enabled", ErrIdPNotPermitted

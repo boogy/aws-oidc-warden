@@ -473,6 +473,7 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, errBoom), nil, handler.ErrIdPExchangeUnavailable},
 		{"role_max", roleMax, nil, handler.ErrDurationExceedsRoleMax},
 		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, errBoom), nil, handler.ErrIdPTokenTooLarge},
+		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed},
 		{"other", &smithy.GenericAPIError{Code: "Throttling", Message: "slow"}, nil, handler.ErrAssumeRoleFailed},
 		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed},
 	}
@@ -740,7 +741,8 @@ func TestProcessRequestOverOneHourAfterIdPBlockRemoved(t *testing.T) {
 		WithIdP(idpService(t, built, signer, nil))
 	var buf bytes.Buffer
 	_, err := mint(t, proc, handler.RequestData{DurationSeconds: 7200}, &buf)
-	require.ErrorIs(t, err, handler.ErrIdPUnavailable)
+	require.ErrorIs(t, err, handler.ErrDurationExceedsCap)
+	assert.Zero(t, signer.calls)
 	assert.Zero(t, cons.wiCalls)
 	assert.Zero(t, cons.assumeCalls)
 }

@@ -41,6 +41,9 @@ func classifyAssumeRoleError(err error) error {
 	return err
 }
 
+// ErrAccountNotAllowed marks a target account refused by cross_account.
+var ErrAccountNotAllowed = errors.New("target account is not allowed by cross_account")
+
 var (
 	ErrWebIdentityDenied                 = errors.New("sts:AssumeRoleWithWebIdentity denied by AWS")
 	ErrWebIdentityUnavailable            = errors.New("sts:AssumeRoleWithWebIdentity could not reach the IdP")

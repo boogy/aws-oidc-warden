@@ -198,7 +198,7 @@ func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, se
 		return nil, err
 	}
 	if !allowed {
-		return nil, fmt.Errorf("target account of %s is not allowed by cross_account", roleARN)
+		return nil, fmt.Errorf("%w: %s", ErrAccountNotAllowed, roleARN)
 	}
 
 	in := &sts.AssumeRoleWithWebIdentityInput{
@@ -289,14 +289,8 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 		return nil, fmt.Errorf("resolve caller identity: %w", err)
 	}
 
-	if account != hub {
-		cfg := a.cfg()
-		if cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
-			return nil, fmt.Errorf("cross-account is disabled (cross_account.enabled=false); refusing to assume role in account %s", account)
-		}
-		if !a.accountAllowed(account, hub) {
-			return nil, fmt.Errorf("target account %s is not in cross_account.allowed_accounts", account)
-		}
+	if !a.targetAllowed(account, hub) {
+		return nil, fmt.Errorf("%w: %s", ErrAccountNotAllowed, roleArn)
 	}
 
 	// Role chaining caps sessions at 1h regardless of account == hub: it's a
@@ -425,10 +419,15 @@ func (a *AwsConsumer) IsTargetAccountAllowed(ctx context.Context, roleArn string
 	if err != nil {
 		return false, fmt.Errorf("resolve hub account: %w", err)
 	}
+	return a.targetAllowed(account, hub), nil
+}
+
+// targetAllowed is the cross_account rule: disabled means hub-only.
+func (a *AwsConsumer) targetAllowed(account, hub string) bool {
 	if cfg := a.cfg(); cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
-		return account == hub, nil
+		return account == hub
 	}
-	return a.accountAllowed(account, hub), nil
+	return a.accountAllowed(account, hub)
 }
 
 // GetRole retrieves information about the specified AWS IAM role

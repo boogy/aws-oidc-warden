@@ -291,8 +291,11 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 		rec.setErrorReason("assume_role", err)
 		// IAM refusal is 403; any other failure is ours (500).
 		ret := ErrAssumeRoleFailed
-		if errors.Is(err, aws.ErrAssumeRoleDenied) {
+		switch {
+		case errors.Is(err, aws.ErrAssumeRoleDenied):
 			ret = ErrAssumeRoleDenied
+		case errors.Is(err, aws.ErrAccountNotAllowed):
+			ret = ErrAccountNotAllowed
 		}
 		return nil, r.deny(ctx, o, "Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
 	}

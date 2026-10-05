@@ -700,6 +700,16 @@ func TestProcessRequest_AssumeRoleDenied(t *testing.T) {
 	assert.Equal(t, "arn:aws:iam::111111111111:role/app", fc.assumed)
 }
 
+func TestProcessRequest_AssumeRoleAccountNotAllowed(t *testing.T) {
+	_, proc := assumeFailingProc(t, fmt.Errorf("%w: arn:aws:iam::111111111111:role/app", gtvaws.ErrAccountNotAllowed))
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
+	require.ErrorIs(t, err, handler.ErrAccountNotAllowed)
+	assert.False(t, errors.Is(err, handler.ErrAssumeRoleFailed))
+}
+
 func TestProcessRequest_AssumeRoleInfraFailure(t *testing.T) {
 	_, proc := assumeFailingProc(t, errors.New("ThrottlingException: rate exceeded"))
 	_, err := proc.ProcessRequest(context.Background(),

@@ -27,9 +27,9 @@ Every caller uses the same endpoint (`/verify`). A role whose authorizing mappin
 
 | Over 1h requested, and…                                   | Answer                        |
 | --------------------------------------------------------- | ----------------------------- |
-| no `idp` block at startup                                 | 400 `duration_exceeds_cap`    |
+| no `idp` block configured                                 | 400 `duration_exceeds_cap`    |
 | mapping lacks `idp_token`, or role not in `allowed_roles` | 403 `idp_not_permitted`       |
-| `idp.enabled: false`, or `idp` block removed on reload    | 503 `idp_signing_unavailable` |
+| `idp.enabled: false` (kill switch)                        | 503 `idp_signing_unavailable` |
 
 ## Flow
 
@@ -229,6 +229,7 @@ Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-pr
 
 - `max_session_duration` is set per mapping (or in `role_groups[].defaults`) and applies to every role that mapping grants: 15m to 12h, default `1h`, and it needs `idp_token`. There is no service-wide ceiling; the platform team bounds the IdP with `idp.allowed_roles`, and each role's own IAM `MaxSessionDuration` is the hard limit.
 - `idp` is base-only: config fragments and the mappings file cannot carry it.
+- A role in another account needs `cross_account.enabled: true` with that account in `allowed_accounts`, as for `AssumeRole`; otherwise the request is refused with 403 `permission_denied`. The exchange never uses the spoke role.
 
 ## Session duration
 
@@ -338,14 +339,14 @@ While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its d
 - `idp.allowed_roles` is base-only (ARNs or `@role_set` names); empty means no extra cap.
 - PEM key files are dev-only; they are refused on Lambda unless `allow_insecure_issuers` is set.
 
-| Risk                                                          | Control                                                                                   |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, single-region check, tamper Deny, SCP, alarms                           |
-| A mapping writer widening sessions                            | `idp.allowed_roles` (base-only) and the role's IAM `MaxSessionDuration`                   |
-| Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                               |
-| Half-rotated keys                                             | All-or-nothing loader; rotation order above                                               |
-| Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`                          |
-| Session-name spoofing                                         | Caller names need `allow_session_name`; validated charset; `SourceIdentity` is immutable  |
+| Risk                                                          | Control                                                                                  |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, single-region check, tamper Deny, SCP, alarms                          |
+| A mapping writer widening sessions                            | `idp.allowed_roles` (base-only) and the role's IAM `MaxSessionDuration`                  |
+| Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                              |
+| Half-rotated keys                                             | All-or-nothing loader; rotation order above                                              |
+| Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`                         |
+| Session-name spoofing                                         | Caller names need `allow_session_name`; validated charset; `SourceIdentity` is immutable |
 
 ## Incident response
 
@@ -362,20 +363,20 @@ In order:
 
 Every response uses the standard error envelope. "Retry" means the same request may succeed later.
 
-| Code                          | Status | Retry | Cause                                                                          |
-| ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------ |
-| `idp_not_permitted`           | 403    | No    | Over 1h without `idp_token` or outside `idp.allowed_roles`                     |
-| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`               |
-| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~` (spaces included) |
-| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider            |
-| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                           |
-| `duration_exceeds_cap`        | 400    | No    | Above the IdP ceiling, or over 1h with no `idp` block at startup               |
-| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                          |
-| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                |
+| Code                          | Status | Retry | Cause                                                                           |
+| ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------- |
+| `idp_not_permitted`           | 403    | No    | Over 1h without `idp_token` or outside `idp.allowed_roles`                      |
+| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                |
+| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`     |
+| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider             |
+| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                            |
+| `duration_exceeds_cap`        | 400    | No    | Above the mapping's `max_session_duration`, or over 1h with no `idp` block      |
+| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                           |
+| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                 |
 | `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false |
-| `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                      |
-| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags          |
-| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also over 1h with the IdP disabled or removed    |
-| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                          |
+| `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                       |
+| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags           |
+| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer over 1h               |
+| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                           |
 
 The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `durationSeconds`, `requestedDurationSeconds` when the caller sent one, `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).

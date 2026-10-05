@@ -31,7 +31,7 @@ Handlers accept the interface for mockability. Clients are built once in `servic
 - Session duration: 1h default, up to role-defined max (≤12h) — but capped hard at 1h whenever the warden's own credentials are a role session (`GetCallerIdentityInfo`'s `isRoleSession`), which is always true on Lambda, same-account assumes included: STS _fails_ (does not clamp) `DurationSeconds` > 3600 on a chained `AssumeRole`, so `AssumeRole` clamps the request itself before calling STS. Only `local` server mode running with IAM user credentials (not a role session) can get a session up to the target role's own max, cross-account targets included.
 - Inline session policy max ~2048 chars.
 - `AwsServiceWrapper.KMS()` returns the KMS client: built once in shared init, rebuilt in `RefreshClients`, deliberately not on `AwsServiceWrapperInterface`.
-- `AssumeRoleWithWebIdentity` is unsigned (no SigV4), so the 1h role-chaining cap does not apply and IAM does not bound the target account; it checks `IsTargetAccountAllowed` inline and returns the `ErrWebIdentity*` sentinels.
+- `AssumeRoleWithWebIdentity` is unsigned (no SigV4), so the 1h role-chaining cap does not apply and IAM does not bound the target account; it checks the `cross_account` rule inline (`ErrAccountNotAllowed`, shared with `AssumeRole`) and maps STS failures to the `ErrWebIdentity*` sentinels.
 - Region via default SDK resolution.
 
 IAM: execution role needs `sts:AssumeRole`+`sts:TagSession` on target roles, `s3:GetObject` on the policy bucket, `iam:GetRole`. Target roles must trust the execution role.
