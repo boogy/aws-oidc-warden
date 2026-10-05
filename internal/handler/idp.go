@@ -49,7 +49,7 @@ func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, role
 		return false, "", nil
 	}
 	switch {
-	case r.idp == nil || cfg.IdP == nil:
+	case r.idp == nil:
 		return false, "over 1h without idp", ErrDurationExceedsCap
 	case !eligible:
 		return false, "over 1h but role not idp-enabled", ErrIdPNotPermitted
@@ -71,7 +71,6 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	ceiling := o.decision.MaxSessionDuration()
 	capSecs := int(ceiling / time.Second)
 	rec.IdPSessionCapSeconds = &capSecs
-	rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
 	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
 	if err != nil {
 		return refuse("duration", "invalid or excessive duration", "Duration refused", err)

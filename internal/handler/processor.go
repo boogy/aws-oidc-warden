@@ -235,6 +235,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, err
 	}
 	r.warnFrozenDrift(ctx, o.log, o.cfg)
+	o.rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
 	if err := checkDuration(requestData.DurationSeconds); err != nil {
 		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
 		return nil, r.deny(ctx, o, "Duration refused", err)
@@ -298,7 +299,6 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 
 	rec.GrantedRole = requestedRole
 	rec.SessionName = sessionName
-	rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
 	rec.DurationSeconds = int(duration)
 	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
 	if cfg.LogClaimValues {

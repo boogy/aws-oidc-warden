@@ -722,10 +722,26 @@ func TestProcessRequestRouting(t *testing.T) {
 func TestProcessRequestOverOneHourWithoutIdP(t *testing.T) {
 	cfg := auditTestCfg(t, false, false)
 	cons := mockConsumer(t)
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), cons, idpClaims(nil), &fakeAuditSink{}, "test")
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), cons, idpClaims(nil), sink, "test")
 	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Role: testRoleARN, DurationSeconds: 7200},
 		validator.ExtractionInput{Token: "t"}, "req-1", slog.Default())
 	require.ErrorIs(t, err, handler.ErrDurationExceedsCap)
+	assert.Zero(t, cons.assumeCalls)
+	assert.EqualValues(t, 7200, sink.last(t)["requestedDurationSeconds"])
+}
+
+func TestProcessRequestOverOneHourAfterIdPBlockRemoved(t *testing.T) {
+	built := idpConfig(t, true, "")
+	live := idpConfig(t, true, "", func(c *config.Config) { c.IdP = nil })
+	cons := mockWI(t)
+	signer := &countingSigner{Signer: idptest.NewSigner(t)}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(live), cons, idpClaims(nil), &fakeAuditSink{}, "test").
+		WithIdP(idpService(t, built, signer, nil))
+	var buf bytes.Buffer
+	_, err := mint(t, proc, handler.RequestData{DurationSeconds: 7200}, &buf)
+	require.ErrorIs(t, err, handler.ErrIdPUnavailable)
+	assert.Zero(t, cons.wiCalls)
 	assert.Zero(t, cons.assumeCalls)
 }
 

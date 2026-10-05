@@ -27,9 +27,9 @@ Every caller uses the same endpoint (`/verify`). A role whose authorizing mappin
 
 | Over 1h requested, and…                                   | Answer                        |
 | --------------------------------------------------------- | ----------------------------- |
-| no `idp` block configured                                 | 400 `duration_exceeds_cap`    |
+| no `idp` block at startup                                 | 400 `duration_exceeds_cap`    |
 | mapping lacks `idp_token`, or role not in `allowed_roles` | 403 `idp_not_permitted`       |
-| `idp.enabled: false` (kill switch)                        | 503 `idp_signing_unavailable` |
+| `idp.enabled: false`, or `idp` block removed on reload    | 503 `idp_signing_unavailable` |
 
 ## Flow
 
@@ -63,7 +63,7 @@ STS fetches `idp.issuer` + `/.well-known/openid-configuration` (here `https://id
 idp-export -config config.yaml -out ./site
 ```
 
-The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.jwks`. `idp-export` reads only the local config file (no S3 overlay); run it against the config that carries the effective `idp` block. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
+The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.jwks`. `idp-export` applies the `s3_config_bucket` overlay and fragments like the running service, so it needs the same S3 read access. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
 
 **Dev and low volume: warden-served.** The warden answers `GET`/`HEAD` on `idp.paths.discovery` and `idp.paths.jwks` with `Cache-Control: public, max-age=<jwks_cache_max_age>`. If you use this:
 
@@ -366,16 +366,16 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------ |
 | `idp_not_permitted`           | 403    | No    | Over 1h without `idp_token` or outside `idp.allowed_roles`                     |
 | `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`               |
-| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or with non-printable ASCII |
+| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~` (spaces included) |
 | `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider            |
 | `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                           |
-| `duration_exceeds_cap`        | 400    | No    | Above the IdP ceiling, or over 1h with no `idp` block                          |
+| `duration_exceeds_cap`        | 400    | No    | Above the IdP ceiling, or over 1h with no `idp` block at startup               |
 | `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                          |
 | `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                |
 | `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false |
 | `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                      |
 | `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags          |
-| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer over 1h              |
+| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also over 1h with the IdP disabled or removed    |
 | `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                          |
 
 The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `durationSeconds`, `requestedDurationSeconds` when the caller sent one, `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).

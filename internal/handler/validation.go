@@ -56,9 +56,7 @@ func decodeRequestBody(body string) (*RequestData, error) {
 	return &data, nil
 }
 
-// ParseRoleOnlyRequestBody parses and validates a delegated-mode request body.
-// In delegated mode the JWT is validated by an upstream service; only the role
-// ARN must be present in the request body.
+// ParseRoleOnlyRequestBody parses a delegated-mode request body, which needs only the role ARN.
 func ParseRoleOnlyRequestBody(body string) (*RequestData, error) {
 	data, err := decodeRequestBody(body)
 	if err != nil {

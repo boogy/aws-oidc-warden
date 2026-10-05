@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
+	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +37,12 @@ func webIdentityWrapper(t *testing.T, handler http.HandlerFunc) *AwsServiceWrapp
 			BaseEndpoint: aws.String(srv.URL),
 			Credentials:  credentials.NewStaticCredentialsProvider("AKIAFAKE", "secret", "tok"),
 		}),
+		getCallerIdentityFn: hubIdentity,
 	}
+}
+
+func hubIdentity(context.Context) (*sts.GetCallerIdentityOutput, error) {
+	return &sts.GetCallerIdentityOutput{Account: aws.String("111111111111"), Arn: aws.String("arn:aws:iam::111111111111:user/warden")}, nil
 }
 
 func xmlHandler(body string) http.HandlerFunc {
@@ -175,6 +181,32 @@ func TestAssumeRoleWithWebIdentityRequiresArgs(t *testing.T) {
 	}
 }
 
+func TestAssumeRoleWithWebIdentityRejectsDisallowedAccount(t *testing.T) {
+	const memberRole = "arn:aws:iam::222222222222:role/Target"
+	tests := []struct {
+		name string
+		cfg  *gtvcfg.Config
+	}{
+		{"cross_account unset", &gtvcfg.Config{}},
+		{"cross_account disabled", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{AllowedAccounts: []string{"222222222222"}}}},
+		{"account not listed", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"333333333333"}}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			w := webIdentityWrapper(t, func(rw http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				xmlHandler(webIdentityOK)(rw, r)
+			})
+			c := NewAwsConsumer(tc.cfg)
+			c.AWS = w
+			_, err := c.AssumeRoleWithWebIdentity(context.Background(), memberRole, "s", "t", nil, 3600)
+			require.Error(t, err)
+			assert.Zero(t, calls.Load())
+		})
+	}
+}
+
 func TestAssumeRoleWithWebIdentityNilCredentials(t *testing.T) {
 	w := webIdentityWrapper(t, xmlHandler(webIdentityNoCreds))
 	c := &AwsConsumer{AWS: w}
@@ -215,7 +247,9 @@ func TestProductionSTSClientIsUnsigned(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			sawRequest.Store(false)
-			c := &AwsConsumer{AWS: tc.build()}
+			w := tc.build()
+			w.getCallerIdentityFn = hubIdentity
+			c := &AwsConsumer{AWS: w}
 			_, err := c.AssumeRoleWithWebIdentity(context.Background(), testRoleARN, "sess", "tok", nil, 3600)
 			require.NoError(t, err)
 			assert.True(t, sawRequest.Load())

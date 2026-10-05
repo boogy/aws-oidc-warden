@@ -77,13 +77,7 @@ func rejectDisallowedFragmentKeys(keys []string) error {
 	return nil
 }
 
-// mergeFragment applies frag's allowed fields onto cfg:
-//   - default_issuer must be base-defined; a conflicting value from an
-//     earlier fragment/base is rejected (result must not depend on fetch order).
-//   - role_sets are merged by name; a name colliding with an existing
-//     role_set is rejected, so a fragment can't silently repoint "@prod".
-//   - role_mappings/role_groups are appended; resolution/compilation/indexing
-//     happen later in Validate() (config.go), not here.
+// mergeFragment applies frag's allowed fields onto cfg; Validate() resolves and indexes them afterwards.
 func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers map[string]bool) error {
 	if frag.DefaultIssuer != "" {
 		if !baseIssuers[frag.DefaultIssuer] {

@@ -192,6 +192,14 @@ func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, se
 	if token == "" {
 		return nil, errors.New("token cannot be empty")
 	}
+	// Unsigned call: the warden's IAM permissions don't bound the target account.
+	allowed, err := a.IsTargetAccountAllowed(ctx, roleARN)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, fmt.Errorf("target account of %s is not allowed by cross_account", roleARN)
+	}
 
 	in := &sts.AssumeRoleWithWebIdentityInput{
 		RoleArn:          aws.String(roleARN),
