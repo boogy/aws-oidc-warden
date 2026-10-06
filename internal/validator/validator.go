@@ -55,7 +55,7 @@ var (
 // to a canonical subject + raw claims map.
 //
 // Deliberately scoped to Validate only: FetchJWKS and GenKeyFunc remain
-// exported on the concrete *TokenValidator for tests and WarmPrefetch, but
+// exported on the concrete *TokenValidator for tests, but
 // are an unscoped, audience-less path, not a standalone validation entry point.
 type TokenValidatorInterface interface {
 	Validate(ctx context.Context, tokenString string) (*types.Claims, error)
