@@ -1453,6 +1453,17 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 		}
 		out = append(out, set...)
 	}
+	for _, r := range out {
+		switch {
+		case strings.TrimSpace(r) == "":
+			return nil, errors.New("roles: an entry is empty")
+		case strings.HasPrefix(r, "@"):
+			return nil, fmt.Errorf("roles: %q is not a role ARN (role_sets cannot reference other sets)", r)
+		}
+		if _, _, err := utils.ParseRoleARN(r); err != nil {
+			return nil, fmt.Errorf("roles: %w", err)
+		}
+	}
 	return out, nil
 }
 
