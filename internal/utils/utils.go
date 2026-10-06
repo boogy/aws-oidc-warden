@@ -172,7 +172,8 @@ func FitSanitizedSTSName(s string) string {
 		return s
 	}
 	sum := sha256.Sum256([]byte(s))
-	return s[:47] + "+" + hex.EncodeToString(sum[:8])
+	tail := "+" + hex.EncodeToString(sum[:8])
+	return s[:MaxSTSNameLen-len(tail)] + tail
 }
 
 // FitSTSName sanitizes then caps at MaxSTSNameLen.

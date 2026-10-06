@@ -141,6 +141,19 @@ func TestALBHandler_MultiValueHeaderSelectsRoleOnlyParser(t *testing.T) {
 		"body was parsed with the token-requiring parser despite the ALB OIDC header")
 }
 
+func TestALBHandler_ErrorResponseSetsMultiValueHeaders(t *testing.T) {
+	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), &captureExtractor{}, nil)
+
+	resp, err := h.Handler(context.Background(), albEvent(map[string][]string{
+		"x-amzn-oidc-data": {"delegated-oidc-data"},
+	}, `{"role":"arn:aws:iam::123456789012:role/MyRole"}`))
+	require.NoError(t, err)
+
+	require.Equal(t, 401, resp.StatusCode)
+	assert.Equal(t, []string{resp.Headers["Content-Type"]}, resp.MultiValueHeaders["Content-Type"])
+	assert.Len(t, resp.MultiValueHeaders, len(resp.Headers))
+}
+
 // TestALBHandler_MultiValueXFFPopulatesSourceIP proves the audit/log sourceIp
 // survives a multi-value target group, and that a per-hop repeated
 // x-forwarded-for is folded into one list so the rightmost-hop rule still

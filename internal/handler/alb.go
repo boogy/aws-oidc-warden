@@ -123,22 +123,22 @@ func (h *AwsApplicationLoadBalancer) unmarshalRequestData(body, oidcData string)
 
 // newResponse builds this frontend's response type from a status and body.
 func (h *AwsApplicationLoadBalancer) newResponse(statusCode int, body string) events.ALBTargetGroupResponse {
-	return events.ALBTargetGroupResponse{
-		StatusCode: statusCode,
-		Headers:    ResponseHeaders,
-		Body:       body,
-	}
+	return h.newResponseWithHeaders(statusCode, body, nil)
 }
 
 // newResponseWithHeaders sets both header maps: ALB reads only MultiValueHeaders when multi-value headers are enabled.
 func (h *AwsApplicationLoadBalancer) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.ALBTargetGroupResponse {
-	resp := h.newResponse(statusCode, body)
-	resp.Headers = mergeHeaders(extra)
-	resp.MultiValueHeaders = make(map[string][]string, len(resp.Headers))
-	for k, v := range resp.Headers {
-		resp.MultiValueHeaders[k] = []string{v}
+	headers := mergeHeaders(extra)
+	multi := make(map[string][]string, len(headers))
+	for k, v := range headers {
+		multi[k] = []string{v}
 	}
-	return resp
+	return events.ALBTargetGroupResponse{
+		StatusCode:        statusCode,
+		Headers:           headers,
+		MultiValueHeaders: multi,
+		Body:              body,
+	}
 }
 
 // WithIdP enables the IdP routes and returns the handler.

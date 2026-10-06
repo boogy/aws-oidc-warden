@@ -206,10 +206,12 @@ func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 		if err := provider.Refresh(ctx); err != nil {
 			return nil, err
 		}
-		if cfg.MappingsFile != "" && cfg.ConfigReloadInterval > 0 {
-			logevent.Info(ctx, nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled",
-				slog.Int64("intervalMs", cfg.ConfigReloadInterval.Milliseconds()),
-				slog.String("mappingsFile", cfg.MappingsFile))
+		if cfg.ConfigReloadInterval > 0 {
+			attrs := []slog.Attr{slog.Int64("intervalMs", cfg.ConfigReloadInterval.Milliseconds())}
+			if cfg.MappingsFile != "" {
+				attrs = append(attrs, slog.String("mappingsFile", cfg.MappingsFile))
+			}
+			logevent.Info(ctx, nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled", attrs...)
 		}
 		return provider, nil
 	}

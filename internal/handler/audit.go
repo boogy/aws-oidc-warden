@@ -142,8 +142,6 @@ func stageSummary(stage string) string {
 		return "session policy read failed"
 	case "assume_role":
 		return "role assumption failed"
-	case "idp":
-		return "identity provider request refused"
 	case "idp_mint":
 		return "token minting failed"
 	case "idp_exchange":

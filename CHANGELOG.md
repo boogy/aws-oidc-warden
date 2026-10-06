@@ -34,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Remote `mappings_file` and fragment URIs must use lowercase `s3://`**; `S3://` skipped the owner and staleness checks.
 - **Config objects and S3 session policies over 1 MiB are rejected** instead of silently truncated.
 - **A `cross_account` refusal during role exchange** returns 403 `permission_denied`, audited at stage `account_check`.
+- **ALB responses set `multiValueHeaders`**, so credential and error responses keep `Content-Type` and security headers on multi-value target groups.
 
 ### Dependencies
 

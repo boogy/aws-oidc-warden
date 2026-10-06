@@ -680,3 +680,26 @@ idp:
 	require.Equal(t, "https://b.example.com/.well-known/jwks.json", c.IdP.JWKSURI)
 	require.Equal(t, "/.well-known/jwks.json", c.IdP.Paths.JWKS)
 }
+
+func TestMergeBytesIdPSameIssuerKeepsCustomPaths(t *testing.T) {
+	c := &Config{}
+	require.NoError(t, c.MergeBytes([]byte(idpMergeBase+`
+idp:
+  enabled: true
+  issuer: "https://a.example.com/prod"
+  audience: "sts.amazonaws.com"
+  jwks_uri: "https://cdn.example.com/keys.json"
+  paths:
+    discovery: "/prod/.well-known/openid-configuration"
+    jwks: "/prod/keys.json"
+  signing_keys:
+    - kms_key_id: "`+kmsARN(1)+`"
+      algorithm: RS256
+      status: active
+`), "yaml"))
+
+	require.NoError(t, c.MergeBytes([]byte("idp:\n  issuer: \"https://a.example.com/prod\"\n"), "yaml"))
+	require.Equal(t, "https://cdn.example.com/keys.json", c.IdP.JWKSURI)
+	require.Equal(t, "/prod/keys.json", c.IdP.Paths.JWKS)
+	require.Equal(t, "/prod/.well-known/openid-configuration", c.IdP.Paths.Discovery)
+}

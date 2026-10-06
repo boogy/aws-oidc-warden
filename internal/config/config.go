@@ -732,7 +732,7 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 	keys := v.AllKeys()
 	for key, zero := range clearOnDeclare {
 		if slices.Contains(keys, key) {
-			zero(next)
+			zero(next, v)
 		}
 	}
 
@@ -760,19 +760,19 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 // clearOnDeclare zeroes a declared slice of structs before decoding, because
 // mapstructure decodes element i onto the struct already at index i and an
 // omitted field would inherit the displaced entry's value.
-var clearOnDeclare = map[string]func(*Config){
-	"issuers":                   func(c *Config) { c.Issuers = nil },
-	"role_mappings":             func(c *Config) { c.RoleMappings = nil },
-	"role_groups":               func(c *Config) { c.RoleGroups = nil },
-	"config_fragment_checksums": func(c *Config) { c.ConfigFragmentChecksums = nil },
-	"idp.signing_keys": func(c *Config) {
+var clearOnDeclare = map[string]func(*Config, *viper.Viper){
+	"issuers":                   func(c *Config, _ *viper.Viper) { c.Issuers = nil },
+	"role_mappings":             func(c *Config, _ *viper.Viper) { c.RoleMappings = nil },
+	"role_groups":               func(c *Config, _ *viper.Viper) { c.RoleGroups = nil },
+	"config_fragment_checksums": func(c *Config, _ *viper.Viper) { c.ConfigFragmentChecksums = nil },
+	"idp.signing_keys": func(c *Config, _ *viper.Viper) {
 		if c.IdP != nil {
 			c.IdP.SigningKeys = nil
 		}
 	},
-	// re-derive jwks_uri and paths from the new issuer
-	"idp.issuer": func(c *Config) {
-		if c.IdP != nil {
+	// re-derive jwks_uri and paths only when the issuer changes
+	"idp.issuer": func(c *Config, v *viper.Viper) {
+		if c.IdP != nil && c.IdP.Issuer != v.GetString("idp.issuer") {
 			c.IdP.JWKSURI = ""
 			c.IdP.Paths = IdPPaths{}
 		}

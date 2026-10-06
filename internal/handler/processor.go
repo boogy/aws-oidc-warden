@@ -376,10 +376,7 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 			slog.String("key", *sessionPolicyFile),
 			slog.Int("policySize", len(policy)),
 			slog.Int64("durationMs", durationMs()))
-	}
-
-	// Inline overrides the S3 file if both are set.
-	if sessionPolicy != nil {
+	} else if sessionPolicy != nil {
 		sessionPolicyString = sessionPolicy
 		policyRef = "inline"
 		logevent.Debug(ctx, log, logevent.PolicySessionLoaded, "session policy loaded",
