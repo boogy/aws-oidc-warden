@@ -168,3 +168,23 @@ func TestNewKeySetRejectsUnsupportedKey(t *testing.T) {
 	_, err := NewKeySet(testCfg(), []LoadedKey{{Signer: edSigner{}, Status: config.IdPKeyActive}})
 	require.Error(t, err)
 }
+
+func TestKeySetDocumentAccessorsAgree(t *testing.T) {
+	ks, err := NewKeySet(testCfg(), []LoadedKey{{Signer: newTestSigner(t), Status: config.IdPKeyActive}})
+	require.NoError(t, err)
+	require.Equal(t, string(ks.JWKS()), ks.JWKSDocument())
+	require.Equal(t, string(ks.Discovery()), ks.DiscoveryDocument())
+
+	got := ks.JWKS()
+	got[0] = 'X'
+	require.NotEqual(t, got[0], ks.JWKSDocument()[0], "byte accessor must return a copy")
+}
+
+func TestKeySetHeaderMatchesActiveSigner(t *testing.T) {
+	ks, err := NewKeySet(testCfg(), []LoadedKey{{Signer: newTestSigner(t), Status: config.IdPKeyActive}})
+	require.NoError(t, err)
+	want, err := json.Marshal(map[string]string{"alg": ks.Active().Algorithm(), "typ": "JWT", "kid": ks.Active().KeyID()})
+	require.NoError(t, err)
+	require.Equal(t, want, ks.header)
+	require.Equal(t, b64.EncodeToString(want), ks.headerB64)
+}

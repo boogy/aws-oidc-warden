@@ -18,14 +18,14 @@ func (r *RequestProcessor) idpDocument(ctx context.Context, kind routeKind, head
 		return status, body, nil
 	}
 	cfg := r.idp.Config()
-	doc, path := ks.JWKS(), cfg.Paths.JWKS
+	doc, path := ks.JWKSDocument(), cfg.Paths.JWKS
 	if kind == routeDiscovery {
-		doc, path = ks.Discovery(), cfg.Paths.Discovery
+		doc, path = ks.DiscoveryDocument(), cfg.Paths.Discovery
 	}
 	logevent.Debug(ctx, log, logevent.IdPDocumentServed, "idp document served", slog.String("path", path))
 	headers = map[string]string{"Cache-Control": "public, max-age=" + strconv.Itoa(int(cfg.JWKSCacheMaxAge.Seconds()))}
 	if head {
 		return http.StatusOK, "", headers
 	}
-	return http.StatusOK, string(doc), headers
+	return http.StatusOK, doc, headers
 }

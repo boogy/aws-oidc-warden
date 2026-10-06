@@ -23,8 +23,10 @@ type LoadedKey struct {
 // KeySet holds the active signer and the precomputed public documents.
 type KeySet struct {
 	active    Signer
-	jwks      []byte
-	discovery []byte
+	header    []byte // JWS header JSON for active
+	headerB64 string
+	jwks      string
+	discovery string
 }
 
 // NewKeySet validates keys and precomputes the JWKS and discovery documents.
@@ -58,19 +60,27 @@ func NewKeySet(cfg config.IdPConfig, keys []LoadedKey) (*KeySet, error) {
 		return nil, errors.New("no active signing key")
 	}
 	var err error
-	if ks.jwks, err = json.Marshal(jwks); err != nil {
+	if ks.header, err = json.Marshal(map[string]string{"alg": ks.active.Algorithm(), "typ": "JWT", "kid": ks.active.KeyID()}); err != nil {
 		return nil, err
 	}
-	if ks.discovery, err = json.Marshal(map[string]any{
+	ks.headerB64 = b64.EncodeToString(ks.header)
+	jwksDoc, err := json.Marshal(jwks)
+	if err != nil {
+		return nil, err
+	}
+	ks.jwks = string(jwksDoc)
+	discoveryDoc, err := json.Marshal(map[string]any{
 		"issuer":                                cfg.Issuer,
 		"jwks_uri":                              cfg.JWKSURI,
 		"response_types_supported":              []string{"id_token"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": algs,
 		"claims_supported":                      mintedClaims,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
+	ks.discovery = string(discoveryDoc)
 	return &ks, nil
 }
 
@@ -78,7 +88,13 @@ func NewKeySet(cfg config.IdPConfig, keys []LoadedKey) (*KeySet, error) {
 func (k *KeySet) Active() Signer { return k.active }
 
 // JWKS returns a copy of the JWKS document.
-func (k *KeySet) JWKS() []byte { return slices.Clone(k.jwks) }
+func (k *KeySet) JWKS() []byte { return []byte(k.jwks) }
 
 // Discovery returns a copy of the OIDC discovery document.
-func (k *KeySet) Discovery() []byte { return slices.Clone(k.discovery) }
+func (k *KeySet) Discovery() []byte { return []byte(k.discovery) }
+
+// JWKSDocument returns the JWKS document without copying.
+func (k *KeySet) JWKSDocument() string { return k.jwks }
+
+// DiscoveryDocument returns the OIDC discovery document without copying.
+func (k *KeySet) DiscoveryDocument() string { return k.discovery }

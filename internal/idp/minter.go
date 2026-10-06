@@ -115,10 +115,7 @@ func mint(ctx context.Context, cfg config.IdPConfig, ks *KeySet, req MintRequest
 		}
 		c.Tags = t
 	}
-	header, err := json.Marshal(map[string]string{"alg": signer.Algorithm(), "typ": "JWT", "kid": signer.KeyID()})
-	if err != nil {
-		return nil, err
-	}
+	header := ks.header
 	payload, err := json.Marshal(c)
 	if err != nil {
 		return nil, err
@@ -127,7 +124,7 @@ func mint(ctx context.Context, cfg config.IdPConfig, ks *KeySet, req MintRequest
 	if est > maxTokenBytes {
 		return nil, fmt.Errorf("%w: estimated %d bytes", ErrTokenTooLarge, est)
 	}
-	signingInput := b64.EncodeToString(header) + "." + b64.EncodeToString(payload)
+	signingInput := ks.headerB64 + "." + b64.EncodeToString(payload)
 	sig, err := signer.Sign(ctx, []byte(signingInput))
 	if err != nil {
 		return nil, fmt.Errorf("sign: %w", err)

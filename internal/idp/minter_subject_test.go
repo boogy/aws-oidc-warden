@@ -61,3 +61,32 @@ func TestMintSubjectTemplateEmitsOnlyAllowedAWSNamespaceClaims(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderSubjectMatchesReplacer(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/team/Deploy"
+	tmpls := []string{
+		"{role_arn}", "{source_issuer}#{source_subject}#{role_arn}", "w:{account_id}:{role_name}:{role_arn}",
+		"{unknown}|{role_arn}", "{{role_arn}", "{role_arn}{role_arn}", "{role_ar{role_arn}", "x{", "{",
+		"{source_subject}{source_subject}/{role_arn}", "a{role_name}{account_id}b{role_arn}",
+	}
+	for _, tmpl := range tmpls {
+		t.Run(tmpl, func(t *testing.T) {
+			want := strings.NewReplacer("{role_arn}", role, "{account_id}", "123456789012", "{role_name}", "Deploy",
+				"{source_issuer}", "https://iss", "{source_subject}", "org/repo").Replace(tmpl)
+			got, err := renderSubject(tmpl, role, "https://iss", "org/repo")
+			if strings.HasSuffix(want, role) {
+				require.NoError(t, err)
+				require.Equal(t, want, got)
+			} else {
+				require.ErrorIs(t, err, ErrInvalidSubject)
+			}
+		})
+	}
+}
+
+func TestRenderSubjectDoesNotReExpandClaimValues(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/Deploy"
+	got, err := renderSubject("{source_issuer}#{source_subject}#{role_arn}", role, "{role_arn}", "{role_name}{account_id}{source_issuer}")
+	require.NoError(t, err)
+	require.Equal(t, "{role_arn}#{role_name}{account_id}{source_issuer}#"+role, got)
+}
