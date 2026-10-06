@@ -31,11 +31,4 @@ idp:
     - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/00000000-0000-0000-0000-000000000000"
       algorithm: ES256
       status: active
-  # Session ceilings live on each mapping (max_session_duration in mappings.yaml).
-  allowed_roles: # the only roles any mapping may have issued through the IdP
-    - "arn:aws:iam::111122223333:role/LongDeploy"
-    - "arn:aws:iam::111122223333:role/BatchRunner"
-    - "arn:aws:iam::111122223333:role/BackupRunner"
-    - "arn:aws:iam::111122223333:role/BackupVerify"
-    - "arn:aws:iam::111122223333:role/EtlExtract"
-    - "arn:aws:iam::111122223333:role/EtlLoad"
+  # Which mappings use the IdP is set per mapping in mappings.yaml.

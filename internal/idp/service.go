@@ -42,7 +42,6 @@ type Service struct {
 func NewService(cfg config.IdPConfig, load Loader) *Service {
 	c := cfg
 	c.SigningKeys = slices.Clone(c.SigningKeys)
-	c.AllowedRoles = slices.Clone(c.AllowedRoles)
 	if c.IncludeSourceIdentity != nil {
 		v := *c.IncludeSourceIdentity
 		c.IncludeSourceIdentity = &v

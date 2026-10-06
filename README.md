@@ -229,7 +229,7 @@ The failure modes that actually bite, in rough order of likelihood:
 | `500 policy_error`                | The mapping's S3 session policy could not be read (missing object, no `s3:GetObject`) or is not valid JSON                                               |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`. Transient; retry with backoff or fail over                                                            |
 | `500 audit_write_failed`          | `audit_required` is on and the S3 audit write failed. Needs `s3:PutObject` **and** `s3:PutObjectTagging` on the log bucket; `make run` has no S3 sink    |
-| `403 idp_not_permitted`           | Over 1h for a role without `idp_token` or outside `idp.allowed_roles`                                                                                    |
+| `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h                                                                       |
 | `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                                                              |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                                                                     |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                                                                |

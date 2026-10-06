@@ -71,14 +71,6 @@ func TestIdPValidate(t *testing.T) {
 		{name: "negative sign_timeout", mutate: func(c *IdPConfig) { c.SignTimeout = -1 }, wantErr: "sign_timeout"},
 		{name: "negative jwks_cache_max_age", mutate: func(c *IdPConfig) { c.JWKSCacheMaxAge = -1 }, wantErr: "jwks_cache_max_age"},
 
-		{name: "allowed_roles arn", mutate: func(c *IdPConfig) { c.AllowedRoles = []string{"arn:aws:iam::123456789012:role/R"} }},
-		{name: "allowed_roles govcloud", mutate: func(c *IdPConfig) { c.AllowedRoles = []string{"arn:aws-us-gov:iam::123456789012:role/R"} }},
-		{name: "allowed_roles china", mutate: func(c *IdPConfig) { c.AllowedRoles = []string{"arn:aws-cn:iam::123456789012:role/R"} }},
-		{name: "allowed_roles set ref", mutate: func(c *IdPConfig) { c.AllowedRoles = []string{"@idp"} }},
-		{name: "allowed_roles bad entry", mutate: func(c *IdPConfig) { c.AllowedRoles = []string{"R"} }, wantErr: "allowed_roles"},
-		{name: "allowed_roles bare @", mutate: func(c *IdPConfig) { c.AllowedRoles = []string{"@"} }, wantErr: "allowed_roles"},
-		{name: "allowed_roles user arn", mutate: func(c *IdPConfig) { c.AllowedRoles = []string{"arn:aws:iam::123456789012:user/U"} }, wantErr: "allowed_roles"},
-
 		{name: "bad alg", mutate: func(c *IdPConfig) { c.SigningKeys[0].Algorithm = "HS256" }, wantErr: "algorithm"},
 		{name: "bad key status", mutate: func(c *IdPConfig) { c.SigningKeys[0].Status = "retired" }, wantErr: "status must be"},
 		{name: "no active key", mutate: func(c *IdPConfig) { c.SigningKeys[0].Status = IdPKeyVerifyOnly }, wantErr: "exactly one active"},
@@ -188,7 +180,6 @@ func TestIdPDefaults(t *testing.T) {
 	require.Equal(t, "https://h.example.com/warden/.well-known/jwks.json", c.JWKSURI)
 	require.Equal(t, IdPAudienceStatic, c.AudienceMode)
 	require.True(t, c.IncludeSourceIdentityClaim())
-	require.Empty(t, c.AllowedRoles)
 }
 
 func TestIdPDefaultJWKSURIFollowsCustomPath(t *testing.T) {
@@ -200,7 +191,6 @@ func TestIdPDefaultJWKSURIFollowsCustomPath(t *testing.T) {
 func TestIdPFingerprintIgnoresReloadableFields(t *testing.T) {
 	a, b := validIdP(), validIdP()
 	b.Enabled = false
-	b.AllowedRoles = []string{"@idp"}
 	require.Equal(t, a.Fingerprint(), b.Fingerprint())
 	b.TokenTTL = time.Minute
 	require.NotEqual(t, a.Fingerprint(), b.Fingerprint())
@@ -221,8 +211,6 @@ idp:
   token_ttl: 3m
   audience_mode: role_arn
   source_identity: "{subject}"
-  allowed_roles:
-    - "arn:aws:iam::123456789012:role/R"
   paths:
     discovery: /.well-known/openid-configuration
     jwks: /.well-known/jwks.json
@@ -282,7 +270,6 @@ func TestIdPYAMLRoundTrip(t *testing.T) {
 	require.Equal(t, 3*time.Minute, c.IdP.TokenTTL)
 	require.Equal(t, IdPAudienceRoleARN, c.IdP.AudienceMode)
 	require.Equal(t, "{subject}", c.IdP.SourceIdentity)
-	require.Equal(t, []string{"arn:aws:iam::123456789012:role/R"}, c.IdP.AllowedRoles)
 	require.Equal(t, "/.well-known/openid-configuration", c.IdP.Paths.Discovery)
 	require.Equal(t, "/.well-known/jwks.json", c.IdP.Paths.JWKS)
 	require.Equal(t, []IdPSigningKey{{KMSKeyID: idpKMSARN, Algorithm: "RS256", Status: IdPKeyActive}}, c.IdP.SigningKeys)

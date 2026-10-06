@@ -341,8 +341,6 @@ type Config struct {
 	// Optional token-minting IdP; frozen at cold start except the live fields
 	IdP *IdPConfig `mapstructure:"idp" json:"idp,omitempty"`
 
-	idpAllowedRoles map[string]bool `mapstructure:"-" json:"-"`
-
 	// JWTValidation controls whether the service validates JWT signatures itself
 	// or trusts pre-validation by an upstream AWS service.
 	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation,omitempty"`
@@ -772,11 +770,6 @@ var clearOnDeclare = map[string]func(*Config){
 			c.IdP.SigningKeys = nil
 		}
 	},
-	"idp.allowed_roles": func(c *Config) {
-		if c.IdP != nil {
-			c.IdP.AllowedRoles = nil
-		}
-	},
 	// re-derive jwks_uri and paths from the new issuer
 	"idp.issuer": func(c *Config) {
 		if c.IdP != nil {
@@ -1019,17 +1012,6 @@ func (c *Config) Validate() error {
 		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
 			return err
 		}
-		c.idpAllowedRoles = nil
-		if len(c.IdP.AllowedRoles) > 0 {
-			roles, err := c.resolveRoleSet(c.IdP.AllowedRoles)
-			if err != nil {
-				return fmt.Errorf("idp.allowed_roles: %w", err)
-			}
-			c.idpAllowedRoles = make(map[string]bool, len(roles))
-			for _, r := range roles {
-				c.idpAllowedRoles[r] = true
-			}
-		}
 	}
 
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {
@@ -1093,8 +1075,8 @@ func (c *Config) Validate() error {
 		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): max_session_duration", source, i, subject), m.MaxSessionDuration); err != nil {
 			return err
 		}
-		if m.MaxSessionDuration != 0 && !m.IDPToken {
-			return fmt.Errorf("%s[%d] (%s): max_session_duration requires idp_token", source, i, subject)
+		if m.MaxSessionDuration > IdPDefaultMaxSessionDuration && c.IdP == nil {
+			return fmt.Errorf("%s[%d] (%s): max_session_duration over 1h requires an idp block", source, i, subject)
 		}
 		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
 			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
@@ -1406,30 +1388,10 @@ func (c *Config) validateMappingsSplit() error {
 	if slices.Contains(c.ConfigFragments, c.MappingsFile) {
 		return errors.New("mappings_file must not also be listed in config_fragments")
 	}
-	if len(c.RoleMappings) > 0 || len(c.RoleGroups) > 0 {
-		return errors.New("mappings_file is set: role_mappings and role_groups belong in the mappings file, not the service config")
-	}
-	owned := c.idpReferencedRoleSets()
-	for name := range c.RoleSets {
-		if !owned[strings.ToLower(name)] {
-			return fmt.Errorf("mappings_file is set: role_sets %q must live in the mappings file unless idp.allowed_roles references it", name)
-		}
+	if len(c.RoleMappings) > 0 || len(c.RoleGroups) > 0 || len(c.RoleSets) > 0 {
+		return errors.New("mappings_file is set: role_mappings, role_groups and role_sets belong in the mappings file, not the service config")
 	}
 	return nil
-}
-
-// idpReferencedRoleSets returns the lower-cased @name entries of idp.allowed_roles.
-func (c *Config) idpReferencedRoleSets() map[string]bool {
-	out := map[string]bool{}
-	if c.IdP == nil {
-		return out
-	}
-	for _, r := range c.IdP.AllowedRoles {
-		if name, ok := strings.CutPrefix(r, "@"); ok {
-			out[strings.ToLower(name)] = true
-		}
-	}
-	return out
 }
 
 // validateFragmentChecksums rejects malformed or inert pins: a pin naming a
@@ -1451,11 +1413,6 @@ func (c *Config) validateFragmentChecksums() error {
 		seen[p.URI] = true
 	}
 	return nil
-}
-
-// IdPRoleAllowed reports whether role may receive an IdP token under idp.allowed_roles.
-func (c *Config) IdPRoleAllowed(role string) bool {
-	return c.idpAllowedRoles == nil || c.idpAllowedRoles[role]
 }
 
 // resolveRoleSet expands "@name" aliases to c.RoleSets[name] at Validate() time.
@@ -1726,9 +1683,9 @@ func (d Decision) sessionTags() map[string]string {
 	return d.authorizing.SessionTags
 }
 
-// IDPTokenAllowed reports whether the mapping that authorized the role opted into IdP token minting.
+// IDPTokenAllowed reports whether the authorizing mapping sets idp_token or a ceiling over 1h.
 func (d Decision) IDPTokenAllowed() bool {
-	return d.authorizing != nil && d.authorizing.IDPToken
+	return d.authorizing != nil && (d.authorizing.IDPToken || d.authorizing.MaxSessionDuration > IdPDefaultMaxSessionDuration)
 }
 
 // MaxSessionDuration is the authorizing mapping's session ceiling, 1h when unset; 0 when nothing authorized.

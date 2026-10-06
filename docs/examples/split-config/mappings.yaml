@@ -6,10 +6,9 @@
 # Every mapping key and condition form: /example-config.yaml (ROLE MAPPINGS).
 #
 # Every caller POSTs to /verify with optional durationSeconds and sessionName.
-# - Without idp_token a role is issued by AssumeRole: 900-3600s, default 3600.
-# - With idp_token (and the role in idp.allowed_roles) it is issued through the
-#   warden's IdP at any duration, up to the mapping's max_session_duration
-#   (default 1h, max 12h). Over 1h without idp_token is refused.
+# - max_session_duration over 1h (max 12h): issued through the warden's IdP.
+# - idp_token: true: issued through the IdP at the default 1h ceiling.
+# - Neither: issued by AssumeRole, 900-3600s, default 3600; over 1h is refused.
 # - Session name: the mapping's role_session_name if set, else the caller's
 #   sessionName when the mapping sets allow_session_name: true (otherwise it is
 #   ignored), else role_session_name in service.yaml.
@@ -53,7 +52,6 @@ role_mappings:
     roles: ["arn:aws:iam::111122223333:role/LongDeploy"]
     conditions:
       ref: "refs/heads/main"
-    idp_token: true
     max_session_duration: 4h
 
   # IdP-issued, two roles, up to 12h, forced session name: a sessionName sent by
@@ -65,7 +63,6 @@ role_mappings:
       - "arn:aws:iam::111122223333:role/BackupVerify"
     conditions:
       event_name: "schedule"
-    idp_token: true
     max_session_duration: 12h
     role_session_name: "nightly-backup"
 
@@ -111,5 +108,4 @@ role_groups:
       roles: ["@etl"]
       conditions:
         ref: "refs/heads/main"
-      idp_token: true
       max_session_duration: 6h

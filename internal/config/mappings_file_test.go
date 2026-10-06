@@ -64,7 +64,6 @@ func TestMappingsFileLoadsRoleMappings(t *testing.T) {
 func TestMappingsFileRejectsBaseOnlyKeys(t *testing.T) {
 	tests := []struct{ name, content string }{
 		{"issuers", "issuers:\n  - issuer: https://evil.example.com\n    provider: github\n    audiences: [x]\n"},
-		{"idp allowed_roles", "idp:\n  allowed_roles: [\"" + mapAdminARN + "\"]\n"},
 		{"idp max_session_duration", "idp:\n  max_session_duration: 4h\n"},
 		{"idp enabled", "idp:\n  enabled: true\n"},
 		{"mappings_file", "mappings_file: /etc/other.yaml\n"},
@@ -84,9 +83,12 @@ func TestMappingsFileRejectsBaseOnlyKeys(t *testing.T) {
 
 func TestMappingsFileAcceptsMappingIdPFields(t *testing.T) {
 	content := "role_mappings:\n  - subject: org/repo\n    roles: [\"" + mapRoleARN + "\"]\n" +
-		"    idp_token: true\n    max_session_duration: 4h\n"
-	p := NewProvider(mappingsCfg(t, content), 0, "", nil)
+		"    max_session_duration: 4h\n"
+	c := mappingsCfg(t, content)
+	c.IdP = validIdP()
+	p := NewProvider(c, 0, "", nil)
 	require.NoError(t, p.Refresh(context.Background()))
+	require.True(t, p.Get().Authorize(c.Issuers[0].Issuer, "org/repo", mapRoleARN, map[string]any{}).IDPTokenAllowed())
 }
 
 func TestMappingsFileKeepsLastGoodOnBadReload(t *testing.T) {
@@ -159,15 +161,10 @@ func TestValidateMappingsSplit(t *testing.T) {
 			c.MappingsFile = "/m.yaml"
 			c.RoleGroups = []RoleGroup{{Subjects: []string{"a/b"}}}
 		}, "mappings_file is set"},
-		{"unreferenced base role_sets", func(c *Config) {
+		{"base role_sets", func(c *Config) {
 			c.MappingsFile = "/m.yaml"
 			c.RoleSets = map[string][]string{"other": arn}
 		}, "role_sets"},
-		{"role_sets referenced by idp.allowed_roles", func(c *Config) {
-			c.MappingsFile = "/m.yaml"
-			c.RoleSets = map[string][]string{"idp": arn}
-			c.IdP = &IdPConfig{AllowedRoles: []string{"@IdP"}}
-		}, ""},
 		{"padded path", func(c *Config) { c.MappingsFile = " /m.yaml" }, "whitespace"},
 		{"also in config_fragments", func(c *Config) {
 			c.MappingsFile = "/m.yaml"
@@ -193,24 +190,6 @@ func TestMappingsFileExclusiveWithInlineMappings(t *testing.T) {
 	c.RoleMappings = []RoleMapping{{Subject: Patterns{"org/inline"}, Roles: []string{mapRoleARN}}}
 	err := NewProvider(c, 0, "", nil).Refresh(context.Background())
 	require.ErrorContains(t, err, "mappings_file is set")
-}
-
-func TestMappingsFileCannotWidenIdPAllowedRoles(t *testing.T) {
-	c := mappingsCfg(t, okMappings)
-	c.RoleSets = map[string][]string{"idp": {mapRoleARN}}
-	c.IdP = validIdP()
-	c.IdP.AllowedRoles = []string{"@idp"}
-	require.NoError(t, c.Validate())
-
-	p := NewProvider(c, 0, "", nil)
-	require.NoError(t, p.Refresh(context.Background()))
-
-	widened := "role_sets:\n  idp: [\"" + mapRoleARN + "\", \"" + mapAdminARN + "\"]\n"
-	require.NoError(t, os.WriteFile(c.MappingsFile, []byte(widened), 0o600))
-	err := p.Refresh(context.Background())
-	require.ErrorContains(t, err, "referenced by idp.allowed_roles")
-	require.False(t, p.Get().IdPRoleAllowed(mapAdminARN))
-	require.True(t, p.Get().IdPRoleAllowed(mapRoleARN))
 }
 
 func TestMaxStale(t *testing.T) {

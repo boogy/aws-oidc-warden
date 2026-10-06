@@ -3,6 +3,7 @@
 Optional. The warden validates the inbound OIDC token as usual, then mints its **own** short-lived OIDC token and exchanges it in-process with an unsigned `sts:AssumeRoleWithWebIdentity`. The caller gets ordinary STS credentials.
 
 - [Why](#why)
+- [When the IdP is used](#when-the-idp-is-used)
 - [Flow](#flow)
 - [Hosting discovery and JWKS](#hosting-discovery-and-jwks)
 - [KMS signing key](#kms-signing-key)
@@ -24,13 +25,28 @@ Optional. The warden validates the inbound OIDC token as usual, then mints its *
 
 `sts:AssumeRole` called with a role session (always the case on Lambda) is role chaining: STS caps the session at **1 hour**. `AssumeRoleWithWebIdentity` is not chained, so the session can last up to the target role's `MaxSessionDuration` (15 minutes to 12 hours). IdP mode exists for long jobs that outlive one hour.
 
-Every caller uses the same endpoint (`/verify`). A role whose authorizing mapping sets `idp_token: true` (and is in `idp.allowed_roles`) is issued through the IdP whenever `idp.enabled` is on, at any duration. Every other role keeps `AssumeRole`, capped at 1h. A request for more than 1h that cannot use the IdP is refused, never shortened:
+## When the IdP is used
 
-| Over 1h requested, and…                                   | Answer                        |
-| --------------------------------------------------------- | ----------------------------- |
-| no `idp` block configured                                 | 400 `duration_exceeds_cap`    |
-| mapping lacks `idp_token`, or role not in `allowed_roles` | 403 `idp_not_permitted`       |
-| `idp.enabled: false` (kill switch)                        | 503 `idp_signing_unavailable` |
+Every caller uses `/verify`. The mapping that authorizes the role picks the path, never the request:
+
+| Authorizing mapping sets               | Path (while `idp.enabled`) | Session length                            |
+| -------------------------------------- | -------------------------- | ----------------------------------------- |
+| `max_session_duration` over 1h         | IdP                        | up to that ceiling                        |
+| `idp_token: true`                      | IdP                        | up to `max_session_duration` (default 1h) |
+| neither                                | `AssumeRole`               | up to 1h, or the mapping's lower ceiling  |
+
+- No role list to maintain: the mappings are the list.
+- An IdP mapping uses the IdP for every request, short ones included, so its roles must trust the warden's IAM OIDC provider ([Trust policy](#trust-policy)).
+- `idp_token: true` is for a mapping capped at 1h whose role should still be IdP-issued, e.g. one that trusts only the warden's OIDC provider.
+- A `max_session_duration` over 1h with no `idp` block is a load error.
+
+A request for more than 1h that cannot use the IdP is refused, never shortened:
+
+| Over 1h requested, and…                | Answer                        |
+| -------------------------------------- | ----------------------------- |
+| no `idp` block configured              | 400 `duration_exceeds_cap`    |
+| the mapping is not an IdP mapping      | 403 `idp_not_permitted`       |
+| `idp.enabled: false` (kill switch)     | 503 `idp_signing_unavailable` |
 
 ## Flow
 
@@ -44,7 +60,7 @@ sequenceDiagram
     participant H as Discovery/JWKS host
 
     C->>W: POST /verify {token, role, durationSeconds?, sessionName?}
-    W->>W: Validate inbound token, authorize; idp_token mapping + idp.allowed_roles selects the IdP
+    W->>W: Validate inbound token, authorize; the authorizing mapping selects the IdP
     W->>K: kms:Sign (minted token, self-verified before use)
     W->>S: AssumeRoleWithWebIdentity (unsigned, minted token)
     S->>H: GET discovery + JWKS
@@ -175,7 +191,7 @@ Every target role trusts the warden's IAM OIDC provider (not GitHub's or any oth
 | `{account_id}`, `{role_name}`         | parts of the role ARN                                |
 | `{source_issuer}`, `{source_subject}` | inbound issuer and canonical subject                 |
 
-**Recommended: keep the default `{role_arn}`.** The `sub` is then the role's own ARN: short, one fixed value per role. Which callers may assume the role is decided by the warden's mappings and `idp.allowed_roles`.
+**Recommended: keep the default `{role_arn}`.** The `sub` is then the role's own ARN: short, one fixed value per role. Which callers may assume the role is decided by the warden's mappings; which roles the IdP can reach is decided by which roles trust the warden's IAM OIDC provider.
 
 Worked example for `role/LongDeploy` with the default template:
 
@@ -237,20 +253,17 @@ idp:
     - kms_key_id: "arn:aws:kms:eu-west-1:123456789012:key/00000000-0000-0000-0000-000000000000"
       algorithm: ES256
       status: active
-  allowed_roles:
-    - "arn:aws:iam::123456789012:role/LongDeploy"
 
 role_mappings:
   - issuer: "https://token.actions.githubusercontent.com" # inbound issuer, not idp.issuer
     subject: "octo-org/long-job"
     roles: ["arn:aws:iam::123456789012:role/LongDeploy"]
-    idp_token: true
-    max_session_duration: 4h
+    max_session_duration: 4h # over 1h: issued through the IdP
 ```
 
 Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-provider).
 
-- `max_session_duration` is set per mapping (or in `role_groups[].defaults`) and applies to every role that mapping grants: 15m to 12h, default `1h`, and it needs `idp_token`. There is no service-wide ceiling; the platform team bounds the IdP by setting `idp.allowed_roles` (empty allows every role), and each role's own IAM `MaxSessionDuration` is the hard limit.
+- `max_session_duration` is set per mapping (or in `role_groups[].defaults`) and applies to every role that mapping grants: 15m to 12h, default `1h`. There is no service-wide ceiling; each role's trust policy and IAM `MaxSessionDuration` are the hard limits.
 - `idp` is base-only: config fragments and the mappings file cannot carry it.
 - A role in another account needs `cross_account.enabled: true` and, when `allowed_accounts` is non-empty, that account listed in it, as for `AssumeRole`; otherwise the request is refused with 403 `permission_denied`. The exchange never uses the spoke role.
 
@@ -343,7 +356,7 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 
 | Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                          |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `allowed_roles`, plus per-mapping `idp_token`, `max_session_duration` |
+| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, plus per-mapping `idp_token`, `max_session_duration`                 |
 
 A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer, or adds a second issuer while the frozen `source_identity` lacks `{issuer}`, is rejected (`config.idp.issuer_collision`).
 
@@ -361,13 +374,13 @@ While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its d
 - Only `ES256` and `RS256`.
 - Transitive session tags: with `session_tags_transitive`, the minted token carries the tag keys as transitive; STS packed-policy limits apply (500 `idp_token_too_large`).
 - Token size: STS accepts at most 20,000 bytes; long claim values and many tags can exceed it.
-- `idp.allowed_roles` is base-only (ARNs or `@role_set` names); empty means no extra cap.
+- The IdP reaches only roles whose trust policy trusts the warden's IAM OIDC provider with the `sub` pin: a role opts in on the AWS side.
 - PEM key files are dev-only; they are refused on Lambda unless `allow_insecure_issuers` is set.
 
 | Risk                                                          | Control                                                                                  |
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, tamper Deny and SCP (preventive), replica-region allowlist (detective), alarms |
-| A mapping writer widening sessions                            | `idp.allowed_roles` (base-only) and the role's IAM `MaxSessionDuration`                  |
+| A mapping writer widening sessions                            | The role's trust policy (`sub` pin) and IAM `MaxSessionDuration`                         |
 | Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                              |
 | Half-rotated keys                                             | All-or-nothing loader; rotation order above                                              |
 | Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`                         |
@@ -390,7 +403,7 @@ Every response uses the standard error envelope. "Retry" means the same request 
 
 | Code                          | Status | Retry | Cause                                                                           |
 | ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------- |
-| `idp_not_permitted`           | 403    | No    | Over 1h without `idp_token` or outside `idp.allowed_roles`                      |
+| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping                                |
 | `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                |
 | `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`     |
 | `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider             |

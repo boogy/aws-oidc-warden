@@ -571,7 +571,6 @@ func TestSplitConfigExamplesLoad(t *testing.T) {
 				d := cfg.Authorize(gh, tt.subject, tt.role, tt.claims)
 				require.True(t, d.Matched)
 				require.Equal(t, tt.idp, d.IDPTokenAllowed())
-				require.Equal(t, tt.idp, cfg.IdPRoleAllowed(tt.role) && d.IDPTokenAllowed())
 				require.Equal(t, tt.ceiling, d.MaxSessionDuration())
 				require.Equal(t, tt.sessionName, d.RoleSessionName())
 			})

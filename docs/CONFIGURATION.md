@@ -333,8 +333,8 @@ See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefin
 
 | Field                      | Default | Notes                                                                                                                                 |
 | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `idp_token`                | `false` | Issue this mapping's roles through the IdP (any duration) while `idp.enabled`; needed for over 1h                                     |
-| `max_session_duration`     | `1h`    | Ceiling for the caller's `durationSeconds` on every role this mapping grants, 15m to 12h. Needs `idp_token`                           |
+| `idp_token`                | `false` | Issue this mapping's roles through the IdP while `idp.enabled`, even at a 1h ceiling. Implied by `max_session_duration` over 1h      |
+| `max_session_duration`     | `1h`    | Ceiling for the caller's `durationSeconds` on every role this mapping grants, 15m to 12h. Over 1h routes through the IdP              |
 
 With `role_sets`, the lowest-order mapping that grants the role decides.
 
@@ -368,7 +368,6 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 | `include_source_identity`  | `true`                                               |                                                                                                                | Adds the AWS source-identity claim to the minted token                                                                                    |
 | `source_identity`          | `{issuer}:{subject}`                                 | placeholders `{request_id}`, `{subject}`, `{issuer}` (inbound issuer host, not `idp.issuer`), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer                                                                                         |
 | `source_identity_overflow` | `truncate`                                           | `truncate`, `reject`                                                                                           | Over 64 characters                                                                                                                        |
-| `allowed_roles`            | empty (no cap)                                       | role ARNs or `@role_set`                                                                                       | Live, base-only; roles outside it get 403 `idp_not_permitted`                                                                             |
 | `sign_timeout`             | `2s`                                                 | > 0                                                                                                            | Per KMS `Sign` call                                                                                                                       |
 | `jwks_cache_max_age`       | `5m`                                                 | >= 0                                                                                                           | `Cache-Control` max-age of served documents                                                                                               |
 | `kms_allowed_regions`      | empty                                                |                                                                                                                | Regions allowed for MRK primary and replicas; required with an MRK key ARN (`key/mrk-…`); when set, every key ARN's region must be listed |
@@ -388,7 +387,7 @@ Every request goes to `/verify`. The body takes `token` and `role`, plus:
 | `durationSeconds` | 900..43200. `AssumeRole` roles: up to 3600, omitted = 3600. IdP roles: up to the ceiling, omitted = `min(3600, ceiling)`; never clamped |
 | `sessionName`     | `^[\w+=,.@-]{2,64}$`. Used only with the mapping's `allow_session_name: true`, else ignored; a `role_session_name` overrides it         |
 
-An `idp_token` role (in `idp.allowed_roles`) is issued through the IdP while `idp.enabled`; any other role uses `AssumeRole`. Over 1h without the IdP is refused ([IDP.md § Why](IDP.md#why)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
+A mapping with `max_session_duration` over 1h or `idp_token: true` is issued through the IdP while `idp.enabled`; any other uses `AssumeRole`, capped at 1h ([IDP.md § When the IdP is used](IDP.md#when-the-idp-is-used)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
 ## Environment Variable Reference
 
@@ -479,7 +478,7 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 
 ### IdP Settings
 
-Applied only when the config file or S3 object already carries an `idp:` block; env alone never creates it. `signing_keys`, `paths` and `allowed_roles` are file/S3 only. Env beats S3 on every reload, including `AOW_IDP_ENABLED`.
+Applied only when the config file or S3 object already carries an `idp:` block; env alone never creates it. `signing_keys` and `paths` are file/S3 only. Env beats S3 on every reload, including `AOW_IDP_ENABLED`.
 
 | Environment Variable               | Config File Key                | Default                              |
 | ---------------------------------- | ------------------------------ | ------------------------------------ |
@@ -531,11 +530,11 @@ config_reload_interval: 60s
 | `mappings_max_stale`     | `AOW_MAPPINGS_MAX_STALE`     | See [Freshness](#freshness)                                         |
 | `s3_config_bucket_owner` | `AOW_S3_CONFIG_BUCKET_OWNER` | Exactly 12 digits; never auto-resolved                              |
 
-With `mappings_file` set, the service config may not carry inline `role_mappings` or `role_groups`. Base `role_sets` are allowed only when `idp.allowed_roles` references them.
+With `mappings_file` set, the service config may not carry inline `role_mappings`, `role_groups` or `role_sets`.
 
 ### What the mappings file may contain
 
-Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment". It may not redefine a `role_sets` name referenced by `idp.allowed_roles`.
+Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment".
 
 The mappings file is a layer beside the base config and the S3 overlay (`s3_config_bucket`/`s3_config_path`). It merges first, then `config_fragments` in order; fragments are rejected inside it. A `role_sets` name defined twice across layers is an error.
 
@@ -575,7 +574,7 @@ Deleting or breaking the file is not revocation: the last good config keeps gran
 
 ### Security
 
-Whoever writes the mappings can grant roles and set `idp_token: true`, but never `idp.*` or `issuers`. The target role's trust policy (and, in IdP mode, the `sub` pin plus `idp.allowed_roles`) remains the final gate.
+Whoever writes the mappings can grant roles and route them through the IdP (`idp_token`, `max_session_duration`), but never set `idp.*` or `issuers`. The target role's trust policy (in IdP mode, the `sub` pin on the warden's IAM OIDC provider) and IAM `MaxSessionDuration` remain the final gate.
 
 ## Config fragments
 

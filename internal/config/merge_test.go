@@ -485,7 +485,7 @@ func TestClearOnDeclareCoversEverySliceOfStructField(t *testing.T) {
 	}
 
 	// nested under the idp pointer, invisible to the top-level reflection
-	want = append(want, "idp.allowed_roles", "idp.issuer", "idp.signing_keys")
+	want = append(want, "idp.issuer", "idp.signing_keys")
 
 	got := make([]string, 0, len(clearOnDeclare))
 	for key := range clearOnDeclare {
@@ -647,9 +647,6 @@ idp:
   enabled: true
   issuer: "https://idp.example.com"
   audience: "sts.amazonaws.com"
-  allowed_roles:
-    - "arn:aws:iam::123456789012:role/A"
-    - "arn:aws:iam::123456789012:role/B"
   signing_keys:
     - file: /k.pem
       algorithm: RS256
@@ -659,12 +656,10 @@ idp:
       status: verify_only
 `), "yaml"))
 	require.Len(t, c.IdP.SigningKeys, 2)
-	require.Len(t, c.IdP.AllowedRoles, 2)
 
-	require.NoError(t, c.MergeBytes([]byte(`{"idp":{"signing_keys":[{"kms_key_id":"`+kmsARN(3)+`","algorithm":"RS256","status":"active"}],"allowed_roles":["arn:aws:iam::123456789012:role/A"]}}`), "json"))
+	require.NoError(t, c.MergeBytes([]byte(`{"idp":{"signing_keys":[{"kms_key_id":"`+kmsARN(3)+`","algorithm":"RS256","status":"active"}]}}`), "json"))
 	require.Len(t, c.IdP.SigningKeys, 1)
 	require.Equal(t, kmsARN(3), c.IdP.SigningKeys[0].KMSKeyID)
-	require.Equal(t, []string{"arn:aws:iam::123456789012:role/A"}, c.IdP.AllowedRoles)
 }
 
 func TestMergeBytesIdPIssuerRederivesDefaults(t *testing.T) {

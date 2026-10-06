@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -333,12 +331,6 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 			}
 		}
 
-		if uri == cfg.MappingsFile {
-			if name, clash := idpOwnedRoleSet(cfg, frag); clash {
-				return nil, fmt.Errorf("mappings_file %q declares role_set %q referenced by idp.allowed_roles", uri, name)
-			}
-		}
-
 		if err := mergeFragment(cfg, frag, uri, baseIssuers); err != nil {
 			return nil, err
 		}
@@ -361,21 +353,6 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 		slog.Int("totalMappings", totalMappings))
 
 	return next, nil
-}
-
-func idpOwnedRoleSet(cfg *Config, frag *FragmentConfig) (string, bool) {
-	owned := cfg.idpReferencedRoleSets()
-	names := make([]string, 0, len(frag.RoleSets))
-	for name := range frag.RoleSets {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if owned[strings.ToLower(name)] {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 // refreshable reports whether any reload source (remote config or fragments) is configured.

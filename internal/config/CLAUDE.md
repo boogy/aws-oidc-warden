@@ -48,5 +48,5 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Viper-based loading, validation, and
 - `MappingsMaxStale` is `*time.Duration` (nil = unset), resolved by `effectiveMappingsMaxStale()`.
 - `Stale()` returns `(age, limit, stale)` from one snapshot; false without a remote source.
 - `idp.go` — `IdPConfig` (`idp:` block) and its validation; `idp_template.go` — subject and source-identity templates. A mapping opts in with `idp_token`.
-- **IdP frozen vs live.** `enabled` and `allowed_roles` hot-reload; every other `idp` key is frozen at startup. `Provider.frozenIdP` rejects a reload whose inbound issuers collide with the IdP issuer or outnumber an `{issuer}`-less frozen `source_identity`.
-- `max_session_duration` is per mapping, so fragments and `mappings_file` may set it; the base-only bound is `idp.allowed_roles` when set (empty = every role), whose role_sets a `mappings_file` cannot redefine (`idpOwnedRoleSet`).
+- **IdP frozen vs live.** `enabled` hot-reloads; every other `idp` key is frozen at startup. `Provider.frozenIdP` rejects a reload whose inbound issuers collide with the IdP issuer or outnumber an `{issuer}`-less frozen `source_identity`.
+- `max_session_duration` and `idp_token` are per mapping, so fragments and `mappings_file` may set them; over 1h or `idp_token` routes the mapping through the IdP (`Decision.IDPTokenAllowed`). Over 1h needs an `idp` block.

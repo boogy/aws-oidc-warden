@@ -8,11 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **IdP mode (`idp`, optional)**: the warden mints a KMS-signed OIDC token and exchanges it via unsigned `AssumeRoleWithWebIdentity`, lifting the 1h role-chaining cap for roles that opt in with `idp_token`. `/verify` routes opted-in roles through it; over-1h requests it cannot serve get 503 `idp_signing_unavailable`, 403 `idp_not_permitted` or 400 `duration_exceeds_cap`. See `docs/IDP.md`.
+- **IdP mode (`idp`, optional)**: the warden mints a KMS-signed OIDC token and exchanges it via unsigned `AssumeRoleWithWebIdentity`, lifting the 1h role-chaining cap. `/verify` routes a mapping through it when its `max_session_duration` is over 1h or it sets `idp_token`; no role list; over-1h requests it cannot serve get 503 `idp_signing_unavailable`, 403 `idp_not_permitted` or 400 `duration_exceeds_cap`. See `docs/IDP.md`.
 - **Multi-region KMS keys** for `idp.signing_keys`: one issuer across regions, each signing with its local replica; replicas are confined to `idp.kms_allowed_regions`.
 - **IdP discovery and JWKS paths** answer 404 while `idp.enabled` is false, refresh config without waiting, and match `requestContext.path` on REST API (v1).
 - **`idp-export` command** writes the discovery and JWKS documents for S3/CloudFront hosting, with overlay and fragments applied.
-- **`max_session_duration`** on a mapping bounds `durationSeconds` (15m–12h, default 1h).
+- **`max_session_duration`** on a mapping bounds `durationSeconds` (15m–12h, default 1h); over 1h needs an `idp` block.
 - **Audit fields**: `action`, `tokenId`, `durationSeconds`, `requestedDurationSeconds`, `sessionNameSource`, `requestedSessionName`; new deny stages `duration`, `session_name`, `idp_mint`, `idp_exchange`.
 - **13 IdP error codes**, documented in the README and `GITHUB_ACTIONS.md` retry tables.
 - **`mappings_file`** loads hot-reloaded role mappings from a separate local or `s3://` file. See `docs/CONFIGURATION.md` § Split configuration.

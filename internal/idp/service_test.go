@@ -151,7 +151,6 @@ func TestServiceMintUsesFrozenConfig(t *testing.T) {
 	cfg := testCfg()
 	cfg.TokenTTL = 5 * time.Minute
 	cfg.SigningKeys = []config.IdPSigningKey{{File: "/k.pem", Algorithm: "ES256", Status: config.IdPKeyActive}}
-	cfg.AllowedRoles = []string{testRole}
 	on := true
 	cfg.IncludeSourceIdentity = &on
 
@@ -159,12 +158,10 @@ func TestServiceMintUsesFrozenConfig(t *testing.T) {
 		return []LoadedKey{{Signer: sg, Status: config.IdPKeyActive}}, nil
 	})
 	cfg.SigningKeys[0].File = "/mutated.pem"
-	cfg.AllowedRoles[0] = "arn:aws:iam::123456789012:role/Evil"
 	*cfg.IncludeSourceIdentity = false
 
 	got := s.Config()
 	require.Equal(t, "/k.pem", got.SigningKeys[0].File)
-	require.Equal(t, []string{testRole}, got.AllowedRoles)
 	require.True(t, *got.IncludeSourceIdentity)
 
 	tok, err := s.Mint(context.Background(), MintRequest{

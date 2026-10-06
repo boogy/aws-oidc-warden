@@ -17,11 +17,10 @@ Both files load in CI: `TestSplitConfigExamplesLoad` (`internal/config/docs_yaml
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
 | `issuers`                | Inbound token issuers. GitHub's canonical subject is the repository (`octo-org/api`); GitLab's is `project_path`. |
 | `default_issuer`         | Issuer a mapping binds to when it omits `issuer`. Set `issuer` on every mapping anyway.                           |
-| `mappings_file`          | `s3://bucket/key` or a local path. With it set, `role_mappings`/`role_groups` may not appear in this file.        |
+| `mappings_file`          | `s3://bucket/key` or a local path. With it set, `role_mappings`/`role_groups`/`role_sets` may not appear here.    |
 | `s3_config_bucket_owner` | Required for `s3://`. The read fails unless the bucket belongs to this account.                                   |
 | `config_reload_interval` | Re-read the mappings at most once per interval (conditional GET; unchanged file = 304, no re-parse).              |
 | `mappings_max_stale`     | Default 3x the interval. Past it, requests get `503 config_stale`.                                                |
-| `idp.allowed_roles`      | The only roles any mapping may have issued through the IdP.                                                       |
 | `session_policy_bucket`  | Bucket holding the files named by a mapping's `session_policy_file`.                                              |
 
 ## mappings.yaml
@@ -66,7 +65,7 @@ The building blocks in `mappings.yaml`:
 | GitHub `octo-org/etl-orders`, main                      | `role_groups` entry, `@etl`, 6h | `EtlExtract`, `EtlLoad` (IdP)                | either role, up to 6h   | `aws-oidc-warden`                              |
 | GitHub `octo-org/other`                                 | none                            | denied                                       | denied                  |                                                |
 
-The `idp_token` rows are IdP-issued at every duration because their roles are in `idp.allowed_roles` and trust the warden's own OIDC provider ([IDP.md § Trust policy](../../IDP.md)). Each ceiling (4h, 12h, 6h) comes from the mapping's own `max_session_duration`; `octo-org/batch` sets none, so it is capped at 1h. A caller's `sessionName` is used only where the mapping sets `allow_session_name: true` (here `octo-org/api` and `octo-org/web`); elsewhere it is ignored. A forced `role_session_name` always wins.
+The IdP rows are IdP-issued at every duration: their mappings set `max_session_duration` over 1h (4h, 12h, 6h), or `idp_token: true` (`octo-org/batch`, capped at 1h). Their roles trust the warden's own OIDC provider ([IDP.md § Trust policy](../../IDP.md)). A caller's `sessionName` is used only where the mapping sets `allow_session_name: true` (here `octo-org/api` and `octo-org/web`); elsewhere it is ignored. A forced `role_session_name` always wins.
 
 Every request goes to `/verify`; `durationSeconds` and `sessionName` are optional:
 
@@ -89,7 +88,7 @@ A key other than `default_issuer`, `role_sets`, `role_mappings`, `role_groups`:
 
 ```text
 idp:
-  allowed_roles: ["arn:aws:iam::111122223333:role/Admin"]
+  enabled: false
 ```
 
 ```text
@@ -105,14 +104,12 @@ role_mappings:
     roles: ["@readonly"]
 ```
 
-A `max_session_duration` without `idp_token: true`.
+A `max_session_duration` over 1h while `service.yaml` has no `idp` block.
 
-Not a load error: `idp_token: true` on a role missing from `idp.allowed_roles` loads, but is served by `AssumeRole`: up to 1h works, more gets `403 idp_not_permitted`. The platform team's `allowed_roles` always wins over the mappings file.
-
-The reverse also fails, at startup: `role_mappings` or `role_groups` inside `service.yaml` while `mappings_file` is set.
+The reverse also fails, at startup: `role_mappings`, `role_groups` or `role_sets` inside `service.yaml` while `mappings_file` is set.
 
 ```text
-mappings_file is set: role_mappings and role_groups belong in the mappings file, not the service config
+mappings_file is set: role_mappings, role_groups and role_sets belong in the mappings file, not the service config
 ```
 
 ## Reload and staleness

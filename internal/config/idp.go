@@ -57,7 +57,6 @@ type IdPConfig struct {
 	IncludeSourceIdentity  *bool           `mapstructure:"include_source_identity"  json:"include_source_identity,omitempty"`
 	SourceIdentity         string          `mapstructure:"source_identity"          json:"source_identity,omitempty"`
 	SourceIdentityOverflow string          `mapstructure:"source_identity_overflow" json:"source_identity_overflow,omitempty"`
-	AllowedRoles           []string        `mapstructure:"allowed_roles"            json:"allowed_roles,omitempty"`
 	SubjectTemplate        string          `mapstructure:"subject_template"         json:"subject_template,omitempty"`
 	JWKSURI                string          `mapstructure:"jwks_uri"                 json:"jwks_uri,omitempty"`
 	Paths                  IdPPaths        `mapstructure:"paths"                    json:"paths"`
@@ -96,7 +95,7 @@ func (c IdPConfig) IncludeSourceIdentityClaim() bool {
 
 // Fingerprint identifies the cold-start-frozen settings (everything but the live fields).
 func (c IdPConfig) Fingerprint() string {
-	c.Enabled, c.AllowedRoles = false, nil
+	c.Enabled = false
 	b, _ := json.Marshal(c)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
@@ -156,9 +155,6 @@ func (c *IdPConfig) validate(allowInsecure bool, inbound []IssuerConfig) error {
 	if c.AudienceMode != IdPAudienceStatic && c.AudienceMode != IdPAudienceRoleARN {
 		return fmt.Errorf("idp.audience_mode must be %s or %s", IdPAudienceStatic, IdPAudienceRoleARN)
 	}
-	if err := c.validateAllowedRoles(); err != nil {
-		return err
-	}
 	if c.TokenTTL < idpMinTTL || c.TokenTTL > idpMaxTTL {
 		return fmt.Errorf("idp.token_ttl must be between %s and %s", idpMinTTL, idpMaxTTL)
 	}
@@ -175,18 +171,6 @@ func (c *IdPConfig) validate(allowInsecure bool, inbound []IssuerConfig) error {
 		return err
 	}
 	return c.validateKeys(allowInsecure)
-}
-
-func (c *IdPConfig) validateAllowedRoles() error {
-	for i, r := range c.AllowedRoles {
-		if name, ok := strings.CutPrefix(r, "@"); ok && name != "" {
-			continue
-		}
-		if _, _, err := utils.ParseRoleARN(r); err != nil {
-			return fmt.Errorf("idp.allowed_roles[%d] %q must be a role ARN or @role_set", i, r)
-		}
-	}
-	return nil
 }
 
 // checkInbound rejects inbound issuers that collide with the IdP issuer, break the # sub separator, or outnumber an issuer-less source_identity.

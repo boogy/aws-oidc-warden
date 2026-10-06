@@ -74,7 +74,7 @@ The status code tells your client whether retrying is worth anything:
 | `500 assume_role_failed`          | Throttling, expired broker credentials, or a malformed session policy                                          | **Yes** — transient¹                                 |
 | `500 policy_error`                | The mapping's S3 session policy is missing, unreadable or invalid                                              | **No** — deterministic²                              |
 | `500 audit_write_failed`          | `audit_required` is on and the audit write to S3 failed                                                        | **No** — deterministic²                              |
-| `403 idp_not_permitted`           | Over 1h without `idp_token` or outside `idp.allowed_roles`                                                     | **No** — deterministic                               |
+| `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h                                                     | **No** — deterministic                               |
 | `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                    | **No** — deterministic                               |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                           | **No** — deterministic                               |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                      | **No** — deterministic                               |

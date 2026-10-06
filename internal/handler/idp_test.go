@@ -698,8 +698,13 @@ func TestProcessRequestRouting(t *testing.T) {
 		{"not_opted_in_over_1h", nil, false, 3601, handler.ErrIdPNotPermitted, 0, 0},
 		{"kill_switch_within_1h_uses_assume_role", func(c *config.Config) { c.IdP.Enabled = false }, true, 0, nil, 0, 1},
 		{"kill_switch_over_1h", func(c *config.Config) { c.IdP.Enabled = false }, true, 7200, handler.ErrIdPUnavailable, 0, 0},
-		{"outside_allowed_roles_within_1h", func(c *config.Config) { c.IdP.AllowedRoles = []string{otherRoleARN} }, true, 0, nil, 0, 1},
-		{"outside_allowed_roles_over_1h", func(c *config.Config) { c.IdP.AllowedRoles = []string{otherRoleARN} }, true, 7200, handler.ErrIdPNotPermitted, 0, 0},
+		{"ceiling_over_1h_uses_idp_within_1h", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, false, 900, nil, 1, 0},
+		{"ceiling_over_1h_uses_idp_over_1h", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, false, 7200, nil, 1, 0},
+		{"ceiling_1h_uses_assume_role", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = time.Hour }, false, 3600, nil, 0, 1},
+		{"ceiling_over_1h_kill_switch_over_1h", func(c *config.Config) {
+			c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour
+			c.IdP.Enabled = false
+		}, false, 7200, handler.ErrIdPUnavailable, 0, 0},
 		{"over_12h_invalid", nil, true, 43201, handler.ErrInvalidDuration, 0, 0},
 	}
 	for _, tt := range tests {

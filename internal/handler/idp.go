@@ -40,8 +40,8 @@ func (r *RequestProcessor) idpEnabled(cfg *config.Config) bool {
 }
 
 // selectIdP routes an IdP-eligible role to the IdP when enabled, else allows only sessions within the AssumeRole cap; refusals carry their audit reason.
-func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, role string, requested int32) (useIdP bool, reason string, err error) {
-	eligible := d.IDPTokenAllowed() && cfg.IdPRoleAllowed(role)
+func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, requested int32) (useIdP bool, reason string, err error) {
+	eligible := d.IDPTokenAllowed()
 	if eligible && r.idpEnabled(cfg) {
 		return true, "", nil
 	}

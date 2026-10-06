@@ -241,7 +241,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
 		return nil, r.deny(ctx, o, "Duration refused", err)
 	}
-	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requestData.Role, requestData.DurationSeconds)
+	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requestData.DurationSeconds)
 	if err != nil {
 		o.rec.Stage, o.rec.Reason = "duration", reason
 		return nil, r.deny(ctx, o, "Duration refused", err)

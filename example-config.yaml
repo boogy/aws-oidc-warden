@@ -149,8 +149,8 @@ role_sets:
 #   role_session_name    forced session name
 #   allow_session_name   honor the caller's sessionName (default false)
 #   session_tags         extra tags; may not redefine the issuer's
-#   idp_token            issue via the IdP (see IDP MODE)
-#   max_session_duration 15m..12h, needs idp_token (default 1h)
+#   idp_token            issue via the IdP even at a 1h ceiling (see IDP MODE)
+#   max_session_duration 15m..12h (default 1h); over 1h issues via the IdP
 #
 # Rejected at load: empty `conditions`, empty patterns/lists/groups, bare `.*`.
 ####################################################################################
@@ -306,7 +306,8 @@ jwt_validation:
 ####################################################################################
 # IDP MODE (optional) — docs/IDP.md, docs/CONFIGURATION.md#idp-optional-identity-provider
 # Mints a warden-signed token for AssumeRoleWithWebIdentity, so sessions can
-# exceed 1h. Mappings opt in with idp_token. Values are placeholders.
+# exceed 1h. A mapping uses it when max_session_duration is over 1h or
+# idp_token is true; no role list. Values are placeholders.
 ####################################################################################
 # idp:
 #   enabled: true
@@ -314,7 +315,6 @@ jwt_validation:
 #   audience: "idp-audience-example"
 #   audience_mode: "static" # static (default) | role_arn
 #   token_ttl: "2m" # 1m..5m, default 2m
-#   allowed_roles: [] # ARNs or @set; empty = no cap
 #   subject_template: "{role_arn}" # default; must end with {role_arn}
 #   include_source_identity: true # default
 #   source_identity: "{issuer}:{subject}" # default
@@ -337,20 +337,18 @@ jwt_validation:
 # role_mappings:
 #   - subject: "org/batch"
 #     roles: ["arn:aws:iam::123456789012:role/batch-runner"]
-#     idp_token: true # 1h default ceiling
+#     idp_token: true # IdP at the default 1h ceiling
 #
 #   - subject: "org/nightly-backup"
 #     roles:
 #       - "arn:aws:iam::123456789012:role/backup-runner"
 #       - "arn:aws:iam::123456789012:role/backup-verify"
 #     conditions: { event_name: "schedule" }
-#     idp_token: true
-#     max_session_duration: 12h
+#     max_session_duration: 12h # over 1h: IdP
 #     role_session_name: "nightly-backup"
 #
 # role_groups:
 #   - subjects: ["org/etl-orders", "org/etl-billing"]
 #     defaults:
 #       roles: ["@etl"]
-#       idp_token: true
 #       max_session_duration: 6h
