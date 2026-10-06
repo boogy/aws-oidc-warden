@@ -98,7 +98,7 @@ idp:
 key "idp" is not allowed in a config fragment (only role_mappings, role_groups, role_sets, default_issuer may be set here; issuers/hardening knobs/tag_auth/allow_insecure_issuers are base-only)
 ```
 
-A bare wildcard subject or condition:
+A match-everything subject or condition (`.*`, `.+`, `(.*)`, ...):
 
 ```text
 role_mappings:

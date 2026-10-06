@@ -633,28 +633,6 @@ func TestValidate_AcceptsSpecificSubjectPatterns(t *testing.T) {
 	}
 }
 
-// TestValidate_WildcardRejectionIsLiteralOnly documents the limit of the check
-// honestly: it catches the shapes operators actually type, not every regex
-// that happens to match everything. If this ever starts failing, the check got
-// smarter and the doc comment on bareWildcards needs updating.
-
-// TestValidate_WildcardRejectionIsLiteralOnly documents the limit of the check
-// honestly: it catches the shapes operators actually type, not every regex
-// that happens to match everything. If this ever starts failing, the check got
-// smarter and the doc comment on bareWildcards needs updating.
-func TestValidate_WildcardRejectionIsLiteralOnly(t *testing.T) {
-	if err := wildcardCfg("(.*)").Validate(); err != nil {
-		t.Skipf("equivalent-wildcard detection has improved: %v", err)
-	}
-	c := wildcardCfg("(.*)")
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if ok, _ := c.AuthorizeRoles("https://token.actions.githubusercontent.com", "anyone/anything", map[string]any{}); !ok {
-		t.Fatal("expected `(.*)` to still match everything")
-	}
-}
-
 // ---------- issuer binding ----------
 
 func TestIssuerBinding(t *testing.T) {

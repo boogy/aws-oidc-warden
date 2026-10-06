@@ -1468,7 +1468,7 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 }
 
 // compileAnchoredSubject compiles a subject pattern as an auto-anchored
-// regex, rejecting bare wildcards (bareWildcards) like compileAnchoredCondition:
+// regex, rejecting patterns that match everything (isUniversal) like compileAnchoredCondition:
 // a subject is the primary identity gate, so ".*" would grant every subject
 // of the bound issuer.
 //
@@ -1478,10 +1478,11 @@ func compileAnchoredSubject(pattern string, rc regexCache) (*matcher, error) {
 	if pattern == "" {
 		return nil, errors.New("subject pattern must not be empty")
 	}
-	if bareWildcards[pattern] {
+	m, err := rc.anchor(pattern)
+	if errors.Is(err, errUniversalPattern) {
 		return nil, fmt.Errorf("subject pattern %q is too permissive; it matches every subject for this issuer — use a specific pattern", pattern)
 	}
-	return rc.anchor(pattern)
+	return m, err
 }
 
 // maxSessionTags is the STS limit on session tags per AssumeRole call.

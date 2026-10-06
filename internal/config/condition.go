@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
@@ -115,8 +117,9 @@ func literalOf(re *syntax.Regexp) (string, bool) {
 	return lit, true
 }
 
-// anchor matches pattern as "^(?:pattern)$". Callers must run the empty and
-// bare-wildcard guards first; only accepted patterns are memoized.
+// anchor matches pattern as "^(?:pattern)$". Callers must run the empty guard
+// first; patterns isUniversal proves match everything are rejected, and only
+// accepted ones are memoized.
 func (rc regexCache) anchor(pattern string) (*matcher, error) {
 	if m, ok := rc[pattern]; ok {
 		return m, nil
@@ -125,6 +128,9 @@ func (rc regexCache) anchor(pattern string) (*matcher, error) {
 	tree, err := parsePattern(pattern)
 	if err != nil {
 		return nil, err
+	}
+	if isUniversal(tree) {
+		return nil, errUniversalPattern
 	}
 	m := &matcher{}
 	if lit, ok := literalOf(tree); ok {
@@ -369,16 +375,68 @@ func clonePatterns(in Patterns) Patterns {
 	return out
 }
 
-// bareWildcards are patterns that match every possible value. They must never
-// gate an authorization decision — as a condition OR as a subject — because
-// they reduce that gate to "always true".
-//
-// This is a literal check on the two shapes operators actually reach for, not
-// a general "does this regex match everything" analysis: that is not something
-// we can decide cheaply, and a determined operator can still write an
-// equivalent pattern (`(.*)`, `.*.*`, `[\s\S]*`). It closes the documented
-// footgun and makes the accident loud; it is not a proof of specificity.
-var bareWildcards = map[string]bool{".*": true, ".+": true}
+// errUniversalPattern marks a pattern that matches every string. Such a
+// pattern would reduce the gate it sits in (a subject or a condition) to
+// "always true", so anchor rejects it.
+var errUniversalPattern = errors.New("pattern matches every value")
+
+// isUniversal reports whether the simplified parse tree re provably matches
+// every string (any text, newlines aside: `.*` counts). It is sound for what
+// it accepts, not complete: it covers the shapes that reduce to "any
+// character, repeated" and not every regexp equivalent to one.
+func isUniversal(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpCapture, syntax.OpQuest:
+		return isUniversal(re.Sub[0])
+	case syntax.OpStar, syntax.OpPlus:
+		return isAnyChar(re.Sub[0]) || isUniversal(re.Sub[0])
+	case syntax.OpRepeat:
+		return re.Min <= 1 && re.Max == -1 && (isAnyChar(re.Sub[0]) || isUniversal(re.Sub[0]))
+	case syntax.OpAlternate:
+		return slices.ContainsFunc(re.Sub, isUniversal)
+	case syntax.OpConcat:
+		universal := false
+		for _, sub := range re.Sub {
+			switch {
+			case isUniversal(sub):
+				universal = true
+			case !isEmptyWidth(sub):
+				return false
+			}
+		}
+		return universal
+	}
+	return false
+}
+
+// isAnyChar reports whether re matches any single character, or any except \n.
+func isAnyChar(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpAnyChar, syntax.OpAnyCharNotNL:
+		return true
+	case syntax.OpCapture:
+		return isAnyChar(re.Sub[0])
+	case syntax.OpAlternate:
+		return slices.ContainsFunc(re.Sub, isAnyChar)
+	case syntax.OpCharClass:
+		r := re.Rune
+		switch len(r) {
+		case 2:
+			return r[0] == 0 && r[1] >= unicode.MaxRune
+		case 4:
+			return r[0] == 0 && r[1] == '\n'-1 && r[2] == '\n'+1 && r[3] >= unicode.MaxRune
+		}
+	}
+	return false
+}
+
+func isEmptyWidth(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpEmptyMatch, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText:
+		return true
+	}
+	return false
+}
 
 // compileAnchoredCondition compiles pattern as an auto-anchored regex,
 // rejecting empty patterns and bare wildcards that would match anything
@@ -387,10 +445,11 @@ func compileAnchoredCondition(pattern string, rc regexCache) (*matcher, error) {
 	if pattern == "" {
 		return nil, errors.New("pattern must not be empty")
 	}
-	if bareWildcards[pattern] {
+	m, err := rc.anchor(pattern)
+	if errors.Is(err, errUniversalPattern) {
 		return nil, fmt.Errorf("pattern %q is too permissive; use a specific pattern", pattern)
 	}
-	return rc.anchor(pattern)
+	return m, err
 }
 
 // valueMatches reports whether one raw verified claim VALUE satisfies pattern
