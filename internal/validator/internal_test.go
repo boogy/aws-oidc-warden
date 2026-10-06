@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -681,4 +682,159 @@ func TestALBKeyCache_ConcurrentGetSet(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestIsBlockedAddr_ReservedRanges(t *testing.T) {
+	tests := []struct {
+		addr        string
+		wantBlocked bool
+	}{
+		// 0.0.0.0/8
+		{"0.0.0.0", true}, {"0.255.255.255", true}, {"1.0.0.0", false},
+		// 100.64.0.0/10
+		{"100.63.255.255", false}, {"100.64.0.0", true}, {"100.127.255.255", true}, {"100.128.0.0", false},
+		// 192.0.0.0/24, 192.0.2.0/24
+		{"191.255.255.255", false}, {"192.0.0.0", true}, {"192.0.0.255", true}, {"192.0.1.0", false},
+		{"192.0.2.0", true}, {"192.0.2.255", true}, {"192.0.3.0", false},
+		// 198.18.0.0/15, 198.51.100.0/24
+		{"198.17.255.255", false}, {"198.18.0.0", true}, {"198.19.255.255", true}, {"198.20.0.0", false},
+		{"198.51.99.255", false}, {"198.51.100.0", true}, {"198.51.100.255", true}, {"198.51.101.0", false},
+		// 203.0.113.0/24
+		{"203.0.112.255", false}, {"203.0.113.0", true}, {"203.0.113.255", true}, {"203.0.114.0", false},
+		// 240.0.0.0/4 and broadcast
+		{"239.255.255.255", true}, // multicast
+		{"240.0.0.0", true}, {"254.255.255.255", true}, {"255.255.255.255", true},
+		// existing classes still blocked
+		{"10.1.2.3", true}, {"172.16.0.1", true}, {"172.32.0.1", false}, {"192.168.0.1", true},
+		{"169.254.169.254", true}, {"224.0.0.1", true},
+		// public
+		{"8.8.8.8", false}, {"140.82.121.4", false},
+		// IPv6
+		{"64:ff9b::1", true}, {"64:ff9b::808:808", true}, {"64:ff9b:1::1", false}, {"64:ff9c::1", false},
+		{"2001:db8::1", true}, {"2001:db8:ffff::1", true}, {"2001:db9::1", false},
+		{"fc00::1", true}, {"fd12:3456::1", true}, {"fe00::1", false},
+		{"fe80::1", true}, {"ff02::1", true}, {"::", true},
+		{"2606:4700::1111", false},
+		// v4-mapped and v4-compatible carriers of reserved IPv4
+		{"::ffff:100.64.0.1", true}, {"::ffff:198.18.0.1", true}, {"::ffff:8.8.8.8", false},
+		{"::100.64.0.1", true}, {"::8.8.8.8", false}, {"::198.51.100.1", true},
+		// zone is ignored
+		{"fe80::1%eth0", true}, {"2606:4700::1111%eth0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			addr, err := netip.ParseAddr(tt.addr)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantBlocked, isBlockedAddr(addr, false))
+			// Loopback is the only thing allowLoopback may relax.
+			assert.Equal(t, tt.wantBlocked, isBlockedAddr(addr, true))
+		})
+	}
+}
+
+func TestIsBlockedAddr_Loopback(t *testing.T) {
+	for _, s := range []string{"127.0.0.1", "127.255.255.254", "::1", "::ffff:127.0.0.1"} {
+		addr := netip.MustParseAddr(s)
+		assert.True(t, isBlockedAddr(addr, false), s)
+		assert.False(t, isBlockedAddr(addr, true), s)
+	}
+	assert.True(t, isBlockedAddr(netip.Addr{}, true), "zero Addr must be blocked")
+}
+
+func TestBlockedDialControl(t *testing.T) {
+	tests := []struct {
+		name          string
+		address       string
+		allowLoopback bool
+		wantErr       string
+	}{
+		{"public v4", "8.8.8.8:443", false, ""},
+		{"public v6", "[2606:4700::1111]:443", false, ""},
+		{"metadata", "169.254.169.254:80", false, "blocked"},
+		{"metadata allowLoopback", "169.254.169.254:80", true, "blocked"},
+		{"private", "10.0.0.1:443", false, "blocked"},
+		{"cgnat", "100.64.0.1:443", false, "blocked"},
+		{"v4-mapped private", "[::ffff:10.0.0.1]:443", false, "blocked"},
+		{"ula", "[fd00:ec2::254]:443", false, "blocked"},
+		{"loopback blocked", "127.0.0.1:8080", false, "blocked"},
+		{"loopback allowed", "127.0.0.1:8080", true, ""},
+		{"v6 loopback allowed", "[::1]:8080", true, ""},
+		{"zoned link-local", "[fe80::1%eth0]:443", false, "blocked"},
+		{"no port", "8.8.8.8", false, "invalid dial address"},
+		{"hostname not an ip", "example.com:443", false, "invalid dial address"},
+		{"empty", "", false, "invalid dial address"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := blockedDialControl(tt.allowLoopback)("tcp", tt.address, nil)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestSecureHTTPClient_NeverUsesEnvironmentProxy(t *testing.T) {
+	tr, ok := newSecureHTTPClient(false, time.Second).Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Nil(t, tr.Proxy)
+}
+
+// Hostname targets are vetted after resolution, not by name.
+func TestSecureHTTPClient_HostnameResolvingToBlockedIPRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+
+	resp, err := newSecureHTTPClient(false, 2*time.Second).Get("http://localhost:" + port + "/")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// The standard dialer tries every resolved address: localhost may list ::1
+// first while the server listens on 127.0.0.1 only.
+func TestSecureHTTPClient_HostnameFallsThroughToLaterAddresses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+
+	resp, err := newSecureHTTPClient(true, 2*time.Second).Get("http://localhost:" + port + "/")
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+}
+
+func TestSecureHTTPClient_LiteralBlockedIPTargetsRefused(t *testing.T) {
+	client := newSecureHTTPClient(false, time.Second)
+	// IPv6 targets are covered via blockedDialControl: on a host without IPv6
+	// the socket() call fails before the control hook runs.
+	for _, target := range []string{
+		"https://169.254.169.254/", "https://10.0.0.1/", "https://100.64.0.1/", "https://198.18.0.1/",
+		"https://[::ffff:10.0.0.1]/",
+	} {
+		t.Run(target, func(t *testing.T) {
+			resp, err := client.Get(target)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "blocked")
+		})
+	}
+	for _, target := range []string{"https://[::1]/", "https://[64:ff9b::a00:1]/", "https://[fd00:ec2::254]/"} {
+		t.Run(target, func(t *testing.T) {
+			resp, err := client.Get(target)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			require.Error(t, err)
+		})
+	}
 }
