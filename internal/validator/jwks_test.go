@@ -636,3 +636,35 @@ func TestFetchJWKS_AlreadyCancelledContextStartsNoFetch(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Zero(t, hits.Load())
 }
+
+func TestValidate_FailedJWKSFetchIsNotRetriedWithinWindow(t *testing.T) {
+	var jwksHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{"issuer": "http://" + r.Host, "jwks_uri": "http://" + r.Host + "/jwks"})
+		case "/jwks":
+			jwksHits.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	cfg := githubIssuer(srv.URL, "aud")
+	require.NoError(t, cfg.Validate())
+	v, advance := clockedValidator(cfg, cache.NewMemoryCache())
+	token := signToken(t, key, "k1", srv.URL, "aud")
+
+	for i := 0; i < 2; i++ {
+		_, err = v.Validate(context.Background(), token)
+		require.Error(t, err)
+	}
+	assert.EqualValues(t, 1, jwksHits.Load())
+
+	advance(6 * time.Second)
+	_, err = v.Validate(context.Background(), token)
+	require.Error(t, err)
+	assert.EqualValues(t, 2, jwksHits.Load(), "retries after the 5s window")
+}

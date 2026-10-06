@@ -68,6 +68,7 @@ type issuerSpec struct {
 	Audiences                 []string
 	ClaimMappings             map[string]string
 	RequiredClaims            []string
+	cacheKey                  string // jwksCacheKey, precomputed
 }
 
 // snapshot is an immutable view of the current trusted issuers, keyed by
@@ -96,7 +97,7 @@ func buildSnapshot(cfg *config.Config) *snapshot {
 // issuerSpec used on the request path. Shared by the self-mode registry
 // (buildSnapshot) and the delegated (apigw/alb) extractor constructors.
 func newIssuerSpec(ic *config.IssuerConfig) *issuerSpec {
-	return &issuerSpec{
+	spec := &issuerSpec{
 		Issuer:         ic.Issuer,
 		Provider:       ic.Provider,
 		JWKSURI:        ic.JWKSURI,
@@ -104,6 +105,8 @@ func newIssuerSpec(ic *config.IssuerConfig) *issuerSpec {
 		ClaimMappings:  ic.ClaimMappings,
 		RequiredClaims: ic.RequiredClaims,
 	}
+	spec.cacheKey = jwksCacheKey(spec)
+	return spec
 }
 
 // TokenValidator routes an incoming token to its issuer's spec via an
@@ -132,10 +135,12 @@ type TokenValidator struct {
 	// (issuer, kid). keyMemo caches parsed, re-validated public keys per
 	// (issuer, kid, key material). jwksURICache memoizes a discovery-resolved
 	// jwks_uri per issuer. sfGroup collapses concurrent cold JWKS fetches for
-	// the same issuer into a single upstream call.
+	// the same cache key into a single upstream call; jwksState remembers recent
+	// failures and cache writes.
 	refetch      *refetchLimiter
 	keyMemo      *keyMemo
-	jwksURICache sync.Map
+	jwksURICache sync.Map // issuer -> discoveredURI
+	jwksState    jwksState
 	sfGroup      singleflight.Group
 }
 
