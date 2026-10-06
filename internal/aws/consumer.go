@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
@@ -52,12 +53,13 @@ type AwsConsumer struct {
 	AWS    AwsServiceWrapperInterface
 	Config *gtvcfg.Config
 
-	configSource func() *gtvcfg.Config // live-config getter; nil falls back to Config
-	now          func() time.Time
-	mu           sync.Mutex
-	spokeCache   map[string]cachedCreds // keyed by account ID
-	spokeFlight  singleflight.Group     // keyed by account ID
-	roleTagCache map[string]cachedTags  // keyed by role ARN
+	configSource  func() *gtvcfg.Config // live-config getter; nil falls back to Config
+	now           func() time.Time
+	mu            sync.Mutex
+	spokeCache    map[string]cachedCreds // keyed by account ID
+	spokeFlight   singleflight.Group     // keyed by account ID
+	roleTagCache  map[string]cachedTags  // keyed by role ARN
+	roleMissCache map[string]cachedMiss  // keyed by role ARN
 }
 
 // cfg returns the live config if a source is wired (hot-reload), else the
@@ -501,6 +503,19 @@ func (a *AwsConsumer) GetRole(ctx context.Context, role string) (*iam.GetRoleOut
 // burst load while keeping tags reasonably fresh.
 const roleTagCacheTTL = 60 * time.Second
 
+const (
+	// roleMissTTL bounds how long a definitive NoSuchEntity is remembered.
+	roleMissTTL = 30 * time.Second
+	// maxRoleMisses caps roleMissCache; it is cleared when full.
+	maxRoleMisses = 4096
+)
+
+// cachedMiss is a remembered NoSuchEntity result for a role ARN.
+type cachedMiss struct {
+	err     error
+	expires time.Time
+}
+
 // GetRoleTags returns the IAM tags of the role identified by roleARN as a
 // key→value map. When the role lives in a different account than the warden,
 // the read is performed with spoke credentials assumed in that account.
@@ -522,6 +537,13 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 		tags := maps.Clone(c.tags)
 		a.mu.Unlock()
 		return tags, nil
+	}
+	if m, ok := a.roleMissCache[roleARN]; ok {
+		if a.now().Before(m.expires) {
+			a.mu.Unlock()
+			return nil, m.err
+		}
+		delete(a.roleMissCache, roleARN)
 	}
 	a.mu.Unlock()
 
@@ -551,7 +573,18 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 		out, err = a.AWS.GetRoleAs(ctx, input, creds)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get role %s: %w", roleName, err)
+		err = fmt.Errorf("get role %s: %w", roleName, err)
+		// Only a definitive NoSuchEntity is cached; throttling, network and AccessDenied are not.
+		var nse *iamtypes.NoSuchEntityException
+		if errors.As(err, &nse) {
+			a.mu.Lock()
+			if a.roleMissCache == nil || len(a.roleMissCache) >= maxRoleMisses {
+				a.roleMissCache = make(map[string]cachedMiss)
+			}
+			a.roleMissCache[roleARN] = cachedMiss{err: err, expires: a.now().Add(roleMissTTL)}
+			a.mu.Unlock()
+		}
+		return nil, err
 	}
 	if out.Role == nil {
 		return nil, errors.New("role information not available")
