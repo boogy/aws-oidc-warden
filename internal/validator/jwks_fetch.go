@@ -42,15 +42,25 @@ func (t *TokenValidator) fetchJWKS(ctx context.Context, spec *issuerSpec, force 
 		}
 	}
 
-	// A cancelled initiator must not abort the fetch its singleflight waiters share.
-	fetchCtx := context.WithoutCancel(ctx)
-	v, err, _ := t.sfGroup.Do(spec.Issuer, func() (any, error) {
-		return t.fetchAndCacheJWKS(fetchCtx, spec)
-	})
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return v.(*types.JWKS), nil
+
+	// The shared fetch ignores its initiator's cancellation; each caller still
+	// stops waiting when its own ctx ends.
+	fetchCtx := context.WithoutCancel(ctx)
+	ch := t.sfGroup.DoChan(spec.Issuer, func() (any, error) {
+		return t.fetchAndCacheJWKS(fetchCtx, spec)
+	})
+	select {
+	case r := <-ch:
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		return r.Val.(*types.JWKS), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // fetchAndCacheJWKS does the actual network work for fetchJWKS: resolve the

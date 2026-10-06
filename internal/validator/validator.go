@@ -206,21 +206,23 @@ func (t *TokenValidator) rebuildSnapshot(cfg *config.Config) *snapshot {
 	return snap
 }
 
-// WarmPrefetch fetches and caches the JWKS for every configured issuer.
-// Intended for cold-start; a fetch failure is logged and otherwise ignored —
-// it must never fail bootstrap.
+// WarmPrefetch fetches and caches the JWKS for every configured issuer,
+// concurrently, returning once all finish or ctx ends. Intended for
+// cold-start; a fetch failure is logged and otherwise ignored — it must never
+// fail bootstrap.
 func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
+	var wg sync.WaitGroup
 	for _, spec := range t.currentSnapshot().registry {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		if _, err := t.fetchJWKS(ctx, spec, false); err != nil {
-			logevent.Warn(ctx, nil, logevent.JWKSPrefetchFailure, "JWKS warm-prefetch failed; will fetch on first request",
-				issuerAttrs(spec.Issuer, slog.String("error", err.Error()))...)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := t.fetchJWKS(ctx, spec, false); err != nil {
+				logevent.Warn(ctx, nil, logevent.JWKSPrefetchFailure, "JWKS warm-prefetch failed; will fetch on first request",
+					issuerAttrs(spec.Issuer, slog.String("error", err.Error()))...)
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // Validate implements the self-mode verification flow.
