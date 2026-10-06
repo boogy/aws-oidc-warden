@@ -164,6 +164,28 @@ func TestProviderBackoffDisabledWhenStale(t *testing.T) {
 	}
 }
 
+func TestProviderStaleRetriesBeforeFullInterval(t *testing.T) {
+	c, st := s3MappingsCfg(t, time.Minute)
+	d := 10 * time.Minute
+	c.MappingsMaxStale = &d
+	st.delete(c.MappingsFile)
+	p := NewProvider(c, time.Minute, "yaml", nil, WithFragmentFetcher(st.fetch))
+	now := time.Unix(1_700_000_000, 0)
+	p.now = func() time.Time { return now }
+	ctx := context.Background()
+
+	p.MaybeRefresh(ctx)
+	require.Equal(t, 1, st.checks[c.MappingsFile])
+
+	now = now.Add(staleRetryInterval - time.Second)
+	p.MaybeRefresh(ctx)
+	assert.Equal(t, 1, st.checks[c.MappingsFile], "retried before staleRetryInterval")
+
+	now = now.Add(time.Second)
+	p.MaybeRefresh(ctx)
+	assert.Equal(t, 2, st.checks[c.MappingsFile], "not retried after staleRetryInterval")
+}
+
 func staleMappingsProvider(t *testing.T, calls *atomic.Int32) *Provider {
 	t.Helper()
 	c, st := s3MappingsCfg(t, time.Minute)

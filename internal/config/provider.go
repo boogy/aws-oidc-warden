@@ -32,6 +32,9 @@ const fragmentMappingSoftCap = 5000
 // refreshTimeout caps a request-triggered refresh, which outlives its caller's cancellation.
 const refreshTimeout = 30 * time.Second
 
+// staleRetryInterval is the attempt spacing while stale, when shorter than the reload interval.
+const staleRetryInterval = 10 * time.Second
+
 // staleWaitTimeout caps how long a stale request waits on an in-flight refresh before failing fast.
 var staleWaitTimeout = 5 * time.Second
 
@@ -136,17 +139,17 @@ func (p *Provider) maybeRefresh(ctx context.Context, waitIfStale bool) {
 	}
 }
 
-// due reports whether the interval, stretched 2x/4x/8x by consecutive failures unless stale, has elapsed since the last attempt.
+// due reports whether the interval, stretched 2x/4x/8x by consecutive failures, has elapsed since the last attempt; while stale it is at most staleRetryInterval.
 func (p *Provider) due(interval time.Duration, stale bool) bool {
 	last := p.lastAttempt.Load()
 	if last == 0 {
 		return true
 	}
-	shift := min(p.failures.Load(), 3)
+	wait := interval << min(p.failures.Load(), 3)
 	if stale {
-		shift = 0
+		wait = min(interval, staleRetryInterval)
 	}
-	return p.now().UnixNano()-last >= int64(interval)<<shift
+	return p.now().UnixNano()-last >= int64(wait)
 }
 
 func (p *Provider) lock()   { p.sem <- struct{}{} }

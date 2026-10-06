@@ -22,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- **Failed config refreshes back off exponentially** (up to 8x the interval), and requests no longer wait on an in-flight refresh unless mappings are past `mappings_max_stale` (max 5s).
+- **Failed config refreshes back off exponentially** (up to 8x the interval), and requests no longer wait on an in-flight refresh unless mappings are past `mappings_max_stale` (max 5s). Stale mappings retry every 10s.
 - **`/verify` accepts `durationSeconds` (900–3600) and `sessionName`**, like `aws-actions/configure-aws-credentials`.
 - **The `s3_config_bucket` overlay uses a conditional GET** when `s3_config_bucket_owner` is set.
 - **A mapping setting both `session_policy` and `session_policy_file`, or `allow_session_name` with `role_session_name`, fails to load** instead of silently ignoring one.
