@@ -64,7 +64,6 @@ func (f *vFake) GetCallerAccount(context.Context) (string, error) { return hubAc
 func (f *vFake) GetCallerIdentityInfo(context.Context) (string, bool, error) {
 	return hubAcct, f.isRoleSession, nil
 }
-func (f *vFake) RefreshClients() {}
 
 func vconsumer(t *testing.T, cfg *gtvcfg.Config) (*AwsConsumer, *vFake) {
 	t.Helper()

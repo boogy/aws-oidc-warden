@@ -71,10 +71,6 @@ func (m *MockAwsServiceWrapper) GetRole(ctx context.Context, input *iam.GetRoleI
 	return args.Get(0).(*iam.GetRoleOutput), args.Error(1)
 }
 
-func (m *MockAwsServiceWrapper) RefreshClients() {
-	m.Called()
-}
-
 func (m *MockAwsServiceWrapper) GetCallerAccount(ctx context.Context) (string, error) {
 	args := m.Called(ctx)
 	return args.String(0), args.Error(1)
@@ -191,14 +187,6 @@ func TestMockAwsServiceWrapper_GetRole(t *testing.T) {
 	mockWrapper.AssertExpectations(t)
 }
 
-// TestMockAwsServiceWrapper_RefreshClients tests the RefreshClients method
-func TestMockAwsServiceWrapper_RefreshClients(t *testing.T) {
-	mockWrapper := new(MockAwsServiceWrapper)
-	mockWrapper.On("RefreshClients").Return().Once()
-	mockWrapper.RefreshClients()
-	mockWrapper.AssertExpectations(t)
-}
-
 // TestGetS3ObjectErrorCase tests an error case for GetS3Object
 func TestGetS3ObjectErrorCase(t *testing.T) {
 	mockWrapper := new(MockAwsServiceWrapper)
@@ -302,11 +290,6 @@ func TestServiceWrapperImplementation(t *testing.T) {
 
 	wrapper := NewAwsServiceWrapper()
 	assert.NotNil(t, wrapper)
-
-	// Test RefreshClients
-	t.Run("RefreshClients", func(t *testing.T) {
-		wrapper.RefreshClients() // Just verify it doesn't panic
-	})
 
 	// Test GetS3Object with a non-existent object (should return error)
 	t.Run("GetS3Object_NonExistent", func(t *testing.T) {

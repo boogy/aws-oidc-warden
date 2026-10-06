@@ -156,8 +156,6 @@ func TestClassifyWebIdentityError(t *testing.T) {
 func TestSTSClientNoRequestBodyLogging(t *testing.T) {
 	w := NewAwsServiceWrapper()
 	assert.Zero(t, w.stsClient.Options().ClientLogMode&aws.LogRequestWithBody)
-	w.RefreshClients()
-	assert.Zero(t, w.stsClient.Options().ClientLogMode&aws.LogRequestWithBody)
 }
 
 func TestAssumeRoleWithWebIdentityRequiresArgs(t *testing.T) {
@@ -249,11 +247,6 @@ func TestProductionSTSClientIsUnsigned(t *testing.T) {
 		build func() *AwsServiceWrapper
 	}{
 		{"NewAwsServiceWrapper", NewAwsServiceWrapper},
-		{"RefreshClients", func() *AwsServiceWrapper {
-			w := &AwsServiceWrapper{defaultTimeout: 5 * time.Second}
-			w.RefreshClients()
-			return w
-		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -32,7 +32,6 @@ type AwsServiceWrapperInterface interface {
 	GetCallerAccount(ctx context.Context) (string, error)
 	GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error)
 	GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
-	RefreshClients()
 }
 
 type s3GetObjectAPI interface {
@@ -94,28 +93,6 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 
 // KMS returns the KMS client.
 func (s *AwsServiceWrapper) KMS() *kms.Client { return s.kms }
-
-// RefreshClients recreates AWS service clients, useful for long-running Lambda environments
-// where clients might need refreshing periodically
-func (s *AwsServiceWrapper) RefreshClients() {
-	logevent.Debug(context.Background(), nil, logevent.AWSClientsRefreshStart, "refreshing AWS clients")
-	cfg, err := config.LoadDefaultConfig(context.Background(),
-		config.WithRetryMaxAttempts(3),
-	)
-	if err != nil {
-		logevent.Error(context.Background(), nil, logevent.AWSClientsRefreshFailure, "failed to refresh AWS config, keeping existing clients",
-			slog.String("error", err.Error()))
-		return
-	}
-
-	s.cfg = cfg
-	s.s3Client = s3.NewFromConfig(cfg)
-	s.stsClient = sts.NewFromConfig(cfg)
-	s.iamClient = iam.NewFromConfig(cfg)
-	s.kms = kms.NewFromConfig(cfg)
-
-	logevent.Info(context.Background(), nil, logevent.AWSClientsRefreshSuccess, "AWS clients successfully refreshed")
-}
 
 func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
