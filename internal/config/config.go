@@ -37,6 +37,7 @@ var (
 	defaultMaxTokenAge         = time.Hour         // Default cap on now-iat when max_token_age is unset
 	defaultJWKSRefetchCooldown = 60 * time.Second  // Default minimum interval between forced JWKS refetches per (issuer,kid)
 	defaultLogLevel            = "info"            // Default slog level name
+	minConfigReloadInterval    = time.Second       // Smallest accepted non-zero config_reload_interval
 
 	validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 
@@ -946,6 +947,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("mappings_file: %w", err)
 	}
 
+	if d := c.ConfigReloadInterval; d > 0 && d < minConfigReloadInterval {
+		return fmt.Errorf("config_reload_interval %s is under %s; a bare number is read as nanoseconds, so write a unit such as 300s or 5m", d, minConfigReloadInterval)
+	}
 	if err := c.validateMaxStale(); err != nil {
 		return err
 	}

@@ -1227,3 +1227,42 @@ func TestValidate_RejectsUnknownProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_ConfigReloadIntervalFloor(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval time.Duration
+		wantErr  bool
+	}{
+		{"unset disables reload", 0, false},
+		{"one nanosecond", time.Nanosecond, true},
+		{"yaml 300 without a unit", 300, true},
+		{"just under a second", 999 * time.Millisecond, true},
+		{"one second", time.Second, false},
+		{"five minutes", 5 * time.Minute, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := wildcardCfg("acme/repo")
+			cfg.ConfigReloadInterval = tc.interval
+			err := cfg.Validate()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unit")
+		})
+	}
+}
+
+func TestMergeBytes_ReloadIntervalWithoutUnitRejected(t *testing.T) {
+	cfg := wildcardCfg("acme/repo")
+	err := cfg.MergeBytes([]byte("config_reload_interval: 300\n"), "yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config_reload_interval")
+
+	cfg = wildcardCfg("acme/repo")
+	require.NoError(t, cfg.MergeBytes([]byte("config_reload_interval: 300s\n"), "yaml"))
+	assert.Equal(t, 300*time.Second, cfg.ConfigReloadInterval)
+}
