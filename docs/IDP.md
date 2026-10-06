@@ -66,6 +66,8 @@ idp-export -config config.yaml -out ./site
 
 The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.jwks`. `idp-export` applies the `s3_config_bucket` overlay, `mappings_file` and `config_fragments` like the running service, so it needs the same S3 read access. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
 
+With an MRK config, run `idp-export` with `AWS_REGION` set to an allowed region.
+
 **Dev and low volume: warden-served.** The warden answers `GET`/`HEAD` on `idp.paths.discovery` and `idp.paths.jwks` with `Cache-Control: public, max-age=<jwks_cache_max_age>`. If you use this:
 
 - Throttle the discovery/JWKS routes separately from `/verify`.
@@ -129,9 +131,12 @@ Key policy: grant the warden role only `kms:Sign`, `kms:GetPublicKey`, `kms:Desc
 Also:
 
 - Apply the key policy on every replica; each replica has its own.
+- A break-glass `kms:ReplicateKey` must pass the hardened `Policy`. Without it, KMS attaches the default policy, which grants the account root `kms:*`.
 - SCP: deny the tamper actions on the key (including `kms:ReplicateKey` and `kms:UpdatePrimaryRegion`) for everyone but the break-glass role.
+- SCP or `DenyTamper` condition: deny `kms:ReplicateKey` when `kms:ReplicaRegion` is `StringNotEquals` the allowed regions.
 - Alarms (CloudTrail/EventBridge): any `kms:Sign` by another principal, and every action in the tamper list (including `kms:ReplicateKey` and `kms:UpdatePrimaryRegion`).
-- Warden role IAM: `kms:DescribeKey`, `kms:GetPublicKey` and `kms:Sign` on its local replica ARN only.
+- Alarms must cover every region. `ReplicateKey` logs `CreateKey` in the replica's region. Also alarm on `PutKeyPolicy` in every region.
+- Warden role IAM: `kms:DescribeKey`, `kms:GetPublicKey` and `kms:Sign` on each region's replica ARN. A role shared across regions needs all of them; a per-region role needs only its local one.
 - Quota: KMS `Sign` request quotas are per account and shared with every other signer. Use a dedicated account or a sized quota. Throttling surfaces as 503 `idp_signing_unavailable`.
 
 ## Multi-region deployment
@@ -143,7 +148,11 @@ One `idp.issuer` can be served from several regions of the same deployment:
 - Each region signs with its local replica. Same key material gives the same `kid` and one JWKS.
 - Host the JWKS statically and globally (S3 + CloudFront from `idp-export`), not from a regional Lambda.
 - Create a single global IAM OIDC provider for `idp.issuer`.
-- A rogue replica outside the allowlist is detected at the next cold start and fails the load. Pair with the alarms above.
+- The replica-region allowlist is a detective control. A rogue replica is detected at the next cold start, which fails the IdP closed in every region. It does not revoke the replica: until someone acts, it can sign tokens STS trusts.
+- The preventive controls are `DenyTamper` on `kms:ReplicateKey` in the primary key policy, and the SCP.
+- Adding a region: add it to `kms_allowed_regions` in every region's config, deploy, then `ReplicateKey`.
+- Removing a region: delete the replica and wait until it is fully deleted (past its waiting period), then drop the region from the allowlist.
+- A single-region key cannot serve a multi-region deployment; KMS keys are regional, and the signer rejects a client region that differs from the key's. Finish rotating onto the MRK in the home region before adding regions.
 
 ## IAM OIDC provider
 
@@ -357,7 +366,7 @@ While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its d
 
 | Risk                                                          | Control                                                                                  |
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, replica-region allowlist, tamper Deny, SCP, alarms                     |
+| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, tamper Deny and SCP (preventive), replica-region allowlist (detective), alarms |
 | A mapping writer widening sessions                            | `idp.allowed_roles` (base-only) and the role's IAM `MaxSessionDuration`                  |
 | Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                              |
 | Half-rotated keys                                             | All-or-nothing loader; rotation order above                                              |
