@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -131,7 +132,13 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string)
 	}
 	logevent.Debug(ctx, nil, logevent.AWSS3GetSuccess, "successfully fetched S3 object", successAttrs...)
 
-	return result.Body, nil
+	// Read before cancel runs: the body is bound to ctx.
+	defer func() { _ = result.Body.Close() }()
+	body, err := utils.ReadAllCapped(result.Body, utils.MaxConfigBytes, fmt.Sprintf("s3://%s/%s", bucket, key))
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
 func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
