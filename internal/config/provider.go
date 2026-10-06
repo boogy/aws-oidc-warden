@@ -118,7 +118,8 @@ func (p *Provider) maybeRefresh(ctx context.Context, waitIfStale bool) {
 	if !stale && !p.due(interval, false) {
 		return
 	}
-	if stale && waitIfStale {
+	// After a failure the refresh is likely to fail again; do not queue requests behind it.
+	if stale && waitIfStale && p.failures.Load() == 0 {
 		wctx, cancel := context.WithTimeout(ctx, staleWaitTimeout)
 		locked := p.lockCtx(wctx)
 		cancel()
