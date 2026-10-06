@@ -19,5 +19,6 @@ Warden-as-IdP: signs short-lived OIDC tokens that STS AssumeRoleWithWebIdentity 
 - Never log `Token.Value` or key material.
 - Only RS256 and ES256.
 - The loader fails if any key fails.
+- MRK keys sign via the local replica; primary and every replica must be in `kms_allowed_regions`.
 - `KeySet` is immutable after build.
 - After a successful `Warm`, no request path calls the loader.

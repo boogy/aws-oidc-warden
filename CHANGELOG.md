@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **IdP mode (`idp`, optional)**: the warden mints a KMS-signed OIDC token and exchanges it via unsigned `AssumeRoleWithWebIdentity`, lifting the 1h role-chaining cap for roles that opt in with `idp_token`. `/verify` routes opted-in roles through it; over-1h requests it cannot serve get 503 `idp_signing_unavailable`, 403 `idp_not_permitted` or 400 `duration_exceeds_cap`. See `docs/IDP.md`.
+- **Multi-region KMS keys** for `idp.signing_keys`: one issuer across regions, each signing with its local replica; replicas are confined to `idp.kms_allowed_regions`.
 - **IdP discovery and JWKS paths** answer 404 while `idp.enabled` is false, refresh config without waiting, and match `requestContext.path` on REST API (v1).
 - **`idp-export` command** writes the discovery and JWKS documents for S3/CloudFront hosting, with overlay and fragments applied.
 - **`max_session_duration`** on a mapping bounds `durationSeconds` (15m–12h, default 1h).

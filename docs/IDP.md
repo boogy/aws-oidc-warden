@@ -6,6 +6,7 @@ Optional. The warden validates the inbound OIDC token as usual, then mints its *
 - [Flow](#flow)
 - [Hosting discovery and JWKS](#hosting-discovery-and-jwks)
 - [KMS signing key](#kms-signing-key)
+- [Multi-region deployment](#multi-region-deployment)
 - [IAM OIDC provider](#iam-oidc-provider)
 - [Trust policy](#trust-policy)
 - [Configuration](#configuration)
@@ -72,7 +73,7 @@ The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.j
 - `idp.paths.*` must match the path the caller requests. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`) and returns 404 unless configured that way. A REST API (v1) routes on `requestContext.path`, which keeps the stage on the `execute-api` domain and the base-path mapping on a custom domain.
 - Only the two `idp.paths.*` are exposed. Any other near miss of them (other case, trailing slash, one extra leading segment) returns 404 `idp_path_not_found`. A method other than `GET`/`HEAD` returns 405 `method_not_allowed` with an `Allow` header.
 
-One issuer URL and one KMS key per deployment; never shared between stages.
+One issuer URL per deployment, never shared between stages. A deployment may span regions with one multi-region key (see [Multi-region deployment](#multi-region-deployment)).
 
 ## KMS signing key
 
@@ -80,12 +81,12 @@ One issuer URL and one KMS key per deployment; never shared between stages.
 | ------------ | ----------------------------------------------------------------------- |
 | Key spec     | `ECC_NIST_P256` (`ES256`) or `RSA_2048`/`RSA_3072`/`RSA_4096` (`RS256`) |
 | Key usage    | `SIGN_VERIFY`                                                           |
-| Multi-region | `false`                                                                 |
+| Multi-region | `false`, or an MRK whose primary and replicas are all in `idp.kms_allowed_regions` |
 | State        | `Enabled`                                                               |
 
-`NewKMSSigner` calls `DescribeKey` and `GetPublicKey` and refuses a key that is disabled, multi-region, not `SIGN_VERIFY`, of another spec, or whose `SigningAlgorithms` lacks the configured algorithm.
+`NewKMSSigner` calls `DescribeKey` and `GetPublicKey` and refuses a key that is disabled, multi-region with a primary or replica outside `idp.kms_allowed_regions`, not `SIGN_VERIFY`, of another spec, or whose `SigningAlgorithms` lacks the configured algorithm.
 
-`idp.signing_keys[].kms_key_id` must be the **full key ARN**. Aliases and bare key IDs are rejected: anyone who can `UpdateAlias` could re-point an alias at another key. `GetPublicKey.KeyId` must equal the configured ARN.
+`idp.signing_keys[].kms_key_id` must be the **full key ARN**. Aliases and bare key IDs are rejected: anyone who can `UpdateAlias` could re-point an alias at another key. `GetPublicKey.KeyId` must equal the configured ARN. For an MRK (`key/mrk-…`) the region in the configured ARN is rewritten to the KMS client's region, which must be in `idp.kms_allowed_regions` (required for any MRK). `DescribeKey` must then report the effective ARN.
 
 Key policy: grant the warden role only `kms:Sign`, `kms:GetPublicKey`, `kms:DescribeKey`, and deny signing to everyone else and key tampering to everyone except a break-glass role:
 
@@ -127,9 +128,22 @@ Key policy: grant the warden role only `kms:Sign`, `kms:GetPublicKey`, `kms:Desc
 
 Also:
 
-- SCP: deny the tamper actions on the key for everyone but the break-glass role.
-- Alarms (CloudTrail/EventBridge): any `kms:Sign` by another principal, and every action in the tamper list.
+- Apply the key policy on every replica; each replica has its own.
+- SCP: deny the tamper actions on the key (including `kms:ReplicateKey` and `kms:UpdatePrimaryRegion`) for everyone but the break-glass role.
+- Alarms (CloudTrail/EventBridge): any `kms:Sign` by another principal, and every action in the tamper list (including `kms:ReplicateKey` and `kms:UpdatePrimaryRegion`).
+- Warden role IAM: `kms:DescribeKey`, `kms:GetPublicKey` and `kms:Sign` on each regional replica ARN.
 - Quota: KMS `Sign` request quotas are per account and shared with every other signer. Use a dedicated account or a sized quota. Throttling surfaces as 503 `idp_signing_unavailable`.
+
+## Multi-region deployment
+
+One `idp.issuer` can be served from several regions of the same deployment:
+
+- Create one MRK and one replica per region. Every region runs the same config.
+- Set `idp.kms_allowed_regions` to the primary and every replica region. Required for an MRK.
+- Each region signs with its local replica. Same key material gives the same `kid` and one JWKS.
+- Host the JWKS statically and globally (S3 + CloudFront from `idp-export`), not from a regional Lambda.
+- Create a single global IAM OIDC provider for `idp.issuer`.
+- A rogue replica outside the allowlist is detected at the next cold start and fails the load. Pair with the alarms above.
 
 ## IAM OIDC provider
 
@@ -312,6 +326,8 @@ The loader is all-or-nothing: if any configured key fails to load, none are serv
 5. Wait for the JWKS max-age to pass.
 6. **Only then** disable or schedule deletion of the old KMS key.
 
+For an MRK, replicate the new key to every allowed region before step 1.
+
 Disabling a KMS key that is still configured makes the load fail and takes the IdP down. At most 5 keys, exactly one `active`.
 
 ## Hot reload and the kill switch
@@ -341,7 +357,7 @@ While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its d
 
 | Risk                                                          | Control                                                                                  |
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, single-region check, tamper Deny, SCP, alarms                          |
+| Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, replica-region allowlist, tamper Deny, SCP, alarms                     |
 | A mapping writer widening sessions                            | `idp.allowed_roles` (base-only) and the role's IAM `MaxSessionDuration`                  |
 | Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                              |
 | Half-rotated keys                                             | All-or-nothing loader; rotation order above                                              |
