@@ -48,6 +48,8 @@ type auditRecord struct {
 	// values, so it must follow the log_claim_values gate. Unexported so the
 	// JSON shape is stable regardless of the gate. Set via setErrorReason.
 	reasonFromError bool
+	// preAuth marks a deny that precedes authentication; it is always batched, never a synchronous S3 write.
+	preAuth bool
 
 	Issuer   string   `json:"issuer,omitempty"`
 	Provider string   `json:"provider,omitempty"`
@@ -217,14 +219,17 @@ func subjectAttr(cfg *config.Config, subject string) slog.Attr {
 // recordDecision redacts rec per cfg.LogClaimValues, emits the standardized
 // decision log line from the redacted record, then sends it to the audit
 // sink as one JSON record: synchronously via WriteRecord when
-// cfg.AuditEnforced(), otherwise best-effort via BufferRecord.
+// cfg.AuditEnforced() and the record is not pre-auth, otherwise best-effort
+// via BufferRecord.
 //
-// Callers must set rec.Decision before calling. When cfg.AuditEnforced() is
-// true, a missing sink, marshal failure, or write failure all return an
-// error wrapping ErrAuditWriteFailed and the caller must fail closed; when
-// false, failures are logged and swallowed so the decision still proceeds.
+// Callers must set rec.Decision before calling. On the synchronous path, a
+// missing sink, marshal failure, or write failure all return an error
+// wrapping ErrAuditWriteFailed and the caller must fail closed; otherwise
+// failures are logged and swallowed so the decision still proceeds.
 func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.redact(cfg.LogClaimValues)
+	// Unauthenticated floods must not hammer the shared S3 prefix and fail real allows closed.
+	enforced := cfg.AuditEnforced() && !rec.preAuth
 
 	attrs := auditLogAttrs(rec, cfg.LogClaimValues)
 	decisionEvent := logevent.AuthzDecision.WithOutcome(rec.Decision)
@@ -236,7 +241,7 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 
 	if r.audit == nil {
 		// config.Validate() can't catch a missing sink; enforce here instead.
-		if cfg.AuditEnforced() {
+		if enforced {
 			err := fmt.Errorf("%w: audit_required is set but no audit sink is configured", ErrAuditWriteFailed)
 			logevent.Error(ctx, log, logevent.AuditWriteFailure, "failed to write audit record", slog.String("error", err.Error()))
 			return err
@@ -247,13 +252,13 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	data, err := json.Marshal(rec)
 	if err != nil {
 		logevent.Error(ctx, log, logevent.AuditMarshalFailure, "failed to marshal audit record", slog.String("error", err.Error()))
-		if cfg.AuditEnforced() {
+		if enforced {
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, err)
 		}
 		return nil
 	}
 
-	if cfg.AuditEnforced() {
+	if enforced {
 		if werr := r.audit.WriteRecord(ctx, data); werr != nil {
 			logevent.Error(ctx, log, logevent.AuditWriteFailure, "failed to write audit record", slog.String("error", werr.Error()))
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, werr)

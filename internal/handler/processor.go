@@ -136,6 +136,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
 		rec.setErrorReason("extract", err)
+		rec.preAuth = true
 		return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
@@ -152,6 +153,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		input.Config, o.cfg = cfg, cfg
 		if claims, err = r.extractor.Extract(ctx, input); err != nil {
 			rec.setErrorReason("extract", err)
+			rec.preAuth = true
 			return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
 		}
 	}
