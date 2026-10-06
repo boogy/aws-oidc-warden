@@ -52,6 +52,8 @@ func NewKMSSigner(ctx context.Context, api KMSAPI, configuredARN, alg string, al
 		if keyID, err = localReplicaARN(api, configuredARN, allowedRegions); err != nil {
 			return nil, err
 		}
+	} else if err := checkClientRegion(api, configuredARN); err != nil {
+		return nil, err
 	}
 	desc, err := api.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: aws.String(keyID)})
 	if err != nil {
@@ -68,7 +70,10 @@ func NewKMSSigner(ctx context.Context, api KMSAPI, configuredARN, alg string, al
 		return nil, fmt.Errorf("kms key %s: KeyUsage must be SIGN_VERIFY", keyID)
 	}
 	if aws.ToBool(md.MultiRegion) != mrk {
-		return nil, fmt.Errorf("kms key %s: MultiRegion is %t but the key ID %s a multi-region key ID", keyID, aws.ToBool(md.MultiRegion), map[bool]string{true: "is", false: "is not"}[mrk])
+		if mrk {
+			return nil, fmt.Errorf("kms key %s: key ID is a multi-region key ID but MultiRegion is false", keyID)
+		}
+		return nil, fmt.Errorf("kms key %s: key ID is not a multi-region key ID but MultiRegion is true", keyID)
 	}
 	if aws.ToString(md.Arn) != keyID {
 		return nil, fmt.Errorf("kms key %s: DescribeKey Arn %q does not match the key ARN", keyID, aws.ToString(md.Arn))
@@ -109,16 +114,36 @@ func NewKMSSigner(ctx context.Context, api KMSAPI, configuredARN, alg string, al
 	return &kmsSigner{api: api, keyID: keyID, alg: alg, kid: kid, pub: pub, spec: spec, timeout: timeout}, nil
 }
 
+func clientRegion(api KMSAPI) string {
+	if o, ok := api.(interface{ Options() kms.Options }); ok {
+		return o.Options().Region
+	}
+	return ""
+}
+
+func checkClientRegion(api KMSAPI, arn string) error {
+	parts := strings.Split(arn, ":")
+	if len(parts) != 6 {
+		return nil
+	}
+	if r := clientRegion(api); r != "" && r != parts[3] {
+		return fmt.Errorf("kms key %s: single-region key is in %s but the KMS client region is %s", arn, parts[3], r)
+	}
+	return nil
+}
+
 func localReplicaARN(api KMSAPI, arn string, allowedRegions []string) (string, error) {
-	o, ok := api.(interface{ Options() kms.Options })
-	if !ok || o.Options().Region == "" {
+	region := clientRegion(api)
+	if region == "" {
 		return "", fmt.Errorf("kms key %s: multi-region key needs a KMS client with a region", arn)
 	}
-	region := o.Options().Region
 	if !slices.Contains(allowedRegions, region) {
 		return "", fmt.Errorf("kms key %s: client region %s is not in kms_allowed_regions", arn, region)
 	}
 	parts := strings.Split(arn, ":")
+	if len(parts) != 6 {
+		return "", fmt.Errorf("kms key %s: malformed key ARN", arn)
+	}
 	parts[3] = region
 	return strings.Join(parts, ":"), nil
 }

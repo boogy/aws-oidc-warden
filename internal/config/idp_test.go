@@ -98,7 +98,7 @@ func TestIdPValidate(t *testing.T) {
 		{name: "kms alias rejected", mutate: func(c *IdPConfig) { c.SigningKeys[0].KMSKeyID = "alias/my-key" }, wantErr: "key ARN"},
 		{name: "kms key id bare uuid rejected", mutate: func(c *IdPConfig) { c.SigningKeys[0].KMSKeyID = "1234abcd-12ab-34cd-56ef-1234567890ab" }, wantErr: "key ARN"},
 		{name: "kms alias arn rejected", mutate: func(c *IdPConfig) { c.SigningKeys[0].KMSKeyID = "arn:aws:kms:eu-west-1:111122223333:alias/k" }, wantErr: "key ARN"},
-		{name: "kms mrk arn rejected", mutate: func(c *IdPConfig) {
+		{name: "mrk without allowlist rejected", mutate: func(c *IdPConfig) {
 			c.SigningKeys[0].KMSKeyID = idpMRKARN
 		}, wantErr: "kms_allowed_regions"},
 		{name: "kms mrk arn with allowlist ok", mutate: func(c *IdPConfig) {
@@ -114,6 +114,9 @@ func TestIdPValidate(t *testing.T) {
 			c.KMSAllowedRegions = []string{"eu-west-1"}
 		}, wantErr: "key ARN"},
 		{name: "kms allowed region bad string", mutate: func(c *IdPConfig) { c.KMSAllowedRegions = []string{"eu-west-1", "Europe"} }, wantErr: "Europe"},
+		{name: "kms allowed region eusc ok", mutate: func(c *IdPConfig) { c.KMSAllowedRegions = []string{"eu-west-1", "eusc-de-east-1"} }},
+		{name: "kms allowed region govcloud ok", mutate: func(c *IdPConfig) { c.KMSAllowedRegions = []string{"eu-west-1", "us-gov-west-1"} }},
+		{name: "kms allowed region fips rejected", mutate: func(c *IdPConfig) { c.KMSAllowedRegions = []string{"eu-west-1", "fips-us-east-1"} }, wantErr: "fips-us-east-1"},
 		{name: "kms allowed region duplicate", mutate: func(c *IdPConfig) { c.KMSAllowedRegions = []string{"eu-west-1", "eu-west-1"} }, wantErr: "duplicate"},
 		{name: "single-region key without allowlist ok", mutate: func(c *IdPConfig) {}},
 		{name: "single-region key in allowlist ok", mutate: func(c *IdPConfig) { c.KMSAllowedRegions = []string{"eu-west-1"} }},

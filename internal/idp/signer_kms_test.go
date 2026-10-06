@@ -311,14 +311,45 @@ func TestKMSSignerMultiRegion(t *testing.T) {
 	}
 }
 
-func TestKMSSignerSingleRegionIgnoresClientRegion(t *testing.T) {
+func TestKMSSignerSingleRegionClientRegion(t *testing.T) {
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	f := newFakeKMS(ec, kmstypes.KeySpecEccNistP256, ecAlgs)
-	s, err := NewKMSSigner(context.Background(), regionKMS{f, "us-east-1"}, testKMSARN, "ES256", nil, time.Second)
-	require.NoError(t, err)
-	_, err = s.Sign(context.Background(), []byte("h.p"))
-	require.NoError(t, err)
-	for _, got := range f.seenARNs {
-		require.Equal(t, testKMSARN, got)
+	tests := []struct {
+		name    string
+		region  string
+		noOpts  bool
+		wantErr []string
+	}{
+		{name: "matching region", region: "eu-west-1"},
+		{name: "empty client region", region: ""},
+		{name: "no Options", noOpts: true},
+		{name: "region mismatch", region: "us-east-1", wantErr: []string{"eu-west-1", "us-east-1"}},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFakeKMS(ec, kmstypes.KeySpecEccNistP256, ecAlgs)
+			var api KMSAPI = regionKMS{f, tt.region}
+			if tt.noOpts {
+				api = f
+			}
+			s, err := NewKMSSigner(context.Background(), api, testKMSARN, "ES256", nil, time.Second)
+			if tt.wantErr != nil {
+				for _, w := range tt.wantErr {
+					require.ErrorContains(t, err, w)
+				}
+				return
+			}
+			require.NoError(t, err)
+			_, err = s.Sign(context.Background(), []byte("h.p"))
+			require.NoError(t, err)
+			require.Len(t, f.seenARNs, 3)
+			for _, got := range f.seenARNs {
+				require.Equal(t, testKMSARN, got)
+			}
+		})
+	}
+}
+
+func TestLocalReplicaARNMalformed(t *testing.T) {
+	_, err := localReplicaARN(regionKMS{nil, "us-east-1"}, "arn:aws:kms:eu-west-1:key/mrk-x", []string{"us-east-1"})
+	require.ErrorContains(t, err, "malformed")
 }

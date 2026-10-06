@@ -40,7 +40,7 @@ const (
 
 var idpKMSKeyARN = regexp.MustCompile(`^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key/(?:[0-9a-f-]{36}|mrk-[0-9a-f]{32})$`)
 
-var idpRegion = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d+$`)
+var idpRegion = regexp.MustCompile(`^([a-z]+-){2,3}\d+$`)
 
 // IsMultiRegionKMSKey reports whether a KMS key ARN names a multi-region key.
 func IsMultiRegionKMSKey(arn string) bool {
@@ -278,7 +278,7 @@ func (c *IdPConfig) validateKeys(allowInsecure bool) error {
 func (c *IdPConfig) validateAllowedRegions() error {
 	seen := map[string]bool{}
 	for _, r := range c.KMSAllowedRegions {
-		if !idpRegion.MatchString(r) {
+		if !idpRegion.MatchString(r) || strings.HasPrefix(r, "fips-") {
 			return fmt.Errorf("idp.kms_allowed_regions: %q is not a valid region", r)
 		}
 		if seen[r] {
