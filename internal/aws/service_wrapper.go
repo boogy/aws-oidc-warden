@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,9 @@ type AwsServiceWrapper struct {
 
 	maxS3ObjectSize int64
 	defaultTimeout  time.Duration
+
+	iamMu      sync.Mutex
+	iamClients map[aws.CredentialsProvider]*iam.Client // GetRoleAs clients by credentials
 
 	// Cached hub identity (from STS GetCallerIdentity)
 	callerMu      sync.Mutex
@@ -276,8 +280,31 @@ func (s *AwsServiceWrapper) GetRoleAs(ctx context.Context, input *iam.GetRoleInp
 
 	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
-	client := iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
-	return client.GetRole(ctx, input)
+	return s.iamClientFor(creds).GetRole(ctx, input)
+}
+
+// maxCachedIAMClients bounds iamClients; spoke credentials rotate, so old entries go stale.
+const maxCachedIAMClients = 64
+
+// iamClientFor returns an IAM client bound to creds, reusing one per provider value.
+func (s *AwsServiceWrapper) iamClientFor(creds aws.CredentialsProvider) *iam.Client {
+	build := func() *iam.Client {
+		return iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
+	}
+	if !reflect.TypeOf(creds).Comparable() {
+		return build()
+	}
+	s.iamMu.Lock()
+	defer s.iamMu.Unlock()
+	if c, ok := s.iamClients[creds]; ok {
+		return c
+	}
+	if s.iamClients == nil || len(s.iamClients) >= maxCachedIAMClients {
+		s.iamClients = make(map[aws.CredentialsProvider]*iam.Client)
+	}
+	c := build()
+	s.iamClients[creds] = c
+	return c
 }
 
 // GetS3ObjectIfChanged reads an owner-pinned object; a 304 returns (nil, prevETag, nil).

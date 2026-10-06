@@ -21,6 +21,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
+	"golang.org/x/sync/singleflight"
 )
 
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
@@ -55,6 +56,7 @@ type AwsConsumer struct {
 	now          func() time.Time
 	mu           sync.Mutex
 	spokeCache   map[string]cachedCreds // keyed by account ID
+	spokeFlight  singleflight.Group     // keyed by account ID
 	roleTagCache map[string]cachedTags  // keyed by role ARN
 }
 
@@ -145,11 +147,36 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 	}
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if c, ok := a.spokeCache[account]; ok && a.now().Before(c.expires) {
+	c, ok := a.spokeCache[account]
+	a.mu.Unlock()
+	if ok && a.now().Before(c.expires) {
 		return c.provider, nil
 	}
 
+	// Detached so one caller's cancellation can't fail the others sharing the flight.
+	flightCtx := context.WithoutCancel(ctx)
+	ch := a.spokeFlight.DoChan(account, func() (any, error) {
+		a.mu.Lock()
+		c, ok := a.spokeCache[account]
+		a.mu.Unlock()
+		if ok && a.now().Before(c.expires) {
+			return c.provider, nil
+		}
+		return a.assumeSpoke(flightCtx, cfg, account)
+	})
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(aws.CredentialsProvider), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// assumeSpoke assumes the convention-named spoke role in account and caches the result.
+func (a *AwsConsumer) assumeSpoke(ctx context.Context, cfg *gtvcfg.Config, account string) (aws.CredentialsProvider, error) {
 	ca := cfg.CrossAccount
 	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ca.SpokeRoleName)
 	sessionName := "aow-broker"
@@ -181,7 +208,8 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 		return nil, fmt.Errorf("spoke role %s returned no credentials", spokeArn)
 	}
 	cr := out.Credentials
-	provider := credentials.NewStaticCredentialsProvider(*cr.AccessKeyId, *cr.SecretAccessKey, *cr.SessionToken)
+	static := credentials.NewStaticCredentialsProvider(*cr.AccessKeyId, *cr.SecretAccessKey, *cr.SessionToken)
+	provider := &static // pointer identity keys the wrapper's IAM client cache
 	expires := a.now().Add(time.Hour)
 	if cr.Expiration != nil {
 		expires = cr.Expiration.Add(-5 * time.Minute) // refresh margin
@@ -193,7 +221,9 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 		slog.String("sessionName", sessionName),
 		slog.Time("expires", expires))
 
+	a.mu.Lock()
 	a.spokeCache[account] = cachedCreds{provider: provider, expires: expires}
+	a.mu.Unlock()
 	return provider, nil
 }
 
