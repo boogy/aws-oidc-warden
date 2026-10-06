@@ -96,9 +96,6 @@ func (p *Provider) Get() *Config {
 	return p.current.Load()
 }
 
-// IntervalForTest exposes the current effective interval for testing only.
-func (p *Provider) IntervalForTest() int64 { return p.interval.Load() }
-
 // MaybeRefresh reloads once the interval or failure backoff has elapsed; while stale it waits for an in-flight refresh.
 func (p *Provider) MaybeRefresh(ctx context.Context) { p.maybeRefresh(ctx, true) }
 

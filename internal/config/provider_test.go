@@ -223,7 +223,7 @@ func TestProvider_ReloadIntervalUpdatedFromS3Config(t *testing.T) {
 	require.NoError(t, p.Refresh(context.Background()))
 
 	// After reload the effective interval should be 5 minutes.
-	assert.Equal(t, 5*time.Minute, time.Duration(p.IntervalForTest()))
+	assert.Equal(t, 5*time.Minute, time.Duration(p.interval.Load()))
 }
 
 // ---------- fragments ----------

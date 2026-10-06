@@ -41,7 +41,7 @@ var (
 
 	validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 
-	accountIDPattern     = regexp.MustCompile(`^\d{12}$`)
+	accountIDPattern     = regexp.MustCompile(`^\d{12}$`) // also the S3 bucket-owner format
 	sessionTagKeyPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]{1,128}$`)
 
 	// tagPrefixPattern is the IAM tag-key charset minus the space, bounded so a
@@ -313,7 +313,7 @@ type Config struct {
 
 	// LogClaimValues controls whether claim VALUES (canonical subject, raw
 	// jwtSub, audience) appear in structured logs and audit records. Default
-	// off: only claim NAMES plus the decision/reason are logged. Session tag
+	// on; false logs only claim NAMES plus the decision/reason. Session tag
 	// keys are always logged; tag values follow this flag too.
 	LogClaimValues bool `mapstructure:"log_claim_values" json:"log_claim_values,omitempty"`
 
@@ -1330,8 +1330,6 @@ func (c *Config) fragmentSources() []string {
 	return append([]string{c.MappingsFile}, c.ConfigFragments...)
 }
 
-var bucketOwnerPattern = regexp.MustCompile(`^\d{12}$`)
-
 func isS3URI(uri string) bool { return strings.HasPrefix(uri, "s3://") }
 
 // validateRemoteScheme keeps the owner-pin and max-stale checks in step with the case-insensitive fetch path.
@@ -1382,7 +1380,7 @@ func (c *Config) validateS3ConfigOwner() error {
 	if needsOwner && c.S3ConfigBucketOwner == "" {
 		return errors.New("s3_config_bucket_owner is required when mappings_file or config_fragments use s3://")
 	}
-	if c.S3ConfigBucketOwner != "" && !bucketOwnerPattern.MatchString(c.S3ConfigBucketOwner) {
+	if c.S3ConfigBucketOwner != "" && !accountIDPattern.MatchString(c.S3ConfigBucketOwner) {
 		return errors.New("s3_config_bucket_owner must be exactly 12 digits")
 	}
 	return nil
