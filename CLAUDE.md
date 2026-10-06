@@ -42,7 +42,7 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 - Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
 - Sentinel errors in `internal/handler/types.go`, mapped to HTTP status by `classifyError` (`internal/handler/errors.go`).
 - Config precedence: env vars > YAML > defaults.
-- Maintain a clean, up-to-date `CHANGELOG.md`.
+- Maintain a clean, up-to-date `CHANGELOG.md`: one phrase per entry, at most two or three sentences for complex topics; detail goes in `docs/`.
 
 ## Security
 
