@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/boogy/aws-oidc-warden/internal/aws"
+	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
@@ -315,10 +315,18 @@ func claimsAudience(claims *gtypes.Claims) []string {
 	return []string(claims.Audience)
 }
 
-// sessionTagKeyNames returns the sorted tag key names an issuer's session_tags
-// spec would populate. Names are always safe to log regardless of LogClaimValues.
-func sessionTagKeyNames(tagSpec map[string]string) []string {
-	return utils.SortedKeys(tagSpec)
+// sessionTagKeyNames returns the names of the attached session tags, in order.
+func sessionTagKeyNames(tags []ststypes.Tag) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t.Key != nil {
+			names = append(names, *t.Key)
+		}
+	}
+	return names
 }
 
 // claimAliases renames claims on their way into the audit record for a
@@ -381,11 +389,8 @@ func claimEmitted(rawClaims map[string]any, name string, include func(string) bo
 	return utils.FormatClaimValue(raw) != ""
 }
 
-// resolvedSessionTags computes the STS session tag values for the audit
-// record's SessionTags field, reusing aws.BuildSessionTags (the function
-// AssumeRole itself uses). Only called when cfg.LogClaimValues is true.
-func resolvedSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) map[string]string {
-	tags := aws.BuildSessionTags(ctx, rawClaims, tagSpec)
+// sessionTagValues maps the attached session tags to their values; callers must gate on cfg.LogClaimValues.
+func sessionTagValues(tags []ststypes.Tag) map[string]string {
 	if len(tags) == 0 {
 		return nil
 	}

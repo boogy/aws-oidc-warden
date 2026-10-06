@@ -286,8 +286,8 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, o.decision)
-	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, claims, sessionTagSpec)
+	tags := aws.BuildSessionTags(ctx, claims.Raw, cfg.EffectiveSessionTags(claims.Issuer, o.decision))
+	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, tags)
 	if errors.Is(err, aws.ErrAccountNotAllowed) {
 		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
 		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
@@ -305,9 +305,9 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	rec.GrantedRole = requestedRole
 	rec.SessionName = sessionName
 	rec.DurationSeconds = int(duration)
-	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
+	rec.SessionTagKeys = sessionTagKeyNames(tags)
 	if cfg.LogClaimValues {
-		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, sessionTagSpec)
+		rec.SessionTags = sessionTagValues(tags)
 	}
 	rec.SessionPolicyRef = policyRef
 	if account, _, aerr := utils.ParseRoleARN(requestedRole); aerr == nil {

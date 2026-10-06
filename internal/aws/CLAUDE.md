@@ -6,7 +6,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). STS/S3/IAM via AWS SDK v2. `consumer
 
 ```go
 type AwsConsumerInterface interface {
-    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *types.Claims, sessionTags map[string]string) (*types.Credentials, error)
+    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, tags []types.Tag) (*types.Credentials, error)
     GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
     GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
     GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
@@ -18,7 +18,7 @@ Handlers accept the interface for mockability. Clients are built once in `servic
 
 ## Session tags
 
-`AssumeRole`'s `sessionTags` param is the caller-resolved `session_tags` spec (STS tag key → raw claim name, from `cfg.EffectiveSessionTags(claims.Issuer, decision)`: the issuer's spec plus the authorizing mapping's additive extras). It attaches tags via `BuildSessionTags(ctx, claims.Raw, sessionTags)`: for each spec entry, the raw claim value is read from `claims.Raw`, stringified via `utils.FormatClaimValue`, and emitted as that tag — nil/empty values are skipped. Use that helper rather than `fmt.Sprintf("%v", …)`: `handler.auditClaims` shares it so a claim reported in the audit record's `claims` and the same claim attached as a session tag can never disagree, and it is what keeps a numeric claim out of scientific notation (a JSON number decodes to `float64`, whose default formatting turns an epoch second into `1.7555904e+09`). Keys/values that violate STS limits (128/256 chars) or charset (`[A-Za-z0-9 _.:/=+@-]`) are **skipped and logged via `logevent.STSSessionTagDropped` (Warn), never sanitized or truncated** — a bad value must not silently become a different value. Output is capped at 50 tags (STS limit); extras are skipped and warned. Spec keys are processed in sorted order for deterministic truncation/logging.
+`AssumeRole`'s `tags` param is the caller-built `[]types.Tag`, attached as given; `AssumeRole` never builds or rebuilds them. The handler builds them once per request via `BuildSessionTags(ctx, claims.Raw, cfg.EffectiveSessionTags(claims.Issuer, decision))` (the issuer's `session_tags` spec — STS tag key → raw claim name — plus the authorizing mapping's additive extras) and reuses the same slice for the IdP mint and the audit record, so a drop warning is logged once. `BuildSessionTags`: for each spec entry, the raw claim value is read from `claims.Raw`, stringified via `utils.FormatClaimValue`, and emitted as that tag — nil/empty values are skipped. Use that helper rather than `fmt.Sprintf("%v", …)`: `handler.auditClaims` shares it so a claim reported in the audit record's `claims` and the same claim attached as a session tag can never disagree, and it is what keeps a numeric claim out of scientific notation (a JSON number decodes to `float64`, whose default formatting turns an epoch second into `1.7555904e+09`). Keys/values that violate STS limits (128/256 chars) or charset (`[A-Za-z0-9 _.:/=+@-]`) are **skipped and logged via `logevent.STSSessionTagDropped` (Warn), never sanitized or truncated** — a bad value must not silently become a different value. Output is capped at 50 tags (STS limit); extras are skipped and warned. Spec keys are processed in sorted order for deterministic truncation/logging.
 
 ## Conventions
 

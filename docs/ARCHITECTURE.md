@@ -168,7 +168,8 @@ sequenceDiagram
 
     Note over Processor: requested role must be in the matched mapping's roles
     Processor->>Processor: Resolve session policy (inline or S3)
-    Processor->>Consumer: AssumeRole(role, ..., session_tags spec)
+    Processor->>Processor: BuildSessionTags (once; also feeds the audit record)
+    Processor->>Consumer: AssumeRole(role, ..., built session tags)
 
     Consumer->>STS: AssumeRole with per-issuer session tags
     STS-->>Consumer: Return credentials
@@ -280,7 +281,7 @@ The AWS consumer abstracts all AWS service interactions:
 
 ```go
 type AwsConsumerInterface interface {
-    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
+    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, tags []types.Tag) (*types.Credentials, error)
     GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
     GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
     GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
@@ -298,7 +299,7 @@ type AwsConsumerInterface interface {
 
 **Session Tags Applied:**
 
-Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(ctx, rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request:
+Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(ctx, rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request. The handler builds the tags once per request; the same slice is handed to `AssumeRole` (or the IdP mint) and feeds the audit record's `sessionTagKeys`/`sessionTags`:
 
 ```go
 func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) []types.Tag

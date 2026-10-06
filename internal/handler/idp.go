@@ -91,14 +91,14 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	spec := cfg.EffectiveSessionTags(claims.Issuer, o.decision)
+	tags := aws.BuildSessionTags(ctx, claims.Raw, cfg.EffectiveSessionTags(claims.Issuer, o.decision))
 	req := idp.MintRequest{
 		RoleARN:        role,
 		SourceIssuer:   claims.Issuer,
 		SourceSubject:  claims.Subject,
 		RequestID:      requestID,
 		SourceIdentity: sourceIdentity,
-		Tags:           aws.BuildSessionTags(ctx, claims.Raw, spec),
+		Tags:           tags,
 	}
 	if cfg.TransitiveSessionTags() {
 		for _, t := range req.Tags {
@@ -166,9 +166,9 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	rec.SourceIdentityTruncated = truncated
 	rec.DurationSeconds = int(duration)
 	rec.SessionPolicyRef = policyRef
-	rec.SessionTagKeys = sessionTagKeyNames(spec)
+	rec.SessionTagKeys = sessionTagKeyNames(tags)
 	if cfg.LogClaimValues {
-		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, spec)
+		rec.SessionTags = sessionTagValues(tags)
 	}
 	if account, _, aerr := utils.ParseRoleARN(role); aerr == nil {
 		rec.AccountID = account

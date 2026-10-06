@@ -39,7 +39,7 @@ type vRecorder struct {
 	assumeCalls   int
 	assumedRole   string
 	gotPolicy     *string
-	gotTagSpec    map[string]string
+	gotTags       map[string]string
 	tags          map[string]string
 	tagsErr       error
 	allowAccount  bool
@@ -72,11 +72,11 @@ func (f *vRecorder) AssumeRoleWithWebIdentity(context.Context, string, string, s
 	return nil, errors.New("not implemented")
 }
 
-func (f *vRecorder) AssumeRole(_ context.Context, roleARN, _ string, policy *string, _ *int32, _ *types.Claims, spec map[string]string) (*ststypes.Credentials, error) {
+func (f *vRecorder) AssumeRole(_ context.Context, roleARN, _ string, policy *string, _ *int32, tags []ststypes.Tag) (*ststypes.Credentials, error) {
 	f.assumeCalls++
 	f.assumedRole = roleARN
 	f.gotPolicy = policy
-	f.gotTagSpec = spec
+	f.gotTags = tagMap(tags)
 	return &ststypes.Credentials{
 		AccessKeyId: aws.String("AKIA"), SecretAccessKey: aws.String("s"),
 		SessionToken: aws.String("t"), Expiration: aws.Time(time.Now().Add(time.Hour)),
@@ -148,8 +148,8 @@ func TestPipeline_ScopedPolicyReachesSTS(t *testing.T) {
 	if rec.gotPolicy == nil || *rec.gotPolicy != `{"scoped":true}` {
 		t.Fatalf("UNSCOPED ASSUMPTION: STS received policy %v for the privileged role", rec.gotPolicy)
 	}
-	if rec.gotTagSpec["repo"] != "repository" {
-		t.Errorf("issuer session_tags spec not forwarded: %v", rec.gotTagSpec)
+	if rec.gotTags["repo"] != "myorg/repo" {
+		t.Errorf("issuer session_tags not built from the verified claims: %v", rec.gotTags)
 	}
 }
 
@@ -389,8 +389,8 @@ func TestGenericIssuer_AllowPathReachesSTSWithPolicyAndTags(t *testing.T) {
 	assert.Equal(t, role, rec.assumedRole)
 	require.NotNil(t, rec.gotPolicy, "the mapping's session policy must reach STS")
 	assert.JSONEq(t, `{"Version":"2012-10-17","Statement":[]}`, *rec.gotPolicy)
-	assert.Equal(t, map[string]string{"project": "project_path"}, rec.gotTagSpec,
-		"the generic issuer's session_tags spec must reach AssumeRole")
+	assert.Equal(t, map[string]string{"project": "acme/platform/api"}, rec.gotTags,
+		"the generic issuer's session_tags must reach AssumeRole built from the claims")
 	assert.Zero(t, rec.tagAuthCalled, "tag-auth must not be consulted once a mapping authorizes")
 }
 
@@ -515,8 +515,8 @@ func TestGenericIssuer_TagAuthAuthorizesViaClaimDimension(t *testing.T) {
 	assert.Equal(t, 1, rec.assumeCalls)
 	assert.Equal(t, gTagRole, rec.assumedRole)
 	assert.Nil(t, rec.gotPolicy, "a tag-authorized role carries no config-declared session policy")
-	assert.Equal(t, map[string]string{"project": "project_path"}, rec.gotTagSpec,
-		"the issuer's session_tags spec still applies on the tag-auth path")
+	assert.Equal(t, map[string]string{"project": "acme/platform/api"}, rec.gotTags,
+		"the issuer's session_tags still apply on the tag-auth path")
 }
 
 // A claim tag that does not match must deny, even though the identity tag does.

@@ -80,18 +80,18 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, nil, nil)
+	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST", *creds.AccessKeyId)
 
-	creds, err = consumer.AssumeRole(context.Background(), "", testSessionName, nil, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), "", testSessionName, nil, &testDuration, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "roleArn cannot be empty")
 
 	// Test case: Empty session name
-	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, "", nil, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, "", nil, &testDuration, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "sessionName cannot be empty")
@@ -108,7 +108,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, testPolicy, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, testPolicy, &testDuration, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST2", *creds.AccessKeyId)
@@ -126,7 +126,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &shortDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &shortDuration, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
@@ -143,7 +143,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &longDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &longDuration, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
@@ -152,7 +152,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		return *input.RoleArn == "arn:aws:iam::123456789012:role/nonexistent"
 	})).Return(nil, errors.New("access denied")).Once()
 
-	creds, err = consumer.AssumeRole(context.Background(), "arn:aws:iam::123456789012:role/nonexistent", testSessionName, nil, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), "arn:aws:iam::123456789012:role/nonexistent", testSessionName, nil, &testDuration, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "access denied")
@@ -164,7 +164,7 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 		Credentials: nil,
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(context.Background(), "arn:aws:iam::123456789012:role/empty-creds", testSessionName, nil, &testDuration, nil, nil)
+	creds, err = consumer.AssumeRole(context.Background(), "arn:aws:iam::123456789012:role/empty-creds", testSessionName, nil, &testDuration, nil)
 	assert.Error(t, err)
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "no credentials returned")
@@ -202,7 +202,7 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 
 	mockAWS.On("GetCallerIdentityInfo", mock.Anything).Return("123456789012", false, nil)
 
-	// With claims + a session_tags spec, verify the expected tags are attached.
+	// Caller-built tags are attached as given.
 	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		if *input.RoleArn != testRoleArn || *input.RoleSessionName != testSessionName {
 			return false
@@ -225,12 +225,12 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, BuildSessionTags(context.Background(), testClaims.Raw, testSpec))
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST", *creds.AccessKeyId)
 
-	// Nil claims: no tags attached even though a spec is passed.
+	// No tags passed: none attached.
 	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return input.Tags == nil && *input.RoleArn == testRoleArn
 	})).Return(&sts.AssumeRoleOutput{
@@ -242,7 +242,7 @@ func TestAwsConsumer_AssumeRole_WithSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, nil, testSpec)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 	assert.Equal(t, "AKIATEST2", *creds.AccessKeyId)
@@ -293,7 +293,7 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	creds, err := consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, BuildSessionTags(context.Background(), testClaims.Raw, testSpec))
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
@@ -310,7 +310,7 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 		},
 	}, nil).Once()
 
-	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, testClaims, testSpec)
+	creds, err = consumer.AssumeRole(context.Background(), testRoleArn, testSessionName, nil, &testDuration, BuildSessionTags(context.Background(), testClaims.Raw, testSpec))
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
@@ -364,7 +364,7 @@ func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
 				},
 			}, nil).Once()
 
-			_, err := consumer.AssumeRole(context.Background(), testRoleArn, "test-session", nil, &testDuration, testClaims, testSpec)
+			_, err := consumer.AssumeRole(context.Background(), testRoleArn, "test-session", nil, &testDuration, BuildSessionTags(context.Background(), testClaims.Raw, testSpec))
 			require.NoError(t, err)
 
 			if tc.wantTransitive {
@@ -951,7 +951,7 @@ func TestAssumeRole_CrossAccount_DirectTransport(t *testing.T) {
 	}}, nil).Once()
 
 	c := newTagAuthConsumer(m)
-	creds, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
+	creds, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "AK2", *creds.AccessKeyId)
 	require.NotNil(t, captured)
@@ -973,7 +973,7 @@ func TestAssumeRoleCrossAccountDisabledFailsClosed(t *testing.T) {
 			c := NewAwsConsumer(cfg)
 			c.AWS = m
 
-			_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
+			_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil)
 			require.Error(t, err)
 			m.AssertNotCalled(t, "AssumeRole", mock.Anything)
 		})
@@ -987,7 +987,7 @@ func TestAssumeRoleUnparseableARNFailsClosed(t *testing.T) {
 	c := NewAwsConsumer(&gtvcfg.Config{})
 	c.AWS = m
 
-	_, err := c.AssumeRole(context.Background(), "not-an-arn", "sess", nil, nil, nil, nil)
+	_, err := c.AssumeRole(context.Background(), "not-an-arn", "sess", nil, nil, nil)
 	require.Error(t, err)
 	m.AssertNotCalled(t, "AssumeRole", mock.Anything)
 	m.AssertNotCalled(t, "GetCallerIdentityInfo")
@@ -1039,7 +1039,7 @@ func TestAssumeRoleCrossAccountNotAllowedFailsClosed(t *testing.T) {
 	})
 	c.AWS = m
 
-	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil, nil)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, nil, nil)
 	require.Error(t, err)
 	m.AssertNotCalled(t, "AssumeRole", mock.Anything)
 }
@@ -1070,7 +1070,7 @@ func TestAssumeRoleClampBoundary(t *testing.T) {
 			c := NewAwsConsumer(&gtvcfg.Config{})
 			c.AWS = m
 			dur := tc.requested
-			_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &dur, nil, nil)
+			_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &dur, nil)
 			require.NoError(t, err)
 			require.NotNil(t, captured)
 			assert.Equal(t, tc.want, *captured.DurationSeconds)
@@ -1119,7 +1119,7 @@ func TestAssumeRole_TransitiveTags_SameAccount(t *testing.T) {
 		Raw: map[string]any{"repository": "acme/api", "actor": "deploy-bot", "ref": "refs/heads/main", "event_name": "push"},
 	}
 
-	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, nil, BuildSessionTags(context.Background(), claims.Raw, defaultGitHubSessionTagsForTest))
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	// All configured session tags are marked transitive, not just repo/ref/actor:
@@ -1159,7 +1159,7 @@ func TestAssumeRole_TransitiveTags_DisabledByDefault(t *testing.T) {
 		Raw: map[string]any{"repository": "acme/api", "actor": "deploy-bot", "ref": "refs/heads/main"},
 	}
 
-	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, nil, claims, defaultGitHubSessionTagsForTest)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, nil, BuildSessionTags(context.Background(), claims.Raw, defaultGitHubSessionTagsForTest))
 	require.NoError(t, err)
 	require.NotNil(t, captured)
 	assert.Empty(t, captured.TransitiveTagKeys)
@@ -1188,7 +1188,7 @@ func TestAssumeRoleClampRoleSession(t *testing.T) {
 		c.AWS = m
 
 		var requested int32 = 7200
-		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
+		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil)
 		require.NoError(t, err)
 		require.NotNil(t, captured)
 		require.NotNil(t, captured.DurationSeconds)
@@ -1217,7 +1217,7 @@ func TestAssumeRoleClampRoleSession(t *testing.T) {
 		c.AWS = m
 
 		var requested int32 = 7200 // > 1h; must be clamped
-		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
+		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil)
 		require.NoError(t, err)
 		require.NotNil(t, captured)
 		require.NotNil(t, captured.DurationSeconds)
@@ -1246,7 +1246,7 @@ func TestAssumeRoleNoClampIAMUser(t *testing.T) {
 		c.AWS = m
 
 		var requested int32 = 7200
-		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil, nil)
+		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::111111111111:role/app", "sess", nil, &requested, nil)
 		require.NoError(t, err)
 		require.NotNil(t, captured)
 		require.NotNil(t, captured.DurationSeconds)
@@ -1275,7 +1275,7 @@ func TestAssumeRoleNoClampIAMUser(t *testing.T) {
 		c.AWS = m
 
 		var requested int32 = 7200
-		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil, nil)
+		_, err := c.AssumeRole(context.Background(), "arn:aws:iam::222222222222:role/app", "sess", nil, &requested, nil)
 		require.NoError(t, err)
 		require.NotNil(t, captured)
 		require.NotNil(t, captured.DurationSeconds)

@@ -201,7 +201,7 @@ Everything above (the values, not the synthesized `matchedRole`), plus seven fie
 | `requestedRole`    | **Allow and deny**           | Set at record construction, before any stage runs, so even an `extract`-stage deny carries it                                                 |
 | `grantedRole`      | Allow only                   | Equal to `requestedRole` once granted                                                                                                         |
 | `matchedVia`       | Always                       | `explicit` or `tag-auth`. **The field to check for "credential issued via tag-auth fallback"** — a question CloudWatch cannot answer, only S3 |
-| `sessionTagKeys`   | Once a role is granted       | Session-tag _names_; present regardless of `log_claim_values`                                                                                 |
+| `sessionTagKeys`   | Once a role is granted       | Names of the session tags actually attached; present regardless of `log_claim_values`                                                           |
 | `sessionTags`      | When `log_claim_values=true` | Resolved session-tag _values_                                                                                                                 |
 | `sessionPolicyRef` | If a policy was applied      | Reference to the session policy                                                                                                               |
 | `expiry`           | Allow only                   | The issued credential's expiration, RFC3339                                                                                                   |

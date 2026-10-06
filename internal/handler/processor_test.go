@@ -141,8 +141,7 @@ type fakeConsumer struct {
 	tags            map[string]string
 	tagsErr         error
 	assumed         string
-	gotClaims       *types.Claims     // claims passed to AssumeRole → drive session tags (ABAC)
-	gotSessionTags  map[string]string // session_tags spec passed to AssumeRole
+	gotSessionTags  map[string]string // session tags passed to AssumeRole (key -> value)
 	gotSessionName  string            // STS session name passed to AssumeRole
 	assumeOut       *ststypes.Credentials
 	allowAccount    bool
@@ -201,15 +200,23 @@ func (f *fakeConsumer) AssumeRoleWithWebIdentity(_ context.Context, role, name, 
 	}, nil
 }
 
-func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, duration *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
+// tagMap flattens STS session tags into key -> value.
+func tagMap(tags []ststypes.Tag) map[string]string {
+	m := make(map[string]string, len(tags))
+	for _, t := range tags {
+		m[aws.ToString(t.Key)] = aws.ToString(t.Value)
+	}
+	return m
+}
+
+func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, duration *int32, tags []ststypes.Tag) (*ststypes.Credentials, error) {
 	f.assumeCalls++
 	if duration != nil {
 		f.gotDuration = *duration
 	}
 	f.assumed = roleARN
 	f.gotSessionName = sessionName
-	f.gotClaims = claims
-	f.gotSessionTags = sessionTags
+	f.gotSessionTags = tagMap(tags)
 	if f.assumeErr != nil {
 		return nil, f.assumeErr
 	}
@@ -219,9 +226,10 @@ func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string
 func baseTagCfg(t *testing.T) *config.Config {
 	cfg := &config.Config{
 		Issuers: []config.IssuerConfig{{
-			Issuer:    testIssuer,
-			Provider:  "github",
-			Audiences: []string{"sts.amazonaws.com"},
+			Issuer:      testIssuer,
+			Provider:    "github",
+			Audiences:   []string{"sts.amazonaws.com"},
+			SessionTags: map[string]string{"repo": "repository"},
 		}},
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
@@ -256,9 +264,8 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "AK", *creds.AccessKeyId)
 	assert.Equal(t, "arn:aws:iam::111111111111:role/app", fc.assumed)
-	// Claims must reach AssumeRole so session tags (repo/ref/...) are attached for ABAC.
-	require.NotNil(t, fc.gotClaims)
-	assert.Equal(t, "acme/api", fc.gotClaims.Repository)
+	// Session tags (repo/ref/...) must reach AssumeRole for ABAC.
+	assert.Equal(t, "acme/api", fc.gotSessionTags["repo"])
 }
 
 func TestProcessRequest_TagAuthDenies(t *testing.T) {
@@ -747,7 +754,7 @@ func assumeFailingProc(t *testing.T, assumeErr error) (*fakeConsumer, *handler.R
 	return fc, handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
 }
 
-// The spec that reaches AssumeRole must be the issuer's tags plus the
+// The tags that reach AssumeRole must be built from the issuer's tags plus the
 // authorizing mapping's extras — and the audit record's sessionTagKeys must
 // report the same set, since that field is what an operator reads to confirm
 // which tags an ABAC policy actually received.
@@ -776,10 +783,10 @@ func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 	exp := time.Now()
 	for _, tc := range []struct {
 		subject, role string
-		wantKeys      map[string]string
+		wantTags      map[string]string
 	}{
-		{"acme/api", "arn:aws:iam::111111111111:role/app", map[string]string{"repo": "repository", "tier": "environment"}},
-		{"acme/web", "arn:aws:iam::111111111111:role/web", map[string]string{"repo": "repository"}},
+		{"acme/api", "arn:aws:iam::111111111111:role/app", map[string]string{"repo": "acme/api", "tier": "prod"}},
+		{"acme/web", "arn:aws:iam::111111111111:role/web", map[string]string{"repo": "acme/web"}},
 	} {
 		t.Run(tc.subject, func(t *testing.T) {
 			claims := &types.Claims{
@@ -798,11 +805,13 @@ func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 				validator.ExtractionInput{Token: "t"},
 				"rid", slog.Default())
 			require.NoError(t, err)
-			assert.Equal(t, tc.wantKeys, fc.gotSessionTags)
+			assert.Equal(t, tc.wantTags, fc.gotSessionTags)
 
-			keys := sink.last(t)["sessionTagKeys"]
+			rec := sink.last(t)
+			keys := rec["sessionTagKeys"]
 			require.NotNil(t, keys, "audit record carried no sessionTagKeys")
-			assert.Len(t, keys, len(tc.wantKeys))
+			assert.Len(t, keys, len(tc.wantTags))
+			assert.Equal(t, len(tc.wantTags), len(rec["sessionTags"].(map[string]any)))
 		})
 	}
 }

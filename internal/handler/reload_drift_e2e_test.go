@@ -103,11 +103,10 @@ func driftOIDCServer(t *testing.T, jwks *types.JWKS) *httptest.Server {
 	return srv
 }
 
-// --- fake AWS consumer: records every AssumeRole call's (role, audience) pair. ---
+// --- fake AWS consumer: records every AssumeRole call's role. ---
 
 type driftCall struct {
 	role string
-	aud  string
 }
 
 type driftConsumer struct {
@@ -135,13 +134,9 @@ func (c *driftConsumer) AssumeRoleWithWebIdentity(context.Context, string, strin
 	return nil, errors.New("not implemented")
 }
 
-func (c *driftConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, claims *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
-	aud := ""
-	if len(claims.Audience) > 0 {
-		aud = claims.Audience[0]
-	}
+func (c *driftConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, _ []ststypes.Tag) (*ststypes.Credentials, error) {
 	c.mu.Lock()
-	c.calls = append(c.calls, driftCall{role: roleARN, aud: aud})
+	c.calls = append(c.calls, driftCall{role: roleARN})
 	c.mu.Unlock()
 	return &ststypes.Credentials{
 		AccessKeyId: awssdk.String("AKIA"), SecretAccessKey: awssdk.String("s"),
@@ -278,15 +273,15 @@ func runDrift(t *testing.T, refreshInterval time.Duration) []driftCall {
 
 // TestProcessRequestNeverAuthorizesAcrossGenerations is the full-pipeline
 // drift guard. With the fix in place, every successful AssumeRole call must
-// be self-consistent: a call authorized for driftAllowedRole must never
-// carry aud-v2 (the audience only generation B accepts, which is also the
-// generation with the role retired).
+// be self-consistent: runDrift sends only aud-v2 tokens (the audience only
+// generation B accepts, which is also the generation with the role retired),
+// so no call for driftAllowedRole may succeed.
 func TestProcessRequestNeverAuthorizesAcrossGenerations(t *testing.T) {
 	calls := runDrift(t, time.Nanosecond)
 
 	var illegal []driftCall
 	for _, c := range calls {
-		if c.role == driftAllowedRole && c.aud == "aud-v2" {
+		if c.role == driftAllowedRole {
 			illegal = append(illegal, c)
 		}
 	}
