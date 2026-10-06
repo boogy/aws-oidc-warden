@@ -1761,15 +1761,6 @@ func (d Decision) SessionPolicy() (*string, *string) {
 	return nil, nil
 }
 
-// sessionTags returns the additional tags declared by the mapping that
-// authorized the role; nil when no mapping did.
-func (d Decision) sessionTags() map[string]string {
-	if d.authorizing == nil {
-		return nil
-	}
-	return d.authorizing.SessionTags
-}
-
 // IDPTokenAllowed reports whether the authorizing mapping sets idp_token or a ceiling over 1h.
 func (d Decision) IDPTokenAllowed() bool {
 	return d.authorizing != nil && (d.authorizing.IDPToken || d.authorizing.MaxSessionDuration > IdPDefaultMaxSessionDuration)
