@@ -60,7 +60,7 @@ sequenceDiagram
     participant H as Discovery/JWKS host
 
     C->>W: POST /verify {token, role, durationSeconds?, sessionName?}
-    W->>W: Validate inbound token, authorize; the authorizing mapping selects the IdP
+    W->>W: Validate inbound token, authorize (the authorizing mapping selects the IdP)
     W->>K: kms:Sign (minted token, self-verified before use)
     W->>S: AssumeRoleWithWebIdentity (unsigned, minted token)
     S->>H: GET discovery + JWKS
