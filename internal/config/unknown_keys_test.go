@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -146,4 +147,18 @@ func TestEnvAndDefaultsAreNotUnknownKeys(t *testing.T) {
 	err := loadFile(t, unknownKeyIssuers+"cache:\n  type: memory\n")
 	require.NoError(t, err)
 	assert.NotContains(t, buf.String(), "unknown_config_key")
+}
+
+// Every env-bindable key must name a real config field, or binding it would
+// surface as an unknown key.
+func TestEnvBindingKeysAreConfigFields(t *testing.T) {
+	for _, b := range envBindings {
+		t.Run(b.key, func(t *testing.T) {
+			v := viper.New()
+			v.Set(b.key, "1")
+			var md mapstructure.Metadata
+			_ = v.Unmarshal(&Config{}, decoderOptions(&md)...)
+			assert.Empty(t, md.Unused, "binding %q has no matching config field", b.key)
+		})
+	}
 }
