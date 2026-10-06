@@ -333,7 +333,7 @@ See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefin
 
 | Field                      | Default | Notes                                                                                                                                 |
 | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `idp_token`                | `false` | Issue this mapping's roles through the IdP while `idp.enabled`, even at a 1h ceiling. Implied by `max_session_duration` over 1h      |
+| `idp_token`                | `false` | Issue this mapping's roles through the IdP while `idp.enabled`, even at 1h. Needs an `idp` block. Implied by over-1h ceilings        |
 | `max_session_duration`     | `1h`    | Ceiling for the caller's `durationSeconds` on every role this mapping grants, 15m to 12h. Over 1h routes through the IdP              |
 
 With `role_sets`, the lowest-order mapping that grants the role decides.
