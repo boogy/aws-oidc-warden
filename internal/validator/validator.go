@@ -530,7 +530,8 @@ func normalizeClaims(raw jwt.MapClaims, provider string, mappings map[string]str
 // genKeyFuncForIssuer returns a jwt.Keyfunc scoped to issuer that resolves a
 // token's kid to a JWKS key. Beyond a kid match, a candidate must also have
 // use "sig" or unset, alg matching the token's alg (if set), and a key type
-// matching the token alg's family (RSA for RS*, EC for ES*) — this blocks an
+// matching the token alg's family (RSA for RS*, EC for ES*, with the curve
+// the alg mandates) — this blocks an
 // alg-confusion or duplicate-kid-different-type attack. Scanning continues
 // past a kid match that fails these checks, so a duplicate kid with one
 // matching and one non-matching key still resolves correctly. issuer scopes
@@ -560,6 +561,9 @@ func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jw
 			case key.KeyType == "RSA" && strings.HasPrefix(tokenAlg, "RS"):
 				return t.resolveKey(issuer, key)
 			case key.KeyType == "EC" && strings.HasPrefix(tokenAlg, "ES"):
+				if key.Crv != ecCurveForAlg[tokenAlg] {
+					continue
+				}
 				return t.resolveKey(issuer, key)
 			}
 		}
@@ -575,6 +579,13 @@ func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jw
 // multi-issuer key memoization; Validate itself calls genKeyFuncForIssuer.
 func (t *TokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc {
 	return t.genKeyFuncForIssuer("", jwks)
+}
+
+// ecCurveForAlg maps an ECDSA JWS alg to the only curve RFC 7518 allows for it.
+var ecCurveForAlg = map[string]string{
+	"ES256": "P-256",
+	"ES384": "P-384",
+	"ES512": "P-521",
 }
 
 func parseRSAKey(key types.JSONWebKey) (*rsa.PublicKey, error) {
