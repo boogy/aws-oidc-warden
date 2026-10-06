@@ -63,7 +63,7 @@ STS fetches `idp.issuer` + `/.well-known/openid-configuration` (here `https://id
 idp-export -config config.yaml -out ./site
 ```
 
-The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.jwks`. `idp-export` applies the `s3_config_bucket` overlay and fragments like the running service, so it needs the same S3 read access. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
+The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.jwks`. `idp-export` applies the `s3_config_bucket` overlay, `mappings_file` and `config_fragments` like the running service, so it needs the same S3 read access. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
 
 **Dev and low volume: warden-served.** The warden answers `GET`/`HEAD` on `idp.paths.discovery` and `idp.paths.jwks` with `Cache-Control: public, max-age=<jwks_cache_max_age>`. If you use this:
 
@@ -227,9 +227,9 @@ role_mappings:
 
 Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-provider).
 
-- `max_session_duration` is set per mapping (or in `role_groups[].defaults`) and applies to every role that mapping grants: 15m to 12h, default `1h`, and it needs `idp_token`. There is no service-wide ceiling; the platform team bounds the IdP with `idp.allowed_roles`, and each role's own IAM `MaxSessionDuration` is the hard limit.
+- `max_session_duration` is set per mapping (or in `role_groups[].defaults`) and applies to every role that mapping grants: 15m to 12h, default `1h`, and it needs `idp_token`. There is no service-wide ceiling; the platform team bounds the IdP by setting `idp.allowed_roles` (empty allows every role), and each role's own IAM `MaxSessionDuration` is the hard limit.
 - `idp` is base-only: config fragments and the mappings file cannot carry it.
-- A role in another account needs `cross_account.enabled: true` with that account in `allowed_accounts`, as for `AssumeRole`; otherwise the request is refused with 403 `permission_denied`. The exchange never uses the spoke role.
+- A role in another account needs `cross_account.enabled: true` and, when `allowed_accounts` is non-empty, that account listed in it, as for `AssumeRole`; otherwise the request is refused with 403 `permission_denied`. The exchange never uses the spoke role.
 
 ## Session duration
 

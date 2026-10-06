@@ -219,31 +219,31 @@ The failure modes that actually bite, in rough order of likelihood:
 
 ## Troubleshooting
 
-| Symptom                           | Likely cause                                                                                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `400 invalid_request`             | Empty or oversized token or role, a role that is not an IAM role ARN, or a body that is not JSON                                                       |
-| `401 token_invalid`               | Workflow missing `id-token: write`; issuer or audience mismatch; clock skew beyond `jwt_leeway`                                                        |
-| `403 permission_denied`           | Subject doesn't match any mapping, or a condition failed. The audit record's `stage` and `reason` say which                                            |
-| `403 assume_role_denied`          | STS refused: the target role's trust policy, or the execution role missing `sts:AssumeRole`/`sts:TagSession`. The log line carries `stsErrorCode`      |
-| `500 assume_role_failed`          | Not a permission problem — throttling, expired broker credentials, or a malformed session policy                                                       |
-| `500 policy_error`                | The mapping's S3 session policy could not be read (missing object, no `s3:GetObject`) or is not valid JSON                                             |
-| `503 config_stale`                | Role mappings are older than `mappings_max_stale`. Transient; retry with backoff or fail over                                                          |
-| `500 audit_write_failed`          | `audit_required` is on and the S3 audit write failed. Needs `s3:PutObject` **and** `s3:PutObjectTagging` on the log bucket; `make run` has no S3 sink  |
-| `403 idp_not_permitted`           | Over 1h for a role without `idp_token` or outside `idp.allowed_roles`                                                                                  |
-| `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                                                            |
-| `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                                                                   |
-| `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                                                              |
-| `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                                                                   |
-| `400 duration_exceeds_cap`        | `durationSeconds` above the mapping's `max_session_duration` (1h for `AssumeRole`), or over 1h with no `idp` block                                     |
-| `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                                                                |
-| `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                                                                   |
-| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                                                           |
-| `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                              |
-| `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                                                                  |
-| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                                                              |
-| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document                                                                                                 |
-| Cache misses / throttling         | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                |
-| Cross-account failures            | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts` |
+| Symptom                           | Likely cause                                                                                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `400 invalid_request`             | Empty or oversized token or role, a role that is not an IAM role ARN, or a body that is not JSON                                                         |
+| `401 token_invalid`               | Workflow missing `id-token: write`; issuer or audience mismatch; clock skew beyond `jwt_leeway`                                                          |
+| `403 permission_denied`           | Subject doesn't match any mapping, a condition failed, or `cross_account` excludes the role's account. The audit record's `stage` and `reason` say which |
+| `403 assume_role_denied`          | STS refused: the target role's trust policy, or the execution role missing `sts:AssumeRole`/`sts:TagSession`. The log line carries `stsErrorCode`        |
+| `500 assume_role_failed`          | Not a permission problem — throttling, expired broker credentials, or a malformed session policy                                                         |
+| `500 policy_error`                | The mapping's S3 session policy could not be read (missing object, no `s3:GetObject`) or is not valid JSON                                               |
+| `503 config_stale`                | Role mappings are older than `mappings_max_stale`. Transient; retry with backoff or fail over                                                            |
+| `500 audit_write_failed`          | `audit_required` is on and the S3 audit write failed. Needs `s3:PutObject` **and** `s3:PutObjectTagging` on the log bucket; `make run` has no S3 sink    |
+| `403 idp_not_permitted`           | Over 1h for a role without `idp_token` or outside `idp.allowed_roles`                                                                                    |
+| `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                                                              |
+| `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                                                                     |
+| `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                                                                |
+| `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                                                                     |
+| `400 duration_exceeds_cap`        | `durationSeconds` above the mapping's `max_session_duration` (at most 1h for `AssumeRole`), or over 1h with no `idp` block                               |
+| `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                                                                  |
+| `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                                                                     |
+| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                                                             |
+| `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                                |
+| `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                                                                    |
+| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                                                                |
+| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document                                                                                                   |
+| Cache misses / throttling         | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                  |
+| Cross-account failures            | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts`   |
 
 Every denial writes one audit record naming the `stage` that refused — start there. See [LOGGING.md](docs/LOGGING.md).
 

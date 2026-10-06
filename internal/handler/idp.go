@@ -144,6 +144,9 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 
 	creds, err := r.consumer.AssumeRoleWithWebIdentity(ctx, role, sessionName, tok.Value, sessionPolicy, duration)
 	rec.TokenID = tok.ID
+	if errors.Is(err, aws.ErrAccountNotAllowed) {
+		return refuse("account_check", reasonAccountNotAllowed, "Target account not allowed", ErrAccountNotAllowed)
+	}
 	if err != nil {
 		code := aws.STSErrorCode(err)
 		rec.setErrorReason("idp_exchange", errors.New("sts error: "+code))

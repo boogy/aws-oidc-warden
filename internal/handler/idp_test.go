@@ -489,7 +489,13 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 			assert.Nil(t, res)
 			rec := sink.last(t)
 			assert.Equal(t, "deny", rec["decision"])
-			if tt.wiErr != nil {
+			switch {
+			case errors.Is(tt.wiErr, gtvaws.ErrAccountNotAllowed):
+				assert.Equal(t, "account_check", rec["stage"])
+				assert.Equal(t, "target account not allowed", rec["reason"])
+				assert.NotEmpty(t, rec["tokenId"])
+			case tt.wiErr != nil:
+				assert.Equal(t, "idp_exchange", rec["stage"])
 				assert.Equal(t, "web identity exchange failed", rec["reason"])
 			}
 		})

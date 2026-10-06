@@ -185,13 +185,17 @@ func TestAssumeRoleWithWebIdentityAccountCheck(t *testing.T) {
 	const memberRole = "arn:aws:iam::222222222222:role/Target"
 	tests := []struct {
 		name    string
+		role    string
 		cfg     *gtvcfg.Config
 		allowed bool
 	}{
-		{"cross_account unset", &gtvcfg.Config{}, false},
-		{"cross_account disabled", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{AllowedAccounts: []string{"222222222222"}}}, false},
-		{"account not listed", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"333333333333"}}}, false},
-		{"account listed", &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"222222222222"}}}, true},
+		{"cross_account unset", memberRole, &gtvcfg.Config{}, false},
+		{"cross_account disabled", memberRole, &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{AllowedAccounts: []string{"222222222222"}}}, false},
+		{"account not listed", memberRole, &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"333333333333"}}}, false},
+		{"account listed", memberRole, &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"222222222222"}}}, true},
+		{"empty allow-list permits any account", memberRole, &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true}}, true},
+		{"hub account with cross_account unset", testRoleARN, &gtvcfg.Config{}, true},
+		{"hub account not listed", testRoleARN, &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{Enabled: true, AllowedAccounts: []string{"222222222222"}}}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,7 +205,7 @@ func TestAssumeRoleWithWebIdentityAccountCheck(t *testing.T) {
 				xmlHandler(webIdentityOK)(rw, r)
 			})
 			c := &AwsConsumer{AWS: w, Config: tc.cfg}
-			creds, err := c.AssumeRoleWithWebIdentity(context.Background(), memberRole, "s", "t", nil, 3600)
+			creds, err := c.AssumeRoleWithWebIdentity(context.Background(), tc.role, "s", "t", nil, 3600)
 			if tc.allowed {
 				require.NoError(t, err)
 				assert.NotNil(t, creds)

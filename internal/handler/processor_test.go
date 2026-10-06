@@ -701,13 +701,22 @@ func TestProcessRequest_AssumeRoleDenied(t *testing.T) {
 }
 
 func TestProcessRequest_AssumeRoleAccountNotAllowed(t *testing.T) {
-	_, proc := assumeFailingProc(t, fmt.Errorf("%w: arn:aws:iam::111111111111:role/app", gtvaws.ErrAccountNotAllowed))
+	fc, _ := assumeFailingProc(t, fmt.Errorf("%w: arn:aws:iam::111111111111:role/app", gtvaws.ErrAccountNotAllowed))
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(baseTagCfg(t)), fc, &tagModeExtractor{&types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
+		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
+	}}, sink, "test")
 	_, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
 		validator.ExtractionInput{Token: "t"},
 		"rid", slog.Default())
 	require.ErrorIs(t, err, handler.ErrAccountNotAllowed)
 	assert.False(t, errors.Is(err, handler.ErrAssumeRoleFailed))
+	rec := sink.last(t)
+	assert.Equal(t, "account_check", rec["stage"])
+	assert.Equal(t, "target account not allowed", rec["reason"])
 }
 
 func TestProcessRequest_AssumeRoleInfraFailure(t *testing.T) {

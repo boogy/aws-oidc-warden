@@ -65,30 +65,30 @@ A failure carries only a classified code — internal detail never reaches the c
 
 The status code tells your client whether retrying is worth anything:
 
-| Status                            | Meaning                                                                                          | Retry or fail over?                                  |
-| --------------------------------- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| `400 invalid_request`             | Malformed body, bad token size, or a `role` that is not an IAM role ARN                          | **No** — deterministic                               |
-| `401 token_invalid`               | Signature, issuer, audience or time bounds failed                                                | **No** — deterministic                               |
-| `403 permission_denied`           | _This service_ refused: no mapping matched, or a condition failed                                | **No** — deterministic                               |
-| `403 assume_role_denied`          | _AWS STS_ refused a role this service authorized (trust policy)                                  | **No** — deterministic                               |
-| `500 assume_role_failed`          | Throttling, expired broker credentials, or a malformed session policy                            | **Yes** — transient¹                                 |
-| `500 policy_error`                | The mapping's S3 session policy is missing, unreadable or invalid                                | **No** — deterministic²                              |
-| `500 audit_write_failed`          | `audit_required` is on and the audit write to S3 failed                                          | **No** — deterministic²                              |
-| `403 idp_not_permitted`           | Over 1h without `idp_token` or outside `idp.allowed_roles`                                       | **No** — deterministic                               |
-| `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)      | **No** — deterministic                               |
-| `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`             | **No** — deterministic                               |
-| `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider        | **No** — deterministic                               |
-| `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                             | **No** — deterministic                               |
-| `400 duration_exceeds_cap`        | Above the mapping's `max_session_duration` (1h for `AssumeRole`), or over 1h with no `idp` block | **No** — deterministic                               |
-| `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                          | **No** — deterministic                               |
-| `400 invalid_session_name`        | A used `sessionName` (`allow_session_name`) is not 2-64 characters of `[\w+=,.@-]`               | **No** — deterministic                               |
-| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false     | **No** — deterministic                               |
-| `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                        | **No** — deterministic                               |
-| `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                            | **No** — deterministic                               |
-| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                        | **Yes** — transient                                  |
-| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document                                           | **Yes** — transient                                  |
-| `503 config_stale`                | Role mappings are older than `mappings_max_stale`                                                | **Yes** — transient, retry with backoff or fail over |
-| `502` / `503` / timeout           | The endpoint is unhealthy or unreachable                                                         | **Yes**                                              |
+| Status                            | Meaning                                                                                                        | Retry or fail over?                                  |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `400 invalid_request`             | Malformed body, bad token size, or a `role` that is not an IAM role ARN                                        | **No** — deterministic                               |
+| `401 token_invalid`               | Signature, issuer, audience or time bounds failed                                                              | **No** — deterministic                               |
+| `403 permission_denied`           | _This service_ refused: no mapping matched, a condition failed, or `cross_account` excludes the role's account | **No** — deterministic                               |
+| `403 assume_role_denied`          | _AWS STS_ refused a role this service authorized (trust policy)                                                | **No** — deterministic                               |
+| `500 assume_role_failed`          | Throttling, expired broker credentials, or a malformed session policy                                          | **Yes** — transient¹                                 |
+| `500 policy_error`                | The mapping's S3 session policy is missing, unreadable or invalid                                              | **No** — deterministic²                              |
+| `500 audit_write_failed`          | `audit_required` is on and the audit write to S3 failed                                                        | **No** — deterministic²                              |
+| `403 idp_not_permitted`           | Over 1h without `idp_token` or outside `idp.allowed_roles`                                                     | **No** — deterministic                               |
+| `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                    | **No** — deterministic                               |
+| `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                           | **No** — deterministic                               |
+| `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                      | **No** — deterministic                               |
+| `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                           | **No** — deterministic                               |
+| `400 duration_exceeds_cap`        | Above the mapping's `max_session_duration` (at most 1h for `AssumeRole`), or over 1h with no `idp` block       | **No** — deterministic                               |
+| `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                        | **No** — deterministic                               |
+| `400 invalid_session_name`        | A used `sessionName` (`allow_session_name`) is not 2-64 characters of `[\w+=,.@-]`                             | **No** — deterministic                               |
+| `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                   | **No** — deterministic                               |
+| `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                      | **No** — deterministic                               |
+| `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                          | **No** — deterministic                               |
+| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                      | **Yes** — transient                                  |
+| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document                                                         | **Yes** — transient                                  |
+| `503 config_stale`                | Role mappings are older than `mappings_max_stale`                                                              | **Yes** — transient, retry with backoff or fail over |
+| `502` / `503` / timeout           | The endpoint is unhealthy or unreachable                                                                       | **Yes**                                              |
 
 ¹ Unless it persists: a malformed session policy fails the same way in every region — the log's `stsErrorCode` is `MalformedPolicyDocument`.
 

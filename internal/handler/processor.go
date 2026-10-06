@@ -81,6 +81,8 @@ type authzOutcome struct {
 	elapsed   func() int64
 }
 
+const reasonAccountNotAllowed = "target account not allowed"
+
 // deny finishes a rejected request. o.rec.Stage and o.rec.Reason must already be set.
 func (r *RequestProcessor) deny(ctx context.Context, o *authzOutcome, msg string, ret error, attrs ...slog.Attr) error {
 	o.rec.ProcessingMS = o.elapsed()
@@ -175,8 +177,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		return nil, r.deny(ctx, o, "Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
 	}
 	if !ok {
-		rec.Stage = "account_check"
-		rec.Reason = "target account not allowed"
+		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
 		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
 	}
 
@@ -287,15 +288,16 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 
 	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, o.decision)
 	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, claims, sessionTagSpec)
+	if errors.Is(err, aws.ErrAccountNotAllowed) {
+		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
+		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
+	}
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
 		// IAM refusal is 403; any other failure is ours (500).
 		ret := ErrAssumeRoleFailed
-		switch {
-		case errors.Is(err, aws.ErrAssumeRoleDenied):
+		if errors.Is(err, aws.ErrAssumeRoleDenied) {
 			ret = ErrAssumeRoleDenied
-		case errors.Is(err, aws.ErrAccountNotAllowed):
-			ret = ErrAccountNotAllowed
 		}
 		return nil, r.deny(ctx, o, "Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
 	}

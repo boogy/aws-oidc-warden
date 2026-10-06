@@ -24,7 +24,7 @@ const (
 
 var (
 	// ErrInvalidSubject is returned when the role ARN or rendered sub is unusable.
-	ErrInvalidSubject = errors.New("idp subject must be printable ASCII of at most 255 bytes ending in a valid role ARN")
+	ErrInvalidSubject = errors.New("idp subject must be ASCII '!'-'~' (no spaces) of at most 255 bytes ending in a valid role ARN")
 	// ErrTokenTooLarge is returned when the estimated token exceeds maxTokenBytes.
 	ErrTokenTooLarge = errors.New("idp token exceeds the STS web-identity token size limit")
 	// ErrInvalidSourceIdentity is returned when the source identity is not a valid STS value.

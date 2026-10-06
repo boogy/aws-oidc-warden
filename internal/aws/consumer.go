@@ -405,11 +405,7 @@ func (a *AwsConsumer) accountAllowed(account, hub string) bool {
 	return slices.Contains(ca.AllowedAccounts, account)
 }
 
-// IsTargetAccountAllowed checks the requested role ARN's account against the
-// cross_account.allowed_accounts list. When cross-account transport is
-// disabled, only the hub account is allowed (there is no spoke path to reach
-// any other account); otherwise the account must be the hub or in the
-// allow-list (empty allow-list permits any account).
+// IsTargetAccountAllowed reports whether roleArn's account passes the cross_account rule.
 func (a *AwsConsumer) IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error) {
 	account, _, err := utils.ParseRoleARN(roleArn)
 	if err != nil {

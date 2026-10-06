@@ -107,8 +107,6 @@ func renderSourceIdentity(tmpl, overflow, requestID, issuer, subject string, cla
 // exchangeError maps an AssumeRoleWithWebIdentity failure to its handler sentinel.
 func exchangeError(err error) error {
 	switch {
-	case errors.Is(err, aws.ErrAccountNotAllowed):
-		return ErrAccountNotAllowed
 	case errors.Is(err, aws.ErrWebIdentityDenied):
 		return ErrIdPExchangeDenied
 	case errors.Is(err, aws.ErrWebIdentityUnavailable):
