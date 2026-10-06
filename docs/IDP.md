@@ -86,7 +86,7 @@ One issuer URL per deployment, never shared between stages. A deployment may spa
 
 `NewKMSSigner` calls `DescribeKey` and `GetPublicKey` and refuses a key that is disabled, multi-region with a primary or replica outside `idp.kms_allowed_regions`, not `SIGN_VERIFY`, of another spec, or whose `SigningAlgorithms` lacks the configured algorithm.
 
-`idp.signing_keys[].kms_key_id` must be the **full key ARN**. Aliases and bare key IDs are rejected: anyone who can `UpdateAlias` could re-point an alias at another key. `GetPublicKey.KeyId` must equal the configured ARN. For an MRK (`key/mrk-…`) the region in the configured ARN is rewritten to the KMS client's region, which must be in `idp.kms_allowed_regions` (required for any MRK). `DescribeKey` must then report the effective ARN.
+`idp.signing_keys[].kms_key_id` must be the **full key ARN**. Aliases and bare key IDs are rejected: anyone who can `UpdateAlias` could re-point an alias at another key. `GetPublicKey.KeyId` must equal the configured ARN. For an MRK (`key/mrk-…`) the region in the configured ARN is rewritten to the KMS client's region, which must be in `idp.kms_allowed_regions` (required for any MRK). `DescribeKey` must then report the effective ARN. When `kms_allowed_regions` is set, every key ARN's region must be listed, single-region keys included.
 
 Key policy: grant the warden role only `kms:Sign`, `kms:GetPublicKey`, `kms:DescribeKey`, and deny signing to everyone else and key tampering to everyone except a break-glass role:
 
@@ -131,7 +131,7 @@ Also:
 - Apply the key policy on every replica; each replica has its own.
 - SCP: deny the tamper actions on the key (including `kms:ReplicateKey` and `kms:UpdatePrimaryRegion`) for everyone but the break-glass role.
 - Alarms (CloudTrail/EventBridge): any `kms:Sign` by another principal, and every action in the tamper list (including `kms:ReplicateKey` and `kms:UpdatePrimaryRegion`).
-- Warden role IAM: `kms:DescribeKey`, `kms:GetPublicKey` and `kms:Sign` on each regional replica ARN.
+- Warden role IAM: `kms:DescribeKey`, `kms:GetPublicKey` and `kms:Sign` on its local replica ARN only.
 - Quota: KMS `Sign` request quotas are per account and shared with every other signer. Use a dedicated account or a sized quota. Throttling surfaces as 503 `idp_signing_unavailable`.
 
 ## Multi-region deployment
