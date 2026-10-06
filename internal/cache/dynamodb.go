@@ -79,7 +79,9 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 func (c *dynamoDBCache) Get(ctx context.Context, key string) (*gTypes.JWKS, bool) {
 	// Try to get from local memory cache first
 	if jwks, found := c.getFromLocalCache(key); found {
-		logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
+		if debugEnabled(ctx) {
+			logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
+		}
 		return jwks, true
 	}
 

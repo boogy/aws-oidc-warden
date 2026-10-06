@@ -103,7 +103,9 @@ func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error)
 func (c *s3Cache) Get(ctx context.Context, key string) (*types.JWKS, bool) {
 	// Try to get from local memory cache first
 	if jwks, found := c.getFromLocalCache(key); found {
-		logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
+		if debugEnabled(ctx) {
+			logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
+		}
 		return jwks, true
 	}
 
