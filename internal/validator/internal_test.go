@@ -183,11 +183,12 @@ func TestRefetchLimiter_NonPositiveCooldownFallsBackToDefault(t *testing.T) {
 
 func TestKeyMemo_StoreAndLoadRoundTrip(t *testing.T) {
 	m := newKeyMemo()
-	_, ok := m.load("fp-1")
+	jwk := rsaJWK("k1", "n", "AQAB")
+	_, ok := m.load("iss", jwk)
 	assert.False(t, ok)
 
-	m.store("fp-1", "some-key")
-	got, ok := m.load("fp-1")
+	m.store("iss", jwk, "some-key")
+	got, ok := m.load("iss", jwk)
 	require.True(t, ok)
 	assert.Equal(t, "some-key", got)
 }
@@ -224,16 +225,68 @@ func rsaJWK(kid, n, e string) types.JSONWebKey {
 	return types.JSONWebKey{KeyID: kid, KeyType: "RSA", N: n, E: e}
 }
 
-func TestKeyFingerprint_DiffersOnRotatedKeyMaterialUnderReusedKid(t *testing.T) {
-	oldFP := keyFingerprint("issuer-a", rsaJWK("reused-kid", "old-n", "AQAB"))
-	newFP := keyFingerprint("issuer-a", rsaJWK("reused-kid", "new-n", "AQAB"))
-	assert.NotEqual(t, oldFP, newFP, "rotating the key material under a reused kid must produce a different fingerprint")
+func TestKeyMemo_MissesOnAnyChangedKeyMaterial(t *testing.T) {
+	base := types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-256", X: "x", Y: "y"}
+	rsa := rsaJWK("k", "n", "AQAB")
+	tests := []struct {
+		name   string
+		stored types.JSONWebKey
+		probe  types.JSONWebKey
+		want   bool
+	}{
+		{"identical EC", base, base, true},
+		{"identical RSA", rsa, rsa, true},
+		{"rotated RSA modulus under reused kid", rsa, rsaJWK("k", "n2", "AQAB"), false},
+		{"changed RSA exponent", rsa, rsaJWK("k", "n", "Aw"), false},
+		{"changed EC x", base, types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-256", X: "x2", Y: "y"}, false},
+		{"changed EC y", base, types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-256", X: "x", Y: "y2"}, false},
+		{"changed EC curve", base, types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-384", X: "x", Y: "y"}, false},
+		{"changed key type", base, types.JSONWebKey{KeyID: "k", KeyType: "RSA", Crv: "P-256", X: "x", Y: "y"}, false},
+		{"different kid", base, types.JSONWebKey{KeyID: "other", KeyType: "EC", Crv: "P-256", X: "x", Y: "y"}, false},
+		{"use/alg do not affect the parsed key", base, types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-256", X: "x", Y: "y", Use: "sig", Algorithm: "ES256"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newKeyMemo()
+			m.store("iss", tt.stored, "stored-key")
+			_, ok := m.load("iss", tt.probe)
+			assert.Equal(t, tt.want, ok)
+		})
+	}
 }
 
-func TestKeyFingerprint_DiffersAcrossIssuers(t *testing.T) {
-	fpA := keyFingerprint("issuer-a", rsaJWK("k1", "same-n", "AQAB"))
-	fpB := keyFingerprint("issuer-b", rsaJWK("k1", "same-n", "AQAB"))
-	assert.NotEqual(t, fpA, fpB, "the same kid/material from a different issuer must not collide")
+func TestKeyMemo_IsolatedAcrossIssuers(t *testing.T) {
+	m := newKeyMemo()
+	jwk := rsaJWK("k1", "same-n", "AQAB")
+	m.store("issuer-a", jwk, "key-a")
+	_, ok := m.load("issuer-b", jwk)
+	assert.False(t, ok, "the same kid/material from a different issuer must not collide")
+}
+
+func TestKeyMemo_RestoreUnderReusedKidReplacesEntryWithoutGrowing(t *testing.T) {
+	m := newKeyMemo()
+	m.store("iss", rsaJWK("k", "old", "AQAB"), "old-key")
+	m.store("iss", rsaJWK("k", "new", "AQAB"), "new-key")
+	assert.EqualValues(t, 1, m.size.Load())
+	_, ok := m.load("iss", rsaJWK("k", "old", "AQAB"))
+	assert.False(t, ok)
+	got, ok := m.load("iss", rsaJWK("k", "new", "AQAB"))
+	require.True(t, ok)
+	assert.Equal(t, "new-key", got)
+}
+
+func TestKeyMemo_SizeBoundClearsOnOverflow(t *testing.T) {
+	m := newKeyMemo()
+	for i := 0; i < maxKeyMemoEntries; i++ {
+		m.store("iss", rsaJWK(fmt.Sprintf("k%d", i), "n", "AQAB"), i)
+	}
+	assert.EqualValues(t, maxKeyMemoEntries, m.size.Load())
+	m.store("iss", rsaJWK("overflow", "n", "AQAB"), "x")
+	assert.EqualValues(t, 1, m.size.Load())
+	_, ok := m.load("iss", rsaJWK("k0", "n", "AQAB"))
+	assert.False(t, ok)
+	_, ok = m.load("iss", rsaJWK("overflow", "n", "AQAB"))
+	assert.True(t, ok)
 }
 
 // TestParseRSAKey_ExponentValidation guards against a malformed/oversized "e"
@@ -837,4 +890,47 @@ func TestSecureHTTPClient_LiteralBlockedIPTargetsRefused(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func BenchmarkResolveKey_CacheHit(b *testing.B) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(b, err)
+	jwk := types.JSONWebKey{
+		KeyID: "kid-1", KeyType: "RSA", Use: "sig", Algorithm: "RS256",
+		N: base64.RawURLEncoding.EncodeToString(priv.N.Bytes()),
+		E: base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
+	}
+	v := ssrfTestValidator(false)
+	const issuer = "https://token.actions.githubusercontent.com"
+	_, err = v.resolveKey(issuer, jwk)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := v.resolveKey(issuer, jwk); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestResolveKey_RotationUnderReusedKidReparses(t *testing.T) {
+	v := ssrfTestValidator(false)
+	jwkOf := func(k *rsa.PrivateKey) types.JSONWebKey {
+		return rsaJWK("reused", base64.RawURLEncoding.EncodeToString(k.N.Bytes()), "AQAB")
+	}
+	oldPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	newPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	got, err := v.resolveKey("iss", jwkOf(oldPriv))
+	require.NoError(t, err)
+	assert.True(t, oldPriv.PublicKey.Equal(got))
+	got, err = v.resolveKey("iss", jwkOf(newPriv))
+	require.NoError(t, err)
+	assert.True(t, newPriv.PublicKey.Equal(got), "rotated material under a reused kid must not serve the stale key")
+	got, err = v.resolveKey("iss", jwkOf(newPriv))
+	require.NoError(t, err)
+	assert.True(t, newPriv.PublicKey.Equal(got))
 }
