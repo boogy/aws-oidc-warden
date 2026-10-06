@@ -192,8 +192,8 @@ func newMux(logger *slog.Logger, latency time.Duration, handlerFunc func(context
 	return mux
 }
 
-// maxLocalBodyBytes sits one byte above the handler's 1 MiB cap so its own size check still answers.
-const maxLocalBodyBytes = 1<<20 + 1
+// maxLocalBodyBytes sits one byte above the handler's cap so its own size check still answers.
+const maxLocalBodyBytes = handler.MaxBodyBytes + 1
 
 // localHandler adapts the Lambda handler to net/http.
 func localHandler(logger *slog.Logger, latency time.Duration, handlerFunc func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error)) http.HandlerFunc {

@@ -8,8 +8,8 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
-// maxBodyBytes is twice the largest token and role plus slack for the other fields and JSON escaping.
-const maxBodyBytes = 2*(MaxTokenLength+MaxRoleLength) + 4096
+// MaxBodyBytes is twice the largest token and role plus slack for the other fields and JSON escaping.
+const MaxBodyBytes = 2*(MaxTokenLength+MaxRoleLength) + 4096
 
 // validateRole checks that role is a bounded IAM role ARN in a recognized partition.
 func validateRole(role string) error {
@@ -46,7 +46,7 @@ func decodeRequestBody(body string) (*RequestData, error) {
 	if strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("request body is empty: %w", ErrInvalidJSON)
 	}
-	if len(body) > maxBodyBytes {
+	if len(body) > MaxBodyBytes {
 		return nil, fmt.Errorf("request body too large: %w", ErrInvalidJSON)
 	}
 
