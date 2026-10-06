@@ -8,7 +8,8 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
-const maxBodyBytes = 1024 * 1024
+// maxBodyBytes is twice the largest token and role plus slack for the other fields and JSON escaping.
+const maxBodyBytes = 2*(MaxTokenLength+MaxRoleLength) + 4096
 
 // validateRole checks that role is a bounded IAM role ARN in a recognized partition.
 func validateRole(role string) error {
