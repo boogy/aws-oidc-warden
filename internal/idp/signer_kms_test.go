@@ -37,7 +37,18 @@ type fakeKMS struct {
 	signErr     error
 	blockSign   bool
 	calls       int
+
+	mdArn    string
+	mrc      *kmstypes.MultiRegionConfiguration
+	seenARNs []string
 }
+
+type regionKMS struct {
+	*fakeKMS
+	region string
+}
+
+func (r regionKMS) Options() kms.Options { return kms.Options{Region: r.region} }
 
 var (
 	ecAlgs  = []kmstypes.SigningAlgorithmSpec{kmstypes.SigningAlgorithmSpecEcdsaSha256}
@@ -48,23 +59,31 @@ func newFakeKMS(priv crypto.Signer, spec kmstypes.KeySpec, algs []kmstypes.Signi
 	return &fakeKMS{priv: priv, keyID: testKMSARN, enabled: true, usage: kmstypes.KeyUsageTypeSignVerify, spec: spec, algs: algs}
 }
 
-func (f *fakeKMS) DescribeKey(_ context.Context, _ *kms.DescribeKeyInput, _ ...func(*kms.Options)) (*kms.DescribeKeyOutput, error) {
+func (f *fakeKMS) DescribeKey(_ context.Context, in *kms.DescribeKeyInput, _ ...func(*kms.Options)) (*kms.DescribeKeyOutput, error) {
+	f.seenARNs = append(f.seenARNs, aws.ToString(in.KeyId))
 	if f.describeErr != nil {
 		return nil, f.describeErr
 	}
 	if f.nilMetadata {
 		return &kms.DescribeKeyOutput{}, nil
 	}
+	arn := f.mdArn
+	if arn == "" {
+		arn = aws.ToString(in.KeyId)
+	}
 	return &kms.DescribeKeyOutput{KeyMetadata: &kmstypes.KeyMetadata{
-		Enabled:           f.enabled,
-		KeyUsage:          f.usage,
-		MultiRegion:       aws.Bool(f.multiRegion),
-		KeySpec:           f.spec,
-		SigningAlgorithms: f.algs,
+		Arn:                      aws.String(arn),
+		MultiRegionConfiguration: f.mrc,
+		Enabled:                  f.enabled,
+		KeyUsage:                 f.usage,
+		MultiRegion:              aws.Bool(f.multiRegion),
+		KeySpec:                  f.spec,
+		SigningAlgorithms:        f.algs,
 	}}, nil
 }
 
-func (f *fakeKMS) GetPublicKey(_ context.Context, _ *kms.GetPublicKeyInput, _ ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error) {
+func (f *fakeKMS) GetPublicKey(_ context.Context, in *kms.GetPublicKeyInput, _ ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error) {
+	f.seenARNs = append(f.seenARNs, aws.ToString(in.KeyId))
 	if f.getPubErr != nil {
 		return nil, f.getPubErr
 	}
@@ -74,6 +93,7 @@ func (f *fakeKMS) GetPublicKey(_ context.Context, _ *kms.GetPublicKeyInput, _ ..
 
 func (f *fakeKMS) Sign(ctx context.Context, in *kms.SignInput, _ ...func(*kms.Options)) (*kms.SignOutput, error) {
 	f.calls++
+	f.seenARNs = append(f.seenARNs, aws.ToString(in.KeyId))
 	if f.blockSign {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -110,7 +130,8 @@ func TestKMSSigner(t *testing.T) {
 		{"key id mismatch", func(f *fakeKMS) { f.keyID = otherARN }, false, "ES256", "KeyId"},
 		{"key id empty", func(f *fakeKMS) { f.keyID = "" }, false, "ES256", "KeyId"},
 		{"disabled", func(f *fakeKMS) { f.enabled = false }, false, "ES256", "Enabled"},
-		{"multi-region", func(f *fakeKMS) { f.multiRegion = true }, false, "ES256", "MultiRegion"},
+		{"multi-region on single-region arn", func(f *fakeKMS) { f.multiRegion = true }, false, "ES256", "MultiRegion"},
+		{"describe arn mismatch", func(f *fakeKMS) { f.mdArn = otherARN }, false, "ES256", "Arn"},
 		{"describe error", func(f *fakeKMS) { f.describeErr = errors.New("denied") }, false, "ES256", "DescribeKey"},
 		{"nil metadata", func(f *fakeKMS) { f.nilMetadata = true }, false, "ES256", "no metadata"},
 		{"get public key error", func(f *fakeKMS) { f.getPubErr = errors.New("boom") }, false, "ES256", "GetPublicKey"},
@@ -126,7 +147,7 @@ func TestKMSSigner(t *testing.T) {
 			if tt.mutate != nil {
 				tt.mutate(f)
 			}
-			s, err := NewKMSSigner(context.Background(), f, testKMSARN, tt.alg, time.Second)
+			s, err := NewKMSSigner(context.Background(), f, testKMSARN, tt.alg, nil, time.Second)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -146,7 +167,7 @@ func TestKMSSigner(t *testing.T) {
 func TestKMSSignerSignsDigest(t *testing.T) {
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	f := newFakeKMS(ec, kmstypes.KeySpecEccNistP256, ecAlgs)
-	s, err := NewKMSSigner(context.Background(), f, testKMSARN, "ES256", time.Second)
+	s, err := NewKMSSigner(context.Background(), f, testKMSARN, "ES256", nil, time.Second)
 	require.NoError(t, err)
 	in := []byte("h.p")
 	sig, err := s.Sign(context.Background(), in)
@@ -159,7 +180,7 @@ func TestKMSSignerSignsDigest(t *testing.T) {
 func TestKMSSignerPropagatesError(t *testing.T) {
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	f := newFakeKMS(ec, kmstypes.KeySpecEccNistP256, ecAlgs)
-	s, err := NewKMSSigner(context.Background(), f, testKMSARN, "ES256", time.Second)
+	s, err := NewKMSSigner(context.Background(), f, testKMSARN, "ES256", nil, time.Second)
 	require.NoError(t, err)
 	f.signErr = errors.New("throttled")
 	_, err = s.Sign(context.Background(), []byte("x"))
@@ -169,7 +190,7 @@ func TestKMSSignerPropagatesError(t *testing.T) {
 func TestKMSSignerTimeout(t *testing.T) {
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	f := newFakeKMS(ec, kmstypes.KeySpecEccNistP256, ecAlgs)
-	s, err := NewKMSSigner(context.Background(), f, testKMSARN, "ES256", 50*time.Millisecond)
+	s, err := NewKMSSigner(context.Background(), f, testKMSARN, "ES256", nil, 50*time.Millisecond)
 	require.NoError(t, err)
 	f.blockSign = true
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -183,7 +204,7 @@ func TestKMSSignerTimeout(t *testing.T) {
 func TestNewKMSSignerBadKeyID(t *testing.T) {
 	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	f := newFakeKMS(ec, kmstypes.KeySpecEccNistP256, ecAlgs)
-	_, err := NewKMSSigner(context.Background(), f, "alias/x", "ES256", time.Second)
+	_, err := NewKMSSigner(context.Background(), f, "alias/x", "ES256", nil, time.Second)
 	require.ErrorContains(t, err, "does not match")
 }
 
@@ -216,5 +237,88 @@ func TestDERToJOSE(t *testing.T) {
 			require.EqualValues(t, 1, out[31])
 			require.EqualValues(t, 2, out[63])
 		})
+	}
+}
+
+const (
+	testMRKARN     = "arn:aws:kms:eu-west-1:111122223333:key/mrk-0123456789abcdef0123456789abcdef"
+	testMRKARNUSE1 = "arn:aws:kms:us-east-1:111122223333:key/mrk-0123456789abcdef0123456789abcdef"
+)
+
+func TestKMSSignerMultiRegion(t *testing.T) {
+	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	allowed := []string{"eu-west-1", "us-east-1"}
+	mrc := func(primary string, replicas ...string) *kmstypes.MultiRegionConfiguration {
+		c := &kmstypes.MultiRegionConfiguration{PrimaryKey: &kmstypes.MultiRegionKey{Region: aws.String(primary)}}
+		for _, r := range replicas {
+			c.ReplicaKeys = append(c.ReplicaKeys, kmstypes.MultiRegionKey{Region: aws.String(r)})
+		}
+		return c
+	}
+	tests := []struct {
+		name    string
+		region  string
+		noOpts  bool
+		mutate  func(f *fakeKMS)
+		allowed []string
+		wantErr string
+	}{
+		{"rewrites to local replica", "us-east-1", false, nil, allowed, ""},
+		{"configured region is local", "eu-west-1", false, nil, allowed, ""},
+		{"rogue replica region", "us-east-1", false, func(f *fakeKMS) { f.mrc = mrc("eu-west-1", "us-east-1", "ap-south-1") }, allowed, "ap-south-1"},
+		{"rogue primary region", "us-east-1", false, func(f *fakeKMS) { f.mrc = mrc("ap-south-1", "us-east-1") }, allowed, "ap-south-1"},
+		{"nil multi-region configuration", "us-east-1", false, func(f *fakeKMS) { f.mrc = nil }, allowed, "MultiRegionConfiguration"},
+		{"nil primary key", "us-east-1", false, func(f *fakeKMS) { f.mrc = &kmstypes.MultiRegionConfiguration{} }, allowed, "MultiRegionConfiguration"},
+		{"local region not allowed", "ap-south-1", false, nil, allowed, "ap-south-1"},
+		{"no Options", "", true, nil, allowed, "region"},
+		{"empty local region", "", false, nil, allowed, "region"},
+		{"multi-region false on mrk arn", "us-east-1", false, func(f *fakeKMS) { f.multiRegion = false }, allowed, "MultiRegion"},
+		{"describe arn mismatch", "us-east-1", false, func(f *fakeKMS) { f.mdArn = testMRKARN }, allowed, "Arn"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFakeKMS(ec, kmstypes.KeySpecEccNistP256, ecAlgs)
+			f.multiRegion = true
+			f.keyID = testMRKARN
+			if tt.region == "us-east-1" {
+				f.keyID = testMRKARNUSE1
+			}
+			f.mrc = mrc("eu-west-1", "us-east-1")
+			if tt.mutate != nil {
+				tt.mutate(f)
+			}
+			var api KMSAPI = regionKMS{f, tt.region}
+			if tt.noOpts {
+				api = f
+			}
+			s, err := NewKMSSigner(context.Background(), api, testMRKARN, "ES256", tt.allowed, time.Second)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			_, err = s.Sign(context.Background(), []byte("h.p"))
+			require.NoError(t, err)
+			want := testMRKARN
+			if tt.region == "us-east-1" {
+				want = testMRKARNUSE1
+			}
+			require.Len(t, f.seenARNs, 3)
+			for _, got := range f.seenARNs {
+				require.Equal(t, want, got)
+			}
+		})
+	}
+}
+
+func TestKMSSignerSingleRegionIgnoresClientRegion(t *testing.T) {
+	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	f := newFakeKMS(ec, kmstypes.KeySpecEccNistP256, ecAlgs)
+	s, err := NewKMSSigner(context.Background(), regionKMS{f, "us-east-1"}, testKMSARN, "ES256", nil, time.Second)
+	require.NoError(t, err)
+	_, err = s.Sign(context.Background(), []byte("h.p"))
+	require.NoError(t, err)
+	for _, got := range f.seenARNs {
+		require.Equal(t, testKMSARN, got)
 	}
 }

@@ -10,11 +10,14 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
+
+	"github.com/boogy/aws-oidc-warden/internal/config"
 )
 
 // KMSAPI is the subset of the KMS client the signer needs.
@@ -40,7 +43,16 @@ type kmsSigner struct {
 }
 
 // NewKMSSigner checks the KMS key's identity and properties and fetches its public half; the private key never leaves KMS.
-func NewKMSSigner(ctx context.Context, api KMSAPI, keyID, alg string, timeout time.Duration) (Signer, error) {
+// A multi-region key is addressed through its replica in the client's region, which must be in allowedRegions.
+func NewKMSSigner(ctx context.Context, api KMSAPI, configuredARN, alg string, allowedRegions []string, timeout time.Duration) (Signer, error) {
+	mrk := config.IsMultiRegionKMSKey(configuredARN)
+	keyID := configuredARN
+	if mrk {
+		var err error
+		if keyID, err = localReplicaARN(api, configuredARN, allowedRegions); err != nil {
+			return nil, err
+		}
+	}
 	desc, err := api.DescribeKey(ctx, &kms.DescribeKeyInput{KeyId: aws.String(keyID)})
 	if err != nil {
 		return nil, fmt.Errorf("kms DescribeKey %s: %w", keyID, err)
@@ -55,15 +67,23 @@ func NewKMSSigner(ctx context.Context, api KMSAPI, keyID, alg string, timeout ti
 	if md.KeyUsage != kmstypes.KeyUsageTypeSignVerify {
 		return nil, fmt.Errorf("kms key %s: KeyUsage must be SIGN_VERIFY", keyID)
 	}
-	if aws.ToBool(md.MultiRegion) {
-		return nil, fmt.Errorf("kms key %s: multi-region keys are not allowed (MultiRegion must be false)", keyID)
+	if aws.ToBool(md.MultiRegion) != mrk {
+		return nil, fmt.Errorf("kms key %s: MultiRegion is %t but the key ID %s a multi-region key ID", keyID, aws.ToBool(md.MultiRegion), map[bool]string{true: "is", false: "is not"}[mrk])
+	}
+	if aws.ToString(md.Arn) != keyID {
+		return nil, fmt.Errorf("kms key %s: DescribeKey Arn %q does not match the key ARN", keyID, aws.ToString(md.Arn))
+	}
+	if mrk {
+		if err := checkReplicaSet(keyID, md.MultiRegionConfiguration, allowedRegions); err != nil {
+			return nil, err
+		}
 	}
 	out, err := api.GetPublicKey(ctx, &kms.GetPublicKeyInput{KeyId: aws.String(keyID)})
 	if err != nil {
 		return nil, fmt.Errorf("kms GetPublicKey %s: %w", keyID, err)
 	}
 	if aws.ToString(out.KeyId) != keyID {
-		return nil, fmt.Errorf("kms key %s: GetPublicKey KeyId %q does not match the configured key ARN", keyID, aws.ToString(out.KeyId))
+		return nil, fmt.Errorf("kms key %s: GetPublicKey KeyId %q does not match the key ARN", keyID, aws.ToString(out.KeyId))
 	}
 	if !slices.Contains(kmsAllowedKeySpecs[alg], out.KeySpec) {
 		return nil, fmt.Errorf("kms key %s: KeySpec %s not allowed for %s", keyID, out.KeySpec, alg)
@@ -87,6 +107,36 @@ func NewKMSSigner(ctx context.Context, api KMSAPI, keyID, alg string, timeout ti
 		return nil, err
 	}
 	return &kmsSigner{api: api, keyID: keyID, alg: alg, kid: kid, pub: pub, spec: spec, timeout: timeout}, nil
+}
+
+func localReplicaARN(api KMSAPI, arn string, allowedRegions []string) (string, error) {
+	o, ok := api.(interface{ Options() kms.Options })
+	if !ok || o.Options().Region == "" {
+		return "", fmt.Errorf("kms key %s: multi-region key needs a KMS client with a region", arn)
+	}
+	region := o.Options().Region
+	if !slices.Contains(allowedRegions, region) {
+		return "", fmt.Errorf("kms key %s: client region %s is not in kms_allowed_regions", arn, region)
+	}
+	parts := strings.Split(arn, ":")
+	parts[3] = region
+	return strings.Join(parts, ":"), nil
+}
+
+func checkReplicaSet(keyID string, c *kmstypes.MultiRegionConfiguration, allowedRegions []string) error {
+	if c == nil || c.PrimaryKey == nil {
+		return fmt.Errorf("kms key %s: DescribeKey returned no MultiRegionConfiguration primary key", keyID)
+	}
+	regions := []string{aws.ToString(c.PrimaryKey.Region)}
+	for _, r := range c.ReplicaKeys {
+		regions = append(regions, aws.ToString(r.Region))
+	}
+	for _, r := range regions {
+		if !slices.Contains(allowedRegions, r) {
+			return fmt.Errorf("kms key %s: replica set includes region %s, which is not in kms_allowed_regions", keyID, r)
+		}
+	}
+	return nil
 }
 
 func (s *kmsSigner) Algorithm() string        { return s.alg }

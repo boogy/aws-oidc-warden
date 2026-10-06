@@ -28,7 +28,7 @@ func NewLoader(cfg config.IdPConfig, kmsAPI func() KMSAPI, log *slog.Logger) Loa
 						slog.String("source", k.Source()), slog.Bool("onLambda", utils.OnLambda()))
 					s, err = NewPEMSigner(k.File, k.Algorithm)
 				} else {
-					s, err = NewKMSSigner(gctx, kmsAPI(), k.KMSKeyID, k.Algorithm, cfg.SignTimeout)
+					s, err = NewKMSSigner(gctx, kmsAPI(), k.KMSKeyID, k.Algorithm, cfg.KMSAllowedRegions, cfg.SignTimeout)
 				}
 				if err != nil {
 					return fmt.Errorf("idp key %s: %w", k.Source(), err)
