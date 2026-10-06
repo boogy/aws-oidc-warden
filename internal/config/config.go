@@ -293,6 +293,9 @@ type Config struct {
 	// S3ConfigBucketOwner is sent as ExpectedBucketOwner on every S3 config read.
 	S3ConfigBucketOwner string `mapstructure:"s3_config_bucket_owner" json:"s3_config_bucket_owner,omitempty"`
 
+	// SessionPolicyBucketOwner is sent as ExpectedBucketOwner on session_policy_file reads; base-only.
+	SessionPolicyBucketOwner string `mapstructure:"session_policy_bucket_owner" json:"session_policy_bucket_owner,omitempty"`
+
 	// ConfigFragmentChecksums optionally pins an expected integrity value
 	// (etag, or sha256 content hash for local paths) per config_fragments
 	// entry; a mismatch on fetch is rejected. Unpinned entries use their etag
@@ -514,6 +517,7 @@ var envBindings = []envBinding{
 	{"config_fragments", func(c *Config, v string) { c.ConfigFragments = splitCommaList(v) }},
 	{"mappings_file", func(c *Config, v string) { c.MappingsFile = v }},
 	{"s3_config_bucket_owner", func(c *Config, v string) { c.S3ConfigBucketOwner = v }},
+	{"session_policy_bucket_owner", func(c *Config, v string) { c.SessionPolicyBucketOwner = v }},
 
 	// Cache knobs (c.Cache is guaranteed non-nil before these run).
 	{"cache.type", func(c *Config, v string) { c.Cache.Type = v }},
@@ -966,6 +970,9 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateS3ConfigOwner(); err != nil {
 		return err
+	}
+	if c.SessionPolicyBucketOwner != "" && !accountIDPattern.MatchString(c.SessionPolicyBucketOwner) {
+		return errors.New("session_policy_bucket_owner must be exactly 12 digits")
 	}
 
 	// Hardening knobs: apply defaults, then enforce bounds.

@@ -208,6 +208,18 @@ func requireSingleIssuer(cfg *config.Config, mode string) error {
 
 // BuildConfigProvider builds the config provider; any reload source triggers a fail-fast initial refresh.
 func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
+	provider, err := buildConfigProvider(cfg, consumer)
+	if err != nil {
+		return nil, err
+	}
+	if live := provider.Get(); live.S3SessionPolicyBucket != "" && live.SessionPolicyBucketOwner == "" {
+		logevent.Warn(context.Background(), nil, logevent.PolicyS3OwnerUnpinned, "session policy bucket read without owner pin",
+			slog.String("bucket", live.S3SessionPolicyBucket))
+	}
+	return provider, nil
+}
+
+func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
 	ctx := context.Background()
 	opt := config.WithFragmentFetcher(s3FragmentFetcher(consumer))
 	hasOverlay := cfg.S3ConfigBucket != "" && cfg.S3ConfigPath != ""

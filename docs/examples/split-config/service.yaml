@@ -27,6 +27,7 @@ default_issuer: "https://token.actions.githubusercontent.com"
 role_session_name: "aws-oidc-warden"
 session_tags_transitive: true # tags survive role chaining in the target account
 session_policy_bucket: "octo-aow-session-policies-111122223333" # holds the files named by session_policy_file
+session_policy_bucket_owner: "111122223333" # sent as ExpectedBucketOwner on policy reads
 
 jwt_validation:
   mode: "self"

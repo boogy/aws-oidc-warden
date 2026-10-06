@@ -259,6 +259,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
 		cfg.S3ConfigBucketOwner = p.base.S3ConfigBucketOwner
+		cfg.SessionPolicyBucketOwner = p.base.SessionPolicyBucketOwner
 		if err := cfg.validateS3ConfigOwner(); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}

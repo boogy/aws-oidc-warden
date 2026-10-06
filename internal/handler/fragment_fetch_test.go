@@ -236,3 +236,33 @@ func TestBuildConfigProviderOverlayWithoutOwnerWarnsAndLoads(t *testing.T) {
 	assert.Empty(t, f.ifChanged)
 	assert.Equal(t, 1, strings.Count(buf.String(), `"config.s3_owner_unpinned"`))
 }
+
+func TestBuildConfigProviderSessionPolicyOwnerWarning(t *testing.T) {
+	const event = `"policy.s3_owner_unpinned"`
+	tests := []struct {
+		name       string
+		bucket     string
+		owner      string
+		overlay    string
+		wantWarned int
+	}{
+		{"bucket set, owner unset warns", "policies", "", "", 1},
+		{"bucket set, owner set is quiet", "policies", fetchOwner, "", 0},
+		{"bucket unset is quiet", "", "", "", 0},
+		{"overlay-supplied bucket, owner unset warns", "", "", "session_policy_bucket: overlay-policies\n", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := captureLogs(t)
+			cfg := fetchBaseConfig(t, func(c *config.Config) {
+				c.S3SessionPolicyBucket, c.SessionPolicyBucketOwner = tt.bucket, tt.owner
+				if tt.overlay != "" {
+					c.S3ConfigBucket, c.S3ConfigPath, c.S3ConfigBucketOwner = "cfgbkt", "cfg.yaml", fetchOwner
+				}
+			})
+			_, err := BuildConfigProvider(cfg, &s3Fake{body: tt.overlay})
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantWarned, strings.Count(buf.String(), event))
+		})
+	}
+}

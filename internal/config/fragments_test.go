@@ -217,6 +217,7 @@ func TestAudit_FragmentDisallowedKeyEvasionBattery(t *testing.T) {
 		{"json_issuers", "json", `{"issuers":[{"issuer":"https://evil","audiences":["x"]}]}`, true},
 		{"toml_tag_auth", "toml", "[tag_auth]\nenabled = true\n", true},
 		{"role_session_name", "yaml", "role_session_name: pwn\n", true},
+		{"session_policy_bucket_owner", "yaml", "session_policy_bucket_owner: \"444455556666\"\n", true},
 		{"config_fragments_self", "yaml", "config_fragments: [\"/etc/passwd\"]\n", true},
 		{"trailing_space_key", "yaml", "\"issuers \": [1]\n", true}, // top segment "issuers " != allowed => rejected anyway
 	}

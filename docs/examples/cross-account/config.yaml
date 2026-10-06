@@ -130,3 +130,4 @@ log_bucket: "acme-aow-audit-111111111111-eu-west-1"
 log_prefix: "audit/"
 audit_required: true # no credentials unless the audit record is written
 session_policy_bucket: "acme-aow-session-policies-111111111111"
+session_policy_bucket_owner: "111111111111" # sent as ExpectedBucketOwner on policy reads

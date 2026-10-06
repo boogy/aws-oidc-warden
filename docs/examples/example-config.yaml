@@ -106,6 +106,7 @@ cache:
 # S3 CONFIG — docs/CONFIGURATION.md#split-configuration, #hot-reloading
 ####################################################################################
 session_policy_bucket: "aws-oidc-warden-session-policies" # for session_policy_file
+# session_policy_bucket_owner: "111122223333" # pins policy reads with ExpectedBucketOwner
 
 # s3_config_bucket: "aws-oidc-warden-config"
 # s3_config_path: "config.yaml"

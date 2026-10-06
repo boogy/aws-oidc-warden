@@ -353,23 +353,10 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 				slog.String("error", err.Error()))
 		}
 
-		sessionPolicyData, err := r.consumer.GetS3Object(ctx, cfg.S3SessionPolicyBucket, *sessionPolicyFile)
+		policyBytes, failMsg, err := r.readSessionPolicyObject(ctx, log, cfg, *sessionPolicyFile)
 		if err != nil {
-			logPolicyErr("failed to read session policy file", err)
-			return nil, "", fmt.Errorf("failed to read session policy file: %w", ErrSessionPolicyAccess)
-		}
-
-		defer func() {
-			if cerr := sessionPolicyData.Close(); cerr != nil {
-				logevent.Warn(ctx, log, logevent.AppResourceCloseFailure, "failed to close resource",
-					slog.String("resource", "session_policy_s3_object"), slog.String("error", cerr.Error()))
-			}
-		}()
-
-		policyBytes, err := utils.ReadAllCapped(sessionPolicyData, utils.MaxConfigBytes, "session policy")
-		if err != nil {
-			logPolicyErr("failed to read session policy data", err)
-			return nil, "", fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
+			logPolicyErr(failMsg, err)
+			return nil, "", fmt.Errorf("%s: %w", failMsg, ErrSessionPolicyAccess)
 		}
 
 		if !json.Valid(policyBytes) {
@@ -418,4 +405,32 @@ func identityAttrs(claims *gtypes.Claims) []slog.Attr {
 		attrs = append(attrs, slog.String("actor", claims.Actor))
 	}
 	return attrs
+}
+
+// readSessionPolicyObject reads a session policy object, owner-pinned when session_policy_bucket_owner is set.
+func (r *RequestProcessor) readSessionPolicyObject(ctx context.Context, log *slog.Logger, cfg *config.Config, key string) (data []byte, failMsg string, err error) {
+	if owner := cfg.SessionPolicyBucketOwner; owner != "" {
+		data, _, err = r.consumer.GetS3ObjectIfChanged(ctx, cfg.S3SessionPolicyBucket, key, "", owner)
+		if err != nil {
+			return nil, "failed to read session policy file", err
+		}
+		return data, "", nil
+	}
+
+	body, err := r.consumer.GetS3Object(ctx, cfg.S3SessionPolicyBucket, key)
+	if err != nil {
+		return nil, "failed to read session policy file", err
+	}
+	defer func() {
+		if cerr := body.Close(); cerr != nil {
+			logevent.Warn(ctx, log, logevent.AppResourceCloseFailure, "failed to close resource",
+				slog.String("resource", "session_policy_s3_object"), slog.String("error", cerr.Error()))
+		}
+	}()
+
+	data, err = utils.ReadAllCapped(body, utils.MaxConfigBytes, "session policy")
+	if err != nil {
+		return nil, "failed to read session policy data", err
+	}
+	return data, "", nil
 }

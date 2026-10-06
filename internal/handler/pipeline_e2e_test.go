@@ -46,7 +46,11 @@ type vRecorder struct {
 	s3Body        string
 	s3Err         error
 	tagAuthCalled int
+
+	pinnedCalls []pinnedRead
 }
+
+type pinnedRead struct{ bucket, key, prevETag, owner string }
 
 func (f *vRecorder) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	f.getS3Called++
@@ -56,8 +60,12 @@ func (f *vRecorder) GetS3Object(context.Context, string, string) (io.ReadCloser,
 	return io.NopCloser(stringReader(f.s3Body)), nil
 }
 
-func (f *vRecorder) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
-	return nil, "", errors.New("not implemented")
+func (f *vRecorder) GetS3ObjectIfChanged(_ context.Context, bucket, key, prevETag, owner string) ([]byte, string, error) {
+	f.pinnedCalls = append(f.pinnedCalls, pinnedRead{bucket, key, prevETag, owner})
+	if f.s3Err != nil {
+		return nil, "", f.s3Err
+	}
+	return []byte(f.s3Body), `"e"`, nil
 }
 func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, error) {
 	f.tagAuthCalled++
@@ -233,6 +241,52 @@ func TestPipeline_PolicyFileFailureDenies(t *testing.T) {
 	}
 	if rec3.gotPolicy == nil || *rec3.gotPolicy != `{"Version":"2012-10-17"}` {
 		t.Errorf("policy file content not forwarded: %v", rec3.gotPolicy)
+	}
+}
+
+// ---------- E3b: session_policy_bucket_owner pins the policy read ----------
+
+func TestPipeline_PolicyFileOwnerPin(t *testing.T) {
+	role := "arn:aws:iam::111111111111:role/deploy"
+	const policy = `{"Version":"2012-10-17"}`
+	tests := []struct {
+		name       string
+		owner      string
+		s3Err      error
+		body       string
+		wantPinned []pinnedRead
+		wantPlain  int
+		wantAssume int
+	}{
+		{"owner set uses pinned read", "111122223333", nil, policy,
+			[]pinnedRead{{"policies", "scoped.json", "", "111122223333"}}, 0, 1},
+		{"owner unset uses plain read", "", nil, policy, nil, 1, 1},
+		{"pinned read failure denies", "111122223333", errors.New("AccessDenied"), "",
+			[]pinnedRead{{"policies", "scoped.json", "", "111122223333"}}, 0, 0},
+		{"pinned invalid JSON denies", "111122223333", nil, "not json{",
+			[]pinnedRead{{"policies", "scoped.json", "", "111122223333"}}, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := vE2ECfg(t, []config.RoleMapping{
+				{Subject: config.Patterns{"myorg/repo"}, Roles: []string{role}, SessionPolicyFile: "scoped.json"},
+			})
+			cfg.SessionPolicyBucketOwner = tt.owner
+			rec := &vRecorder{allowAccount: true, s3Body: tt.body, s3Err: tt.s3Err}
+
+			_, err := vRun(t, cfg, rec, vE2EClaims("myorg/repo", "refs/heads/main"), role)
+
+			assert.Equal(t, tt.wantPinned, rec.pinnedCalls)
+			assert.Equal(t, tt.wantPlain, rec.getS3Called)
+			assert.Equal(t, tt.wantAssume, rec.assumeCalls)
+			if tt.wantAssume == 0 {
+				require.ErrorIs(t, err, handler.ErrSessionPolicyAccess)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, rec.gotPolicy)
+			assert.Equal(t, policy, *rec.gotPolicy)
+		})
 	}
 }
 

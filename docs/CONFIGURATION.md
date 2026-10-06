@@ -393,17 +393,18 @@ A mapping with `max_session_duration` over 1h or `idp_token: true` is issued thr
 
 ### Core Settings
 
-| Environment Variable         | Config File Key          | Description                                                                                                                   | Default                           |
-| ---------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| `AOW_ROLE_SESSION_NAME`      | `role_session_name`      | AWS STS role session name; overridable per-mapping (see [role_mappings](#authorization-role_mappings-role_groups-role_sets))  | `aws-oidc-warden`                 |
-| `AOW_S3_CONFIG_BUCKET`       | `s3_config_bucket`       | S3 bucket holding the remote config object                                                                                    | (empty)                           |
-| `AOW_S3_CONFIG_PATH`         | `s3_config_path`         | Key/path of the remote config object in that bucket                                                                           | (empty)                           |
-| `AOW_CONFIG_RELOAD_INTERVAL` | `config_reload_interval` | Hot-reload the S3 config at most this often (e.g. `5m`, at least `1s`); `0` disables                                                         | `0` (disabled)                    |
-| `AOW_CONFIG_FRAGMENTS`       | `config_fragments`       | Comma-separated fragment sources merged onto base config (local paths or `s3://` — see [Config fragments](#config-fragments)) | (empty)                           |
-| `AOW_MAPPINGS_FILE`          | `mappings_file`          | Local path or `s3://` URI of the role-mappings file (see [Split configuration](#split-configuration))                         | (empty)                           |
-| `AOW_MAPPINGS_MAX_STALE`     | `mappings_max_stale`     | Refuse requests with `503 config_stale` once mappings are older than this; `0` disables                                       | 3x reload interval (`s3://` only) |
-| `AOW_S3_CONFIG_BUCKET_OWNER` | `s3_config_bucket_owner` | 12-digit account ID sent as `ExpectedBucketOwner` on S3 config reads; required for `s3://` mappings or fragments              | (empty)                           |
-| `AOW_SESSION_POLICY_BUCKET`  | `session_policy_bucket`  | S3 bucket for `session_policy_file` lookups                                                                                   | (empty)                           |
+| Environment Variable              | Config File Key               | Description                                                                                                                    | Default                           |
+| --------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| `AOW_ROLE_SESSION_NAME`           | `role_session_name`           | AWS STS role session name; overridable per-mapping (see [role_mappings](#authorization-role_mappings-role_groups-role_sets))   | `aws-oidc-warden`                 |
+| `AOW_S3_CONFIG_BUCKET`            | `s3_config_bucket`            | S3 bucket holding the remote config object                                                                                     | (empty)                           |
+| `AOW_S3_CONFIG_PATH`              | `s3_config_path`              | Key/path of the remote config object in that bucket                                                                            | (empty)                           |
+| `AOW_CONFIG_RELOAD_INTERVAL`      | `config_reload_interval`      | Hot-reload the S3 config at most this often (e.g. `5m`, at least `1s`); `0` disables                                           | `0` (disabled)                    |
+| `AOW_CONFIG_FRAGMENTS`            | `config_fragments`            | Comma-separated fragment sources merged onto base config (local paths or `s3://` — see [Config fragments](#config-fragments))  | (empty)                           |
+| `AOW_MAPPINGS_FILE`               | `mappings_file`               | Local path or `s3://` URI of the role-mappings file (see [Split configuration](#split-configuration))                          | (empty)                           |
+| `AOW_MAPPINGS_MAX_STALE`          | `mappings_max_stale`          | Refuse requests with `503 config_stale` once mappings are older than this; `0` disables                                        | 3x reload interval (`s3://` only) |
+| `AOW_S3_CONFIG_BUCKET_OWNER`      | `s3_config_bucket_owner`      | 12-digit account ID sent as `ExpectedBucketOwner` on S3 config reads; required for `s3://` mappings or fragments               | (empty)                           |
+| `AOW_SESSION_POLICY_BUCKET`       | `session_policy_bucket`       | S3 bucket for `session_policy_file` lookups                                                                                    | (empty)                           |
+| `AOW_SESSION_POLICY_BUCKET_OWNER` | `session_policy_bucket_owner` | 12-digit account ID sent as `ExpectedBucketOwner` on `session_policy_file` reads; unset logs `policy.s3_owner_unpinned` (Warn) | (empty)                           |
 
 `issuers`, `default_issuer`, `role_sets`, `role_mappings`, `role_groups`, and `config_fragment_checksums` are structured values with no flat env-var equivalent — set them in the config file (or a fragment).
 
@@ -534,7 +535,7 @@ With `mappings_file` set, the service config may not carry inline `role_mappings
 
 ### What the mappings file may contain
 
-Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment".
+Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner`, `session_policy_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment".
 
 The mappings file is a layer beside the base config and the S3 overlay (`s3_config_bucket`/`s3_config_path`). It merges first, then `config_fragments` in order; fragments are rejected inside it. A `role_sets` name defined twice across layers is an error.
 
@@ -544,6 +545,10 @@ The mappings file is a layer beside the base config and the S3 overlay (`s3_conf
 
 - Required for an `s3://` `mappings_file` or `s3://` fragment; a missing value fails `Validate()`.
 - Recommended for the S3 overlay. Unset, the overlay still loads and startup logs `config.s3_owner_unpinned` (Warn).
+
+### Session policy bucket owner
+
+`session_policy_bucket_owner` pins `session_policy_file` reads the same way, as a separate key because the policy bucket may live in another account. Exactly 12 digits; service config only (env or file), never an S3 overlay or fragment. Unset, the read is unpinned and startup logs `policy.s3_owner_unpinned` (Warn) when `session_policy_bucket` is set.
 
 ### Reload
 

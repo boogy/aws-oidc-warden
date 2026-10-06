@@ -464,6 +464,33 @@ func TestProvider_OverlayBucketOwner(t *testing.T) {
 	}
 }
 
+func TestProvider_OverlaySessionPolicyBucketOwner(t *testing.T) {
+	const overlayOwner = "session_policy_bucket: \"swapped\"\nsession_policy_bucket_owner: \"444455556666\"\n"
+	tests := []struct {
+		name      string
+		baseOwner string
+		overlay   string
+		wantOwner string
+	}{
+		{"overlay cannot change base owner", "111122223333", overlayOwner, "111122223333"},
+		{"overlay cannot fill unset owner", "", overlayOwner, ""},
+		{"overlay without the key keeps base owner", "111122223333", "session_policy_bucket: \"swapped\"\n", "111122223333"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := baseConfig(t)
+			base.S3SessionPolicyBucket, base.SessionPolicyBucketOwner = "policies", tt.baseOwner
+			require.NoError(t, base.Validate())
+			overlay := func(context.Context) ([]byte, error) { return []byte(tt.overlay), nil }
+			p := NewProvider(base, time.Minute, "yaml", overlay)
+
+			require.NoError(t, p.Refresh(context.Background()))
+			assert.Equal(t, "swapped", p.Get().S3SessionPolicyBucket)
+			assert.Equal(t, tt.wantOwner, p.Get().SessionPolicyBucketOwner)
+		})
+	}
+}
+
 func TestProvider_ChangedFragmentTriggersReload(t *testing.T) {
 	const uri = "s3://bucket/frag.yaml"
 	store := newFakeFragmentStore()

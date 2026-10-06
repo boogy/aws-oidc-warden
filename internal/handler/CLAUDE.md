@@ -41,6 +41,6 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `apigatewayv2.go` is the only adapter compatible with API Gateway JWT Authorizer — v1 REST API does not receive authorizer claims.
 - The extractor is created once at bootstrap; changing `jwt_validation.mode` at runtime requires a Lambda cold start.
 - A mapping sets `session_policy` or `session_policy_file`, never both; `Validate()` rejects both.
-- S3 policy reads are bounded (`io.LimitReader`, 1 MB).
+- S3 policy reads are bounded (`io.LimitReader`, 1 MB). With `session_policy_bucket_owner` set they go through `GetS3ObjectIfChanged(…, "", owner)` (ExpectedBucketOwner); unset, `BuildConfigProvider` logs `policy.s3_owner_unpinned` once.
 - Start time is carried in context (`StartTimeContextKey`).
 - IdP kill switch: `idp.enabled` is live; when off, mint answers `503 idp_signing_unavailable` and discovery/JWKS answer 404 (after the 405 method check). Those routes call `RefreshIfDue`, never `MaybeRefresh`, so they never wait on a refresh. Env overrides S3 config. Past max-stale, `/verify` and mint answer `503 config_stale`; discovery/JWKS keep serving.

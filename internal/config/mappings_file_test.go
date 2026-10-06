@@ -69,6 +69,7 @@ func TestMappingsFileRejectsBaseOnlyKeys(t *testing.T) {
 		{"mappings_file", "mappings_file: /etc/other.yaml\n"},
 		{"mappings_max_stale", "mappings_max_stale: 1h\n"},
 		{"s3_config_bucket_owner", "s3_config_bucket_owner: \"123456789012\"\n"},
+		{"session_policy_bucket_owner", "session_policy_bucket_owner: \"123456789012\"\n"},
 		{"config_fragments", "config_fragments: [/etc/other.yaml]\n"},
 	}
 	for _, tt := range tests {
@@ -313,6 +314,40 @@ func TestS3BucketOwnerRequired(t *testing.T) {
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
+}
+
+func TestSessionPolicyBucketOwnerValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		owner   string
+		wantErr string
+	}{
+		{"unset", "", ""},
+		{"12 digits", "123456789012", ""},
+		{"too short", "12345678901", "session_policy_bucket_owner must be exactly 12 digits"},
+		{"too long", "1234567890123", "session_policy_bucket_owner must be exactly 12 digits"},
+		{"non-digit", "12345678901a", "session_policy_bucket_owner must be exactly 12 digits"},
+		{"padded", " 123456789012", "session_policy_bucket_owner must be exactly 12 digits"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := baseConfig(t)
+			c.S3SessionPolicyBucket, c.SessionPolicyBucketOwner = "policies", tt.owner
+			err := c.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestSessionPolicyBucketOwnerEnv(t *testing.T) {
+	t.Setenv("AOW_SESSION_POLICY_BUCKET_OWNER", "444455556666")
+	c := &Config{}
+	reapplyEnvOverrides(c)
+	require.Equal(t, "444455556666", c.SessionPolicyBucketOwner)
 }
 
 func TestMaxStaleMaybeRefreshWaitsOnInFlightRefresh(t *testing.T) {

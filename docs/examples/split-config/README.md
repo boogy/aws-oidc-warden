@@ -13,18 +13,19 @@ Both files load in CI: `TestSplitConfigExamplesLoad` (`internal/config/docs_yaml
 
 ## service.yaml
 
-| Key                      | Meaning                                                                                                           |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `issuers`                | Inbound token issuers. GitHub's canonical subject is the repository (`octo-org/api`); GitLab's is `project_path`. |
-| `default_issuer`         | Issuer a mapping binds to when it omits `issuer`. Set `issuer` on every mapping anyway.                           |
-| `mappings_file`          | `s3://bucket/key` or a local path. With it set, `role_mappings`/`role_groups`/`role_sets` may not appear here.    |
-| `s3_config_bucket_owner` | Required for `s3://`. The read fails unless the bucket belongs to this account.                                   |
-| `config_reload_interval` | Re-read the mappings at most once per interval (conditional GET; unchanged file = 304, no re-parse).              |
-| `mappings_max_stale`     | Default 3x the interval. Past it, requests get `503 config_stale`.                                                |
-| `session_policy_bucket`  | Bucket holding the files named by a mapping's `session_policy_file`.                                              |
-| `session_tags`           | Per issuer: STS session tags taken from token claims, for ABAC in the target account.                             |
-| `cache`                  | JWKS cache in DynamoDB, shared by every Lambda environment in the region.                                         |
-| `log_to_s3`, `audit_*`   | Audit record per decision in S3; `audit_required` returns no credentials if the write fails.                      |
+| Key                           | Meaning                                                                                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `issuers`                     | Inbound token issuers. GitHub's canonical subject is the repository (`octo-org/api`); GitLab's is `project_path`. |
+| `default_issuer`              | Issuer a mapping binds to when it omits `issuer`. Set `issuer` on every mapping anyway.                           |
+| `mappings_file`               | `s3://bucket/key` or a local path. With it set, `role_mappings`/`role_groups`/`role_sets` may not appear here.    |
+| `s3_config_bucket_owner`      | Required for `s3://`. The read fails unless the bucket belongs to this account.                                   |
+| `config_reload_interval`      | Re-read the mappings at most once per interval (conditional GET; unchanged file = 304, no re-parse).              |
+| `mappings_max_stale`          | Default 3x the interval. Past it, requests get `503 config_stale`.                                                |
+| `session_policy_bucket`       | Bucket holding the files named by a mapping's `session_policy_file`.                                              |
+| `session_policy_bucket_owner` | Account that must own `session_policy_bucket`; the read fails otherwise.                                          |
+| `session_tags`                | Per issuer: STS session tags taken from token claims, for ABAC in the target account.                             |
+| `cache`                       | JWKS cache in DynamoDB, shared by every Lambda environment in the region.                                         |
+| `log_to_s3`, `audit_*`        | Audit record per decision in S3; `audit_required` returns no credentials if the write fails.                      |
 
 ## mappings.yaml
 
