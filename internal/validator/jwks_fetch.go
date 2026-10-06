@@ -2,12 +2,15 @@ package validator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
@@ -23,48 +26,115 @@ func issuerAttrs(issuer string, extra ...slog.Attr) []slog.Attr {
 }
 
 // FetchJWKS fetches the JWKS for the given issuer, using the cache when
-// available. Exposed standalone (no jwks_uri override) for testing and
-// warm-prefetch; Validate uses the issuer's registered spec instead, which
-// may carry a jwks_uri override.
+// available. Exposed standalone (no jwks_uri override) for tests; Validate
+// uses the issuer's registered spec instead, which may carry a jwks_uri
+// override.
 func (t *TokenValidator) FetchJWKS(ctx context.Context, issuer string) (*types.JWKS, error) {
 	return t.fetchJWKS(ctx, &issuerSpec{Issuer: issuer}, false)
+}
+
+// jwksCacheKey is the cache, singleflight and bookkeeping key for spec. A
+// jwks_uri override is part of it, so issuers sharing a persistent cache table
+// never read each other's override-sourced keys.
+func jwksCacheKey(spec *issuerSpec) string {
+	if spec.cacheKey != "" {
+		return spec.cacheKey
+	}
+	if spec.JWKSURI == "" {
+		return spec.Issuer
+	}
+	sum := sha256.Sum256([]byte(spec.JWKSURI))
+	return spec.Issuer + "|jwks_uri=" + hex.EncodeToString(sum[:8])
 }
 
 // fetchJWKS fetches (or serves from cache) the JWKS for spec.Issuer. When
 // spec.JWKSURI is set, OIDC discovery is skipped and that URL is fetched
 // directly (still required to be a secure URL). When force is true the cache
 // is bypassed — used to recover from signing-key rotation. Concurrent cold
-// fetches for the same issuer are deduplicated via a per-issuer singleflight.
+// fetches for the same cache key are deduplicated via a singleflight, and a
+// fetch that failed within jwksFailureMemoTTL is not retried.
 func (t *TokenValidator) fetchJWKS(ctx context.Context, spec *issuerSpec, force bool) (*types.JWKS, error) {
+	key := jwksCacheKey(spec)
 	if !force {
-		if cachedJWKS, found := t.cache.Get(ctx, spec.Issuer); found && cachedJWKS != nil {
+		if cachedJWKS, found := t.cache.Get(ctx, key); found && cachedJWKS != nil {
 			return cachedJWKS, nil
 		}
 	}
 
-	// A cancelled initiator must not abort the fetch its singleflight waiters share.
-	fetchCtx := context.WithoutCancel(ctx)
-	v, err, _ := t.sfGroup.Do(spec.Issuer, func() (any, error) {
-		return t.fetchAndCacheJWKS(fetchCtx, spec)
-	})
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return v.(*types.JWKS), nil
+	if prev := t.jwksState.recentFailure(key, t.timeNow()); prev != nil {
+		logevent.Debug(ctx, nil, logevent.JWKSFetchSuppressed, "JWKS fetch skipped after a recent failure",
+			issuerAttrs(spec.Issuer)...)
+		return nil, fmt.Errorf("jwks fetch skipped after recent failure: %w", prev)
+	}
+
+	// The shared fetch ignores its initiator's cancellation; each caller still
+	// stops waiting when its own ctx ends.
+	fetchCtx := context.WithoutCancel(ctx)
+	ch := t.sfGroup.DoChan(key, func() (any, error) {
+		jwks, err := t.fetchAndCacheJWKS(fetchCtx, spec, force)
+		if err != nil {
+			t.jwksState.recordFailure(key, t.timeNow(), err)
+			return nil, err
+		}
+		t.jwksState.clearFailure(key)
+		return jwks, nil
+	})
+	select {
+	case r := <-ch:
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		return r.Val.(*types.JWKS), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// discoveredURI is a memoized discovery-resolved jwks_uri.
+type discoveredURI struct {
+	uri      string
+	storedAt time.Time
+}
+
+// storeJWKS caches jwks under key. A forced refetch that returned the same
+// key set as the last write, which is less than half the TTL old and still
+// cached, skips the write: it would only extend the expiry and cost a
+// DynamoDB PutItem / S3 PutObject. Past half the TTL it rewrites, so a stable
+// key set is never left to expire under steady unknown-kid traffic.
+func (t *TokenValidator) storeJWKS(ctx context.Context, key string, jwks *types.JWKS, force bool) {
+	ttl := cache.GetConfiguredTTL(t.currentConfig())
+	now := t.timeNow()
+	hash, hashed := hashJWKS(jwks)
+	if force && hashed && t.jwksState.writtenRecently(key, hash, now, ttl/2) {
+		if _, stillCached := t.cache.Get(ctx, key); stillCached {
+			return
+		}
+	}
+	t.cache.Set(ctx, key, jwks, ttl)
+	if hashed {
+		t.jwksState.recordWrite(key, hash, now)
+	}
 }
 
 // fetchAndCacheJWKS does the actual network work for fetchJWKS: resolve the
 // JWKS URI (explicit override, memoized discovery, or a fresh discovery
 // call), fetch + validate the JWKS, and cache it. Runs inside the
-// singleflight group, so it executes at most once per issuer per in-flight fetch.
-func (t *TokenValidator) fetchAndCacheJWKS(ctx context.Context, spec *issuerSpec) (*types.JWKS, error) {
+// singleflight group, so it executes at most once per cache key per in-flight fetch.
+func (t *TokenValidator) fetchAndCacheJWKS(ctx context.Context, spec *issuerSpec, force bool) (*types.JWKS, error) {
 	jwksURI := spec.JWKSURI
 	// Only a discovery-resolved URI (no per-issuer override) is eligible for
 	// the "re-discover once on 404" recovery below and gets memoized.
 	discoveryDriven := jwksURI == ""
+	memoized := false
 	if discoveryDriven {
-		if cached, ok := t.jwksURICache.Load(spec.Issuer); ok {
-			jwksURI = cached.(string)
+		// Trusted for one cache TTL, including on forced refetches.
+		if cached, ok := t.jwksURICache.Load(spec.Issuer); ok &&
+			t.timeNow().Sub(cached.(discoveredURI).storedAt) < cache.GetConfiguredTTL(t.currentConfig()) {
+			jwksURI = cached.(discoveredURI).uri
+			memoized = true
 		} else {
 			var err error
 			jwksURI, err = t.discoverJWKSURI(ctx, spec)
@@ -87,6 +157,7 @@ func (t *TokenValidator) fetchAndCacheJWKS(ctx context.Context, spec *issuerSpec
 			if serr := requireSecureURL(newURI, t.allowInsecureIssuers); serr == nil {
 				jwks, _, err = t.getJWKS(ctx, spec.Issuer, newURI)
 				jwksURI = newURI
+				memoized = false
 			}
 		}
 	}
@@ -94,11 +165,12 @@ func (t *TokenValidator) fetchAndCacheJWKS(ctx context.Context, spec *issuerSpec
 		return nil, err
 	}
 
-	if discoveryDriven {
-		t.jwksURICache.Store(spec.Issuer, jwksURI)
+	// Only a fresh discovery restarts the memo's age.
+	if discoveryDriven && !memoized {
+		t.jwksURICache.Store(spec.Issuer, discoveredURI{uri: jwksURI, storedAt: t.timeNow()})
 	}
 
-	t.cache.Set(ctx, spec.Issuer, jwks, cache.GetConfiguredTTL(t.currentConfig()))
+	t.storeJWKS(ctx, jwksCacheKey(spec), jwks, force)
 	return jwks, nil
 }
 

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -182,11 +183,12 @@ func TestRefetchLimiter_NonPositiveCooldownFallsBackToDefault(t *testing.T) {
 
 func TestKeyMemo_StoreAndLoadRoundTrip(t *testing.T) {
 	m := newKeyMemo()
-	_, ok := m.load("fp-1")
+	jwk := rsaJWK("k1", "n", "AQAB")
+	_, ok := m.load("iss", jwk)
 	assert.False(t, ok)
 
-	m.store("fp-1", "some-key")
-	got, ok := m.load("fp-1")
+	m.store("iss", jwk, "some-key")
+	got, ok := m.load("iss", jwk)
 	require.True(t, ok)
 	assert.Equal(t, "some-key", got)
 }
@@ -223,16 +225,68 @@ func rsaJWK(kid, n, e string) types.JSONWebKey {
 	return types.JSONWebKey{KeyID: kid, KeyType: "RSA", N: n, E: e}
 }
 
-func TestKeyFingerprint_DiffersOnRotatedKeyMaterialUnderReusedKid(t *testing.T) {
-	oldFP := keyFingerprint("issuer-a", rsaJWK("reused-kid", "old-n", "AQAB"))
-	newFP := keyFingerprint("issuer-a", rsaJWK("reused-kid", "new-n", "AQAB"))
-	assert.NotEqual(t, oldFP, newFP, "rotating the key material under a reused kid must produce a different fingerprint")
+func TestKeyMemo_MissesOnAnyChangedKeyMaterial(t *testing.T) {
+	base := types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-256", X: "x", Y: "y"}
+	rsa := rsaJWK("k", "n", "AQAB")
+	tests := []struct {
+		name   string
+		stored types.JSONWebKey
+		probe  types.JSONWebKey
+		want   bool
+	}{
+		{"identical EC", base, base, true},
+		{"identical RSA", rsa, rsa, true},
+		{"rotated RSA modulus under reused kid", rsa, rsaJWK("k", "n2", "AQAB"), false},
+		{"changed RSA exponent", rsa, rsaJWK("k", "n", "Aw"), false},
+		{"changed EC x", base, types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-256", X: "x2", Y: "y"}, false},
+		{"changed EC y", base, types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-256", X: "x", Y: "y2"}, false},
+		{"changed EC curve", base, types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-384", X: "x", Y: "y"}, false},
+		{"changed key type", base, types.JSONWebKey{KeyID: "k", KeyType: "RSA", Crv: "P-256", X: "x", Y: "y"}, false},
+		{"different kid", base, types.JSONWebKey{KeyID: "other", KeyType: "EC", Crv: "P-256", X: "x", Y: "y"}, false},
+		{"use/alg do not affect the parsed key", base, types.JSONWebKey{KeyID: "k", KeyType: "EC", Crv: "P-256", X: "x", Y: "y", Use: "sig", Algorithm: "ES256"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newKeyMemo()
+			m.store("iss", tt.stored, "stored-key")
+			_, ok := m.load("iss", tt.probe)
+			assert.Equal(t, tt.want, ok)
+		})
+	}
 }
 
-func TestKeyFingerprint_DiffersAcrossIssuers(t *testing.T) {
-	fpA := keyFingerprint("issuer-a", rsaJWK("k1", "same-n", "AQAB"))
-	fpB := keyFingerprint("issuer-b", rsaJWK("k1", "same-n", "AQAB"))
-	assert.NotEqual(t, fpA, fpB, "the same kid/material from a different issuer must not collide")
+func TestKeyMemo_IsolatedAcrossIssuers(t *testing.T) {
+	m := newKeyMemo()
+	jwk := rsaJWK("k1", "same-n", "AQAB")
+	m.store("issuer-a", jwk, "key-a")
+	_, ok := m.load("issuer-b", jwk)
+	assert.False(t, ok, "the same kid/material from a different issuer must not collide")
+}
+
+func TestKeyMemo_RestoreUnderReusedKidReplacesEntryWithoutGrowing(t *testing.T) {
+	m := newKeyMemo()
+	m.store("iss", rsaJWK("k", "old", "AQAB"), "old-key")
+	m.store("iss", rsaJWK("k", "new", "AQAB"), "new-key")
+	assert.EqualValues(t, 1, m.size.Load())
+	_, ok := m.load("iss", rsaJWK("k", "old", "AQAB"))
+	assert.False(t, ok)
+	got, ok := m.load("iss", rsaJWK("k", "new", "AQAB"))
+	require.True(t, ok)
+	assert.Equal(t, "new-key", got)
+}
+
+func TestKeyMemo_SizeBoundClearsOnOverflow(t *testing.T) {
+	m := newKeyMemo()
+	for i := 0; i < maxKeyMemoEntries; i++ {
+		m.store("iss", rsaJWK(fmt.Sprintf("k%d", i), "n", "AQAB"), i)
+	}
+	assert.EqualValues(t, maxKeyMemoEntries, m.size.Load())
+	m.store("iss", rsaJWK("overflow", "n", "AQAB"), "x")
+	assert.EqualValues(t, 1, m.size.Load())
+	_, ok := m.load("iss", rsaJWK("k0", "n", "AQAB"))
+	assert.False(t, ok)
+	_, ok = m.load("iss", rsaJWK("overflow", "n", "AQAB"))
+	assert.True(t, ok)
 }
 
 // TestParseRSAKey_ExponentValidation guards against a malformed/oversized "e"
@@ -646,4 +700,237 @@ func TestSelfExtractorFallsBackWhenNoConfigPinned(t *testing.T) {
 	if got != current {
 		t.Errorf("unpinned extraction should read the provider; got %v", got)
 	}
+}
+
+func TestALBKeyCache_GetDropsExpiredEntry(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	c := albKeyCache{entries: map[string]albKeyCacheEntry{
+		"live":    {key: &priv.PublicKey, expiresAt: time.Now().Add(time.Minute)},
+		"expired": {key: &priv.PublicKey, expiresAt: time.Now().Add(-time.Second)},
+	}}
+
+	_, ok := c.get("live")
+	assert.True(t, ok)
+	_, ok = c.get("expired")
+	assert.False(t, ok)
+	assert.NotContains(t, c.entries, "expired")
+	_, ok = c.get("absent")
+	assert.False(t, ok)
+}
+
+func TestALBKeyCache_ConcurrentGetSet(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	var c albKeyCache
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				c.set("k", &priv.PublicKey)
+				c.get("k")
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestIsBlockedAddr_ReservedRanges(t *testing.T) {
+	tests := []struct {
+		addr        string
+		wantBlocked bool
+	}{
+		// 0.0.0.0/8
+		{"0.0.0.0", true}, {"0.255.255.255", true}, {"1.0.0.0", false},
+		// 100.64.0.0/10
+		{"100.63.255.255", false}, {"100.64.0.0", true}, {"100.127.255.255", true}, {"100.128.0.0", false},
+		// 192.0.0.0/24, 192.0.2.0/24
+		{"191.255.255.255", false}, {"192.0.0.0", true}, {"192.0.0.255", true}, {"192.0.1.0", false},
+		{"192.0.2.0", true}, {"192.0.2.255", true}, {"192.0.3.0", false},
+		// 198.18.0.0/15, 198.51.100.0/24
+		{"198.17.255.255", false}, {"198.18.0.0", true}, {"198.19.255.255", true}, {"198.20.0.0", false},
+		{"198.51.99.255", false}, {"198.51.100.0", true}, {"198.51.100.255", true}, {"198.51.101.0", false},
+		// 203.0.113.0/24
+		{"203.0.112.255", false}, {"203.0.113.0", true}, {"203.0.113.255", true}, {"203.0.114.0", false},
+		// 240.0.0.0/4 and broadcast
+		{"239.255.255.255", true}, // multicast
+		{"240.0.0.0", true}, {"254.255.255.255", true}, {"255.255.255.255", true},
+		// existing classes still blocked
+		{"10.1.2.3", true}, {"172.16.0.1", true}, {"172.32.0.1", false}, {"192.168.0.1", true},
+		{"169.254.169.254", true}, {"224.0.0.1", true},
+		// public
+		{"8.8.8.8", false}, {"140.82.121.4", false},
+		// IPv6
+		{"64:ff9b::1", true}, {"64:ff9b::808:808", true}, {"64:ff9b:1::1", false}, {"64:ff9c::1", false},
+		{"2001:db8::1", true}, {"2001:db8:ffff::1", true}, {"2001:db9::1", false},
+		{"fc00::1", true}, {"fd12:3456::1", true}, {"fe00::1", false},
+		{"fe80::1", true}, {"ff02::1", true}, {"::", true},
+		{"2606:4700::1111", false},
+		// v4-mapped and v4-compatible carriers of reserved IPv4
+		{"::ffff:100.64.0.1", true}, {"::ffff:198.18.0.1", true}, {"::ffff:8.8.8.8", false},
+		{"::100.64.0.1", true}, {"::8.8.8.8", false}, {"::198.51.100.1", true},
+		// zone is ignored
+		{"fe80::1%eth0", true}, {"2606:4700::1111%eth0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.addr, func(t *testing.T) {
+			addr, err := netip.ParseAddr(tt.addr)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantBlocked, isBlockedAddr(addr, false))
+			// Loopback is the only thing allowLoopback may relax.
+			assert.Equal(t, tt.wantBlocked, isBlockedAddr(addr, true))
+		})
+	}
+}
+
+func TestIsBlockedAddr_Loopback(t *testing.T) {
+	for _, s := range []string{"127.0.0.1", "127.255.255.254", "::1", "::ffff:127.0.0.1"} {
+		addr := netip.MustParseAddr(s)
+		assert.True(t, isBlockedAddr(addr, false), s)
+		assert.False(t, isBlockedAddr(addr, true), s)
+	}
+	assert.True(t, isBlockedAddr(netip.Addr{}, true), "zero Addr must be blocked")
+}
+
+func TestBlockedDialControl(t *testing.T) {
+	tests := []struct {
+		name          string
+		address       string
+		allowLoopback bool
+		wantErr       string
+	}{
+		{"public v4", "8.8.8.8:443", false, ""},
+		{"public v6", "[2606:4700::1111]:443", false, ""},
+		{"metadata", "169.254.169.254:80", false, "blocked"},
+		{"metadata allowLoopback", "169.254.169.254:80", true, "blocked"},
+		{"private", "10.0.0.1:443", false, "blocked"},
+		{"cgnat", "100.64.0.1:443", false, "blocked"},
+		{"v4-mapped private", "[::ffff:10.0.0.1]:443", false, "blocked"},
+		{"ula", "[fd00:ec2::254]:443", false, "blocked"},
+		{"loopback blocked", "127.0.0.1:8080", false, "blocked"},
+		{"loopback allowed", "127.0.0.1:8080", true, ""},
+		{"v6 loopback allowed", "[::1]:8080", true, ""},
+		{"zoned link-local", "[fe80::1%eth0]:443", false, "blocked"},
+		{"no port", "8.8.8.8", false, "invalid dial address"},
+		{"hostname not an ip", "example.com:443", false, "invalid dial address"},
+		{"empty", "", false, "invalid dial address"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := blockedDialControl(tt.allowLoopback)("tcp", tt.address, nil)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestSecureHTTPClient_NeverUsesEnvironmentProxy(t *testing.T) {
+	tr, ok := newSecureHTTPClient(false, time.Second).Transport.(*http.Transport)
+	require.True(t, ok)
+	assert.Nil(t, tr.Proxy)
+}
+
+// Hostname targets are vetted after resolution, not by name.
+func TestSecureHTTPClient_HostnameResolvingToBlockedIPRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+
+	resp, err := newSecureHTTPClient(false, 2*time.Second).Get("http://localhost:" + port + "/")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "blocked")
+}
+
+// The standard dialer tries every resolved address: localhost may list ::1
+// first while the server listens on 127.0.0.1 only.
+func TestSecureHTTPClient_HostnameFallsThroughToLaterAddresses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+
+	resp, err := newSecureHTTPClient(true, 2*time.Second).Get("http://localhost:" + port + "/")
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+}
+
+func TestSecureHTTPClient_LiteralBlockedIPTargetsRefused(t *testing.T) {
+	client := newSecureHTTPClient(false, time.Second)
+	// IPv6 targets are covered via blockedDialControl: on a host without IPv6
+	// the socket() call fails before the control hook runs.
+	for _, target := range []string{
+		"https://169.254.169.254/", "https://10.0.0.1/", "https://100.64.0.1/", "https://198.18.0.1/",
+		"https://[::ffff:10.0.0.1]/",
+	} {
+		t.Run(target, func(t *testing.T) {
+			resp, err := client.Get(target)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "blocked")
+		})
+	}
+	for _, target := range []string{"https://[::1]/", "https://[64:ff9b::a00:1]/", "https://[fd00:ec2::254]/"} {
+		t.Run(target, func(t *testing.T) {
+			resp, err := client.Get(target)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			require.Error(t, err)
+		})
+	}
+}
+
+func BenchmarkResolveKey_CacheHit(b *testing.B) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(b, err)
+	jwk := types.JSONWebKey{
+		KeyID: "kid-1", KeyType: "RSA", Use: "sig", Algorithm: "RS256",
+		N: base64.RawURLEncoding.EncodeToString(priv.N.Bytes()),
+		E: base64.RawURLEncoding.EncodeToString([]byte{1, 0, 1}),
+	}
+	v := ssrfTestValidator(false)
+	const issuer = "https://token.actions.githubusercontent.com"
+	_, err = v.resolveKey(issuer, jwk)
+	require.NoError(b, err)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := v.resolveKey(issuer, jwk); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestResolveKey_RotationUnderReusedKidReparses(t *testing.T) {
+	v := ssrfTestValidator(false)
+	jwkOf := func(k *rsa.PrivateKey) types.JSONWebKey {
+		return rsaJWK("reused", base64.RawURLEncoding.EncodeToString(k.N.Bytes()), "AQAB")
+	}
+	oldPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	newPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	got, err := v.resolveKey("iss", jwkOf(oldPriv))
+	require.NoError(t, err)
+	assert.True(t, oldPriv.PublicKey.Equal(got))
+	got, err = v.resolveKey("iss", jwkOf(newPriv))
+	require.NoError(t, err)
+	assert.True(t, newPriv.PublicKey.Equal(got), "rotated material under a reused kid must not serve the stale key")
+	got, err = v.resolveKey("iss", jwkOf(newPriv))
+	require.NoError(t, err)
+	assert.True(t, newPriv.PublicKey.Equal(got))
 }

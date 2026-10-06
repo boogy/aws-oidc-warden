@@ -55,7 +55,7 @@ var (
 // to a canonical subject + raw claims map.
 //
 // Deliberately scoped to Validate only: FetchJWKS and GenKeyFunc remain
-// exported on the concrete *TokenValidator for tests and WarmPrefetch, but
+// exported on the concrete *TokenValidator for tests, but
 // are an unscoped, audience-less path, not a standalone validation entry point.
 type TokenValidatorInterface interface {
 	Validate(ctx context.Context, tokenString string) (*types.Claims, error)
@@ -68,6 +68,7 @@ type issuerSpec struct {
 	Audiences                 []string
 	ClaimMappings             map[string]string
 	RequiredClaims            []string
+	cacheKey                  string // jwksCacheKey, precomputed
 }
 
 // snapshot is an immutable view of the current trusted issuers, keyed by
@@ -96,7 +97,7 @@ func buildSnapshot(cfg *config.Config) *snapshot {
 // issuerSpec used on the request path. Shared by the self-mode registry
 // (buildSnapshot) and the delegated (apigw/alb) extractor constructors.
 func newIssuerSpec(ic *config.IssuerConfig) *issuerSpec {
-	return &issuerSpec{
+	spec := &issuerSpec{
 		Issuer:         ic.Issuer,
 		Provider:       ic.Provider,
 		JWKSURI:        ic.JWKSURI,
@@ -104,6 +105,8 @@ func newIssuerSpec(ic *config.IssuerConfig) *issuerSpec {
 		ClaimMappings:  ic.ClaimMappings,
 		RequiredClaims: ic.RequiredClaims,
 	}
+	spec.cacheKey = jwksCacheKey(spec)
+	return spec
 }
 
 // TokenValidator routes an incoming token to its issuer's spec via an
@@ -132,10 +135,12 @@ type TokenValidator struct {
 	// (issuer, kid). keyMemo caches parsed, re-validated public keys per
 	// (issuer, kid, key material). jwksURICache memoizes a discovery-resolved
 	// jwks_uri per issuer. sfGroup collapses concurrent cold JWKS fetches for
-	// the same issuer into a single upstream call.
+	// the same cache key into a single upstream call; jwksState remembers recent
+	// failures and cache writes.
 	refetch      *refetchLimiter
 	keyMemo      *keyMemo
-	jwksURICache sync.Map
+	jwksURICache sync.Map // issuer -> discoveredURI
+	jwksState    jwksState
 	sfGroup      singleflight.Group
 }
 
@@ -206,21 +211,23 @@ func (t *TokenValidator) rebuildSnapshot(cfg *config.Config) *snapshot {
 	return snap
 }
 
-// WarmPrefetch fetches and caches the JWKS for every configured issuer.
-// Intended for cold-start; a fetch failure is logged and otherwise ignored —
-// it must never fail bootstrap.
+// WarmPrefetch fetches and caches the JWKS for every configured issuer,
+// concurrently, returning once all finish or ctx ends. Intended for
+// cold-start; a fetch failure is logged and otherwise ignored — it must never
+// fail bootstrap.
 func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
+	var wg sync.WaitGroup
 	for _, spec := range t.currentSnapshot().registry {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-		if _, err := t.fetchJWKS(ctx, spec, false); err != nil {
-			logevent.Warn(ctx, nil, logevent.JWKSPrefetchFailure, "JWKS warm-prefetch failed; will fetch on first request",
-				issuerAttrs(spec.Issuer, slog.String("error", err.Error()))...)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := t.fetchJWKS(ctx, spec, false); err != nil {
+				logevent.Warn(ctx, nil, logevent.JWKSPrefetchFailure, "JWKS warm-prefetch failed; will fetch on first request",
+					issuerAttrs(spec.Issuer, slog.String("error", err.Error()))...)
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 // Validate implements the self-mode verification flow.
@@ -245,13 +252,9 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 	}
 
 	// Step 1: unverified iss peek — routing only, never identity/authorization.
-	unverified := jwt.MapClaims{}
-	if _, _, err := jwt.NewParser().ParseUnverified(tokenString, unverified); err != nil {
-		return nil, fmt.Errorf("failed to parse token: %w", err)
-	}
-	unverifiedIssuer, err := unverified.GetIssuer()
-	if err != nil || unverifiedIssuer == "" {
-		return nil, fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
+	unverifiedIssuer, err := peekIssuer(tokenString)
+	if err != nil {
+		return nil, err
 	}
 
 	// Step 2: registry lookup by exact issuer match; denies before any JWKS fetch.
@@ -326,6 +329,44 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 	// silently drift weaker.
 	bounds := claimBounds{leeway: leeway, maxLifetime: cfg.MaxTokenLifetime, maxAge: cfg.MaxTokenAge}
 	return checkAndNormalizeClaims(raw, spec, bounds, t.timeNow())
+}
+
+// peekIssuer returns the token's unverified iss for registry routing only. It
+// decodes just the payload; ParseWithClaims re-verifies the issuer, so a wrong
+// peek can only fail closed.
+func peekIssuer(tokenString string) (string, error) {
+	first := strings.IndexByte(tokenString, '.')
+	if first < 0 {
+		return "", malformedTokenErr("token contains an invalid number of segments")
+	}
+	rest := tokenString[first+1:]
+	second := strings.IndexByte(rest, '.')
+	if second < 0 || strings.IndexByte(rest[second+1:], '.') >= 0 {
+		return "", malformedTokenErr("token contains an invalid number of segments")
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(rest[:second])
+	if err != nil {
+		return "", malformedTokenErr("could not base64 decode claim")
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return "", fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
+		}
+		return "", malformedTokenErr("could not JSON decode claim")
+	}
+	if claims.Iss == "" {
+		return "", fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
+	}
+	return claims.Iss, nil
+}
+
+func malformedTokenErr(reason string) error {
+	return fmt.Errorf("failed to parse token: %w: %s", jwt.ErrTokenMalformed, reason)
 }
 
 // audienceMatches reports whether any of the token's audiences matches any of
@@ -494,7 +535,8 @@ func normalizeClaims(raw jwt.MapClaims, provider string, mappings map[string]str
 // genKeyFuncForIssuer returns a jwt.Keyfunc scoped to issuer that resolves a
 // token's kid to a JWKS key. Beyond a kid match, a candidate must also have
 // use "sig" or unset, alg matching the token's alg (if set), and a key type
-// matching the token alg's family (RSA for RS*, EC for ES*) — this blocks an
+// matching the token alg's family (RSA for RS*, EC for ES*, with the curve
+// the alg mandates) — this blocks an
 // alg-confusion or duplicate-kid-different-type attack. Scanning continues
 // past a kid match that fails these checks, so a duplicate kid with one
 // matching and one non-matching key still resolves correctly. issuer scopes
@@ -524,6 +566,9 @@ func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jw
 			case key.KeyType == "RSA" && strings.HasPrefix(tokenAlg, "RS"):
 				return t.resolveKey(issuer, key)
 			case key.KeyType == "EC" && strings.HasPrefix(tokenAlg, "ES"):
+				if key.Crv != ecCurveForAlg[tokenAlg] {
+					continue
+				}
 				return t.resolveKey(issuer, key)
 			}
 		}
@@ -539,6 +584,13 @@ func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jw
 // multi-issuer key memoization; Validate itself calls genKeyFuncForIssuer.
 func (t *TokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc {
 	return t.genKeyFuncForIssuer("", jwks)
+}
+
+// ecCurveForAlg maps an ECDSA JWS alg to the only curve RFC 7518 allows for it.
+var ecCurveForAlg = map[string]string{
+	"ES256": "P-256",
+	"ES384": "P-384",
+	"ES512": "P-521",
 }
 
 func parseRSAKey(key types.JSONWebKey) (*rsa.PublicKey, error) {
