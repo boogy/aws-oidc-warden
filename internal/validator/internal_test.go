@@ -647,3 +647,38 @@ func TestSelfExtractorFallsBackWhenNoConfigPinned(t *testing.T) {
 		t.Errorf("unpinned extraction should read the provider; got %v", got)
 	}
 }
+
+func TestALBKeyCache_GetDropsExpiredEntry(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	c := albKeyCache{entries: map[string]albKeyCacheEntry{
+		"live":    {key: &priv.PublicKey, expiresAt: time.Now().Add(time.Minute)},
+		"expired": {key: &priv.PublicKey, expiresAt: time.Now().Add(-time.Second)},
+	}}
+
+	_, ok := c.get("live")
+	assert.True(t, ok)
+	_, ok = c.get("expired")
+	assert.False(t, ok)
+	assert.NotContains(t, c.entries, "expired")
+	_, ok = c.get("absent")
+	assert.False(t, ok)
+}
+
+func TestALBKeyCache_ConcurrentGetSet(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	var c albKeyCache
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				c.set("k", &priv.PublicKey)
+				c.get("k")
+			}
+		}()
+	}
+	wg.Wait()
+}
