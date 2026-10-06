@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`mappings_max_stale`** answers 503 `config_stale` once mappings are older than this (default 3x `config_reload_interval` for `s3://`).
 - **`allow_session_name`** on a mapping lets callers name their STS session; otherwise a requested `sessionName` is ignored.
 - **`s3_config_bucket_owner`** pins the expected owner on S3 config reads; required for `s3://` mappings and fragments.
+- **`session_policy_bucket_owner`** pins the expected owner on session-policy S3 reads; startup warns (`policy.s3_owner_unpinned`) when a policy bucket is set without it.
+- **Local dev server `-host` flag**, defaulting to `127.0.0.1` instead of all interfaces.
 
 ### Changed
 
@@ -26,6 +28,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`/verify` accepts `durationSeconds` (900–3600) and `sessionName`**, like `aws-actions/configure-aws-credentials`.
 - **The `s3_config_bucket` overlay uses a conditional GET** when `s3_config_bucket_owner` is set.
 - **A mapping setting both `session_policy` and `session_policy_file`, or `allow_session_name` with `role_session_name`, fails to load** instead of silently ignoring one.
+- **Stricter config loading**: unknown nested keys (e.g. a misspelled `conditions`, which silently made a grant unconditional), malformed role entries, `config_reload_interval` under 1s, and session tags STS would refuse (`aws:` prefix, case-insensitive duplicates, over 50) fail to load; unknown top-level keys only warn.
+- **The wildcard guard rejects every match-everything pattern** (`.*.*`, `(?s).*`, `[\s\S]*`, `(.*)`, …), not just `.*` and `.+`.
+- **A fragment's `default_issuer` binds only that fragment's own mappings.**
+- **Unauthenticated (extract-stage) denies are always batched to the audit bucket**, so junk tokens cannot throttle the synchronous audit writes allows depend on.
+- **Stale requests fail fast once a refresh has failed** instead of waiting up to 5s each.
+- **Request bodies are capped at ~36 KiB**, derived from the token and role limits, instead of 1 MiB.
+- **JWKS cache entries carry a hash of the issuer's `jwks_uri` override**, so deployments sharing a cache table with different overrides no longer share keys; failed fetches are remembered for 5s and the discovered `jwks_uri` expires with the cache TTL.
+- **Outbound JWKS/discovery fetches check every address actually dialed** and also block CGNAT, NAT64, benchmarking, documentation and reserved ranges.
+- **Tag-auth caches IAM `NoSuchEntity` for 30s** per role, so unknown role names cannot burn the IAM quota.
+- **Audit `sessionTagKeys` lists the tags actually attached**, and a dropped tag warns once per request.
+- **Hot-path performance**: literal subjects and conditions skip regex, non-one-pass subject patterns are owner-bucketed, unchanged config refreshes skip the rebuild, audit gzip writers are pooled, the issuer peek and key memo no longer allocate, and session tags are built once per request.
 
 ### Fixed
 
@@ -35,6 +48,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Config objects and S3 session policies over 1 MiB are rejected** instead of silently truncated.
 - **A `cross_account` refusal during role exchange** returns 403 `permission_denied`, audited at stage `account_check`.
 - **ALB responses set `multiValueHeaders`**, so credential and error responses keep `Content-Type` and security headers on multi-value target groups.
+- **Patterns that close the auto-anchor group early (`main)|(x`) are rejected**; they escaped `^(?:…)$` and matched unanchored.
+- **A newline in a claim value no longer slips past a `none_of` veto.**
+- **ALB mode honors `jwt_leeway`**, and the ALB adapter picks the token source from `jwt_validation.mode`, so self mode behind an ALB OIDC action works.
+- **EC JWKS keys must match the token's curve.**
+- **JWKS warm-up and fetches honor the caller's deadline**; issuers warm concurrently, so a hung IdP no longer stalls cold start.
+- **Session policies read from S3 are fully read before their request context is cancelled**; large objects could truncate.
+- **The audit batch no longer grows without bound or blocks requests during an S3 outage**; past 5000 records the oldest are dropped (`audit.batch.dropped`).
+- **The local dev server drains in-flight requests on shutdown** and bounds write time and header size.
+
+### Removed
+
+- Unused `RefreshClients` (and its `aws.clients.refresh.*` events), `AwsConsumer.GetRole`, `cache.WithAWSConfig`/`WithDynamoDBAWSConfig`, s3logger `WriteSingleLog`/`LoggerInterface`, and the unread JWK `x5c`/`x5u` fields.
 
 ### Dependencies
 
