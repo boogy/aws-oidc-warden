@@ -96,6 +96,8 @@ type RoleMapping struct {
 	resolvedSubject string         `mapstructure:"-" json:"-"`
 	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
 	order           int            `mapstructure:"-" json:"-"`
+
+	effectiveTags map[string]string `mapstructure:"-" json:"-"` // issuer spec + SessionTags; read-only, may alias the issuer's map
 }
 
 // RoleGroupDefaults are the fields a role_group applies uniformly to every
@@ -909,10 +911,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}
 
-		for tagKey := range iss.SessionTags {
-			if !sessionTagKeyPattern.MatchString(tagKey) {
-				return fmt.Errorf("issuers[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", i, iss.Issuer, tagKey)
-			}
+		if err := validateSessionTagKeys(iss.SessionTags); err != nil {
+			return fmt.Errorf("issuers[%d] (%s): session_tags: %w", i, iss.Issuer, err)
+		}
+		if err := checkSessionTagSet(iss.SessionTags); err != nil {
+			return fmt.Errorf("issuers[%d] (%s): session_tags: %w", i, iss.Issuer, err)
 		}
 
 		if iss.TagPrefix != "" && !tagPrefixPattern.MatchString(iss.TagPrefix) {
@@ -1091,15 +1094,19 @@ func (c *Config) Validate() error {
 		m.Issuer = resolvedIssuer
 
 		issuerTags := c.IssuerSessionTags(resolvedIssuer)
+		if err := validateSessionTagKeys(m.SessionTags); err != nil {
+			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
+		}
+		// Rejected rather than ignored: a silently dropped override reads
+		// as applied, and the tag feeds ABAC conditions in the target role.
 		for tagKey := range m.SessionTags {
-			if !sessionTagKeyPattern.MatchString(tagKey) {
-				return fmt.Errorf("%s[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", source, i, subject, tagKey)
-			}
-			// Rejected rather than ignored: a silently dropped override reads
-			// as applied, and the tag feeds ABAC conditions in the target role.
 			if _, dup := issuerTags[tagKey]; dup {
 				return fmt.Errorf("%s[%d] (%s): session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", source, i, subject, tagKey, resolvedIssuer)
 			}
+		}
+		m.effectiveTags, err = mergeSessionTags(issuerTags, m.SessionTags)
+		if err != nil {
+			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
 		}
 
 		roles, err := c.resolveRoleSet(m.Roles)
@@ -1457,6 +1464,57 @@ func compileAnchoredSubject(pattern string, rc regexCache) (*regexp.Regexp, erro
 	return rc.anchor(pattern)
 }
 
+// maxSessionTags is the STS limit on session tags per AssumeRole call.
+const maxSessionTags = 50
+
+// validateSessionTagKeys rejects keys STS would refuse: bad charset/length, or
+// the reserved aws: prefix (case-insensitive).
+func validateSessionTagKeys(tags map[string]string) error {
+	for _, key := range utils.SortedKeys(tags) {
+		if !sessionTagKeyPattern.MatchString(key) {
+			return fmt.Errorf("key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", key)
+		}
+		if len(key) >= 4 && strings.EqualFold(key[:4], "aws:") {
+			return fmt.Errorf("key %q uses the aws: prefix, which STS reserves", key)
+		}
+	}
+	return nil
+}
+
+// checkSessionTagSet rejects keys that collide case-insensitively (STS treats
+// them as one key) and a union of more than maxSessionTags.
+func checkSessionTagSet(sets ...map[string]string) error {
+	seen := make(map[string]string)
+	for _, set := range sets {
+		for _, key := range utils.SortedKeys(set) {
+			folded := strings.ToLower(key)
+			if prev, ok := seen[folded]; ok && prev != key {
+				return fmt.Errorf("keys %q and %q are the same STS tag key (STS compares keys case-insensitively)", prev, key)
+			}
+			seen[folded] = key
+		}
+	}
+	if len(seen) > maxSessionTags {
+		return fmt.Errorf("%d session tags exceed the STS limit of %d", len(seen), maxSessionTags)
+	}
+	return nil
+}
+
+// mergeSessionTags returns issuerTags plus extra (issuer wins) after checking
+// the union. With no extra it returns issuerTags itself, already checked.
+func mergeSessionTags(issuerTags, extra map[string]string) (map[string]string, error) {
+	if len(extra) == 0 {
+		return issuerTags, nil
+	}
+	if err := checkSessionTagSet(issuerTags, extra); err != nil {
+		return nil, err
+	}
+	merged := make(map[string]string, len(issuerTags)+len(extra))
+	maps.Copy(merged, extra)
+	maps.Copy(merged, issuerTags)
+	return merged, nil
+}
+
 // validateRoleSessionName rejects a session name STS would refuse or the
 // runtime sanitizer would reshape. Rejects rather than sanitizes: this value
 // becomes an identity (assumed-role ARN, aws:userid, CloudTrail, IAM
@@ -1605,22 +1663,18 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 // issuer's spec plus whatever the authorizing mapping adds. Session tags are
 // per-issuer by design — issuers mint different claims, so there is no global
 // spec to inherit. Additive only: Validate() rejects a mapping key the issuer
-// already defines, and the issuer's value still wins here so the issuer's
-// contract holds regardless. A role granted by tag-auth has no authorizing
+// already defines. The union is built once in Validate(); callers must treat
+// the result as read-only. A role granted by tag-auth has no authorizing
 // mapping and gets the issuer spec alone; an unconfigured issuer gets nothing.
 func (c *Config) EffectiveSessionTags(issuer string, d Decision) map[string]string {
 	iss := c.issuerConfig(issuer)
 	if iss == nil {
 		return nil
 	}
-	extra := d.sessionTags()
-	if len(extra) == 0 {
-		return iss.SessionTags
+	if m := d.authorizing; m != nil && m.Issuer == issuer && m.effectiveTags != nil {
+		return m.effectiveTags
 	}
-	merged := make(map[string]string, len(iss.SessionTags)+len(extra))
-	maps.Copy(merged, extra)
-	maps.Copy(merged, iss.SessionTags)
-	return merged
+	return iss.SessionTags
 }
 
 // FindSessionPolicy returns the session policy from the mapping that
