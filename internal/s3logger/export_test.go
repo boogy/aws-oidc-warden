@@ -6,10 +6,6 @@ import (
 
 // Exported for the external s3logger_test package only.
 
-func (l *S3Logger) SetS3Client(client s3ClientInterface) {
-	l.s3Client = client
-}
-
 func (l *S3Logger) SetTimeNow(timeFunc func() time.Time) {
 	l.timeNow = timeFunc
 }

@@ -120,6 +120,13 @@ func NewS3Logger(cfg *gtvcfg.Config) *S3Logger {
 	return logger
 }
 
+// SetS3Client injects the S3 client; handler tests in other packages need it.
+func (l *S3Logger) SetS3Client(client s3ClientInterface) {
+	l.initMu.Lock()
+	defer l.initMu.Unlock()
+	l.s3Client = client
+}
+
 // SetConfigSource wires a live-config getter (e.g. config.Provider.Get) so
 // runtime-changeable values are read per-write instead of from the boot-time
 // snapshot. Optional: with none wired, the snapshot is used.
