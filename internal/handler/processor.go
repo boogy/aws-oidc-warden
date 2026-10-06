@@ -83,6 +83,8 @@ type authzOutcome struct {
 
 const reasonAccountNotAllowed = "target account not allowed"
 
+var errInvalidPolicyJSON = errors.New("session policy is not valid JSON")
+
 // deny finishes a rejected request. o.rec.Stage and o.rec.Reason must already be set.
 func (r *RequestProcessor) deny(ctx context.Context, o *authzOutcome, msg string, ret error, attrs ...slog.Attr) error {
 	o.rec.ProcessingMS = o.elapsed()
@@ -360,9 +362,8 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 			return nil, "", fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
 		}
 
-		var jsonCheck any
-		if err := json.Unmarshal(policyBytes, &jsonCheck); err != nil {
-			logPolicyErr("invalid JSON in session policy file", err)
+		if !json.Valid(policyBytes) {
+			logPolicyErr("invalid JSON in session policy file", errInvalidPolicyJSON)
 			return nil, "", fmt.Errorf("invalid JSON in session policy file: %w", ErrSessionPolicyAccess)
 		}
 

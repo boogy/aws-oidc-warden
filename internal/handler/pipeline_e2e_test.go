@@ -733,3 +733,35 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 		assert.True(t, sawSubject, "a deny must record which subject was denied")
 	})
 }
+
+func TestPipeline_PolicyFileJSONAcceptSet(t *testing.T) {
+	role := "arn:aws:iam::111111111111:role/deploy"
+	cfg := vE2ECfg(t, []config.RoleMapping{
+		{Subject: config.Patterns{"myorg/repo"}, Roles: []string{role}, SessionPolicyFile: "scoped.json"},
+	})
+	tests := []struct {
+		name    string
+		body    string
+		allowed bool
+	}{
+		{"object", `{"Version":"2012-10-17"}`, true},
+		{"padded object", " \n{\"a\":[1,2]}\n ", true},
+		{"empty", "", false},
+		{"truncated", `{"Version":`, false},
+		{"trailing garbage", `{"a":1} x`, false},
+		{"two documents", `{"a":1}{"b":2}`, false},
+		{"unquoted key", `{a:1}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &vRecorder{allowAccount: true, s3Body: tt.body}
+			_, err := vRun(t, cfg, rec, vE2EClaims("myorg/repo", "refs/heads/main"), role)
+			if tt.allowed != (err == nil) {
+				t.Fatalf("allowed=%v, err=%v", tt.allowed, err)
+			}
+			if !tt.allowed && rec.assumeCalls != 0 {
+				t.Error("role assumed unscoped after invalid policy JSON")
+			}
+		})
+	}
+}
