@@ -48,9 +48,7 @@ type Bootstrap struct {
 	Config    *config.Config
 	Provider  *config.Provider
 	Consumer  aws.AwsConsumerInterface
-	Validator validator.TokenValidatorInterface  // kept for external use / tests
 	Extractor validator.ClaimsExtractorInterface // used by processor
-	Cache     cache.Cache
 	S3Logger  *s3logger.S3Logger
 	Logger    *slog.Logger
 	Adapter   string
@@ -133,9 +131,7 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 		Config:    cfg,
 		Provider:  provider,
 		Consumer:  consumer,
-		Validator: tokenValidator,
 		Extractor: extractor,
-		Cache:     jwksCache,
 		S3Logger:  s3log,
 		Logger:    logger,
 		Adapter:   adapter,
@@ -175,7 +171,7 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 	case "apigw":
 		return validator.NewAPIGWExtractor(provider), nil
 	case "alb":
-		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
+		if err := requireSingleIssuer(cfg, mode); err != nil {
 			return nil, err
 		}
 		return validator.NewALBExtractor(provider), nil
@@ -184,12 +180,12 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 	}
 }
 
-// singleDelegatedIssuer returns the sole configured issuer for alb mode.
-func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfig, error) {
+// requireSingleIssuer enforces alb mode's exactly-one-issuer rule.
+func requireSingleIssuer(cfg *config.Config, mode string) error {
 	if len(cfg.Issuers) != 1 {
-		return nil, fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
+		return fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
 	}
-	return &cfg.Issuers[0], nil
+	return nil
 }
 
 // BuildConfigProvider builds the config provider; any reload source triggers a fail-fast initial refresh.

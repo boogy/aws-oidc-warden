@@ -78,7 +78,6 @@ func (h *AwsApiGateway) createRequestContext(ctx context.Context, event events.A
 		event.RequestContext.RequestID,
 		event.RequestContext.Identity.SourceIP,
 		event.Headers,
-		event.RequestContext.Identity.UserAgent,
 	)
 }
 

@@ -69,7 +69,6 @@ func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.La
 		event.RequestContext.RequestID,
 		event.RequestContext.HTTP.SourceIP,
 		event.Headers,
-		event.RequestContext.HTTP.UserAgent,
 	)
 }
 

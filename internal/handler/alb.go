@@ -109,7 +109,7 @@ func albRequestHeaders(event events.ALBTargetGroupRequest) map[string]string {
 func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, headers map[string]string) (context.Context, context.CancelFunc) {
 	// ALB has neither a request ID nor a source-IP field, so both fall back
 	// to their non-frontend paths (fresh UUID, rightmost XFF hop).
-	return newRequestContext(ctx, "", "", headers, headerValue(headers, "user-agent"))
+	return newRequestContext(ctx, "", "", headers)
 }
 
 // unmarshalRequestData parses the ALB request body: role-only when
