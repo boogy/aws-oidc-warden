@@ -403,7 +403,7 @@ func TestNestedConditionsDecodeFromYAML(t *testing.T) {
 	require.NoError(t, v.ReadConfig(strings.NewReader(nestedConditionYAML)))
 
 	var c Config
-	require.NoError(t, v.Unmarshal(&c, decoderOptions()...))
+	require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
 	require.Len(t, c.RoleMappings, 1)
 
 	cond := c.RoleMappings[0].Conditions
@@ -619,7 +619,7 @@ role_mappings:
 	require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
 
 	var c Config
-	require.NoError(t, v.Unmarshal(&c, decoderOptions()...))
+	require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
 	require.Len(t, c.RoleMappings, 1)
 	return c.RoleMappings[0].Conditions
 }

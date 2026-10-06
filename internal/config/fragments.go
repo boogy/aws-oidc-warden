@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/utils"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -52,8 +53,12 @@ func parseFragment(data []byte, format, source string) (*FragmentConfig, error) 
 	}
 
 	var frag FragmentConfig
-	if err := v.Unmarshal(&frag, decoderOptions()...); err != nil {
+	var md mapstructure.Metadata
+	if err := v.Unmarshal(&frag, decoderOptions(&md)...); err != nil {
 		return nil, fmt.Errorf("config fragment %q: failed to unmarshal: %w", source, err)
+	}
+	if err := rejectUnusedKeys(md.Unused, fmt.Sprintf("config fragment %q", source)); err != nil {
+		return nil, err
 	}
 	return &frag, nil
 }

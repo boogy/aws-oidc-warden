@@ -17,6 +17,7 @@ import (
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -689,8 +690,12 @@ func (c *Config) LoadConfig() error {
 		}
 	}
 
-	if err := viper.Unmarshal(c, decoderOptions()...); err != nil {
+	var md mapstructure.Metadata
+	if err := viper.Unmarshal(c, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	if err := rejectUnusedKeys(md.Unused, "config file"); err != nil {
+		return err
 	}
 
 	// Zero-config GitHub seed: only when there is truly no configuration
@@ -741,8 +746,12 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 		}
 	}
 
-	if err := v.Unmarshal(next, decoderOptions()...); err != nil {
+	var md mapstructure.Metadata
+	if err := v.Unmarshal(next, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %w", err)
+	}
+	if err := rejectUnusedKeys(md.Unused, "overlay"); err != nil {
+		return err
 	}
 
 	reapplyEnvOverrides(next)
