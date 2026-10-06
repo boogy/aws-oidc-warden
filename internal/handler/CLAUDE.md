@@ -17,7 +17,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Core request logic shared by all dep
 - `bootstrap.go` `NewIdPService` — builds the `idp.Service` whenever an `idp` block exists (keys warm only when `idp.enabled`); the KMS client comes from `DefaultIdPKMS`, the shared `AwsServiceWrapper` singleton the consumer also uses. `RefreshClients` swaps its clients without synchronization, so it must never run while requests are in flight (it has no production caller).
 - `apigateway.go` — REST API v1 adapter (`events.APIGatewayProxyRequest`). Passes `ExtractionInput{Token: requestData.Token}`; always self mode. IdP routes match `requestContext.path` (stage-qualified), not `event.Path`.
 - `apigatewayv2.go` — HTTP API v2 adapter (`events.APIGatewayV2HTTPRequest`). Reads authorizer claims from `event.RequestContext.Authorizer.JWT.Claims`; use with `jwt_validation.mode: "apigw"`.
-- `alb.go` — ALB adapter. Reads `x-amzn-oidc-data` header when present (delegated ALB mode); falls back to token-in-body (self mode).
+- `alb.go` — ALB adapter. The path follows `jwt_validation.mode` captured at construction, never header presence: `alb` mode reads `x-amzn-oidc-data` with a role-only body (a missing header still reaches `ALBExtractor` and is denied); `self` mode reads the token from the body and ignores the header (an ALB authenticate action always sets it).
 - `lambdaurl.go` — Lambda URL adapter. Always self mode.
 
 ## Pipeline

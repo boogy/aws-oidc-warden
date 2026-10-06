@@ -110,7 +110,7 @@ func albEvent(multi map[string][]string, body string) events.ALBTargetGroupReque
 // group.
 func TestALBHandler_ReadsMultiValueHeaders(t *testing.T) {
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	event := albEvent(map[string][]string{
 		"x-amzn-oidc-data": {"delegated-oidc-data"},
@@ -129,7 +129,7 @@ func TestALBHandler_ReadsMultiValueHeaders(t *testing.T) {
 // header value the extraction input uses, so the two can never disagree.
 func TestALBHandler_MultiValueHeaderSelectsRoleOnlyParser(t *testing.T) {
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	resp, err := h.Handler(context.Background(), albEvent(map[string][]string{
 		"x-amzn-oidc-data": {"delegated-oidc-data"},
@@ -142,7 +142,7 @@ func TestALBHandler_MultiValueHeaderSelectsRoleOnlyParser(t *testing.T) {
 }
 
 func TestALBHandler_ErrorResponseSetsMultiValueHeaders(t *testing.T) {
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), &captureExtractor{}, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), &captureExtractor{}, nil)
 
 	resp, err := h.Handler(context.Background(), albEvent(map[string][]string{
 		"x-amzn-oidc-data": {"delegated-oidc-data"},
@@ -165,7 +165,7 @@ func TestALBHandler_MultiValueXFFPopulatesSourceIP(t *testing.T) {
 	defer slog.SetDefault(prevDefault)
 
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	_, err := h.Handler(context.Background(), albEvent(map[string][]string{
 		"x-amzn-oidc-data": {"delegated-oidc-data"},
@@ -182,7 +182,7 @@ func TestALBHandler_MultiValueXFFPopulatesSourceIP(t *testing.T) {
 }
 
 func TestALBHandler_OversizedOIDCHeaderIsInvalidRequest(t *testing.T) {
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), &captureExtractor{}, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), &captureExtractor{}, nil)
 
 	resp, err := h.Handler(context.Background(), albEvent(map[string][]string{
 		"x-amzn-oidc-data": {strings.Repeat("a", handler.MaxTokenLength+1)},
@@ -196,7 +196,7 @@ func TestALBHandler_OversizedOIDCHeaderIsInvalidRequest(t *testing.T) {
 // Single-value target groups must keep working unchanged.
 func TestALBHandler_SingleValueHeadersStillWork(t *testing.T) {
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	event := albEvent(nil, `{"role":"arn:aws:iam::123456789012:role/MyRole"}`)
 	event.Headers = map[string]string{"x-amzn-oidc-data": "single-value-oidc"}
@@ -211,7 +211,7 @@ func TestALBHandler_SingleValueHeadersStillWork(t *testing.T) {
 // when multi-value is on, and the one that can carry every hop.
 func TestALBHandler_MultiValueWinsOverSingleValue(t *testing.T) {
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	event := albEvent(map[string][]string{"x-amzn-oidc-data": {"multi-value-oidc"}},
 		`{"role":"arn:aws:iam::123456789012:role/MyRole"}`)
@@ -242,7 +242,7 @@ func TestALBHandler_NoXFF_OmitsEmptySourceIPKeys(t *testing.T) {
 	defer slog.SetDefault(prevDefault)
 
 	ex := &stubExtractor{err: handler.ErrTokenValidationFailed}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	event := events.ALBTargetGroupRequest{
 		HTTPMethod: "POST",
@@ -554,4 +554,55 @@ func TestIdPDocumentRouteWarnsOnFrozenDrift(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 200, r.StatusCode, r.Body)
 	assert.Equal(t, 1, countEventLines(buf.String(), "config.idp.reload_ignored"))
+}
+
+// The body/header parse path follows the configured jwt_validation.mode, not header presence.
+func TestALBHandler_PathFollowsConfiguredMode(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/MyRole"
+	withToken := `{"token":"body-token","role":"` + role + `"}`
+	roleOnly := `{"role":"` + role + `"}`
+	hdr := map[string][]string{"x-amzn-oidc-data": {"alb-oidc-data"}}
+
+	tests := []struct {
+		name       string
+		mode       string
+		headers    map[string][]string
+		body       string
+		wantStatus int
+		wantToken  string
+		wantALB    string
+	}{
+		{"self, header present, body token used", "self", hdr, withToken, 401, "body-token", ""},
+		{"self, no header, body token used", "self", nil, withToken, 401, "body-token", ""},
+		{"self, header present, no body token rejected", "self", hdr, roleOnly, 400, "", ""},
+		{"alb, header present, header used", "alb", hdr, roleOnly, 401, "", "alb-oidc-data"},
+		{"alb, header present, body token ignored", "alb", hdr, withToken, 401, "", "alb-oidc-data"},
+		{"alb, no header still reaches the extractor", "alb", nil, roleOnly, 401, "", ""},
+		{"alb, no header, body token not honored", "alb", nil, withToken, 401, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ex := &captureExtractor{}
+			h := handler.NewAwsApplicationLoadBalancer(staticProviderMode(t, tt.mode), mockConsumer(t), ex, nil)
+			resp, err := h.Handler(context.Background(), albEvent(tt.headers, tt.body))
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, resp.StatusCode)
+			assert.Equal(t, tt.wantToken, ex.input.Token)
+			assert.Equal(t, tt.wantALB, ex.input.ALBOIDCData)
+		})
+	}
+}
+
+// alb mode with the real extractor must deny when the ALB header is absent.
+func TestALBHandler_ALBModeMissingHeaderDenies(t *testing.T) {
+	p := albModeProvider(t)
+	fc := mockConsumer(t)
+	h := handler.NewAwsApplicationLoadBalancer(p, fc, validator.NewALBExtractor(p), nil)
+
+	resp, err := h.Handler(context.Background(), albEvent(nil,
+		`{"token":"body-token","role":"arn:aws:iam::123456789012:role/MyRole"}`))
+	require.NoError(t, err)
+
+	assert.Equal(t, 401, resp.StatusCode)
+	assert.Zero(t, fc.assumeCalls, "no credentials may be issued without the ALB header")
 }

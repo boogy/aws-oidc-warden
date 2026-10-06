@@ -37,9 +37,15 @@ func (f *fixedExtractor) Extract(_ context.Context, _ validator.ExtractionInput)
 }
 
 // staticProvider builds a config.Provider that maps "org/repo" → "arn:aws:iam::123456789012:role/MyRole".
-func staticProvider(t *testing.T) *config.Provider {
+func staticProvider(t *testing.T) *config.Provider { return staticProviderMode(t, "") }
+
+// albModeProvider is staticProvider with jwt_validation.mode "alb".
+func albModeProvider(t *testing.T) *config.Provider { return staticProviderMode(t, "alb") }
+
+func staticProviderMode(t *testing.T, mode string) *config.Provider {
 	t.Helper()
 	cfg := &config.Config{
+		JWTValidation: config.JWTValidation{Mode: mode},
 		Issuers: []config.IssuerConfig{{
 			Issuer:    testIssuer,
 			Provider:  "github",
@@ -51,6 +57,9 @@ func staticProvider(t *testing.T) *config.Provider {
 			Subject: config.Patterns{"org/repo"},
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
+	}
+	if mode == "alb" {
+		cfg.JWTValidation.ALBExpectedSigner = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test/abc"
 	}
 	require.NoError(t, cfg.Validate())
 	return config.NewStaticProvider(cfg)
