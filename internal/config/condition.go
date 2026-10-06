@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
@@ -81,6 +82,10 @@ type regexCache map[string]*regexp.Regexp
 func (rc regexCache) anchor(pattern string) (*regexp.Regexp, error) {
 	if re, ok := rc[pattern]; ok {
 		return re, nil
+	}
+	// Unbalanced parens (`x)|(y`) compile once wrapped and escape the anchor.
+	if _, err := syntax.Parse(pattern, syntax.Perl); err != nil {
+		return nil, err
 	}
 	re, err := regexp.Compile("^(?:" + pattern + ")$")
 	if err != nil {
