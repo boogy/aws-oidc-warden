@@ -404,8 +404,8 @@ func compileAnchoredCondition(pattern string, rc regexCache) (*matcher, error) {
 //
 // This reads the VALUE, never the Go type, and in BOTH polarities: dispatching
 // on type under none_of alone made the two spellings of a predicate disagree
-// and broke NOT(NOT(x)) == x. types.OpaqueClaim is the one deliberate
-// exception to that symmetry — see valueIsUndecidable.
+// and broke NOT(NOT(x)) == x. types.OpaqueClaim and values containing a
+// newline are deliberate exceptions to that symmetry — see valueIsUndecidable.
 //
 // Cost is bounded without an element cap: the token is already length-capped
 // upstream by max_token_bytes (default 8192), so the number of array elements
@@ -566,14 +566,21 @@ func claimText(v any) (string, bool) {
 // match" would disarm the veto and authorize exactly the caller the operator
 // refused, so such a value counts as MATCHED and fires the veto instead.
 //
-// Three shapes qualify: an object, a list carrying a structural element, and
-// types.OpaqueClaim — a claim whose JSON type an upstream stringifier
+// Four shapes qualify: an object, a list carrying a structural element, a
+// readable scalar whose text contains a newline (or a list element that does),
+// and types.OpaqueClaim — a claim whose JSON type an upstream stringifier
 // destroyed (apigw mode), readable as text but no longer a reading of the real
 // value. OpaqueClaim is the one place the gate refuses a claim by TYPE rather
 // than by VALUE: claimText reads it, so positive polarity matches its verbatim
 // text while negation vetoes, and NOT(NOT(x)) == x does NOT hold for it. That
 // asymmetry is load-bearing — removing it reopens the apigw none_of fail-open
 // (TestOpaqueClaimPositiveAndNoneOfAreNotComplements).
+//
+// A newline is undecidable because `.` does not match it: a veto such as
+// `.*@contractor\.com` would not fire on "x\nbob@contractor.com", so the
+// refused caller would pass. It fails closed under negation, and positive
+// matching is unchanged. The same asymmetry applies, so NOT(NOT(x)) == x does
+// not hold for such a value either.
 //
 // Absence is deliberately NOT undecidable: nil, from a missing claim or a JSON
 // null, is a known state, and none_of's exact-negation semantics depend on it.
@@ -586,14 +593,14 @@ func valueIsUndecidable(v any) bool {
 		return true
 	case []any:
 		for _, el := range t {
-			if _, ok := claimText(el); !ok {
+			if text, ok := claimText(el); !ok || strings.Contains(text, "\n") {
 				return true
 			}
 		}
 		return false
 	default:
-		_, ok := claimText(v)
-		return !ok
+		text, ok := claimText(v)
+		return !ok || strings.Contains(text, "\n")
 	}
 }
 
@@ -673,9 +680,9 @@ func (r *claimResolver) satisfies(cond *Condition) bool {
 // into a none_of member, so a none_of nested inside a none_of is positive again
 // (double negation), which is what the operator wrote. all_of and any_of
 // preserve polarity — they change how members combine, not whether the result
-// is negated. Only claimMatches reads it, and only for a claim it cannot read
-// at all; every other leaf answers identically in both polarities, which is
-// what makes NOT(NOT(x)) == x hold for every value the gate can compare.
+// is negated. Only claimMatches reads it, and only for a claim valueIsUndecidable
+// rejects; every other leaf answers identically in both polarities, so
+// NOT(NOT(x)) == x holds except for those values.
 func satisfiesConditionsWith(cond *Condition, res *claimResolver, negated bool) bool {
 	if cond == nil {
 		return true
