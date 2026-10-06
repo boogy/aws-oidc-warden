@@ -601,7 +601,7 @@ config_fragment_checksums:
 Rules enforced on every merge:
 
 - **Allowlist**: a fragment may only set `default_issuer`, `role_sets`, `role_mappings`, `role_groups`. Any other top-level key is rejected.
-- **`default_issuer`**: a fragment's `default_issuer` must already be a base-defined issuer, and cannot conflict with the base's own `default_issuer` if both set one.
+- **`default_issuer`**: a fragment's `default_issuer` must already be a base-defined issuer, and cannot conflict with the base's own `default_issuer` if both set one. It binds only that fragment's own `role_mappings`/`role_groups` entries that name no `issuer`; it is never applied to the base or to other fragments, so an issuer-less entry elsewhere still needs the base's `default_issuer` (or a sole issuer).
 - **`role_sets`**: merged by name; a fragment defining a `role_sets` name the base (or another already-merged fragment) already defined is rejected.
 - **`role_mappings`/`role_groups`**: appended.
 - Each fragment is capped at 1 MiB; fetch failures (and re-validation failures after merge) fall back to the last-known-good config rather than serving a partial/invalid merge.
