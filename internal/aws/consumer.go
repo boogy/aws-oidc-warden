@@ -89,10 +89,26 @@ func NewAwsConsumer(cfg *gtvcfg.Config) *AwsConsumer {
 // on every SessionName call.
 var invalidSessionNameChars = regexp.MustCompile(`[^[:word:]+=,.@-]`)
 
+// validSessionName reports whether s is entirely [\w+=,.@-] (ASCII; any UTF-8 byte is invalid).
+func validSessionName(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case c == '_', c == '+', c == '=', c == ',', c == '.', c == '@', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // SessionName cleans name to be valid for STS (64 chars max, [\w+=,.@-]),
 // substituting disallowed characters rather than deleting them, since
 // deletion can collapse two distinct identities onto one session name.
 func (a *AwsConsumer) SessionName(ctx context.Context, name string) string {
+	if len(name) <= utils.MaxSTSNameLen && validSessionName(name) {
+		return name
+	}
 	original := name
 	name = invalidSessionNameChars.ReplaceAllLiteralString(name, "-")
 
@@ -336,7 +352,18 @@ const (
 	maxSessionTagValLen = 256
 )
 
-var sessionTagCharsetPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]*$`)
+// validSessionTagString reports whether s is entirely [A-Za-z0-9 _.:/=+@-] (ASCII; any UTF-8 byte is invalid).
+func validSessionTagString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case c == ' ', c == '_', c == '.', c == ':', c == '/', c == '=', c == '+', c == '@', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // BuildSessionTags builds STS session tags from tagSpec (STS tag key -> raw
 // claim name) using rawClaims, the token's verified claims. An invalid key or
@@ -348,7 +375,7 @@ func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map
 		return nil
 	}
 
-	var tags []types.Tag
+	tags := make([]types.Tag, 0, min(len(tagSpec), maxSessionTags))
 	for _, tagKey := range utils.SortedKeys(tagSpec) {
 		claimName := tagSpec[tagKey]
 		raw, ok := rawClaims[claimName]
@@ -360,13 +387,13 @@ func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map
 			continue
 		}
 
-		if len(tagKey) > maxSessionTagKeyLen || !sessionTagCharsetPattern.MatchString(tagKey) {
+		if len(tagKey) > maxSessionTagKeyLen || !validSessionTagString(tagKey) {
 			logevent.Warn(ctx, nil, logevent.STSSessionTagDropped, "skipping session tag: key fails STS charset/length limits",
 				slog.String("tagKey", tagKey), slog.String("claim", claimName),
 				slog.String("dropReason", "invalid_key"))
 			continue
 		}
-		if len(value) > maxSessionTagValLen || !sessionTagCharsetPattern.MatchString(value) {
+		if len(value) > maxSessionTagValLen || !validSessionTagString(value) {
 			logevent.Warn(ctx, nil, logevent.STSSessionTagDropped, "skipping session tag: value fails STS charset/length limits",
 				slog.String("tagKey", tagKey), slog.String("claim", claimName),
 				slog.String("dropReason", "invalid_value"))
@@ -385,6 +412,9 @@ func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map
 		})
 	}
 
+	if len(tags) == 0 {
+		return nil
+	}
 	return tags
 }
 
