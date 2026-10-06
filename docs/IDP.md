@@ -38,7 +38,7 @@ Every caller uses `/verify`. The mapping that authorizes the role picks the path
 - No role list to maintain: the mappings are the list.
 - An IdP mapping uses the IdP for every request, short ones included, so its roles must trust the warden's IAM OIDC provider ([Trust policy](#trust-policy)).
 - `idp_token: true` is for a mapping capped at 1h whose role should still be IdP-issued, e.g. one that trusts only the warden's OIDC provider.
-- A `max_session_duration` over 1h with no `idp` block is a load error.
+- A `max_session_duration` over 1h, or `idp_token: true`, with no `idp` block is a load error.
 
 A request for more than 1h that cannot use the IdP is refused, never shortened:
 

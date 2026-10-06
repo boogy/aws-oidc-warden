@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Multi-region KMS keys** for `idp.signing_keys`: one issuer across regions, each signing with its local replica; replicas are confined to `idp.kms_allowed_regions`.
 - **IdP discovery and JWKS paths** answer 404 while `idp.enabled` is false, refresh config without waiting, and match `requestContext.path` on REST API (v1).
 - **`idp-export` command** writes the discovery and JWKS documents for S3/CloudFront hosting, with overlay and fragments applied.
-- **`max_session_duration`** on a mapping bounds `durationSeconds` (15m–12h, default 1h); over 1h needs an `idp` block.
+- **`max_session_duration`** on a mapping bounds `durationSeconds` (15m–12h, default 1h); over 1h, like `idp_token`, needs an `idp` block.
 - **Audit fields**: `action`, `tokenId`, `durationSeconds`, `requestedDurationSeconds`, `sessionNameSource`, `requestedSessionName`; new deny stages `duration`, `session_name`, `idp_mint`, `idp_exchange`.
 - **13 IdP error codes**, documented in the README and `GITHUB_ACTIONS.md` retry tables.
 - **`mappings_file`** loads hot-reloaded role mappings from a separate local or `s3://` file. See `docs/CONFIGURATION.md` § Split configuration.

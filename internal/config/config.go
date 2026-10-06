@@ -1078,6 +1078,9 @@ func (c *Config) Validate() error {
 		if m.MaxSessionDuration > IdPDefaultMaxSessionDuration && c.IdP == nil {
 			return fmt.Errorf("%s[%d] (%s): max_session_duration over 1h requires an idp block", source, i, subject)
 		}
+		if m.IDPToken && c.IdP == nil {
+			return fmt.Errorf("%s[%d] (%s): idp_token requires an idp block", source, i, subject)
+		}
 		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
 			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
 		}
@@ -1717,11 +1720,7 @@ func (d Decision) SessionNameAllowed() bool {
 // matches subject and whose conditions are satisfied by claims, in one walk.
 // Pass "" for role when only the role union is wanted.
 func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) Decision {
-	capacity := c.estimatedRolesPerMapping
-	if capacity < 4 {
-		capacity = 4
-	}
-	d := Decision{Roles: make([]string, 0, capacity)}
+	d := Decision{Roles: make([]string, 0, max(c.estimatedRolesPerMapping, 4))}
 
 	idx, ok := c.index[issuer]
 	if !ok {

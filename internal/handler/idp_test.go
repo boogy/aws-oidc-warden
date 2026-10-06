@@ -745,7 +745,7 @@ func TestProcessRequestOverOneHourWithoutIdP(t *testing.T) {
 
 func TestProcessRequestOverOneHourAfterIdPBlockRemoved(t *testing.T) {
 	built := idpConfig(t, true, "")
-	live := idpConfig(t, true, "", func(c *config.Config) { c.IdP = nil })
+	live := idpConfig(t, false, "", func(c *config.Config) { c.IdP = nil })
 	cons := mockWI(t)
 	signer := &countingSigner{Signer: idptest.NewSigner(t)}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(live), cons, idpClaims(nil), &fakeAuditSink{}, "test").
