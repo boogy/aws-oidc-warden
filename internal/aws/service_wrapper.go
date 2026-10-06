@@ -1,12 +1,14 @@
 package aws
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +34,6 @@ type AwsServiceWrapperInterface interface {
 	GetCallerAccount(ctx context.Context) (string, error)
 	GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error)
 	GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error)
-	RefreshClients()
 }
 
 type s3GetObjectAPI interface {
@@ -55,6 +56,9 @@ type AwsServiceWrapper struct {
 
 	maxS3ObjectSize int64
 	defaultTimeout  time.Duration
+
+	iamMu      sync.Mutex
+	iamClients map[aws.CredentialsProvider]*iam.Client // GetRoleAs clients by credentials
 
 	// Cached hub identity (from STS GetCallerIdentity)
 	callerMu      sync.Mutex
@@ -95,28 +99,6 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 // KMS returns the KMS client.
 func (s *AwsServiceWrapper) KMS() *kms.Client { return s.kms }
 
-// RefreshClients recreates AWS service clients, useful for long-running Lambda environments
-// where clients might need refreshing periodically
-func (s *AwsServiceWrapper) RefreshClients() {
-	logevent.Debug(context.Background(), nil, logevent.AWSClientsRefreshStart, "refreshing AWS clients")
-	cfg, err := config.LoadDefaultConfig(context.Background(),
-		config.WithRetryMaxAttempts(3),
-	)
-	if err != nil {
-		logevent.Error(context.Background(), nil, logevent.AWSClientsRefreshFailure, "failed to refresh AWS config, keeping existing clients",
-			slog.String("error", err.Error()))
-		return
-	}
-
-	s.cfg = cfg
-	s.s3Client = s3.NewFromConfig(cfg)
-	s.stsClient = sts.NewFromConfig(cfg)
-	s.iamClient = iam.NewFromConfig(cfg)
-	s.kms = kms.NewFromConfig(cfg)
-
-	logevent.Info(context.Background(), nil, logevent.AWSClientsRefreshSuccess, "AWS clients successfully refreshed")
-}
-
 func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
@@ -154,7 +136,13 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string)
 	}
 	logevent.Debug(ctx, nil, logevent.AWSS3GetSuccess, "successfully fetched S3 object", successAttrs...)
 
-	return result.Body, nil
+	// Read before cancel runs: the body is bound to ctx.
+	defer func() { _ = result.Body.Close() }()
+	body, err := utils.ReadAllCapped(result.Body, utils.MaxConfigBytes, fmt.Sprintf("s3://%s/%s", bucket, key))
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
 func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
@@ -292,8 +280,31 @@ func (s *AwsServiceWrapper) GetRoleAs(ctx context.Context, input *iam.GetRoleInp
 
 	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
-	client := iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
-	return client.GetRole(ctx, input)
+	return s.iamClientFor(creds).GetRole(ctx, input)
+}
+
+// maxCachedIAMClients bounds iamClients; spoke credentials rotate, so old entries go stale.
+const maxCachedIAMClients = 64
+
+// iamClientFor returns an IAM client bound to creds, reusing one per provider value.
+func (s *AwsServiceWrapper) iamClientFor(creds aws.CredentialsProvider) *iam.Client {
+	build := func() *iam.Client {
+		return iam.NewFromConfig(s.cfg, func(o *iam.Options) { o.Credentials = creds })
+	}
+	if !reflect.TypeOf(creds).Comparable() {
+		return build()
+	}
+	s.iamMu.Lock()
+	defer s.iamMu.Unlock()
+	if c, ok := s.iamClients[creds]; ok {
+		return c
+	}
+	if s.iamClients == nil || len(s.iamClients) >= maxCachedIAMClients {
+		s.iamClients = make(map[aws.CredentialsProvider]*iam.Client)
+	}
+	c := build()
+	s.iamClients[creds] = c
+	return c
 }
 
 // GetS3ObjectIfChanged reads an owner-pinned object; a 304 returns (nil, prevETag, nil).

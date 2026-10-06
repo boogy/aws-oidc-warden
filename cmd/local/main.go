@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 
 // ServerSettings holds the local server CLI flags.
 type ServerSettings struct {
+	Host            string
 	Port            int
 	ConfigPath      string
 	MappingsPath    string
@@ -91,41 +93,76 @@ func main() {
 		idpPaths = []string{p.Discovery, p.JWKS}
 	}
 
-	addr := fmt.Sprintf(":%d", settings.Port)
-	server := &http.Server{
-		Addr:              addr,
-		Handler:           newMux(logger, settings.SimulateLatency, h.Handler, idpPaths...),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+	addr := net.JoinHostPort(settings.Host, strconv.Itoa(settings.Port))
+	server := newServer(addr, newMux(logger, settings.SimulateLatency, h.Handler, idpPaths...), settings.SimulateLatency)
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server error",
+			slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 
-	go func() {
-		stop := make(chan os.Signal, 1)
-		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-		<-stop
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server shutdown error",
-				slog.String("error", err.Error()))
-		}
-	}()
-
 	logevent.Info(ctx, logger, logevent.HTTPServerStart, "starting local development server",
+		slog.String("host", settings.Host),
 		slog.Int("port", settings.Port),
-		slog.String("verifyEndpoint", fmt.Sprintf("http://localhost:%d/verify", settings.Port)),
-		slog.String("healthEndpoint", fmt.Sprintf("http://localhost:%d/health", settings.Port)))
+		slog.String("verifyEndpoint", "http://"+addr+"/verify"),
+		slog.String("healthEndpoint", "http://"+addr+"/health"))
 
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	if err := serve(ctx, logger, server, ln, stop, shutdownTimeout); err != nil {
 		logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server error",
 			slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	logevent.Info(ctx, logger, logevent.AppStop, "server stopped")
+}
+
+const (
+	readTimeout     = 30 * time.Second
+	shutdownTimeout = 5 * time.Second
+)
+
+// newServer sizes WriteTimeout to cover the body read, the simulated latency and the handler's own deadline.
+func newServer(addr string, h http.Handler, latency time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      readTimeout + latency + handler.DefaultTimeout + 5*time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
+}
+
+// serve runs server on ln until stop fires, then returns only after Shutdown has finished draining.
+func serve(ctx context.Context, logger *slog.Logger, server *http.Server, ln net.Listener, stop <-chan os.Signal, timeout time.Duration) error {
+	quit := make(chan struct{})
+	defer close(quit)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		select {
+		case <-stop:
+		case <-quit:
+			return
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server shutdown error",
+				slog.String("error", err.Error()))
+		}
+	}()
+
+	if err := server.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	<-drained
+	return nil
 }
 
 // newMux serves /verify, the exact IdP document paths and /health; every other path is 404.
@@ -183,12 +220,6 @@ func localHandler(logger *slog.Logger, latency time.Duration, handlerFunc func(c
 			http.Error(w, "Error reading request body", http.StatusBadRequest)
 			return
 		}
-		defer func() {
-			if err := r.Body.Close(); err != nil {
-				logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error closing request body",
-					slog.String("error", err.Error()))
-			}
-		}()
 
 		response, err := handlerFunc(reqCtx, buildEvent(r, body, requestID, sourceIP))
 		if err != nil {
@@ -249,6 +280,7 @@ func remoteIP(remoteAddr string) string {
 func parseCliFlags() (ServerSettings, error) {
 	settings := ServerSettings{}
 
+	flag.StringVar(&settings.Host, "host", "127.0.0.1", "Address to listen on (use 0.0.0.0 inside a container)")
 	flag.IntVar(&settings.Port, "port", 8080, "Port to listen on")
 	flag.StringVar(&settings.ConfigPath, "config", "", "Path to config file or directory")
 	flag.StringVar(&settings.MappingsPath, "mappings", "", "Path or s3:// URI of the role-mappings file")

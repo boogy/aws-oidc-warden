@@ -71,10 +71,6 @@ func (m *MockAwsServiceWrapper) GetRole(ctx context.Context, input *iam.GetRoleI
 	return args.Get(0).(*iam.GetRoleOutput), args.Error(1)
 }
 
-func (m *MockAwsServiceWrapper) RefreshClients() {
-	m.Called()
-}
-
 func (m *MockAwsServiceWrapper) GetCallerAccount(ctx context.Context) (string, error) {
 	args := m.Called(ctx)
 	return args.String(0), args.Error(1)
@@ -191,14 +187,6 @@ func TestMockAwsServiceWrapper_GetRole(t *testing.T) {
 	mockWrapper.AssertExpectations(t)
 }
 
-// TestMockAwsServiceWrapper_RefreshClients tests the RefreshClients method
-func TestMockAwsServiceWrapper_RefreshClients(t *testing.T) {
-	mockWrapper := new(MockAwsServiceWrapper)
-	mockWrapper.On("RefreshClients").Return().Once()
-	mockWrapper.RefreshClients()
-	mockWrapper.AssertExpectations(t)
-}
-
 // TestGetS3ObjectErrorCase tests an error case for GetS3Object
 func TestGetS3ObjectErrorCase(t *testing.T) {
 	mockWrapper := new(MockAwsServiceWrapper)
@@ -302,11 +290,6 @@ func TestServiceWrapperImplementation(t *testing.T) {
 
 	wrapper := NewAwsServiceWrapper()
 	assert.NotNil(t, wrapper)
-
-	// Test RefreshClients
-	t.Run("RefreshClients", func(t *testing.T) {
-		wrapper.RefreshClients() // Just verify it doesn't panic
-	})
 
 	// Test GetS3Object with a non-existent object (should return error)
 	t.Run("GetS3Object_NonExistent", func(t *testing.T) {
@@ -835,6 +818,55 @@ func TestGetS3ObjectIfChanged(t *testing.T) {
 			} else {
 				assert.Equal(t, tt.wantData, string(data))
 			}
+		})
+	}
+}
+
+// ctxBoundS3 serves a body that fails once the GetObject ctx is cancelled, like the SDK's HTTP body.
+type ctxBoundS3 struct{ body string }
+
+func (c *ctxBoundS3) GetObject(ctx context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return &s3.GetObjectOutput{Body: io.NopCloser(&ctxReader{ctx: ctx, r: strings.NewReader(c.body)})}, nil
+}
+
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c *ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+func TestGetS3Object_BodyReadableAfterReturn(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int
+		wantErr string
+	}{
+		{name: "small", size: 10},
+		{name: "at cap", size: utils.MaxConfigBytes},
+		{name: "oversize", size: utils.MaxConfigBytes + 1, wantErr: "exceeds"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Repeat("a", tt.size)
+			w := &AwsServiceWrapper{s3Client: &ctxBoundS3{body: body}, defaultTimeout: time.Second, maxS3ObjectSize: 5 << 20}
+
+			rc, err := w.GetS3Object(context.Background(), "b", "k")
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				assert.Nil(t, rc)
+				return
+			}
+			require.NoError(t, err)
+			defer func() { _ = rc.Close() }()
+			got, err := io.ReadAll(rc)
+			require.NoError(t, err)
+			assert.Equal(t, body, string(got))
 		})
 	}
 }

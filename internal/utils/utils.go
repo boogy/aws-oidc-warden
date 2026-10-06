@@ -22,6 +22,9 @@ import (
 // JSON-decode time (float64), so two distinct claim values can render
 // identically; this function can't recover that.
 func FormatClaimValue(raw any) string {
+	if s, ok := raw.(string); ok {
+		return s
+	}
 	// IsInf guard: +Inf/-Inf satisfy f == Trunc(f).
 	if f, ok := raw.(float64); ok && !math.IsInf(f, 0) && !math.IsNaN(f) &&
 		f == math.Trunc(f) {

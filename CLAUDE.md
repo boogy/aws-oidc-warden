@@ -32,7 +32,7 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 
 - `make check` — fmt + lint + vuln + test. Run before every commit.
 - `make test` / `make test-coverage` — tests / HTML coverage.
-- `make run` — local server on :8080 with `docs/examples/example-config.yaml`.
+- `make run` — local server on 127.0.0.1:8080 with `docs/examples/example-config.yaml`.
 - `make build-lambda` — all Lambda variants (ARM64). Binary must be named `bootstrap`.
 
 ## Conventions

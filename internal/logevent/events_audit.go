@@ -14,6 +14,10 @@ var AuditWriteSuccess = newEvent("audit.write.success")
 // (Error).
 var AuditBufferFailure = newEvent("audit.buffer.failure")
 
+// AuditBatchDropped is emitted when the oldest buffered audit records are
+// dropped because S3 flushes keep failing (Error).
+var AuditBatchDropped = newEvent("audit.batch.dropped")
+
 // AuditFlushSuccess is emitted when the audit buffer flushes successfully
 // (Debug).
 var AuditFlushSuccess = newEvent("audit.flush.success")

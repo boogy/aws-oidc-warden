@@ -185,6 +185,8 @@ func TestRedactToken_NegativeCountsDoNotPanic(t *testing.T) {
 	}
 }
 
+type namedString string
+
 func TestFormatClaimValue(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -217,6 +219,10 @@ func TestFormatClaimValue(t *testing.T) {
 		{"int64", int64(42), "42"},
 		{"nil", nil, "<nil>"},
 		{"slice", []string{"a", "b"}, "[a b]"},
+		{"any slice", []any{"a", float64(2), true}, "[a 2 true]"},
+		{"string with percent and braces", "100% {x} %v", "100% {x} %v"},
+		{"unicode string", "é世界", "é世界"},
+		{"named string type", namedString("n"), "n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, utils.FormatClaimValue(tc.raw))

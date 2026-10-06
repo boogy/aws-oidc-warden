@@ -61,11 +61,11 @@ role_mappings:
 **2. Run it locally** to check the config loads and authorizes what you expect:
 
 ```bash
-make run   # local server on :8080 with docs/examples/example-config.yaml
+make run   # local server on 127.0.0.1:8080 with docs/examples/example-config.yaml
 # or: go run cmd/local/main.go -port 9090 -config config.yaml -log-level debug
 ```
 
-Endpoints: `POST /verify` (matches Lambda behaviour) and `GET /health`. The local server has no S3 hot-reload — that is a Lambda feature.
+Endpoints: `POST /verify` (matches Lambda behaviour) and `GET /health`. The local server has no S3 hot-reload — that is a Lambda feature. It listens on loopback only; pass `-host 0.0.0.0` when running it in a container.
 
 **3. Deploy** it with your own IaC — the contract to satisfy (packaging, config delivery, IAM, front-end) is in **[ARCHITECTURE.md](docs/ARCHITECTURE.md#infrastructure-as-code)**.
 

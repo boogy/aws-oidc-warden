@@ -15,11 +15,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
+	"golang.org/x/sync/singleflight"
 )
 
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
@@ -49,11 +51,13 @@ type AwsConsumer struct {
 	AWS    AwsServiceWrapperInterface
 	Config *gtvcfg.Config
 
-	configSource func() *gtvcfg.Config // live-config getter; nil falls back to Config
-	now          func() time.Time
-	mu           sync.Mutex
-	spokeCache   map[string]cachedCreds // keyed by account ID
-	roleTagCache map[string]cachedTags  // keyed by role ARN
+	configSource  func() *gtvcfg.Config // live-config getter; nil falls back to Config
+	now           func() time.Time
+	mu            sync.Mutex
+	spokeCache    map[string]cachedCreds // keyed by account ID
+	spokeFlight   singleflight.Group     // keyed by account ID
+	roleTagCache  map[string]cachedTags  // keyed by role ARN
+	roleMissCache map[string]cachedMiss  // keyed by role ARN
 }
 
 // cfg returns the live config if a source is wired (hot-reload), else the
@@ -87,10 +91,26 @@ func NewAwsConsumer(cfg *gtvcfg.Config) *AwsConsumer {
 // on every SessionName call.
 var invalidSessionNameChars = regexp.MustCompile(`[^[:word:]+=,.@-]`)
 
+// validSessionName reports whether s is entirely [\w+=,.@-] (ASCII; any UTF-8 byte is invalid).
+func validSessionName(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case c == '_', c == '+', c == '=', c == ',', c == '.', c == '@', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // SessionName cleans name to be valid for STS (64 chars max, [\w+=,.@-]),
 // substituting disallowed characters rather than deleting them, since
 // deletion can collapse two distinct identities onto one session name.
 func (a *AwsConsumer) SessionName(ctx context.Context, name string) string {
+	if len(name) <= utils.MaxSTSNameLen && validSessionName(name) {
+		return name
+	}
 	original := name
 	name = invalidSessionNameChars.ReplaceAllLiteralString(name, "-")
 
@@ -127,11 +147,36 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 	}
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if c, ok := a.spokeCache[account]; ok && a.now().Before(c.expires) {
+	c, ok := a.spokeCache[account]
+	a.mu.Unlock()
+	if ok && a.now().Before(c.expires) {
 		return c.provider, nil
 	}
 
+	// Detached so one caller's cancellation can't fail the others sharing the flight.
+	flightCtx := context.WithoutCancel(ctx)
+	ch := a.spokeFlight.DoChan(account, func() (any, error) {
+		a.mu.Lock()
+		c, ok := a.spokeCache[account]
+		a.mu.Unlock()
+		if ok && a.now().Before(c.expires) {
+			return c.provider, nil
+		}
+		return a.assumeSpoke(flightCtx, cfg, account)
+	})
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(aws.CredentialsProvider), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// assumeSpoke assumes the convention-named spoke role in account and caches the result.
+func (a *AwsConsumer) assumeSpoke(ctx context.Context, cfg *gtvcfg.Config, account string) (aws.CredentialsProvider, error) {
 	ca := cfg.CrossAccount
 	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ca.SpokeRoleName)
 	sessionName := "aow-broker"
@@ -163,7 +208,8 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 		return nil, fmt.Errorf("spoke role %s returned no credentials", spokeArn)
 	}
 	cr := out.Credentials
-	provider := credentials.NewStaticCredentialsProvider(*cr.AccessKeyId, *cr.SecretAccessKey, *cr.SessionToken)
+	static := credentials.NewStaticCredentialsProvider(*cr.AccessKeyId, *cr.SecretAccessKey, *cr.SessionToken)
+	provider := &static // pointer identity keys the wrapper's IAM client cache
 	expires := a.now().Add(time.Hour)
 	if cr.Expiration != nil {
 		expires = cr.Expiration.Add(-5 * time.Minute) // refresh margin
@@ -175,7 +221,9 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 		slog.String("sessionName", sessionName),
 		slog.Time("expires", expires))
 
+	a.mu.Lock()
 	a.spokeCache[account] = cachedCreds{provider: provider, expires: expires}
+	a.mu.Unlock()
 	return provider, nil
 }
 
@@ -329,7 +377,18 @@ const (
 	maxSessionTagValLen = 256
 )
 
-var sessionTagCharsetPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]*$`)
+// validSessionTagString reports whether s is entirely [A-Za-z0-9 _.:/=+@-] (ASCII; any UTF-8 byte is invalid).
+func validSessionTagString(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case c == ' ', c == '_', c == '.', c == ':', c == '/', c == '=', c == '+', c == '@', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // BuildSessionTags builds STS session tags from tagSpec (STS tag key -> raw
 // claim name) using rawClaims, the token's verified claims. An invalid key or
@@ -341,7 +400,7 @@ func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map
 		return nil
 	}
 
-	var tags []types.Tag
+	tags := make([]types.Tag, 0, min(len(tagSpec), maxSessionTags))
 	for _, tagKey := range utils.SortedKeys(tagSpec) {
 		claimName := tagSpec[tagKey]
 		raw, ok := rawClaims[claimName]
@@ -353,13 +412,13 @@ func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map
 			continue
 		}
 
-		if len(tagKey) > maxSessionTagKeyLen || !sessionTagCharsetPattern.MatchString(tagKey) {
+		if len(tagKey) > maxSessionTagKeyLen || !validSessionTagString(tagKey) {
 			logevent.Warn(ctx, nil, logevent.STSSessionTagDropped, "skipping session tag: key fails STS charset/length limits",
 				slog.String("tagKey", tagKey), slog.String("claim", claimName),
 				slog.String("dropReason", "invalid_key"))
 			continue
 		}
-		if len(value) > maxSessionTagValLen || !sessionTagCharsetPattern.MatchString(value) {
+		if len(value) > maxSessionTagValLen || !validSessionTagString(value) {
 			logevent.Warn(ctx, nil, logevent.STSSessionTagDropped, "skipping session tag: value fails STS charset/length limits",
 				slog.String("tagKey", tagKey), slog.String("claim", claimName),
 				slog.String("dropReason", "invalid_value"))
@@ -378,6 +437,9 @@ func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map
 		})
 	}
 
+	if len(tags) == 0 {
+		return nil
+	}
 	return tags
 }
 
@@ -423,6 +485,19 @@ func (a *AwsConsumer) targetAllowed(account, hub string) bool {
 // burst load while keeping tags reasonably fresh.
 const roleTagCacheTTL = 60 * time.Second
 
+const (
+	// roleMissTTL bounds how long a definitive NoSuchEntity is remembered.
+	roleMissTTL = 30 * time.Second
+	// maxRoleMisses caps roleMissCache; it is cleared when full.
+	maxRoleMisses = 4096
+)
+
+// cachedMiss is a remembered NoSuchEntity result for a role ARN.
+type cachedMiss struct {
+	err     error
+	expires time.Time
+}
+
 // GetRoleTags returns the IAM tags of the role identified by roleARN as a
 // key→value map. When the role lives in a different account than the warden,
 // the read is performed with spoke credentials assumed in that account.
@@ -444,6 +519,13 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 		tags := maps.Clone(c.tags)
 		a.mu.Unlock()
 		return tags, nil
+	}
+	if m, ok := a.roleMissCache[roleARN]; ok {
+		if a.now().Before(m.expires) {
+			a.mu.Unlock()
+			return nil, m.err
+		}
+		delete(a.roleMissCache, roleARN)
 	}
 	a.mu.Unlock()
 
@@ -473,7 +555,18 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 		out, err = a.AWS.GetRoleAs(ctx, input, creds)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get role %s: %w", roleName, err)
+		err = fmt.Errorf("get role %s: %w", roleName, err)
+		// Only a definitive NoSuchEntity is cached; throttling, network and AccessDenied are not.
+		var nse *iamtypes.NoSuchEntityException
+		if errors.As(err, &nse) {
+			a.mu.Lock()
+			if a.roleMissCache == nil || len(a.roleMissCache) >= maxRoleMisses {
+				a.roleMissCache = make(map[string]cachedMiss)
+			}
+			a.roleMissCache[roleARN] = cachedMiss{err: err, expires: a.now().Add(roleMissTTL)}
+			a.mu.Unlock()
+		}
+		return nil, err
 	}
 	if out.Role == nil {
 		return nil, errors.New("role information not available")

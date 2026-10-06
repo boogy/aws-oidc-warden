@@ -1,7 +1,6 @@
 package s3logger
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"net/url"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -180,9 +180,7 @@ func TestBufferedWriteUsesLiveConfigAfterReload(t *testing.T) {
 	spy := &ctxCapturingS3{}
 	l.clientFactory = func(context.Context) (s3ClientInterface, error) { return spy, nil }
 
-	var buf bytes.Buffer
-	buf.WriteString(`{"decision":"allow"}`)
-	require.NoError(t, l.writeLogToS3(buf))
+	require.NoError(t, l.writeLogToS3([]byte(`{"decision":"allow"}`)))
 	require.NoError(t, l.Flush())
 
 	require.Equal(t, []string{"reloaded-bucket"}, spy.buckets,
@@ -197,25 +195,10 @@ func TestBufferedWriteNoOpWhenLiveConfigDisablesS3(t *testing.T) {
 	spy := &ctxCapturingS3{}
 	l.SetS3Client(spy)
 
-	var buf bytes.Buffer
-	buf.WriteString(`{"decision":"allow"}`)
-	require.NoError(t, l.writeLogToS3(buf))
+	require.NoError(t, l.writeLogToS3([]byte(`{"decision":"allow"}`)))
 	require.NoError(t, l.Flush())
 
 	assert.Empty(t, spy.buckets, "wrote to S3 while the live config disables S3 logging")
-}
-
-func TestWriteSingleLog_UsesLiveConfigAfterReload(t *testing.T) {
-	l := NewS3Logger(&gtvcfg.Config{LogToS3: false})
-
-	live := &gtvcfg.Config{LogToS3: true, LogBucket: "reloaded-bucket"}
-	l.SetConfigSource(func() *gtvcfg.Config { return live })
-
-	spy := &ctxCapturingS3{}
-	l.clientFactory = func(context.Context) (s3ClientInterface, error) { return spy, nil }
-
-	require.NoError(t, l.WriteSingleLog([]byte(`{"decision":"allow"}`)))
-	require.Equal(t, []string{"reloaded-bucket"}, spy.buckets)
 }
 
 func TestWriteRecord_ClientConstructionIgnoresCancelledCallerCtx(t *testing.T) {
@@ -262,4 +245,12 @@ func TestWriteObject_TaggingIsURLEncoded(t *testing.T) {
 	assert.Equal(t, "sev1 & rising", parsed.Get("incident"),
 		"an extra tag containing a separator corrupted the tag set")
 	assert.Equal(t, "aws-oidc-warden", parsed.Get("source"))
+}
+
+func TestWriteObject_NilClient(t *testing.T) {
+	l := NewS3Logger(&gtvcfg.Config{LogToS3: true, LogBucket: "audit-bucket"})
+	l.SetS3Client(nil)
+
+	err := l.writeObject(context.Background(), "bucket", "key", []byte("test"), logevent.AuditFlushSuccess)
+	require.ErrorContains(t, err, "S3 client not initialized")
 }

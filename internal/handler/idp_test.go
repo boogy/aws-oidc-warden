@@ -819,7 +819,6 @@ func (f *stsFake) GetCallerAccount(context.Context) (string, error) { return "12
 func (f *stsFake) GetCallerIdentityInfo(context.Context) (string, bool, error) {
 	return "123456789012", false, nil
 }
-func (f *stsFake) RefreshClients() {}
 
 func captureConsumer(t *testing.T, cfg *config.Config) (*gtvaws.AwsConsumer, *stsFake) {
 	t.Helper()
