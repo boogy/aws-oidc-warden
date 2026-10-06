@@ -78,8 +78,8 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 
 	var sourceIdentity string
 	var truncated bool
-	if frozen := r.idp.Config(); frozen.IncludeSourceIdentityClaim() {
-		sourceIdentity, truncated, err = renderSourceIdentity(frozen.SourceIdentity, frozen.SourceIdentityOverflow, requestID, claims.Issuer, claims.Subject, claims.Raw)
+	if r.sourceIdentity != nil {
+		sourceIdentity, truncated, err = r.sourceIdentity.render(requestID, claims.Issuer, claims.Subject, claims.Raw)
 		if err != nil {
 			return refuse("idp_mint", "source identity could not be derived", "Source identity could not be derived", err)
 		}
@@ -193,7 +193,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 
 	return &IssuedCredentials{
 		Credentials:     *creds,
-		Issuer:          r.idp.Config().Issuer,
+		Issuer:          r.idpIssuer,
 		RoleARN:         role,
 		SessionName:     sessionName,
 		SourceIdentity:  sourceIdentity,

@@ -22,13 +22,26 @@ const (
 	routeIdPDisabled
 )
 
+// idpRoutes holds the frozen IdP paths and their lowercase forms, computed once.
+type idpRoutes struct {
+	discovery, jwks           string
+	lowerDiscovery, lowerJWKS string
+}
+
+func newIdPRoutes(p config.IdPPaths) *idpRoutes {
+	return &idpRoutes{
+		discovery: p.Discovery, jwks: p.JWKS,
+		lowerDiscovery: strings.ToLower(p.Discovery), lowerJWKS: strings.ToLower(p.JWKS),
+	}
+}
+
 // route classifies a request by method and exact path; without an IdP service everything is routeAssume.
 func (r *RequestProcessor) route(ctx context.Context, method, path string) routeKind {
 	if r.idp == nil {
 		return routeAssume
 	}
-	p := r.idp.Config().Paths
-	if path == p.Discovery || path == p.JWKS {
+	p := r.routes
+	if path == p.discovery || path == p.jwks {
 		if method != http.MethodGet && method != http.MethodHead {
 			return routeMethodNotAllowed
 		}
@@ -36,34 +49,33 @@ func (r *RequestProcessor) route(ctx context.Context, method, path string) route
 		if !r.idpEnabled(r.provider.Get()) {
 			return routeIdPDisabled
 		}
-		if path == p.Discovery {
+		if path == p.discovery {
 			return routeDiscovery
 		}
 		return routeJWKS
 	}
-	if idpShaped(path, p) {
+	if p.shaped(path) {
 		return routeNotFound
 	}
 	return routeAssume
 }
 
-// idpShaped reports a near-miss of a configured IdP path: other case, trailing slash, or one extra leading segment.
-func idpShaped(path string, p config.IdPPaths) bool {
+// shaped reports a near-miss of a configured IdP path: other case, trailing slash, or one extra leading segment.
+func (p *idpRoutes) shaped(path string) bool {
 	lower := strings.TrimSuffix(strings.ToLower(path), "/")
-	candidates := []string{lower}
+	if p.matches(lower) {
+		return true
+	}
 	if strings.HasPrefix(lower, "/") {
 		if i := strings.Index(lower[1:], "/"); i >= 0 {
-			candidates = append(candidates, lower[i+1:])
-		}
-	}
-	for _, c := range candidates {
-		for _, want := range []string{p.Discovery, p.JWKS} {
-			if c == strings.ToLower(want) {
-				return true
-			}
+			return p.matches(lower[i+1:])
 		}
 	}
 	return false
+}
+
+func (p *idpRoutes) matches(lower string) bool {
+	return lower == p.lowerDiscovery || lower == p.lowerJWKS
 }
 
 // mergeHeaders copies ResponseHeaders and overlays extra.

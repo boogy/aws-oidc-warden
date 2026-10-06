@@ -21,28 +21,36 @@ import (
 
 // RequestProcessor contains the core business logic for processing authentication requests
 type RequestProcessor struct {
-	provider    *config.Provider
-	consumer    aws.AwsConsumerInterface
-	extractor   validator.ClaimsExtractorInterface
-	audit       AuditSink // nil is a no-op
-	frontend    string
-	idp         *idp.Service
-	frozenFP    string
-	lastChecked atomic.Pointer[config.Config]
+	provider       *config.Provider
+	consumer       aws.AwsConsumerInterface
+	extractor      validator.ClaimsExtractorInterface
+	audit          AuditSink // nil is a no-op
+	frontend       string
+	idp            *idp.Service
+	routes         *idpRoutes
+	idpIssuer      string
+	sourceIdentity *sourceIdentityTemplate // nil when the source_identity claim is off
+	frozenFP       string
+	lastChecked    atomic.Pointer[config.Config]
 }
 
 // WithIdP enables the IdP mint path; a nil service leaves it disabled.
 func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
-	r.idp = s
+	r.idp, r.routes, r.sourceIdentity = s, nil, nil
 	if s != nil {
-		r.frozenFP = s.Config().Fingerprint()
+		frozen := s.Config()
+		r.frozenFP = frozen.Fingerprint()
+		r.routes, r.idpIssuer = newIdPRoutes(frozen.Paths), frozen.Issuer
+		if frozen.IncludeSourceIdentityClaim() {
+			r.sourceIdentity = parseSourceIdentity(frozen.SourceIdentity, frozen.SourceIdentityOverflow)
+		}
 	}
 	return r
 }
 
 // warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added or removed idp block.
 func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
-	if r.lastChecked.Swap(cfg) == cfg {
+	if r.lastChecked.Load() == cfg || r.lastChecked.Swap(cfg) == cfg {
 		return
 	}
 	fp := ""

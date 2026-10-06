@@ -117,7 +117,7 @@ func TestRenderSourceIdentity(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, truncated, err := renderSourceIdentity(tt.tmpl, tt.overflow, "req-1", tt.issuer, tt.subject, tt.claims)
+			got, truncated, err := parseSourceIdentity(tt.tmpl, tt.overflow).render("req-1", tt.issuer, tt.subject, tt.claims)
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -132,7 +132,7 @@ func TestRenderSourceIdentity(t *testing.T) {
 	}
 
 	render := func(tmpl, issuer, subject string) string {
-		got, _, err := renderSourceIdentity(tmpl, "", "req-1", issuer, subject, nil)
+		got, _, err := parseSourceIdentity(tmpl, "").render("req-1", issuer, subject, nil)
 		require.NoError(t, err)
 		return got
 	}
