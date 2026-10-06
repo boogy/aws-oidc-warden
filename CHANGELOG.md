@@ -45,6 +45,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `docs/IDP.md` setup guide, plus IdP references in `CONFIGURATION.md`, `ARCHITECTURE.md` and `example-config.yaml`.
 - `docs/examples/split-config/`: annotated service and mappings files with per-caller outcomes.
 - `GITHUB_ACTIONS.md`: the composite action gains `duration-seconds` and `session-name` inputs.
+- `example-config.yaml` moved to `docs/examples/`; the split-config and cross-account examples are production-shaped.
+- `docs/examples/multi-region/` and `ARCHITECTURE.md` § Multi-region: shared config, per-region resources via `AOW_*` env.
 
 ## [3.5.2] - 2026-09-26
 

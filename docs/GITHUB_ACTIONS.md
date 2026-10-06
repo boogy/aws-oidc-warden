@@ -214,7 +214,7 @@ The audience passed to `getIDToken(...)` must match **both** the API Gateway JWT
 
 ## Multi-region failover
 
-Two regional deployments, primary first, secondary only when the primary is genuinely unavailable. The deployment side — what to share, what never to share, and the trust-policy foot-gun — is in [ARCHITECTURE.md § Scaling](ARCHITECTURE.md#scaling).
+Two regional deployments, primary first, secondary only when the primary is genuinely unavailable. The deployment side — what to share, what never to share, and the trust-policy foot-gun — is in [ARCHITECTURE.md § Multi-region](ARCHITECTURE.md#multi-region).
 
 Both versions below implement the same policy:
 

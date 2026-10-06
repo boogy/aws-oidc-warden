@@ -32,7 +32,7 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 
 - `make check` — fmt + lint + vuln + test. Run before every commit.
 - `make test` / `make test-coverage` — tests / HTML coverage.
-- `make run` — local server on :8080 with `example-config.yaml`.
+- `make run` — local server on :8080 with `docs/examples/example-config.yaml`.
 - `make build-lambda` — all Lambda variants (ARM64). Binary must be named `bootstrap`.
 
 ## Conventions
@@ -54,4 +54,4 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 
 ## Git
 
-Branch from `main` (`feature/…`, `fix/…`). Conventional Commits. PRs need passing CI (test, lint, security scan). Ask before editing `example-config.yaml` with real values, force-pushing, or changing CI workflows.
+Branch from `main` (`feature/…`, `fix/…`). Conventional Commits. PRs need passing CI (test, lint, security scan). Ask before editing `docs/examples/example-config.yaml` with real values, force-pushing, or changing CI workflows.

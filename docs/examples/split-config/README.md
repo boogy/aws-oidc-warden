@@ -22,6 +22,9 @@ Both files load in CI: `TestSplitConfigExamplesLoad` (`internal/config/docs_yaml
 | `config_reload_interval` | Re-read the mappings at most once per interval (conditional GET; unchanged file = 304, no re-parse).              |
 | `mappings_max_stale`     | Default 3x the interval. Past it, requests get `503 config_stale`.                                                |
 | `session_policy_bucket`  | Bucket holding the files named by a mapping's `session_policy_file`.                                              |
+| `session_tags`           | Per issuer: STS session tags taken from token claims, for ABAC in the target account.                             |
+| `cache`                  | JWKS cache in DynamoDB, shared by every Lambda environment in the region.                                         |
+| `log_to_s3`, `audit_*`   | Audit record per decision in S3; `audit_required` returns no credentials if the write fails.                      |
 
 ## mappings.yaml
 
@@ -42,25 +45,25 @@ The building blocks in `mappings.yaml`:
 - **`role_mappings`**: one grant per entry. `subject` may be a list; each element gets the same roles and conditions.
 - **`role_groups`**: many subjects, one shared `defaults` block. Use it for fleets of repos with identical access.
 - **Session policies** (`session_policy`, `session_policy_file`): narrow what one mapping's session may do. The session gets the intersection of the role's permissions and the policy, so one broad role can serve several callers with different scopes. `session_policy` is inline JSON; `session_policy_file` is a key in `session_policy_bucket`. Set one per mapping. They apply to `AssumeRole` and IdP-issued sessions alike.
-- **IdP fields** (`idp_token`, `max_session_duration`): issue a mapping's roles through the warden's IdP, which allows sessions longer than 1h. Without `idp_token`, the mapping gets `AssumeRole`, capped at 1h.
+- **IdP fields**: `max_session_duration` over 1h, or `idp_token: true`, issue a mapping's roles through the warden's IdP. Otherwise the mapping gets `AssumeRole`, capped at 1h.
 
 ## What each caller gets
 
 | Caller (issuer, subject, claims)                        | Matching entry                  | `/verify` up to 1h                           | `/verify` over 1h       | Session name                                   |
 | ------------------------------------------------------- | ------------------------------- | -------------------------------------------- | ----------------------- | ---------------------------------------------- |
-| GitHub `octo-org/api`, `ref=refs/heads/main`            | `@api-deployers`                | `ApiDeploy`, `ApiMigrate` (AssumeRole)       | denied (no `idp_token`) | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/api`, `ref=refs/heads/main`            | `@api-deployers`                | `ApiDeploy`, `ApiMigrate` (AssumeRole)       | denied (AssumeRole cap) | caller's `sessionName`, else `aws-oidc-warden` |
 | GitHub `octo-org/api`, `ref=refs/heads/feature`         | none (condition fails)          | denied                                       | denied                  |                                                |
-| GitHub `octo-org/web`, any ref                          | `@readonly` (list subject)      | `ReadOnly` (AssumeRole)                      | denied (no `idp_token`) | caller's `sessionName`, else `aws-oidc-warden` |
+| GitHub `octo-org/web`, any ref                          | `@readonly` (list subject)      | `ReadOnly` (AssumeRole)                      | denied (AssumeRole cap) | caller's `sessionName`, else `aws-oidc-warden` |
 | GitHub `octo-org/batch`, any ref                        | `BatchRunner`, `idp_token`      | `BatchRunner` (IdP)                          | denied (1h ceiling)     | `aws-oidc-warden`                              |
-| GitHub `octo-org/data-pipeline`, main                   | `LongDeploy`, `idp_token`, 4h   | `LongDeploy` (IdP)                           | `LongDeploy`, up to 4h  | `aws-oidc-warden`                              |
-| GitHub `octo-org/nightly-backup`, `event_name=schedule` | two roles, `idp_token`, 12h     | `BackupRunner`, `BackupVerify` (IdP)         | either role, up to 12h  | always `nightly-backup`                        |
+| GitHub `octo-org/data-pipeline`, main                   | `LongDeploy`, 4h                | `LongDeploy` (IdP)                           | `LongDeploy`, up to 4h  | `aws-oidc-warden`                              |
+| GitHub `octo-org/nightly-backup`, `event_name=schedule` | two roles, 12h                  | `BackupRunner`, `BackupVerify` (IdP)         | either role, up to 12h  | always `nightly-backup`                        |
 | GitHub `octo-org/nightly-backup`, `event_name=push`     | none (condition fails)          | denied                                       | denied                  |                                                |
-| GitHub `octo-org/reports`, any ref                      | `ReportsReader` + inline policy | `ReportsReader`, read-only on `octo-reports` | denied (no `idp_token`) | `aws-oidc-warden`                              |
-| GitHub `octo-org/terraform`, main                       | `TerraformApply` + policy file  | `TerraformApply`, scoped by `terraform.json` | denied (no `idp_token`) | always `terraform-apply`                       |
+| GitHub `octo-org/reports`, any ref                      | `ReportsReader` + inline policy | `ReportsReader`, read-only on `octo-reports` | denied (AssumeRole cap) | `aws-oidc-warden`                              |
+| GitHub `octo-org/terraform`, main                       | `TerraformApply` + policy file  | `TerraformApply`, scoped by `terraform.json` | denied (AssumeRole cap) | always `terraform-apply`                       |
 | GitHub `octo-org/terraform`, other ref                  | none (condition fails)          | denied                                       | denied                  |                                                |
-| GitLab `platform/infra`, `ref=main`                     | `@readonly`                     | `ReadOnly` (AssumeRole)                      | denied (no `idp_token`) | `aws-oidc-warden`                              |
+| GitLab `platform/infra`, `ref=main`                     | `@readonly`                     | `ReadOnly` (AssumeRole)                      | denied (AssumeRole cap) | `aws-oidc-warden`                              |
 | GitHub token claiming `platform/infra`                  | none (bound to GitLab)          | denied                                       | denied                  |                                                |
-| GitHub `octo-org/tool-a`, `event_name=push`             | `role_groups` entry             | `ReadOnly` (AssumeRole)                      | denied (no `idp_token`) | `aws-oidc-warden`                              |
+| GitHub `octo-org/tool-a`, `event_name=push`             | `role_groups` entry             | `ReadOnly` (AssumeRole)                      | denied (AssumeRole cap) | `aws-oidc-warden`                              |
 | GitHub `octo-org/tool-a`, `event_name=pull_request`     | none (condition fails)          | denied                                       | denied                  |                                                |
 | GitHub `octo-org/etl-orders`, main                      | `role_groups` entry, `@etl`, 6h | `EtlExtract`, `EtlLoad` (IdP)                | either role, up to 6h   | `aws-oidc-warden`                              |
 | GitHub `octo-org/other`                                 | none                            | denied                                       | denied                  |                                                |
@@ -129,7 +132,7 @@ A `304 Not Modified` counts as a successful refresh, so an unchanged file never 
 ## Deploying the mappings file
 
 1. Create a versioned bucket in the account named by `s3_config_bucket_owner`.
-2. Let the warden's Lambda role read the object only: `s3:GetObject` on `arn:aws:s3:::EXAMPLE-BUCKET/mappings.yaml`, plus `kms:Decrypt` if the bucket uses SSE-KMS. No `s3:ListBucket`. With `session_policy_file` mappings, also `s3:GetObject` on `arn:aws:s3:::EXAMPLE-POLICY-BUCKET/session-policies/*`.
+2. Let the warden's Lambda role read the object only: `s3:GetObject` on `arn:aws:s3:::octo-aow-config-111122223333/mappings.yaml`, plus `kms:Decrypt` if the bucket uses SSE-KMS. No `s3:ListBucket`. With `session_policy_file` mappings, also `s3:GetObject` on `arn:aws:s3:::octo-aow-session-policies-111122223333/session-policies/*`.
 3. Restrict writes to the role that deploys mappings (typically the CI job that reviews `mappings.yaml`):
 
    ```json
@@ -141,7 +144,7 @@ A `304 Not Modified` counts as a successful refresh, so an unchanged file never 
          "Effect": "Deny",
          "Principal": "*",
          "Action": ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"],
-         "Resource": "arn:aws:s3:::EXAMPLE-BUCKET/*",
+         "Resource": "arn:aws:s3:::octo-aow-config-111122223333/*",
          "Condition": {
            "ArnNotEquals": {
              "aws:PrincipalArn": "arn:aws:iam::111122223333:role/MappingsDeployer"
@@ -153,7 +156,7 @@ A `304 Not Modified` counts as a successful refresh, so an unchanged file never 
    ```
 
 4. Alarm on `PutObject`/`DeleteObject` for the key (CloudTrail data events).
-5. Upload: `aws s3 cp mappings.yaml s3://EXAMPLE-BUCKET/mappings.yaml`.
+5. Upload: `aws s3 cp mappings.yaml s3://octo-aow-config-111122223333/mappings.yaml`.
 
 Full IaC contract: [ARCHITECTURE.md § Infrastructure as code](../../ARCHITECTURE.md).
 
@@ -163,4 +166,4 @@ Full IaC contract: [ARCHITECTURE.md § Infrastructure as code](../../ARCHITECTUR
 go run ./cmd/local -config docs/examples/split-config/service.yaml -mappings docs/examples/split-config/mappings.yaml
 ```
 
-`-mappings` overrides `mappings_file`, so the local file is used instead of S3. A local path never goes stale. The `idp` block needs AWS credentials that can use the KMS key; drop it for a `/verify`-only test.
+`-mappings` overrides `mappings_file`, so the local file is used instead of S3. A local path never goes stale. Without AWS access, drop the `idp` block and run with `AOW_CACHE_TYPE=memory AOW_LOG_TO_S3=false`.

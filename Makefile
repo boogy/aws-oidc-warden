@@ -71,7 +71,7 @@ build-lambdaurl:
 .PHONY: run
 run: build-local
 	@echo "Running local development server..."
-	@$(BUILD_DIR)/$(APP_NAME)-local --port=8080 --log-level=debug --config=./example-config.yaml
+	@$(BUILD_DIR)/$(APP_NAME)-local --port=8080 --log-level=debug --config=./docs/examples/example-config.yaml
 
 .PHONY: clean
 clean:

@@ -3,7 +3,7 @@
 # Any other key rejects the whole file; the warden keeps the last good version.
 # Set issuer on every entry: with several issuers, one omitted falls back to default_issuer.
 # Docs: docs/CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets.
-# Every mapping key and condition form: /example-config.yaml (ROLE MAPPINGS).
+# Every mapping key and condition form: ../example-config.yaml (ROLE MAPPINGS).
 #
 # Every caller POSTs to /verify with optional durationSeconds and sessionName.
 # - max_session_duration over 1h (max 12h): issued through the warden's IdP.

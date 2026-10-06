@@ -1,34 +1,60 @@
 # service.yaml: the warden's own config, owned by the platform team.
 # It holds no role mappings; those live in the file named by mappings_file.
+# Production shape for one region (eu-west-1) in account 111122223333.
 # Docs: docs/CONFIGURATION.md#split-configuration, docs/IDP.md.
-# Every key, with its options and defaults: /example-config.yaml.
+# Every key, with its options and defaults: ../example-config.yaml.
 
 issuers:
   - issuer: "https://token.actions.githubusercontent.com"
     provider: "github" # canonical subject = the repository, e.g. octo-org/api
     audiences: ["sts.amazonaws.com"]
+    required_claims: ["repository", "ref"]
+    session_tags: # STS session tags for ABAC: aws:PrincipalTag/repo, ...
+      repo: "repository"
+      ref: "ref"
+      actor: "actor"
+      event-name: "event_name"
   - issuer: "https://gitlab.com"
     provider: "generic"
     audiences: ["https://gitlab.com"]
     claim_mappings:
       subject: "project_path" # canonical subject = the project path, e.g. platform/infra
+    required_claims: ["project_path", "ref"]
+    session_tags:
+      project: "project_path"
+      ref: "ref"
 default_issuer: "https://token.actions.githubusercontent.com"
 role_session_name: "aws-oidc-warden"
-session_policy_bucket: "EXAMPLE-POLICY-BUCKET" # holds the files named by session_policy_file
+session_tags_transitive: true # tags survive role chaining in the target account
+session_policy_bucket: "octo-aow-session-policies-111122223333" # holds the files named by session_policy_file
 
-mappings_file: "s3://EXAMPLE-BUCKET/mappings.yaml"
+jwt_validation:
+  mode: "self"
+
+cache:
+  type: "dynamodb" # shared across Lambda environments; one table per region
+  dynamodb_table: "aow-jwks-cache"
+  ttl: 4h
+
+log_level: "info"
+log_to_s3: true
+log_bucket: "octo-aow-audit-111122223333-eu-west-1"
+log_prefix: "audit/"
+audit_required: true # no credentials unless the audit record is written
+
+mappings_file: "s3://octo-aow-config-111122223333/mappings.yaml"
 s3_config_bucket_owner: "111122223333" # required for s3://; sent as ExpectedBucketOwner
 config_reload_interval: 60s
 # mappings_max_stale: 180s # default 3x config_reload_interval; past it requests get 503 config_stale
 
 idp:
   enabled: true
-  issuer: "https://idp.example.com" # the warden's own issuer, registered as an IAM OIDC provider
-  audience: "idp-audience-example"
+  issuer: "https://idp.ci.octo.example" # the warden's own issuer, registered as an IAM OIDC provider
+  audience: "aow-idp"
   # Full key ARN only. Multi-region (key/mrk-...) also needs kms_allowed_regions;
   # see docs/IDP.md#multi-region-deployment.
   signing_keys:
-    - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/00000000-0000-0000-0000-000000000000"
+    - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
       algorithm: ES256
       status: active
   # Which mappings use the IdP is set per mapping in mappings.yaml.

@@ -299,7 +299,7 @@ role_mappings:
 
 // exampleConfigPath is the file shipped at the repo root and pointed at by the
 // README, `make run`, and every deployment guide.
-const exampleConfigPath = "../../example-config.yaml"
+const exampleConfigPath = "../../docs/examples/example-config.yaml"
 
 // TestExampleConfigLoadsAndValidates guards the one config an operator is most
 // likely to copy. Nothing else in the suite reads it, so a key renamed in the
@@ -501,7 +501,7 @@ func TestSplitConfigExamplesLoad(t *testing.T) {
 	})
 
 	t.Run("mappings.yaml authorizes through a provider", func(t *testing.T) {
-		const uri = "s3://EXAMPLE-BUCKET/mappings.yaml"
+		const uri = "s3://octo-aow-config-111122223333/mappings.yaml"
 		require.Contains(t, string(service), uri)
 		local := strings.Replace(string(service), uri, mappings, 1)
 		local = strings.Replace(local, "config_reload_interval: 60s\n", "", 1)
@@ -599,4 +599,42 @@ func TestSplitConfigExamplesLoad(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestCrossAccountExampleLoads(t *testing.T) {
+	data, err := os.ReadFile("../../docs/examples/cross-account/config.yaml")
+	require.NoError(t, err)
+	cfg := &config.Config{}
+	require.NoError(t, cfg.MergeBytes(data, "yaml"))
+
+	ok, roles := cfg.AuthorizeRoles("https://token.actions.githubusercontent.com", "acme/api",
+		map[string]any{"ref": "refs/tags/v1.2.3", "ref_type": "tag"})
+	require.True(t, ok)
+	require.Equal(t, []string{"arn:aws:iam::333333333333:role/aow/deploy-production"}, roles)
+}
+
+func TestMultiRegionExampleLoads(t *testing.T) {
+	const dir = "../../docs/examples/multi-region/"
+	data, err := os.ReadFile(dir + "config.yaml")
+	require.NoError(t, err)
+
+	for _, region := range []string{"eu-west-1", "us-east-1"} {
+		t.Run(region, func(t *testing.T) {
+			env, err := os.ReadFile(dir + region + ".env")
+			require.NoError(t, err)
+			for line := range strings.Lines(string(env)) {
+				line = strings.TrimSpace(line)
+				if k, v, ok := strings.Cut(line, "="); ok && !strings.HasPrefix(line, "#") {
+					t.Setenv(k, v)
+				}
+			}
+
+			cfg := &config.Config{}
+			require.NoError(t, cfg.MergeBytes(data, "yaml"))
+			require.Equal(t, "s3://octo-aow-config-111122223333-"+region+"/mappings.yaml", cfg.MappingsFile)
+			require.Equal(t, "octo-aow-audit-111122223333-"+region, cfg.LogBucket)
+			require.Equal(t, "octo-aow-session-policies-111122223333-"+region, cfg.S3SessionPolicyBucket)
+			require.Equal(t, "aow-jwks-cache", cfg.Cache.DynamoDBTable)
+		})
+	}
 }

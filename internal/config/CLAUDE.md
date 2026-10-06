@@ -6,7 +6,7 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). Viper-based loading, validation, and
 
 - `NewConfig()` loads once (`sync.Once`) and returns the shared instance.
 - Precedence: `AOW_`-prefixed env vars > config file (YAML/JSON/TOML) > defaults.
-- Nested keys map to underscores: `AOW_CACHE_TTL` → `cache.ttl`. See `example-config.yaml` for the full reference.
+- Nested keys map to underscores: `AOW_CACHE_TTL` → `cache.ttl`. See `docs/examples/example-config.yaml` for the full reference.
 
 ## Key structures & methods
 

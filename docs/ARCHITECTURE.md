@@ -632,9 +632,7 @@ Nothing in the request path holds state, so scale is AWS's problem rather than t
 | JWKS cache (S3)       | Effectively unlimited                                          | Highest latency of the three                                 |
 | Config in S3          | One read per refresh interval per environment, not per request | A bad config object is rejected and the previous one is kept |
 
-For multi-region, deploy the stack per region. Nothing coordinates between regions, so this needs no additional application config.
-
-Keep the JWKS cache **per-region** — do not reach for Global Tables. The cache holds public signing keys and is rebuildable from a single JWKS fetch, so replication buys nothing and couples two deployments that are otherwise independent. The same reasoning applies with more force to the audit bucket, where sharing one bucket makes the secondary region fail closed during a primary-region S3 outage. One more trap worth naming: a target role's trust policy must list **every** region's execution role, or failover succeeds at the gateway and then fails at `sts:AssumeRole`.
+For multi-region, deploy the stack per region: see [Multi-region](#multi-region).
 
 Measured numbers — per-request cost, load time at thousands of mappings, memory sizing: [PERFORMANCE.md](PERFORMANCE.md).
 
@@ -681,6 +679,25 @@ Cross-account target and spoke roles: [examples/cross-account/](examples/cross-a
 | Discovery and JWKS | Unauthenticated GET routes for discovery/JWKS, or static hosting. Static hosting from `idp-export` is the default; a warden-served JWKS couples STS availability to the Lambda                                                                                                                                                |
 | IAM OIDC provider  | URL = `idp.issuer`, client ID = `idp.audience` (one per target role ARN with `audience_mode: role_arn`)                                                                                                                                                                                                                       |
 | Target roles       | `MaxSessionDuration` at least the longest allowed session; trust policy allowing `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity` for the IdP provider, pinned on `aud` and `sub`                                                                                                                   |
+
+### Multi-region
+
+Deploy the same package and config file in every region. Each region is independent: nothing in the request path calls another region. Region-specific resources come from `AOW_*` environment variables on each region's Lambda, which beat the config file on every load and reload:
+
+| Per region (env var)                                                              | Shared (config file)                                    |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| JWKS cache table (`AOW_CACHE_DYNAMODB_TABLE`); never a Global Table               | `issuers`, hardening knobs, `jwt_validation`            |
+| Audit bucket (`AOW_LOG_BUCKET`); a shared one fails the secondary closed          | `idp` block: one issuer, one MRK with a replica per region |
+| Mappings file (`AOW_MAPPINGS_FILE`), same content in every region                 | Session tags, `audit_required`, reload interval         |
+| Session-policy bucket (`AOW_SESSION_POLICY_BUCKET`), same content                 |                                                         |
+| S3 config overlay (`AOW_S3_CONFIG_BUCKET`, `AOW_S3_CONFIG_PATH`), same content    |                                                         |
+
+- Authorization config must match across regions, or failover changes the answer. Upload mappings and policy files to every region in one CI job, or replicate them.
+- A target role's trust policy must list **every** region's execution role, or failover passes the gateway and fails at `sts:AssumeRole`. IdP-issued roles trust the IAM OIDC provider instead and need no per-region change.
+- IdP: one MRK, one replica per region, `idp.kms_allowed_regions`, a global static JWKS. See [IDP.md § Multi-region deployment](IDP.md#multi-region-deployment).
+- Callers list every regional endpoint and fail over on transient errors only: [GITHUB_ACTIONS.md § Multi-region failover](GITHUB_ACTIONS.md#multi-region-failover).
+
+Worked example with both regions' environment: [examples/multi-region/](examples/multi-region/README.md).
 
 ### Required IAM Permissions
 

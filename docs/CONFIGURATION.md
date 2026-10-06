@@ -1,6 +1,6 @@
 # AWS OIDC Warden Configuration
 
-The complete configuration reference. If you are setting the service up for the first time, start with [`example-config.yaml`](../example-config.yaml) — a full annotated reference config — and use this document to look up individual keys.
+The complete configuration reference. If you are setting the service up for the first time, start with [`example-config.yaml`](examples/example-config.yaml) — a full annotated reference config — and use this document to look up individual keys.
 
 **On this page**
 
@@ -629,4 +629,4 @@ An overlay that fails validation is never served, and never partially applied: t
 
 ## Configuration File Format
 
-AWS OIDC Warden supports YAML, JSON, and TOML configuration files (format auto-detected from the file extension via `FormatFromPath`; anything other than `.yaml`/`.yml`/`.toml` is treated as JSON). See [example-config.yaml](../example-config.yaml) for a complete annotated example covering a two-issuer (GitHub + GitLab) setup, `role_sets`/`role_groups`/`default_issuer`, `tag_auth`, `jwt_validation`, and hardening/logging knobs.
+AWS OIDC Warden supports YAML, JSON, and TOML configuration files (format auto-detected from the file extension via `FormatFromPath`; anything other than `.yaml`/`.yml`/`.toml` is treated as JSON). See [example-config.yaml](examples/example-config.yaml) for a complete annotated example covering a two-issuer (GitHub + GitLab) setup, `role_sets`/`role_groups`/`default_issuer`, `tag_auth`, `jwt_validation`, and hardening/logging knobs.

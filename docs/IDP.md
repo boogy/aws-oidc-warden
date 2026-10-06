@@ -170,6 +170,8 @@ One `idp.issuer` can be served from several regions of the same deployment:
 - Removing a region: delete the replica and wait until it is fully deleted (past its waiting period), then drop the region from the allowlist.
 - A single-region key cannot serve a multi-region deployment; KMS keys are regional, and the signer rejects a client region that differs from the key's. Finish rotating onto the MRK in the home region before adding regions.
 
+The rest of a multi-region deployment (per-region buckets, cache, environment): [ARCHITECTURE.md § Multi-region](ARCHITECTURE.md#multi-region) and [examples/multi-region/](examples/multi-region/README.md).
+
 ## IAM OIDC provider
 
 Create one IAM OIDC provider per deployment for the warden itself. The inbound issuers (GitHub, GitLab, …) need no IAM provider for IdP mode:

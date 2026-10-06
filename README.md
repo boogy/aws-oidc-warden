@@ -30,6 +30,7 @@ Authorization is decided on the token's **verified** subject plus regex conditio
 | [docs/LOGGING.md](docs/LOGGING.md)                                  | Structured logs, the durable audit trail, `audit_required`, SIEM signals, alerts                                                          |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                        | Component diagram, request pipeline, package layout, IAM permissions                                                                      |
 | [docs/PERFORMANCE.md](docs/PERFORMANCE.md)                          | Measured behaviour at thousands of repositories — request cost, load time, memory sizing                                                  |
+| [docs/examples/](docs/examples/)                                    | Loadable configs: annotated full reference, split config, cross-account, multi-region                                                     |
 | [docs/MIGRATION_V3.md](docs/MIGRATION_V3.md)                        | v2 → v3: condition keys are claim names, and `environment` changed meaning                                                                |
 | [docs/MIGRATION_V2.md](docs/MIGRATION_V2.md)                        | v1 → v2: the `issuers[]` model, with a breaking-change checklist                                                                          |
 
@@ -60,7 +61,7 @@ role_mappings:
 **2. Run it locally** to check the config loads and authorizes what you expect:
 
 ```bash
-make run   # local server on :8080 with example-config.yaml
+make run   # local server on :8080 with docs/examples/example-config.yaml
 # or: go run cmd/local/main.go -port 9090 -config config.yaml -log-level debug
 ```
 
