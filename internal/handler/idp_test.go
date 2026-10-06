@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -569,7 +570,14 @@ func TestProcessMintWarnsOnceOnFrozenIdPDrift(t *testing.T) {
 	signer := &countingSigner{Signer: idptest.NewSigner(t)}
 	svc := idpService(t, cfg, signer, nil)
 	cfg.IdP.Audience = "drifted.example.com"
-	provider := config.NewProvider(cfg, time.Hour, "yaml", func(context.Context) ([]byte, error) { return []byte("{}"), nil })
+	var fetches atomic.Int32
+	provider := config.NewProvider(cfg, time.Hour, "yaml", func(context.Context) ([]byte, error) {
+		// A changed overlay is what makes each refresh a new config generation.
+		if fetches.Add(1)%2 == 0 {
+			return []byte("log_level: debug\n"), nil
+		}
+		return []byte("log_level: info\n"), nil
+	})
 	proc := handler.NewRequestProcessor(provider, mockWI(t), idpClaims(nil), &fakeAuditSink{}, "apigatewayv2").WithIdP(svc)
 
 	var buf bytes.Buffer
@@ -831,7 +839,7 @@ func captureConsumer(t *testing.T, cfg *config.Config) (*gtvaws.AwsConsumer, *st
 func TestSessionTagParity(t *testing.T) {
 	many := map[string]string{}
 	manyRaw := map[string]any{"repository": "org/repo"}
-	for i := range 51 {
+	for i := range 50 {
 		k := fmt.Sprintf("t%02d", i)
 		many[k] = k
 		manyRaw[k] = "v"

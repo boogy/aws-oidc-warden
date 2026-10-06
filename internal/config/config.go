@@ -17,6 +17,7 @@ import (
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -37,10 +38,11 @@ var (
 	defaultMaxTokenAge         = time.Hour         // Default cap on now-iat when max_token_age is unset
 	defaultJWKSRefetchCooldown = 60 * time.Second  // Default minimum interval between forced JWKS refetches per (issuer,kid)
 	defaultLogLevel            = "info"            // Default slog level name
+	minConfigReloadInterval    = time.Second       // Smallest accepted non-zero config_reload_interval
 
 	validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 
-	accountIDPattern     = regexp.MustCompile(`^\d{12}$`)
+	accountIDPattern     = regexp.MustCompile(`^\d{12}$`) // also the S3 bucket-owner format
 	sessionTagKeyPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]{1,128}$`)
 
 	// tagPrefixPattern is the IAM tag-key charset minus the space, bounded so a
@@ -94,8 +96,12 @@ type RoleMapping struct {
 
 	// Rebuilt by Validate(): one resolvedSubject per effective mapping; order keeps first-match-wins.
 	resolvedSubject string         `mapstructure:"-" json:"-"`
-	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
+	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"` // nil for a literal subject (subjectExact)
+	subjectKey      string         `mapstructure:"-" json:"-"` // exact literal or owner, per subjectClass
+	subjectClass    subjectClass   `mapstructure:"-" json:"-"`
 	order           int            `mapstructure:"-" json:"-"`
+
+	effectiveTags map[string]string `mapstructure:"-" json:"-"` // issuer spec + SessionTags; read-only, may alias the issuer's map
 }
 
 // RoleGroupDefaults are the fields a role_group applies uniformly to every
@@ -310,7 +316,7 @@ type Config struct {
 
 	// LogClaimValues controls whether claim VALUES (canonical subject, raw
 	// jwtSub, audience) appear in structured logs and audit records. Default
-	// off: only claim NAMES plus the decision/reason are logged. Session tag
+	// on; false logs only claim NAMES plus the decision/reason. Session tag
 	// keys are always logged; tag values follow this flag too.
 	LogClaimValues bool `mapstructure:"log_claim_values" json:"log_claim_values,omitempty"`
 
@@ -684,8 +690,12 @@ func (c *Config) LoadConfig() error {
 		}
 	}
 
-	if err := viper.Unmarshal(c, decoderOptions()...); err != nil {
+	var md mapstructure.Metadata
+	if err := viper.Unmarshal(c, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	if err := rejectUnusedKeys(md.Unused, "config file"); err != nil {
+		return err
 	}
 
 	// Zero-config GitHub seed: only when there is truly no configuration
@@ -736,8 +746,12 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 		}
 	}
 
-	if err := v.Unmarshal(next, decoderOptions()...); err != nil {
+	var md mapstructure.Metadata
+	if err := v.Unmarshal(next, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %w", err)
+	}
+	if err := rejectUnusedKeys(md.Unused, "overlay"); err != nil {
+		return err
 	}
 
 	reapplyEnvOverrides(next)
@@ -909,10 +923,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}
 
-		for tagKey := range iss.SessionTags {
-			if !sessionTagKeyPattern.MatchString(tagKey) {
-				return fmt.Errorf("issuers[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", i, iss.Issuer, tagKey)
-			}
+		if err := validateSessionTagKeys(iss.SessionTags); err != nil {
+			return fmt.Errorf("issuers[%d] (%s): session_tags: %w", i, iss.Issuer, err)
+		}
+		if err := checkSessionTagSet(iss.SessionTags); err != nil {
+			return fmt.Errorf("issuers[%d] (%s): session_tags: %w", i, iss.Issuer, err)
 		}
 
 		if iss.TagPrefix != "" && !tagPrefixPattern.MatchString(iss.TagPrefix) {
@@ -943,6 +958,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("mappings_file: %w", err)
 	}
 
+	if d := c.ConfigReloadInterval; d > 0 && d < minConfigReloadInterval {
+		return fmt.Errorf("config_reload_interval %s is under %s; a bare number is read as nanoseconds, so write a unit such as 300s or 5m", d, minConfigReloadInterval)
+	}
 	if err := c.validateMaxStale(); err != nil {
 		return err
 	}
@@ -1094,15 +1112,19 @@ func (c *Config) Validate() error {
 		m.Issuer = resolvedIssuer
 
 		issuerTags := c.IssuerSessionTags(resolvedIssuer)
+		if err := validateSessionTagKeys(m.SessionTags); err != nil {
+			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
+		}
+		// Rejected rather than ignored: a silently dropped override reads
+		// as applied, and the tag feeds ABAC conditions in the target role.
 		for tagKey := range m.SessionTags {
-			if !sessionTagKeyPattern.MatchString(tagKey) {
-				return fmt.Errorf("%s[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", source, i, subject, tagKey)
-			}
-			// Rejected rather than ignored: a silently dropped override reads
-			// as applied, and the tag feeds ABAC conditions in the target role.
 			if _, dup := issuerTags[tagKey]; dup {
 				return fmt.Errorf("%s[%d] (%s): session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", source, i, subject, tagKey, resolvedIssuer)
 			}
+		}
+		m.effectiveTags, err = mergeSessionTags(issuerTags, m.SessionTags)
+		if err != nil {
+			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
 		}
 
 		roles, err := c.resolveRoleSet(m.Roles)
@@ -1115,9 +1137,14 @@ func (c *Config) Validate() error {
 		m.Roles = roles
 
 		m.resolvedSubject = subject
-		m.compiledPattern, err = compileAnchoredSubject(subject, patterns)
+		subjectMatcher, err := compileAnchoredSubject(subject, patterns)
 		if err != nil {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, subject, err)
+		}
+		m.subjectKey, m.subjectClass = classifySubject(subject)
+		// A literal subject is proven equal by its exact-bucket hit; no regexp.
+		if m.subjectClass != subjectExact {
+			m.compiledPattern = subjectMatcher.re
 		}
 
 		// Clone into effective-private memory BEFORE compiling: compileCondition
@@ -1322,8 +1349,6 @@ func (c *Config) fragmentSources() []string {
 	return append([]string{c.MappingsFile}, c.ConfigFragments...)
 }
 
-var bucketOwnerPattern = regexp.MustCompile(`^\d{12}$`)
-
 func isS3URI(uri string) bool { return strings.HasPrefix(uri, "s3://") }
 
 // validateRemoteScheme keeps the owner-pin and max-stale checks in step with the case-insensitive fetch path.
@@ -1374,7 +1399,7 @@ func (c *Config) validateS3ConfigOwner() error {
 	if needsOwner && c.S3ConfigBucketOwner == "" {
 		return errors.New("s3_config_bucket_owner is required when mappings_file or config_fragments use s3://")
 	}
-	if c.S3ConfigBucketOwner != "" && !bucketOwnerPattern.MatchString(c.S3ConfigBucketOwner) {
+	if c.S3ConfigBucketOwner != "" && !accountIDPattern.MatchString(c.S3ConfigBucketOwner) {
 		return errors.New("s3_config_bucket_owner must be exactly 12 digits")
 	}
 	return nil
@@ -1440,24 +1465,87 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 		}
 		out = append(out, set...)
 	}
+	for _, r := range out {
+		switch {
+		case strings.TrimSpace(r) == "":
+			return nil, errors.New("roles: an entry is empty")
+		case strings.HasPrefix(r, "@"):
+			return nil, fmt.Errorf("roles: %q is not a role ARN (role_sets cannot reference other sets)", r)
+		}
+		if _, _, err := utils.ParseRoleARN(r); err != nil {
+			return nil, fmt.Errorf("roles: %w", err)
+		}
+	}
 	return out, nil
 }
 
 // compileAnchoredSubject compiles a subject pattern as an auto-anchored
-// regex, rejecting bare wildcards (bareWildcards) like compileAnchoredCondition:
+// regex, rejecting patterns that match everything (isUniversal) like compileAnchoredCondition:
 // a subject is the primary identity gate, so ".*" would grant every subject
 // of the bound issuer.
 //
 // The empty guard lives here, not in the caller, so every subject path shares
 // it: "" anchors to "^(?:)$", which reads as a gate but matches nothing real.
-func compileAnchoredSubject(pattern string, rc regexCache) (*regexp.Regexp, error) {
+func compileAnchoredSubject(pattern string, rc regexCache) (*matcher, error) {
 	if pattern == "" {
 		return nil, errors.New("subject pattern must not be empty")
 	}
-	if bareWildcards[pattern] {
+	m, err := rc.anchor(pattern)
+	if errors.Is(err, errUniversalPattern) {
 		return nil, fmt.Errorf("subject pattern %q is too permissive; it matches every subject for this issuer — use a specific pattern", pattern)
 	}
-	return rc.anchor(pattern)
+	return m, err
+}
+
+// maxSessionTags is the STS limit on session tags per AssumeRole call.
+const maxSessionTags = 50
+
+// validateSessionTagKeys rejects keys STS would refuse: bad charset/length, or
+// the reserved aws: prefix (case-insensitive).
+func validateSessionTagKeys(tags map[string]string) error {
+	for _, key := range utils.SortedKeys(tags) {
+		if !sessionTagKeyPattern.MatchString(key) {
+			return fmt.Errorf("key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", key)
+		}
+		if len(key) >= 4 && strings.EqualFold(key[:4], "aws:") {
+			return fmt.Errorf("key %q uses the aws: prefix, which STS reserves", key)
+		}
+	}
+	return nil
+}
+
+// checkSessionTagSet rejects keys that collide case-insensitively (STS treats
+// them as one key) and a union of more than maxSessionTags.
+func checkSessionTagSet(sets ...map[string]string) error {
+	seen := make(map[string]string)
+	for _, set := range sets {
+		for _, key := range utils.SortedKeys(set) {
+			folded := strings.ToLower(key)
+			if prev, ok := seen[folded]; ok && prev != key {
+				return fmt.Errorf("keys %q and %q are the same STS tag key (STS compares keys case-insensitively)", prev, key)
+			}
+			seen[folded] = key
+		}
+	}
+	if len(seen) > maxSessionTags {
+		return fmt.Errorf("%d session tags exceed the STS limit of %d", len(seen), maxSessionTags)
+	}
+	return nil
+}
+
+// mergeSessionTags returns issuerTags plus extra (issuer wins) after checking
+// the union. With no extra it returns issuerTags itself, already checked.
+func mergeSessionTags(issuerTags, extra map[string]string) (map[string]string, error) {
+	if len(extra) == 0 {
+		return issuerTags, nil
+	}
+	if err := checkSessionTagSet(issuerTags, extra); err != nil {
+		return nil, err
+	}
+	merged := make(map[string]string, len(issuerTags)+len(extra))
+	maps.Copy(merged, extra)
+	maps.Copy(merged, issuerTags)
+	return merged, nil
 }
 
 // validateRoleSessionName rejects a session name STS would refuse or the
@@ -1608,22 +1696,18 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 // issuer's spec plus whatever the authorizing mapping adds. Session tags are
 // per-issuer by design — issuers mint different claims, so there is no global
 // spec to inherit. Additive only: Validate() rejects a mapping key the issuer
-// already defines, and the issuer's value still wins here so the issuer's
-// contract holds regardless. A role granted by tag-auth has no authorizing
+// already defines. The union is built once in Validate(); callers must treat
+// the result as read-only. A role granted by tag-auth has no authorizing
 // mapping and gets the issuer spec alone; an unconfigured issuer gets nothing.
 func (c *Config) EffectiveSessionTags(issuer string, d Decision) map[string]string {
 	iss := c.issuerConfig(issuer)
 	if iss == nil {
 		return nil
 	}
-	extra := d.sessionTags()
-	if len(extra) == 0 {
-		return iss.SessionTags
+	if m := d.authorizing; m != nil && m.Issuer == issuer && m.effectiveTags != nil {
+		return m.effectiveTags
 	}
-	merged := make(map[string]string, len(iss.SessionTags)+len(extra))
-	maps.Copy(merged, extra)
-	maps.Copy(merged, iss.SessionTags)
-	return merged
+	return iss.SessionTags
 }
 
 // FindSessionPolicy returns the session policy from the mapping that
@@ -1727,15 +1811,11 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 		return d
 	}
 
-	for _, mapping := range candidatesFor(idx, subject) {
-		if mapping.compiledPattern == nil || !mapping.compiledPattern.MatchString(subject) {
-			continue
+	res := newClaimResolver(claims)
+	take := func(mapping *RoleMapping) {
+		if !res.satisfies(mapping.Conditions) {
+			return
 		}
-
-		if !satisfiesConditions(mapping.Conditions, claims) {
-			continue
-		}
-
 		d.Matched = true
 		d.Roles = append(d.Roles, mapping.Roles...)
 
@@ -1743,6 +1823,20 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 			if d.authorizing == nil || mapping.order < d.authorizing.order {
 				d.authorizing = mapping
 			}
+		}
+	}
+
+	for _, mapping := range idx.exact[subject] {
+		take(mapping)
+	}
+	for _, mapping := range idx.byOwner[ownerOf(subject)] {
+		if mapping.compiledPattern != nil && mapping.compiledPattern.MatchString(subject) {
+			take(mapping)
+		}
+	}
+	for _, mapping := range idx.any {
+		if mapping.compiledPattern != nil && mapping.compiledPattern.MatchString(subject) {
+			take(mapping)
 		}
 	}
 

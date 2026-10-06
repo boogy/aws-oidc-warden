@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/utils"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -52,8 +53,12 @@ func parseFragment(data []byte, format, source string) (*FragmentConfig, error) 
 	}
 
 	var frag FragmentConfig
-	if err := v.Unmarshal(&frag, decoderOptions()...); err != nil {
+	var md mapstructure.Metadata
+	if err := v.Unmarshal(&frag, decoderOptions(&md)...); err != nil {
 		return nil, fmt.Errorf("config fragment %q: failed to unmarshal: %w", source, err)
+	}
+	if err := rejectUnusedKeys(md.Unused, fmt.Sprintf("config fragment %q", source)); err != nil {
+		return nil, err
 	}
 	return &frag, nil
 }
@@ -86,7 +91,6 @@ func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers
 		if cfg.DefaultIssuer != "" && cfg.DefaultIssuer != frag.DefaultIssuer {
 			return fmt.Errorf("config fragment %q: default_issuer %q conflicts with already-set %q", source, frag.DefaultIssuer, cfg.DefaultIssuer)
 		}
-		cfg.DefaultIssuer = frag.DefaultIssuer
 	}
 
 	if len(frag.RoleSets) > 0 {
@@ -108,8 +112,24 @@ func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers
 		}
 	}
 
+	// The fragment's default binds only its own entries; cfg.DefaultIssuer is
+	// never touched, so it cannot re-home another source's issuer-less entries.
+	// The appended elements are copies, so the cached parse stays unmodified.
+	nm, ng := len(cfg.RoleMappings), len(cfg.RoleGroups)
 	cfg.RoleMappings = append(cfg.RoleMappings, frag.RoleMappings...)
 	cfg.RoleGroups = append(cfg.RoleGroups, frag.RoleGroups...)
+	if frag.DefaultIssuer != "" {
+		for i := nm; i < len(cfg.RoleMappings); i++ {
+			if cfg.RoleMappings[i].Issuer == "" {
+				cfg.RoleMappings[i].Issuer = frag.DefaultIssuer
+			}
+		}
+		for i := ng; i < len(cfg.RoleGroups); i++ {
+			if cfg.RoleGroups[i].Issuer == "" {
+				cfg.RoleGroups[i].Issuer = frag.DefaultIssuer
+			}
+		}
+	}
 	return nil
 }
 

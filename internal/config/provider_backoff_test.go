@@ -219,6 +219,20 @@ func TestProviderStaleWaitsForHeldRefreshLock(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load(), "waiter reuses the holder's refresh")
 }
 
+func TestProviderStaleDoesNotWaitAfterFailures(t *testing.T) {
+	p := staleMappingsProvider(t, new(atomic.Int32))
+	p.failures.Store(1)
+	p.lock()
+	defer p.unlock()
+	done := make(chan struct{})
+	go func() { p.MaybeRefresh(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stale MaybeRefresh queued behind an in-flight refresh although the source is failing")
+	}
+}
+
 func TestProviderStaleWaitEndsWithCallerContext(t *testing.T) {
 	p := staleMappingsProvider(t, new(atomic.Int32))
 	p.lock()

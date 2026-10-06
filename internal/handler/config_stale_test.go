@@ -36,7 +36,7 @@ func staleProvider(t *testing.T, maxStale *time.Duration) (*config.Provider, *at
 		c.RoleMappings = nil
 		c.MappingsFile = "s3://b/m.yaml"
 		c.S3ConfigBucketOwner = "123456789012"
-		c.ConfigReloadInterval = 10 * time.Millisecond
+		c.ConfigReloadInterval = time.Second // Validate rejects anything shorter
 		c.MappingsMaxStale = maxStale
 	})
 	var fail atomic.Bool
@@ -61,13 +61,14 @@ func staleProcessor(t *testing.T, p *config.Provider, cons *fakeConsumer, ext *c
 }
 
 func TestConfigStaleDeniesRequest(t *testing.T) {
-	p, fail := staleProvider(t, new(20*time.Millisecond))
+	t.Parallel()
+	p, fail := staleProvider(t, new(2*time.Second))
 	cons := mockConsumer(t)
 	ext := &countingExtractor{inner: idpClaims(nil)}
 	proc, sink := staleProcessor(t, p, cons, ext)
 
 	fail.Store(true)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2100 * time.Millisecond)
 
 	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Token: "t", Role: testRoleARN},
 		validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))
@@ -81,13 +82,14 @@ func TestConfigStaleDeniesRequest(t *testing.T) {
 }
 
 func TestConfigStaleDeniesMint(t *testing.T) {
-	p, fail := staleProvider(t, new(20*time.Millisecond))
+	t.Parallel()
+	p, fail := staleProvider(t, new(2*time.Second))
 	cons := mockConsumer(t)
 	ext := &countingExtractor{inner: idpClaims(nil)}
 	proc, sink := staleProcessor(t, p, cons, ext)
 
 	fail.Store(true)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2100 * time.Millisecond)
 
 	_, err := mint(t, proc, handler.RequestData{}, &bytes.Buffer{})
 
@@ -106,13 +108,14 @@ func (rejectingExtractor) Extract(context.Context, validator.ExtractionInput) (*
 }
 
 func TestConfigStaleNotRevealedToUnauthenticatedCaller(t *testing.T) {
-	p, fail := staleProvider(t, new(20*time.Millisecond))
+	t.Parallel()
+	p, fail := staleProvider(t, new(2*time.Second))
 	cons := mockConsumer(t)
 	ext := &countingExtractor{inner: rejectingExtractor{}}
 	proc, sink := staleProcessor(t, p, cons, ext)
 
 	fail.Store(true)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(2100 * time.Millisecond)
 
 	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Token: "t", Role: testRoleARN},
 		validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))

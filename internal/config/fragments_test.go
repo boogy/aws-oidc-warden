@@ -347,7 +347,8 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 
 	// Compiled/derived state must be rebuilt.
 	require.Len(t, clone.effective, 1)
-	assert.NotNil(t, clone.effective[0].compiledPattern)
+	assert.NotEmpty(t, clone.effective[0].resolvedSubject)
+	assert.True(t, clone.effective[0].compiledPattern != nil || clone.effective[0].subjectClass == subjectExact, "subject must be compiled or an exact literal")
 	assert.Equal(t, []string{"arn:aws:iam::111111111111:role/prod"}, clone.effective[0].Roles)
 	assert.NotEmpty(t, clone.effective[0].Conditions.compiled)
 }
@@ -697,6 +698,7 @@ role_groups:
 	assert.Equal(t, setLen, len(c2.parsed.RoleSets["fragset"]))
 	// Unexported per-mapping state must not have leaked into the cached parse.
 	assert.Nil(t, c2.parsed.RoleMappings[0].compiledPattern, "compiledPattern leaked into cached fragment")
+	assert.Empty(t, c2.parsed.RoleMappings[0].subjectKey, "subjectKey leaked into cached fragment")
 	assert.Empty(t, c2.parsed.RoleMappings[0].Conditions.compiled, "compiled conditions leaked into cached fragment")
 }
 
@@ -815,4 +817,81 @@ func TestAudit_RoleGroupOrderingAmongstThemselves(t *testing.T) {
 		"arn:aws:iam::111111111111:role/prod", map[string]any{})
 	require.NotNil(t, polFile)
 	assert.Equal(t, "first.json", *polFile)
+}
+
+// ---------------------------------------------------------------------------
+// F. a fragment's default_issuer is scoped to that fragment
+// ---------------------------------------------------------------------------
+
+const (
+	fragIssA = "https://token.actions.githubusercontent.com"
+	fragIssB = "https://gitlab.example.com"
+)
+
+func twoIssuerFragBase(t *testing.T, fragments ...string) *Config {
+	t.Helper()
+	c := a2Base(t)
+	c.Issuers = append(c.Issuers, IssuerConfig{
+		Issuer: fragIssB, Provider: "generic", Audiences: []string{"aud"},
+		ClaimMappings: map[string]string{"subject": "sub"},
+	})
+	c.ConfigFragments = fragments
+	require.NoError(t, c.Validate())
+	return c
+}
+
+func TestFragmentDefaultIssuerBindsOnlyItsOwnEntries(t *testing.T) {
+	dir := t.TempDir()
+	const role = "arn:aws:iam::111111111111:role/r"
+	fragA := a2Write(t, dir, "a.yaml", "default_issuer: \""+fragIssB+"\"\nrole_mappings:\n  - subject: \"a/app\"\n    roles: [\""+role+"\"]\nrole_groups:\n  - subjects: [\"a/grp\"]\n    defaults: {roles: [\""+role+"\"]}\n")
+	fragB := a2Write(t, dir, "b.yaml", "role_mappings:\n  - subject: \"b/app\"\n    roles: [\""+role+"\"]\n")
+	fragBExplicit := a2Write(t, dir, "b2.yaml", "role_mappings:\n  - subject: \"b/app\"\n    issuer: \""+fragIssA+"\"\n    roles: [\""+role+"\"]\n")
+
+	t.Run("another fragment's issuer-less entry is not bound by it", func(t *testing.T) {
+		p := NewProvider(twoIssuerFragBase(t, fragA, fragB), time.Minute, "", nil)
+		err := p.Refresh(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "issuer must be set explicitly")
+		assert.Contains(t, err.Error(), "b/app")
+	})
+
+	t.Run("own entries bind to it and the config default stays empty", func(t *testing.T) {
+		p := NewProvider(twoIssuerFragBase(t, fragA, fragBExplicit), time.Minute, "", nil)
+		require.NoError(t, p.Refresh(context.Background()))
+		cfg := p.Get()
+		assert.Empty(t, cfg.DefaultIssuer)
+
+		byIssuer := map[string]string{}
+		for _, m := range cfg.effective {
+			byIssuer[m.resolvedSubject] = m.Issuer
+		}
+		assert.Equal(t, map[string]string{"a/app": fragIssB, "a/grp": fragIssB, "b/app": fragIssA}, byIssuer)
+
+		ok, _ := cfg.AuthorizeRoles(fragIssB, "a/app", map[string]any{})
+		assert.True(t, ok)
+		ok, _ = cfg.AuthorizeRoles(fragIssA, "a/app", map[string]any{})
+		assert.False(t, ok)
+	})
+
+	t.Run("the cached parse is not modified", func(t *testing.T) {
+		p := NewProvider(twoIssuerFragBase(t, fragA), time.Minute, "", nil)
+		require.NoError(t, p.Refresh(context.Background()))
+		require.NoError(t, p.Refresh(context.Background()))
+		for _, frag := range p.fragments {
+			assert.Empty(t, frag.parsed.RoleMappings[0].Issuer, "cached parse must not be modified")
+		}
+	})
+}
+
+func TestMergeFragment_DefaultIssuerNotWrittenToConfig(t *testing.T) {
+	cfg := &Config{}
+	frag := &FragmentConfig{
+		DefaultIssuer: "https://a.example.com",
+		RoleMappings:  []RoleMapping{{Subject: Patterns{"x/y"}}, {Subject: Patterns{"x/z"}, Issuer: "https://b.example.com"}},
+	}
+	require.NoError(t, mergeFragment(cfg, frag, "f", map[string]bool{"https://a.example.com": true}))
+	assert.Empty(t, cfg.DefaultIssuer)
+	assert.Equal(t, "https://a.example.com", cfg.RoleMappings[0].Issuer)
+	assert.Equal(t, "https://b.example.com", cfg.RoleMappings[1].Issuer)
+	assert.Empty(t, frag.RoleMappings[0].Issuer)
 }

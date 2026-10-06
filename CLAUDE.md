@@ -48,7 +48,7 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 
 - Never log full tokens/credentials — redact via `internal/utils`.
 - Validate JWT signature, issuer, audience, expiration.
-- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific. A bare `.*`/`.+` is **rejected by `Validate()`** for both (shared `bareWildcards` guard) — the check is literal, so an equivalent pattern still compiles. Conditions at the same level are AND'd; `all_of`/`any_of`/`none_of` groups nest inside for richer logic (capped at 5 levels / 64 nodes, enforced in `Validate()`).
+- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific. A pattern that provably matches every string (`.*`, `.+`, `(?s).*`, `[\s\S]*`, `(.*)`, `^.*$`, `a|.*`) is **rejected by `Validate()`** for both (shared `isUniversal` parse-tree check); it is sound for what it accepts, not complete, so keep patterns specific anyway. Conditions at the same level are AND'd; `all_of`/`any_of`/`none_of` groups nest inside for richer logic (capped at 5 levels / 64 nodes, enforced in `Validate()`).
 - Validate JSON and bound reads (`io.LimitReader`) before processing external input.
 - Never commit credentials/secrets. Sign commits and tags. Do not add a Claude co-author.
 

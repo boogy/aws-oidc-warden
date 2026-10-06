@@ -5,7 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
@@ -53,7 +57,7 @@ type Condition struct {
 // are OR'd with each other, and every compiledCondition on a node is AND'd.
 type compiledCondition struct {
 	claim    string
-	patterns []*regexp.Regexp
+	patterns []*matcher
 }
 
 const (
@@ -73,23 +77,71 @@ func compileCondition(cond *Condition, rc regexCache) error {
 	return compileConditionAt(cond, "conditions", 1, &budget, rc)
 }
 
-// regexCache memoizes anchored-pattern compilation within one Validate() pass.
-type regexCache map[string]*regexp.Regexp
+// matcher is one anchored pattern. A pure literal (re == nil) compares with
+// ==, which is exactly what ^(?:lit)$ means; anything else runs its regexp.
+type matcher struct {
+	re  *regexp.Regexp
+	lit string
+}
 
-// anchor compiles pattern as "^(?:pattern)$". Callers must run the empty and
-// bare-wildcard guards first; only accepted patterns are memoized.
-func (rc regexCache) anchor(pattern string) (*regexp.Regexp, error) {
-	if re, ok := rc[pattern]; ok {
-		return re, nil
+func (m *matcher) match(s string) bool {
+	if m.re == nil {
+		return s == m.lit
 	}
-	re, err := regexp.Compile("^(?:" + pattern + ")$")
+	return m.re.MatchString(s)
+}
+
+// regexCache memoizes anchored-pattern compilation within one Validate() pass.
+type regexCache map[string]*matcher
+
+// parsePattern parses and simplifies pattern with the flags regexp.Compile uses.
+func parsePattern(pattern string) (*syntax.Regexp, error) {
+	re, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
 		return nil, err
 	}
-	if rc != nil {
-		rc[pattern] = re
+	return re.Simplify(), nil
+}
+
+// literalOf returns the one string re matches, when re is a plain
+// case-sensitive literal. U+FFFD is excluded: the regexp engine reads invalid
+// UTF-8 as U+FFFD, which == would not.
+func literalOf(re *syntax.Regexp) (string, bool) {
+	if re.Op != syntax.OpLiteral || re.Flags&syntax.FoldCase != 0 {
+		return "", false
 	}
-	return re, nil
+	lit := string(re.Rune)
+	if strings.ContainsRune(lit, utf8.RuneError) {
+		return "", false
+	}
+	return lit, true
+}
+
+// anchor matches pattern as "^(?:pattern)$". Callers must run the empty guard
+// first; patterns isUniversal proves match everything are rejected, and only
+// accepted ones are memoized.
+func (rc regexCache) anchor(pattern string) (*matcher, error) {
+	if m, ok := rc[pattern]; ok {
+		return m, nil
+	}
+	// Unbalanced parens (`x)|(y`) compile once wrapped and escape the anchor.
+	tree, err := parsePattern(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if isUniversal(tree) {
+		return nil, errUniversalPattern
+	}
+	m := &matcher{}
+	if lit, ok := literalOf(tree); ok {
+		m.lit = lit
+	} else if m.re, err = regexp.Compile("^(?:" + pattern + ")$"); err != nil {
+		return nil, err
+	}
+	if rc != nil {
+		rc[pattern] = m
+	}
+	return m, nil
 }
 
 // namedPatterns pairs a shorthand condition key with its patterns.
@@ -141,7 +193,7 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 		if len(patterns) == 0 {
 			return fmt.Errorf("%s: %q must list at least one pattern", path, key)
 		}
-		compiled := make([]*regexp.Regexp, 0, len(patterns))
+		compiled := make([]*matcher, 0, len(patterns))
 		for _, pattern := range patterns {
 			re, err := compileAnchoredCondition(pattern, rc)
 			if err != nil {
@@ -323,28 +375,81 @@ func clonePatterns(in Patterns) Patterns {
 	return out
 }
 
-// bareWildcards are patterns that match every possible value. They must never
-// gate an authorization decision — as a condition OR as a subject — because
-// they reduce that gate to "always true".
-//
-// This is a literal check on the two shapes operators actually reach for, not
-// a general "does this regex match everything" analysis: that is not something
-// we can decide cheaply, and a determined operator can still write an
-// equivalent pattern (`(.*)`, `.*.*`, `[\s\S]*`). It closes the documented
-// footgun and makes the accident loud; it is not a proof of specificity.
-var bareWildcards = map[string]bool{".*": true, ".+": true}
+// errUniversalPattern marks a pattern that matches every string. Such a
+// pattern would reduce the gate it sits in (a subject or a condition) to
+// "always true", so anchor rejects it.
+var errUniversalPattern = errors.New("pattern matches every value")
+
+// isUniversal reports whether the simplified parse tree re provably matches
+// every string (any text, newlines aside: `.*` counts). It is sound for what
+// it accepts, not complete: it covers the shapes that reduce to "any
+// character, repeated" and not every regexp equivalent to one.
+func isUniversal(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpCapture, syntax.OpQuest:
+		return isUniversal(re.Sub[0])
+	case syntax.OpStar, syntax.OpPlus:
+		return isAnyChar(re.Sub[0]) || isUniversal(re.Sub[0])
+	case syntax.OpRepeat:
+		return re.Min <= 1 && re.Max == -1 && (isAnyChar(re.Sub[0]) || isUniversal(re.Sub[0]))
+	case syntax.OpAlternate:
+		return slices.ContainsFunc(re.Sub, isUniversal)
+	case syntax.OpConcat:
+		universal := false
+		for _, sub := range re.Sub {
+			switch {
+			case isUniversal(sub):
+				universal = true
+			case !isEmptyWidth(sub):
+				return false
+			}
+		}
+		return universal
+	}
+	return false
+}
+
+// isAnyChar reports whether re matches any single character, or any except \n.
+func isAnyChar(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpAnyChar, syntax.OpAnyCharNotNL:
+		return true
+	case syntax.OpCapture:
+		return isAnyChar(re.Sub[0])
+	case syntax.OpAlternate:
+		return slices.ContainsFunc(re.Sub, isAnyChar)
+	case syntax.OpCharClass:
+		r := re.Rune
+		switch len(r) {
+		case 2:
+			return r[0] == 0 && r[1] >= unicode.MaxRune
+		case 4:
+			return r[0] == 0 && r[1] == '\n'-1 && r[2] == '\n'+1 && r[3] >= unicode.MaxRune
+		}
+	}
+	return false
+}
+
+func isEmptyWidth(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpEmptyMatch, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText:
+		return true
+	}
+	return false
+}
 
 // compileAnchoredCondition compiles pattern as an auto-anchored regex,
 // rejecting empty patterns and bare wildcards that would match anything
 // (security conditions must be specific, never `.*`).
-func compileAnchoredCondition(pattern string, rc regexCache) (*regexp.Regexp, error) {
+func compileAnchoredCondition(pattern string, rc regexCache) (*matcher, error) {
 	if pattern == "" {
 		return nil, errors.New("pattern must not be empty")
 	}
-	if bareWildcards[pattern] {
+	m, err := rc.anchor(pattern)
+	if errors.Is(err, errUniversalPattern) {
 		return nil, fmt.Errorf("pattern %q is too permissive; use a specific pattern", pattern)
 	}
-	return rc.anchor(pattern)
+	return m, err
 }
 
 // valueMatches reports whether one raw verified claim VALUE satisfies pattern
@@ -358,26 +463,26 @@ func compileAnchoredCondition(pattern string, rc regexCache) (*regexp.Regexp, er
 //
 // This reads the VALUE, never the Go type, and in BOTH polarities: dispatching
 // on type under none_of alone made the two spellings of a predicate disagree
-// and broke NOT(NOT(x)) == x. types.OpaqueClaim is the one deliberate
-// exception to that symmetry — see valueIsUndecidable.
+// and broke NOT(NOT(x)) == x. types.OpaqueClaim and values containing a
+// newline are deliberate exceptions to that symmetry — see valueIsUndecidable.
 //
 // Cost is bounded without an element cap: the token is already length-capped
 // upstream by max_token_bytes (default 8192), so the number of array elements
 // a request can carry is bounded by the same limit that bounds the claim set.
-func valueMatches(v any, pattern *regexp.Regexp) bool {
+func valueMatches(v any, pattern *matcher) bool {
 	switch t := v.(type) {
 	case nil:
 		return false
 	case []any:
 		for _, el := range t {
-			if s, ok := claimText(el); ok && pattern.MatchString(s) {
+			if s, ok := claimText(el); ok && pattern.match(s) {
 				return true
 			}
 		}
 		return false
 	default:
 		s, ok := claimText(v)
-		return ok && pattern.MatchString(s)
+		return ok && pattern.match(s)
 	}
 }
 
@@ -432,8 +537,8 @@ type claimResolver struct {
 	ambiguous bool
 }
 
-func newClaimResolver(claims map[string]any) *claimResolver {
-	return &claimResolver{raw: claims}
+func newClaimResolver(claims map[string]any) claimResolver {
+	return claimResolver{raw: claims}
 }
 
 // lookup returns the value for claim name, or nil when no claim resolves to it.
@@ -520,14 +625,21 @@ func claimText(v any) (string, bool) {
 // match" would disarm the veto and authorize exactly the caller the operator
 // refused, so such a value counts as MATCHED and fires the veto instead.
 //
-// Three shapes qualify: an object, a list carrying a structural element, and
-// types.OpaqueClaim — a claim whose JSON type an upstream stringifier
+// Four shapes qualify: an object, a list carrying a structural element, a
+// readable scalar whose text contains a newline (or a list element that does),
+// and types.OpaqueClaim — a claim whose JSON type an upstream stringifier
 // destroyed (apigw mode), readable as text but no longer a reading of the real
 // value. OpaqueClaim is the one place the gate refuses a claim by TYPE rather
 // than by VALUE: claimText reads it, so positive polarity matches its verbatim
 // text while negation vetoes, and NOT(NOT(x)) == x does NOT hold for it. That
 // asymmetry is load-bearing — removing it reopens the apigw none_of fail-open
 // (TestOpaqueClaimPositiveAndNoneOfAreNotComplements).
+//
+// A newline is undecidable because `.` does not match it: a veto such as
+// `.*@contractor\.com` would not fire on "x\nbob@contractor.com", so the
+// refused caller would pass. It fails closed under negation, and positive
+// matching is unchanged. The same asymmetry applies, so NOT(NOT(x)) == x does
+// not hold for such a value either.
 //
 // Absence is deliberately NOT undecidable: nil, from a missing claim or a JSON
 // null, is a known state, and none_of's exact-negation semantics depend on it.
@@ -540,14 +652,14 @@ func valueIsUndecidable(v any) bool {
 		return true
 	case []any:
 		for _, el := range t {
-			if _, ok := claimText(el); !ok {
+			if text, ok := claimText(el); !ok || strings.Contains(text, "\n") {
 				return true
 			}
 		}
 		return false
 	default:
-		_, ok := claimText(v)
-		return !ok
+		text, ok := claimText(v)
+		return !ok || strings.Contains(text, "\n")
 	}
 }
 
@@ -588,11 +700,19 @@ func claimMatches(res *claimResolver, cc compiledCondition, negated bool) bool {
 // at Validate() time — and its depth is bounded by the config, never by request
 // input.
 func satisfiesConditions(cond *Condition, claims map[string]any) bool {
+	res := newClaimResolver(claims)
+	return res.satisfies(cond)
+}
+
+// satisfies evaluates cond against r's claims. r may be reused across
+// mappings of one request: its folded index is built once and the ambiguity
+// flag is reset per call.
+func (r *claimResolver) satisfies(cond *Condition) bool {
 	if cond == nil {
 		return true
 	}
-	res := newClaimResolver(claims)
-	ok := satisfiesConditionsWith(cond, res, false)
+	r.ambiguous = false
+	ok := satisfiesConditionsWith(cond, r, false)
 	// An ambiguous claim denies the whole mapping, not just its leaf. Denying
 	// only the leaf is polarity-dependent: under none_of a leaf that cannot
 	// match is a veto that cannot fire, so `none_of: [{isContractor: "true"}]`
@@ -608,10 +728,7 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	// deny. Checking after the walk rather than short-circuiting inside it is
 	// what makes the deny independent of where in the tree the collision sat
 	// and of how many negations enclose it.
-	if res.ambiguous {
-		return false
-	}
-	return ok
+	return ok && !r.ambiguous
 }
 
 // satisfiesConditionsWith is the recursive walk. The resolver is threaded down
@@ -622,9 +739,9 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 // into a none_of member, so a none_of nested inside a none_of is positive again
 // (double negation), which is what the operator wrote. all_of and any_of
 // preserve polarity — they change how members combine, not whether the result
-// is negated. Only claimMatches reads it, and only for a claim it cannot read
-// at all; every other leaf answers identically in both polarities, which is
-// what makes NOT(NOT(x)) == x hold for every value the gate can compare.
+// is negated. Only claimMatches reads it, and only for a claim valueIsUndecidable
+// rejects; every other leaf answers identically in both polarities, so
+// NOT(NOT(x)) == x holds except for those values.
 func satisfiesConditionsWith(cond *Condition, res *claimResolver, negated bool) bool {
 	if cond == nil {
 		return true

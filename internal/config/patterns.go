@@ -1,10 +1,15 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
+	"slices"
+	"strings"
 
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
@@ -76,7 +81,9 @@ func nilConditionHookFunc() mapstructure.DecodeHookFuncType {
 // decoderOptions returns the mapstructure options EVERY config unmarshal must
 // pass (LoadConfig, MergeBytes, parseFragment). viper.DecodeHook REPLACES
 // viper's default chain, so its defaults are re-composed here after ours.
-func decoderOptions() []viper.DecoderConfigOption {
+//
+// md, when non-nil, receives the decode metadata; see rejectUnusedKeys.
+func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 	return []viper.DecoderConfigOption{
 		viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
 			stringToPatternsHookFunc(),
@@ -85,6 +92,26 @@ func decoderOptions() []viper.DecoderConfigOption {
 			mapstructure.StringToSliceHookFunc(","),
 		)),
 		// DecodeNil: affects only the two keys the hooks above claim.
-		func(c *mapstructure.DecoderConfig) { c.DecodeNil = true },
+		func(c *mapstructure.DecoderConfig) { c.DecodeNil = true; c.Metadata = md },
 	}
+}
+
+// rejectUnusedKeys fails on a nested key no struct field claimed
+// (role_mappings[0].condtions, tag_auth.enabeld): such a typo silently drops
+// the setting it was meant to carry. An unused top-level key only warns, so
+// holder keys such as YAML anchors (x-anchors) keep loading.
+func rejectUnusedKeys(unused []string, source string) error {
+	unused = slices.Sorted(slices.Values(unused))
+	for _, key := range unused {
+		if strings.ContainsAny(key, ".[") {
+			return fmt.Errorf("%s: unknown key %q is not a config field (check the spelling)", source, key)
+		}
+	}
+	for _, key := range unused {
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning, "unknown top-level config key is ignored",
+			slog.String("warning", "unknown_config_key"),
+			slog.String("key", key),
+			slog.String("source", source))
+	}
+	return nil
 }

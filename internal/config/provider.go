@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +62,8 @@ type Provider struct {
 	fragmentFetch FragmentFetchFunc          // nil if no remote ("scheme://") fragments are configured
 	fragments     map[string]*cachedFragment // last-applied fragment cache; only touched under sem (in refreshLocked)
 	frozenIdP     *IdPConfig                 // idp config the running service was built from; guarded by sem
+	built         bool                       // a refresh has fully applied overlaySum and fragments; guarded by sem
+	overlaySum    [sha256.Size]byte          // digest of base + overlay bytes behind current; guarded by sem
 }
 
 // NewStaticProvider returns a Provider that always serves cfg and never reloads.
@@ -89,15 +92,13 @@ func (p *Provider) FreezeIdP(c *IdPConfig) {
 	p.lock()
 	defer p.unlock()
 	p.frozenIdP = c
+	p.built = false
 }
 
 // Get returns the currently active configuration.
 func (p *Provider) Get() *Config {
 	return p.current.Load()
 }
-
-// IntervalForTest exposes the current effective interval for testing only.
-func (p *Provider) IntervalForTest() int64 { return p.interval.Load() }
 
 // MaybeRefresh reloads once the interval or failure backoff has elapsed; while stale it waits for an in-flight refresh.
 func (p *Provider) MaybeRefresh(ctx context.Context) { p.maybeRefresh(ctx, true) }
@@ -117,7 +118,8 @@ func (p *Provider) maybeRefresh(ctx context.Context, waitIfStale bool) {
 	if !stale && !p.due(interval, false) {
 		return
 	}
-	if stale && waitIfStale {
+	// After a failure the refresh is likely to fail again; do not queue requests behind it.
+	if stale && waitIfStale && p.failures.Load() == 0 {
 		wctx, cancel := context.WithTimeout(ctx, staleWaitTimeout)
 		locked := p.lockCtx(wctx)
 		cancel()
@@ -214,16 +216,45 @@ func (p *Provider) Refresh(ctx context.Context) error {
 
 // refreshLocked performs the fetch, merge and swap. Must be called with p.sem held.
 func (p *Provider) refreshLocked(ctx context.Context) error {
-	cfg, err := cloneConfig(p.base)
+	baseJSON, err := json.Marshal(p.base)
 	if err != nil {
+		return fmt.Errorf("failed to clone base configuration: %w", err)
+	}
+	var data []byte
+	if p.fetch != nil {
+		if data, err = p.fetch(ctx); err != nil {
+			return fmt.Errorf("failed to fetch configuration: %w", err)
+		}
+	}
+	// The digest covers the base too, so a changed base is never skipped.
+	h := sha256.New()
+	h.Write(baseJSON)
+	h.Write([]byte{0})
+	h.Write(data)
+	var sum [sha256.Size]byte
+	h.Sum(sum[:0])
+
+	// Same overlay bytes and every fragment etag as last time: the rebuild
+	// would reproduce current, so skip it.
+	var probed map[string]fetchedFragment
+	if p.built && sum == p.overlaySum {
+		var unchanged bool
+		unchanged, probed, err = p.fragmentsUnchanged(ctx, p.current.Load())
+		if err != nil {
+			return fmt.Errorf("failed to apply config fragments: %w", err)
+		}
+		if unchanged {
+			p.lastRefresh.Store(p.now().UnixNano())
+			return nil
+		}
+	}
+
+	cfg := new(Config)
+	if err := json.Unmarshal(baseJSON, cfg); err != nil {
 		return fmt.Errorf("failed to clone base configuration: %w", err)
 	}
 
 	if p.fetch != nil {
-		data, err := p.fetch(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to fetch configuration: %w", err)
-		}
 		if err := cfg.MergeBytes(data, p.format); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
@@ -241,7 +272,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		return fmt.Errorf("invalid base configuration: %w", err)
 	}
 
-	nextFragments, err := p.applyFragments(ctx, cfg)
+	nextFragments, err := p.applyFragments(ctx, cfg, probed)
 	if err != nil {
 		return fmt.Errorf("failed to apply config fragments: %w", err)
 	}
@@ -265,6 +296,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 
 	p.current.Store(cfg)
 	p.fragments = nextFragments
+	p.overlaySum, p.built = sum, true
 	p.lastRefresh.Store(p.now().UnixNano())
 
 	// Propagate a changed interval so operators can adjust polling without a cold start.
@@ -278,8 +310,49 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	return nil
 }
 
+// fragmentsUnchanged reports whether every fragment of cur still has its applied
+// etag. Size and pin checks run exactly as in applyFragments, so a rotated pin
+// or oversized body fails the refresh instead of being skipped.
+//
+// The fetches are returned so a rebuild after a change reuses them.
+func (p *Provider) fragmentsUnchanged(ctx context.Context, cur *Config) (bool, map[string]fetchedFragment, error) {
+	sources := cur.fragmentSources()
+	if len(sources) != len(p.fragments) {
+		return false, nil, nil
+	}
+	unchanged := true
+	fetched := make(map[string]fetchedFragment, len(sources))
+	for _, uri := range sources {
+		prev := p.fragments[uri]
+		if prev == nil {
+			return false, fetched, nil
+		}
+		data, etag, err := p.fetchFragment(ctx, uri, prev.etag, cur.S3ConfigBucketOwner)
+		if err != nil {
+			return false, nil, fmt.Errorf("config_fragments: %w", err)
+		}
+		if len(data) > utils.MaxConfigBytes {
+			return false, nil, fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, utils.MaxConfigBytes)
+		}
+		if expected, pinned := cur.fragmentChecksum(uri); pinned && expected != etag {
+			return false, nil, fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
+		}
+		fetched[uri] = fetchedFragment{data: data, etag: etag}
+		if etag != prev.etag {
+			unchanged = false
+		}
+	}
+	return unchanged, fetched, nil
+}
+
+// fetchedFragment is one fragment read already made during this refresh.
+type fetchedFragment struct {
+	data []byte
+	etag string
+}
+
 // applyFragments merges every fragment onto cfg in list order; the caller commits the returned cache only on success.
-func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]*cachedFragment, error) {
+func (p *Provider) applyFragments(ctx context.Context, cfg *Config, probed map[string]fetchedFragment) (map[string]*cachedFragment, error) {
 	sources := cfg.fragmentSources()
 	if len(sources) == 0 {
 		return nil, nil
@@ -303,8 +376,12 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config) (map[string]
 			prevETag = prev.etag
 		}
 
-		data, etag, err := p.fetchFragment(ctx, uri, prevETag, cfg.S3ConfigBucketOwner)
-		if err != nil {
+		var data []byte
+		var etag string
+		var err error
+		if f, ok := probed[uri]; ok {
+			data, etag = f.data, f.etag
+		} else if data, etag, err = p.fetchFragment(ctx, uri, prevETag, cfg.S3ConfigBucketOwner); err != nil {
 			return nil, fmt.Errorf("config_fragments: %w", err)
 		}
 		if len(data) > utils.MaxConfigBytes {
