@@ -627,11 +627,11 @@ func TestProvider_FragmentReload_Race(t *testing.T) {
 			default:
 			}
 			i++
-			store.set(uri, []byte(fmt.Sprintf(`
+			store.set(uri, fmt.Appendf(nil, `
 role_mappings:
   - subject: "owner/repo-%d"
     roles: ["arn:aws:iam::111111111111:role/r%d"]
-`, i, i)))
+`, i, i))
 		}
 	}()
 

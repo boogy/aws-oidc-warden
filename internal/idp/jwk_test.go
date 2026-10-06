@@ -30,7 +30,7 @@ func TestThumbprintECCanonical(t *testing.T) {
 	pt, err := key.PublicKey.Bytes()
 	require.NoError(t, err)
 	x, y := base64.RawURLEncoding.EncodeToString(pt[1:33]), base64.RawURLEncoding.EncodeToString(pt[33:65])
-	sum := sha256.Sum256([]byte(fmt.Sprintf(`{"crv":"P-256","kty":"EC","x":"%s","y":"%s"}`, x, y)))
+	sum := sha256.Sum256(fmt.Appendf(nil, `{"crv":"P-256","kty":"EC","x":"%s","y":"%s"}`, x, y))
 	kid, err := Thumbprint(&key.PublicKey)
 	require.NoError(t, err)
 	require.Equal(t, base64.RawURLEncoding.EncodeToString(sum[:]), kid)

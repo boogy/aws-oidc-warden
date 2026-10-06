@@ -289,7 +289,7 @@ func TestBatchProcessing(t *testing.T) {
 	})).Return(&s3.PutObjectOutput{}, nil).Once()
 
 	for i := 1; i <= 2; i++ {
-		err := logger.BufferRecord([]byte(fmt.Sprintf("log message %d\n", i)))
+		err := logger.BufferRecord(fmt.Appendf(nil, "log message %d\n", i))
 		assert.NoError(t, err)
 	}
 
@@ -406,7 +406,7 @@ func TestConcurrentLogWrites(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				err := logger.BufferRecord([]byte(fmt.Sprintf("concurrent log %d-%d\n", id, j)))
+				err := logger.BufferRecord(fmt.Appendf(nil, "concurrent log %d-%d\n", id, j))
 				assert.NoError(t, err)
 			}
 		}(i)

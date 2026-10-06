@@ -191,10 +191,10 @@ func driftGenA(issuer string) *config.Config {
 // driftGenBJSON is the reload payload: audience rotated to aud-v2 AND the
 // role mapping retired (empty role_mappings), in the same push.
 func driftGenBJSON(issuer string) []byte {
-	return []byte(fmt.Sprintf(`{
+	return fmt.Appendf(nil, `{
 		"issuers": [{"issuer": %q, "provider": "github", "audiences": ["aud-v2"], "required_claims": ["repository"]}],
 		"role_mappings": []
-	}`, issuer))
+	}`, issuer)
 }
 
 // driftGenAJSON is the same shape as driftGenA, as an overlay payload — used
@@ -204,10 +204,10 @@ func driftGenBJSON(issuer string) []byte {
 // handful of chances to land in the window; continuous oscillation gives it
 // thousands).
 func driftGenAJSON(issuer string) []byte {
-	return []byte(fmt.Sprintf(`{
+	return fmt.Appendf(nil, `{
 		"issuers": [{"issuer": %q, "provider": "github", "audiences": ["aud-v1"], "required_claims": ["repository"]}],
 		"role_mappings": [{"subject": "owner/repo", "roles": [%q]}]
-	}`, issuer, driftAllowedRole))
+	}`, issuer, driftAllowedRole)
 }
 
 // runDrift wires the real pipeline and hammers it concurrently with a hot
