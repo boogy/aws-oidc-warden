@@ -82,3 +82,25 @@ func TestRouteRefreshesBeforeKillSwitchCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestIdPRoutesShaped(t *testing.T) {
+	rt := newIdPRoutes(config.IdPPaths{Discovery: "/Warden/.well-known/openid-configuration", JWKS: "/Warden/keys"})
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/warden/keys", true},
+		{"/WARDEN/KEYS/", true},
+		{"/prod/Warden/keys", true},
+		{"/prod/warden/.well-known/openid-configuration", true},
+		{"/a/b/warden/keys", false},
+		{"/warden", false},
+		{"", false},
+		{"/verify", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			assert.Equal(t, tt.want, rt.shaped(tt.path))
+		})
+	}
+}

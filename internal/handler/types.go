@@ -21,7 +21,6 @@ const (
 	RequestIDContextKey         contextKey = "requestId"
 	StartTimeContextKey         contextKey = "startTime"
 	SourceIPContextKey          contextKey = "sourceIp"
-	UserAgentContextKey         contextKey = "userAgent"
 	FrontendRequestIDContextKey contextKey = "frontendRequestId"
 	// SourceIPSourceContextKey carries the provenance of SourceIPContextKey:
 	// "frontend" (attested by AWS) or "x-forwarded-for" (client-supplied).

@@ -923,3 +923,42 @@ func TestProcessWarnsWhenReloadAddsIdPBlock(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
 }
+
+func TestSessionTagsBuiltOncePerRequest(t *testing.T) {
+	tests := []struct {
+		name           string
+		idpToken       bool
+		logClaimValues bool
+	}{
+		{"assume_role", false, false},
+		{"assume_role_audited_values", false, true},
+		{"mint", true, false},
+		{"mint_audited_values", true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := idpConfig(t, tt.idpToken, "", func(c *config.Config) {
+				c.LogClaimValues = tt.logClaimValues
+				c.Issuers[0].SessionTags = map[string]string{"ok": "good", "bad": "bad"}
+			})
+			raw := map[string]any{"repository": "org/repo", "good": "fine", "bad": "<>"}
+			var buf bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(idpLogger(&buf))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+
+			proc, sink, _ := idpProcessorFor(t, cfg, mockWI(t), idpClaims(raw))
+			_, err := mint(t, proc, handler.RequestData{}, &buf)
+			require.NoError(t, err)
+
+			assert.Equal(t, 1, strings.Count(buf.String(), `"eventType":"sts.session_tag.dropped"`))
+			rec := sink.last(t)
+			assert.Equal(t, []any{"ok"}, rec["sessionTagKeys"])
+			if tt.logClaimValues {
+				assert.Equal(t, map[string]any{"ok": "fine"}, rec["sessionTags"])
+			} else {
+				assert.Nil(t, rec["sessionTags"])
+			}
+		})
+	}
+}

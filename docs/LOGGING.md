@@ -52,6 +52,7 @@ Every registered event (`internal/logevent/events_*.go`), grouped by `eventCateg
 | `app.stop`                        | Info                       | —                                                                                                                                                                   |
 | `app.init.failure`                | Error                      | component, error                                                                                                                                                    |
 | `app.resource_close.failure`      | Warn                       | resource, error                                                                                                                                                     |
+| `app.warm.failure`               | Warn                       | component, error                                                                                                                                                    |
 | `audit.buffer.failure`            | Error                      | error                                                                                                                                                               |
 | `audit.client.init`               | Info                       | bucket                                                                                                                                                              |
 | `audit.client.init.failure`       | Error                      | error                                                                                                                                                               |
@@ -201,7 +202,7 @@ Everything above (the values, not the synthesized `matchedRole`), plus seven fie
 | `requestedRole`    | **Allow and deny**           | Set at record construction, before any stage runs, so even an `extract`-stage deny carries it                                                 |
 | `grantedRole`      | Allow only                   | Equal to `requestedRole` once granted                                                                                                         |
 | `matchedVia`       | Always                       | `explicit` or `tag-auth`. **The field to check for "credential issued via tag-auth fallback"** — a question CloudWatch cannot answer, only S3 |
-| `sessionTagKeys`   | Once a role is granted       | Session-tag _names_; present regardless of `log_claim_values`                                                                                 |
+| `sessionTagKeys`   | Once a role is granted       | Names of the session tags actually attached; present regardless of `log_claim_values`                                                           |
 | `sessionTags`      | When `log_claim_values=true` | Resolved session-tag _values_                                                                                                                 |
 | `sessionPolicyRef` | If a policy was applied      | Reference to the session policy                                                                                                               |
 | `expiry`           | Allow only                   | The issued credential's expiration, RFC3339                                                                                                   |
@@ -282,6 +283,8 @@ Two modes, and the switch between them is **not** `audit_required` alone:
 | Flush trigger    | Size (`BatchSize`), age (`MaxBatchAge`), or container shutdown (SIGTERM → `Cleanup()`)                          | n/a                                                                                 |
 | On write failure | Logged; request proceeds                                                                                        | **Request is denied** (fail-closed)                                                 |
 | Durability       | **Best-effort** — flushed on SIGTERM within Lambda's ~500 ms shutdown window; a crash or slow S3 PUT loses them | Guaranteed before credentials are issued                                            |
+
+**Pre-auth denies are always batched.** A deny at the `extract` stage (token validation failed — before the caller is authenticated) goes to the batch buffer even when `audit_required` is enforced, so a flood of junk tokens cannot throttle the shared S3 prefix and make legitimate allows fail closed. Such denies still reach CloudWatch via `authz.decision`; every post-authentication deny and every allow stays synchronous.
 
 Treat container-shutdown flushing as a best-effort backstop only.
 

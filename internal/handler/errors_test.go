@@ -109,7 +109,7 @@ func (s *stubConsumer) GetRoleTags(context.Context, string) (map[string]string, 
 	return nil, nil
 }
 
-func (s *stubConsumer) AssumeRole(_ context.Context, _, sessionName string, _ *string, duration *int32, _ *gtypes.Claims, _ map[string]string) (*types.Credentials, error) {
+func (s *stubConsumer) AssumeRole(_ context.Context, _, sessionName string, _ *string, duration *int32, _ []types.Tag) (*types.Credentials, error) {
 	s.assumeCalls++
 	s.sessionName = sessionName
 	if duration != nil {

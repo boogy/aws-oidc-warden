@@ -24,6 +24,7 @@ const frontendALB = "alb"
 type AwsApplicationLoadBalancer struct {
 	processor *RequestProcessor
 	region    string
+	albMode   bool // jwt_validation.mode is fixed at cold start
 }
 
 // NewAwsApplicationLoadBalancer creates a new Application Load Balancer handler. audit may be nil (see AuditSink).
@@ -31,6 +32,7 @@ func NewAwsApplicationLoadBalancer(provider *config.Provider, consumer aws.AwsCo
 	return &AwsApplicationLoadBalancer{
 		processor: NewRequestProcessor(provider, consumer, extractor, audit, frontendALB),
 		region:    os.Getenv("AWS_REGION"),
+		albMode:   provider.Get().JWTValidation.Mode == "alb",
 	}
 }
 
@@ -53,30 +55,10 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		return resp, nil
 	}
 
-	oidcData := headerValue(headers, "x-amzn-oidc-data")
-	region := h.region
-
-	// Bound before body parsing to reject oversized ALB OIDC headers early.
-	if len(oidcData) > MaxTokenLength {
-		err := fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size: %w", ErrTokenTooLarge)
-		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
-		return h.respondError(ctx, err, http.StatusBadRequest)
-	}
-
-	requestData, err := h.unmarshalRequestData(event.Body, oidcData)
+	requestData, input, err := h.parseRequest(event.Body, headers)
 	if err != nil {
 		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
 		return h.respondError(ctx, err, http.StatusBadRequest)
-	}
-
-	var input validator.ExtractionInput
-	if oidcData != "" {
-		input = validator.ExtractionInput{
-			ALBOIDCData: oidcData,
-			AWSRegion:   region,
-		}
-	} else {
-		input = validator.ExtractionInput{Token: requestData.Token}
 	}
 
 	credentials, err := h.processor.ProcessRequest(ctx, requestData, input, requestID, log)
@@ -109,16 +91,30 @@ func albRequestHeaders(event events.ALBTargetGroupRequest) map[string]string {
 func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, headers map[string]string) (context.Context, context.CancelFunc) {
 	// ALB has neither a request ID nor a source-IP field, so both fall back
 	// to their non-frontend paths (fresh UUID, rightmost XFF hop).
-	return newRequestContext(ctx, "", "", headers, headerValue(headers, "user-agent"))
+	return newRequestContext(ctx, "", "", headers)
 }
 
-// unmarshalRequestData parses the ALB request body: role-only when
-// x-amzn-oidc-data carries the token, full body otherwise.
-func (h *AwsApplicationLoadBalancer) unmarshalRequestData(body, oidcData string) (*RequestData, error) {
-	if oidcData != "" {
-		return ParseRoleOnlyRequestBody(body)
+// parseRequest picks the body and extraction path from the configured mode, never from header presence.
+// In alb mode a missing header still reaches the extractor, which denies it.
+func (h *AwsApplicationLoadBalancer) parseRequest(body string, headers map[string]string) (*RequestData, validator.ExtractionInput, error) {
+	if !h.albMode {
+		data, err := ParseRequestBody(body)
+		if err != nil {
+			return nil, validator.ExtractionInput{}, err
+		}
+		return data, validator.ExtractionInput{Token: data.Token}, nil
 	}
-	return ParseRequestBody(body)
+
+	oidcData := headerValue(headers, "x-amzn-oidc-data")
+	// Bound before body parsing to reject oversized ALB OIDC headers early.
+	if len(oidcData) > MaxTokenLength {
+		return nil, validator.ExtractionInput{}, fmt.Errorf("x-amzn-oidc-data header exceeds maximum allowed size: %w", ErrTokenTooLarge)
+	}
+	data, err := ParseRoleOnlyRequestBody(body)
+	if err != nil {
+		return nil, validator.ExtractionInput{}, err
+	}
+	return data, validator.ExtractionInput{ALBOIDCData: oidcData, AWSRegion: h.region}, nil
 }
 
 // newResponse builds this frontend's response type from a status and body.

@@ -66,7 +66,7 @@ func assumeWithSTSError(t *testing.T, stsErr error) error {
 	t.Helper()
 	c := NewAwsConsumer(vbaseCfg())
 	c.AWS = &failingFake{vFake: &vFake{}, err: stsErr}
-	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/Target", "aow", nil, nil, nil, nil)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/Target", "aow", nil, nil, nil)
 	require.Error(t, err)
 	return err
 }

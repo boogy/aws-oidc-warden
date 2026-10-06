@@ -16,7 +16,7 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 - **`internal/cache/`** → [CLAUDE.md](internal/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects). _Go here when_ changing cache backends, TTL handling, or eviction.
 
-- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-resolved `sessionTags` (built by `BuildSessionTags(ctx, rawClaims, tagSpec)` from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
+- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-built `[]types.Tag` (the handler runs `BuildSessionTags(ctx, rawClaims, tagSpec)` once per request from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
 
 - **`internal/idp/`** → [CLAUDE.md](internal/idp/CLAUDE.md) — optional warden-as-IdP: KMS/PEM signer, self-verified token mint, JWKS/discovery documents; the handler exchanges the minted token via unsigned `AssumeRoleWithWebIdentity`. Operator guide: `docs/IDP.md`. _Go here when_ touching minting, signing keys, or the `idp` config.
 

@@ -21,28 +21,36 @@ import (
 
 // RequestProcessor contains the core business logic for processing authentication requests
 type RequestProcessor struct {
-	provider    *config.Provider
-	consumer    aws.AwsConsumerInterface
-	extractor   validator.ClaimsExtractorInterface
-	audit       AuditSink // nil is a no-op
-	frontend    string
-	idp         *idp.Service
-	frozenFP    string
-	lastChecked atomic.Pointer[config.Config]
+	provider       *config.Provider
+	consumer       aws.AwsConsumerInterface
+	extractor      validator.ClaimsExtractorInterface
+	audit          AuditSink // nil is a no-op
+	frontend       string
+	idp            *idp.Service
+	routes         *idpRoutes
+	idpIssuer      string
+	sourceIdentity *sourceIdentityTemplate // nil when the source_identity claim is off
+	frozenFP       string
+	lastChecked    atomic.Pointer[config.Config]
 }
 
 // WithIdP enables the IdP mint path; a nil service leaves it disabled.
 func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
-	r.idp = s
+	r.idp, r.routes, r.sourceIdentity = s, nil, nil
 	if s != nil {
-		r.frozenFP = s.Config().Fingerprint()
+		frozen := s.Config()
+		r.frozenFP = frozen.Fingerprint()
+		r.routes, r.idpIssuer = newIdPRoutes(frozen.Paths), frozen.Issuer
+		if frozen.IncludeSourceIdentityClaim() {
+			r.sourceIdentity = parseSourceIdentity(frozen.SourceIdentity, frozen.SourceIdentityOverflow)
+		}
 	}
 	return r
 }
 
 // warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added or removed idp block.
 func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
-	if r.lastChecked.Swap(cfg) == cfg {
+	if r.lastChecked.Load() == cfg || r.lastChecked.Swap(cfg) == cfg {
 		return
 	}
 	fp := ""
@@ -82,6 +90,8 @@ type authzOutcome struct {
 }
 
 const reasonAccountNotAllowed = "target account not allowed"
+
+var errInvalidPolicyJSON = errors.New("session policy is not valid JSON")
 
 // deny finishes a rejected request. o.rec.Stage and o.rec.Reason must already be set.
 func (r *RequestProcessor) deny(ctx context.Context, o *authzOutcome, msg string, ret error, attrs ...slog.Attr) error {
@@ -126,6 +136,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
 		rec.setErrorReason("extract", err)
+		rec.preAuth = true
 		return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
@@ -142,6 +153,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		input.Config, o.cfg = cfg, cfg
 		if claims, err = r.extractor.Extract(ctx, input); err != nil {
 			rec.setErrorReason("extract", err)
+			rec.preAuth = true
 			return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
 		}
 	}
@@ -286,8 +298,8 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, o.decision)
-	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, claims, sessionTagSpec)
+	tags := aws.BuildSessionTags(ctx, claims.Raw, cfg.EffectiveSessionTags(claims.Issuer, o.decision))
+	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, tags)
 	if errors.Is(err, aws.ErrAccountNotAllowed) {
 		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
 		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
@@ -305,9 +317,9 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	rec.GrantedRole = requestedRole
 	rec.SessionName = sessionName
 	rec.DurationSeconds = int(duration)
-	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
+	rec.SessionTagKeys = sessionTagKeyNames(tags)
 	if cfg.LogClaimValues {
-		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, sessionTagSpec)
+		rec.SessionTags = sessionTagValues(tags)
 	}
 	rec.SessionPolicyRef = policyRef
 	if account, _, aerr := utils.ParseRoleARN(requestedRole); aerr == nil {
@@ -360,9 +372,8 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 			return nil, "", fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
 		}
 
-		var jsonCheck any
-		if err := json.Unmarshal(policyBytes, &jsonCheck); err != nil {
-			logPolicyErr("invalid JSON in session policy file", err)
+		if !json.Valid(policyBytes) {
+			logPolicyErr("invalid JSON in session policy file", errInvalidPolicyJSON)
 			return nil, "", fmt.Errorf("invalid JSON in session policy file: %w", ErrSessionPolicyAccess)
 		}
 

@@ -1135,7 +1135,7 @@ type leakyConsumer struct {
 	assumeErr error
 }
 
-func (l *leakyConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, _ *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
+func (l *leakyConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, _ []ststypes.Tag) (*ststypes.Credentials, error) {
 	if l.assumeErr != nil {
 		return nil, l.assumeErr
 	}
@@ -1386,4 +1386,59 @@ func TestAudit_DenyRecord_HasProcessingMs(t *testing.T) {
 	require.Error(t, err)
 
 	assert.Greater(t, sink.last(t)["processingMs"], float64(0))
+}
+
+// Pre-auth denies are always batched; every other decision stays synchronous when enforced.
+func TestAudit_Required_PreAuthDenyIsBatchedOthersSynchronous(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/MyRole"
+	tests := []struct {
+		name         string
+		ex           validator.ClaimsExtractorInterface
+		role         string
+		wantErr      error
+		wantDecision string
+		wantWrites   int
+		wantBuffers  int
+	}{
+		{"extract-stage deny is batched", &stubExtractor{err: errors.New("bad token")}, role, handler.ErrTokenValidationFailed, "deny", 0, 1},
+		{"authorize-stage deny is synchronous", &fixedExtractor{claims: allowClaims("org/other")}, role, handler.ErrRoleNotPermitted, "deny", 1, 0},
+		{"allow is synchronous", &fixedExtractor{claims: allowClaims("org/repo")}, role, nil, "allow", 1, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := auditTestCfg(t, true, true)
+			sink := &fakeAuditSink{}
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), tt.ex, sink, "test")
+
+			_, err := proc.ProcessRequest(context.Background(),
+				&handler.RequestData{Role: tt.role}, validator.ExtractionInput{Token: "t"}, "req-preauth", slog.Default())
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantWrites, sink.writes)
+			assert.Equal(t, tt.wantBuffers, sink.buffers)
+			assert.Equal(t, tt.wantDecision, sink.last(t)["decision"])
+		})
+	}
+}
+
+// A failing or missing sink must not turn a pre-auth deny into a different error, nor fail it closed.
+func TestAudit_Required_PreAuthDenyIgnoresSinkFailure(t *testing.T) {
+	cfg := auditTestCfg(t, true, true)
+	ex := &stubExtractor{err: errors.New("bad token")}
+	for name, sink := range map[string]handler.AuditSink{
+		"failing sink": &fakeAuditSink{err: errors.New("s3 throttled")},
+		"no sink":      nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockConsumer(t), ex, sink, "test")
+			_, err := proc.ProcessRequest(context.Background(),
+				&handler.RequestData{Role: "arn:aws:iam::123456789012:role/MyRole"},
+				validator.ExtractionInput{Token: "t"}, "req-preauth", slog.Default())
+			require.ErrorIs(t, err, handler.ErrTokenValidationFailed)
+			assert.NotErrorIs(t, err, handler.ErrAuditWriteFailed)
+		})
+	}
 }

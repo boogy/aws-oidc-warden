@@ -19,17 +19,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
-	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 // AwsConsumerInterface encapsulates all actions performs with the AWS services
 type AwsConsumerInterface interface {
-	AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
+	AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, tags []types.Tag) (*types.Credentials, error)
 	AssumeRoleWithWebIdentity(ctx context.Context, roleARN, sessionName, token string, policy *string, duration int32) (*types.Credentials, error)
 	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 	GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error)
-	GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
 	GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
 	IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
@@ -222,10 +220,8 @@ func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, se
 }
 
 // AssumeRole assumes the specified AWS IAM role and returns temporary credentials.
-// sessionTags is the issuer's configured session_tags spec (STS tag key -> raw
-// claim name, see config.Config.IssuerSessionTags); it drives which of the
-// verified token's raw claims get attached as STS session tags.
-func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error) {
+// tags are the caller-built session tags (see BuildSessionTags), attached as given.
+func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName string, sessionPolicy *string, duration *int32, tags []types.Tag) (*types.Credentials, error) {
 	if roleArn == "" {
 		return nil, errors.New("roleArn cannot be empty")
 	}
@@ -262,11 +258,8 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 		assumeRoleInput.Policy = sessionPolicy
 	}
 
-	if claims != nil && claims.Raw != nil {
-		tags := BuildSessionTags(ctx, claims.Raw, sessionTags)
-		if len(tags) > 0 {
-			assumeRoleInput.Tags = tags
-		}
+	if len(tags) > 0 {
+		assumeRoleInput.Tags = tags
 	}
 
 	// Mark identity-bearing session tags transitive so ABAC survives any further
@@ -424,17 +417,6 @@ func (a *AwsConsumer) targetAllowed(account, hub string) bool {
 		return account == hub
 	}
 	return a.accountAllowed(account, hub)
-}
-
-// GetRole retrieves information about the specified AWS IAM role
-func (a *AwsConsumer) GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error) {
-	if role == "" {
-		return nil, errors.New("role name cannot be empty")
-	}
-
-	return a.AWS.GetRole(ctx, &iam.GetRoleInput{
-		RoleName: aws.String(role),
-	})
 }
 
 // roleTagCacheTTL bounds how long role tags are cached to cut IAM calls under

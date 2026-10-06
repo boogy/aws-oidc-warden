@@ -59,16 +59,32 @@ func auditSessionName(requested string) string {
 	return utils.FitSTSName(requested)
 }
 
-// renderSourceIdentity expands tmpl into an STS-safe SourceIdentity; truncated reports an overflow cut.
-func renderSourceIdentity(tmpl, overflow, requestID, issuer, subject string, claims map[string]any) (value string, truncated bool, err error) {
-	var b strings.Builder
+// sourceIdentityTemplate is a source_identity template split once at cold start.
+type sourceIdentityTemplate struct {
+	lits     []string // STS-sanitized literals; len(keys)+1
+	keys     []string
+	overflow string
+}
+
+func parseSourceIdentity(tmpl, overflow string) *sourceIdentityTemplate {
+	t := &sourceIdentityTemplate{overflow: overflow}
 	last := 0
 	for _, m := range sourceIDPlaceholder.FindAllStringSubmatchIndex(tmpl, -1) {
-		b.WriteString(utils.SanitizeSTSName(tmpl[last:m[0]]))
+		t.lits = append(t.lits, utils.SanitizeSTSName(tmpl[last:m[0]]))
+		t.keys = append(t.keys, tmpl[m[2]:m[3]])
 		last = m[1]
+	}
+	t.lits = append(t.lits, utils.SanitizeSTSName(tmpl[last:]))
+	return t
+}
+
+// render expands the template into an STS-safe SourceIdentity; truncated reports an overflow cut.
+func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claims map[string]any) (value string, truncated bool, err error) {
+	var b strings.Builder
+	for i, key := range t.keys {
+		b.WriteString(t.lits[i])
 
 		var v string
-		key := tmpl[m[2]:m[3]]
 		switch key {
 		case "request_id":
 			v = requestID
@@ -89,13 +105,13 @@ func renderSourceIdentity(tmpl, overflow, requestID, issuer, subject string, cla
 		}
 		b.WriteString(utils.SanitizeSTSNameHashed(v))
 	}
-	b.WriteString(utils.SanitizeSTSName(tmpl[last:]))
+	b.WriteString(t.lits[len(t.keys)])
 
 	out := b.String()
 	if len(out) < 2 {
 		return "", false, ErrIdPSourceIdentityInvalid
 	}
-	if len(out) > utils.MaxSTSNameLen && overflow == config.IdPOverflowReject {
+	if len(out) > utils.MaxSTSNameLen && t.overflow == config.IdPOverflowReject {
 		return "", false, ErrIdPSourceIdentityInvalid
 	}
 	if len(out) > utils.MaxSTSNameLen {

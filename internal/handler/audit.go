@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/boogy/aws-oidc-warden/internal/aws"
+	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
@@ -48,6 +48,8 @@ type auditRecord struct {
 	// values, so it must follow the log_claim_values gate. Unexported so the
 	// JSON shape is stable regardless of the gate. Set via setErrorReason.
 	reasonFromError bool
+	// preAuth marks a deny that precedes authentication; it is always batched, never a synchronous S3 write.
+	preAuth bool
 
 	Issuer   string   `json:"issuer,omitempty"`
 	Provider string   `json:"provider,omitempty"`
@@ -217,14 +219,17 @@ func subjectAttr(cfg *config.Config, subject string) slog.Attr {
 // recordDecision redacts rec per cfg.LogClaimValues, emits the standardized
 // decision log line from the redacted record, then sends it to the audit
 // sink as one JSON record: synchronously via WriteRecord when
-// cfg.AuditEnforced(), otherwise best-effort via BufferRecord.
+// cfg.AuditEnforced() and the record is not pre-auth, otherwise best-effort
+// via BufferRecord.
 //
-// Callers must set rec.Decision before calling. When cfg.AuditEnforced() is
-// true, a missing sink, marshal failure, or write failure all return an
-// error wrapping ErrAuditWriteFailed and the caller must fail closed; when
-// false, failures are logged and swallowed so the decision still proceeds.
+// Callers must set rec.Decision before calling. On the synchronous path, a
+// missing sink, marshal failure, or write failure all return an error
+// wrapping ErrAuditWriteFailed and the caller must fail closed; otherwise
+// failures are logged and swallowed so the decision still proceeds.
 func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.redact(cfg.LogClaimValues)
+	// Unauthenticated floods must not hammer the shared S3 prefix and fail real allows closed.
+	enforced := cfg.AuditEnforced() && !rec.preAuth
 
 	attrs := auditLogAttrs(rec, cfg.LogClaimValues)
 	decisionEvent := logevent.AuthzDecision.WithOutcome(rec.Decision)
@@ -236,7 +241,7 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 
 	if r.audit == nil {
 		// config.Validate() can't catch a missing sink; enforce here instead.
-		if cfg.AuditEnforced() {
+		if enforced {
 			err := fmt.Errorf("%w: audit_required is set but no audit sink is configured", ErrAuditWriteFailed)
 			logevent.Error(ctx, log, logevent.AuditWriteFailure, "failed to write audit record", slog.String("error", err.Error()))
 			return err
@@ -247,13 +252,13 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	data, err := json.Marshal(rec)
 	if err != nil {
 		logevent.Error(ctx, log, logevent.AuditMarshalFailure, "failed to marshal audit record", slog.String("error", err.Error()))
-		if cfg.AuditEnforced() {
+		if enforced {
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, err)
 		}
 		return nil
 	}
 
-	if cfg.AuditEnforced() {
+	if enforced {
 		if werr := r.audit.WriteRecord(ctx, data); werr != nil {
 			logevent.Error(ctx, log, logevent.AuditWriteFailure, "failed to write audit record", slog.String("error", werr.Error()))
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, werr)
@@ -315,10 +320,18 @@ func claimsAudience(claims *gtypes.Claims) []string {
 	return []string(claims.Audience)
 }
 
-// sessionTagKeyNames returns the sorted tag key names an issuer's session_tags
-// spec would populate. Names are always safe to log regardless of LogClaimValues.
-func sessionTagKeyNames(tagSpec map[string]string) []string {
-	return utils.SortedKeys(tagSpec)
+// sessionTagKeyNames returns the names of the attached session tags, in order.
+func sessionTagKeyNames(tags []ststypes.Tag) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t.Key != nil {
+			names = append(names, *t.Key)
+		}
+	}
+	return names
 }
 
 // claimAliases renames claims on their way into the audit record for a
@@ -381,11 +394,8 @@ func claimEmitted(rawClaims map[string]any, name string, include func(string) bo
 	return utils.FormatClaimValue(raw) != ""
 }
 
-// resolvedSessionTags computes the STS session tag values for the audit
-// record's SessionTags field, reusing aws.BuildSessionTags (the function
-// AssumeRole itself uses). Only called when cfg.LogClaimValues is true.
-func resolvedSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) map[string]string {
-	tags := aws.BuildSessionTags(ctx, rawClaims, tagSpec)
+// sessionTagValues maps the attached session tags to their values; callers must gate on cfg.LogClaimValues.
+func sessionTagValues(tags []ststypes.Tag) map[string]string {
 	if len(tags) == 0 {
 		return nil
 	}
