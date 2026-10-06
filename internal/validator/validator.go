@@ -247,13 +247,9 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 	}
 
 	// Step 1: unverified iss peek — routing only, never identity/authorization.
-	unverified := jwt.MapClaims{}
-	if _, _, err := jwt.NewParser().ParseUnverified(tokenString, unverified); err != nil {
-		return nil, fmt.Errorf("failed to parse token: %w", err)
-	}
-	unverifiedIssuer, err := unverified.GetIssuer()
-	if err != nil || unverifiedIssuer == "" {
-		return nil, fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
+	unverifiedIssuer, err := peekIssuer(tokenString)
+	if err != nil {
+		return nil, err
 	}
 
 	// Step 2: registry lookup by exact issuer match; denies before any JWKS fetch.
@@ -328,6 +324,44 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 	// silently drift weaker.
 	bounds := claimBounds{leeway: leeway, maxLifetime: cfg.MaxTokenLifetime, maxAge: cfg.MaxTokenAge}
 	return checkAndNormalizeClaims(raw, spec, bounds, t.timeNow())
+}
+
+// peekIssuer returns the token's unverified iss for registry routing only. It
+// decodes just the payload; ParseWithClaims re-verifies the issuer, so a wrong
+// peek can only fail closed.
+func peekIssuer(tokenString string) (string, error) {
+	first := strings.IndexByte(tokenString, '.')
+	if first < 0 {
+		return "", malformedTokenErr("token contains an invalid number of segments")
+	}
+	rest := tokenString[first+1:]
+	second := strings.IndexByte(rest, '.')
+	if second < 0 || strings.IndexByte(rest[second+1:], '.') >= 0 {
+		return "", malformedTokenErr("token contains an invalid number of segments")
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(rest[:second])
+	if err != nil {
+		return "", malformedTokenErr("could not base64 decode claim")
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return "", fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
+		}
+		return "", malformedTokenErr("could not JSON decode claim")
+	}
+	if claims.Iss == "" {
+		return "", fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
+	}
+	return claims.Iss, nil
+}
+
+func malformedTokenErr(reason string) error {
+	return fmt.Errorf("failed to parse token: %w: %s", jwt.ErrTokenMalformed, reason)
 }
 
 // audienceMatches reports whether any of the token's audiences matches any of
