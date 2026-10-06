@@ -347,7 +347,8 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 
 	// Compiled/derived state must be rebuilt.
 	require.Len(t, clone.effective, 1)
-	assert.NotNil(t, clone.effective[0].compiledPattern)
+	assert.NotEmpty(t, clone.effective[0].resolvedSubject)
+	assert.True(t, clone.effective[0].compiledPattern != nil || clone.effective[0].subjectClass == subjectExact, "subject must be compiled or an exact literal")
 	assert.Equal(t, []string{"arn:aws:iam::111111111111:role/prod"}, clone.effective[0].Roles)
 	assert.NotEmpty(t, clone.effective[0].Conditions.compiled)
 }
@@ -697,6 +698,7 @@ role_groups:
 	assert.Equal(t, setLen, len(c2.parsed.RoleSets["fragset"]))
 	// Unexported per-mapping state must not have leaked into the cached parse.
 	assert.Nil(t, c2.parsed.RoleMappings[0].compiledPattern, "compiledPattern leaked into cached fragment")
+	assert.Empty(t, c2.parsed.RoleMappings[0].subjectKey, "subjectKey leaked into cached fragment")
 	assert.Empty(t, c2.parsed.RoleMappings[0].Conditions.compiled, "compiled conditions leaked into cached fragment")
 }
 

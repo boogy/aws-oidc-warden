@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
@@ -54,7 +55,7 @@ type Condition struct {
 // are OR'd with each other, and every compiledCondition on a node is AND'd.
 type compiledCondition struct {
 	claim    string
-	patterns []*regexp.Regexp
+	patterns []*matcher
 }
 
 const (
@@ -74,27 +75,67 @@ func compileCondition(cond *Condition, rc regexCache) error {
 	return compileConditionAt(cond, "conditions", 1, &budget, rc)
 }
 
-// regexCache memoizes anchored-pattern compilation within one Validate() pass.
-type regexCache map[string]*regexp.Regexp
+// matcher is one anchored pattern. A pure literal (re == nil) compares with
+// ==, which is exactly what ^(?:lit)$ means; anything else runs its regexp.
+type matcher struct {
+	re  *regexp.Regexp
+	lit string
+}
 
-// anchor compiles pattern as "^(?:pattern)$". Callers must run the empty and
-// bare-wildcard guards first; only accepted patterns are memoized.
-func (rc regexCache) anchor(pattern string) (*regexp.Regexp, error) {
-	if re, ok := rc[pattern]; ok {
-		return re, nil
+func (m *matcher) match(s string) bool {
+	if m.re == nil {
+		return s == m.lit
 	}
-	// Unbalanced parens (`x)|(y`) compile once wrapped and escape the anchor.
-	if _, err := syntax.Parse(pattern, syntax.Perl); err != nil {
-		return nil, err
-	}
-	re, err := regexp.Compile("^(?:" + pattern + ")$")
+	return m.re.MatchString(s)
+}
+
+// regexCache memoizes anchored-pattern compilation within one Validate() pass.
+type regexCache map[string]*matcher
+
+// parsePattern parses and simplifies pattern with the flags regexp.Compile uses.
+func parsePattern(pattern string) (*syntax.Regexp, error) {
+	re, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
 		return nil, err
 	}
-	if rc != nil {
-		rc[pattern] = re
+	return re.Simplify(), nil
+}
+
+// literalOf returns the one string re matches, when re is a plain
+// case-sensitive literal. U+FFFD is excluded: the regexp engine reads invalid
+// UTF-8 as U+FFFD, which == would not.
+func literalOf(re *syntax.Regexp) (string, bool) {
+	if re.Op != syntax.OpLiteral || re.Flags&syntax.FoldCase != 0 {
+		return "", false
 	}
-	return re, nil
+	lit := string(re.Rune)
+	if strings.ContainsRune(lit, utf8.RuneError) {
+		return "", false
+	}
+	return lit, true
+}
+
+// anchor matches pattern as "^(?:pattern)$". Callers must run the empty and
+// bare-wildcard guards first; only accepted patterns are memoized.
+func (rc regexCache) anchor(pattern string) (*matcher, error) {
+	if m, ok := rc[pattern]; ok {
+		return m, nil
+	}
+	// Unbalanced parens (`x)|(y`) compile once wrapped and escape the anchor.
+	tree, err := parsePattern(pattern)
+	if err != nil {
+		return nil, err
+	}
+	m := &matcher{}
+	if lit, ok := literalOf(tree); ok {
+		m.lit = lit
+	} else if m.re, err = regexp.Compile("^(?:" + pattern + ")$"); err != nil {
+		return nil, err
+	}
+	if rc != nil {
+		rc[pattern] = m
+	}
+	return m, nil
 }
 
 // namedPatterns pairs a shorthand condition key with its patterns.
@@ -146,7 +187,7 @@ func compileConditionAt(cond *Condition, path string, depth int, budget *int, rc
 		if len(patterns) == 0 {
 			return fmt.Errorf("%s: %q must list at least one pattern", path, key)
 		}
-		compiled := make([]*regexp.Regexp, 0, len(patterns))
+		compiled := make([]*matcher, 0, len(patterns))
 		for _, pattern := range patterns {
 			re, err := compileAnchoredCondition(pattern, rc)
 			if err != nil {
@@ -342,7 +383,7 @@ var bareWildcards = map[string]bool{".*": true, ".+": true}
 // compileAnchoredCondition compiles pattern as an auto-anchored regex,
 // rejecting empty patterns and bare wildcards that would match anything
 // (security conditions must be specific, never `.*`).
-func compileAnchoredCondition(pattern string, rc regexCache) (*regexp.Regexp, error) {
+func compileAnchoredCondition(pattern string, rc regexCache) (*matcher, error) {
 	if pattern == "" {
 		return nil, errors.New("pattern must not be empty")
 	}
@@ -369,20 +410,20 @@ func compileAnchoredCondition(pattern string, rc regexCache) (*regexp.Regexp, er
 // Cost is bounded without an element cap: the token is already length-capped
 // upstream by max_token_bytes (default 8192), so the number of array elements
 // a request can carry is bounded by the same limit that bounds the claim set.
-func valueMatches(v any, pattern *regexp.Regexp) bool {
+func valueMatches(v any, pattern *matcher) bool {
 	switch t := v.(type) {
 	case nil:
 		return false
 	case []any:
 		for _, el := range t {
-			if s, ok := claimText(el); ok && pattern.MatchString(s) {
+			if s, ok := claimText(el); ok && pattern.match(s) {
 				return true
 			}
 		}
 		return false
 	default:
 		s, ok := claimText(v)
-		return ok && pattern.MatchString(s)
+		return ok && pattern.match(s)
 	}
 }
 
@@ -437,8 +478,8 @@ type claimResolver struct {
 	ambiguous bool
 }
 
-func newClaimResolver(claims map[string]any) *claimResolver {
-	return &claimResolver{raw: claims}
+func newClaimResolver(claims map[string]any) claimResolver {
+	return claimResolver{raw: claims}
 }
 
 // lookup returns the value for claim name, or nil when no claim resolves to it.
@@ -593,11 +634,19 @@ func claimMatches(res *claimResolver, cc compiledCondition, negated bool) bool {
 // at Validate() time — and its depth is bounded by the config, never by request
 // input.
 func satisfiesConditions(cond *Condition, claims map[string]any) bool {
+	res := newClaimResolver(claims)
+	return res.satisfies(cond)
+}
+
+// satisfies evaluates cond against r's claims. r may be reused across
+// mappings of one request: its folded index is built once and the ambiguity
+// flag is reset per call.
+func (r *claimResolver) satisfies(cond *Condition) bool {
 	if cond == nil {
 		return true
 	}
-	res := newClaimResolver(claims)
-	ok := satisfiesConditionsWith(cond, res, false)
+	r.ambiguous = false
+	ok := satisfiesConditionsWith(cond, r, false)
 	// An ambiguous claim denies the whole mapping, not just its leaf. Denying
 	// only the leaf is polarity-dependent: under none_of a leaf that cannot
 	// match is a veto that cannot fire, so `none_of: [{isContractor: "true"}]`
@@ -613,10 +662,7 @@ func satisfiesConditions(cond *Condition, claims map[string]any) bool {
 	// deny. Checking after the walk rather than short-circuiting inside it is
 	// what makes the deny independent of where in the tree the collision sat
 	// and of how many negations enclose it.
-	if res.ambiguous {
-		return false
-	}
-	return ok
+	return ok && !r.ambiguous
 }
 
 // satisfiesConditionsWith is the recursive walk. The resolver is threaded down

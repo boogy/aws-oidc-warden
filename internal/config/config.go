@@ -95,7 +95,9 @@ type RoleMapping struct {
 
 	// Rebuilt by Validate(): one resolvedSubject per effective mapping; order keeps first-match-wins.
 	resolvedSubject string         `mapstructure:"-" json:"-"`
-	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
+	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"` // nil for a literal subject (subjectExact)
+	subjectKey      string         `mapstructure:"-" json:"-"` // exact literal or owner, per subjectClass
+	subjectClass    subjectClass   `mapstructure:"-" json:"-"`
 	order           int            `mapstructure:"-" json:"-"`
 
 	effectiveTags map[string]string `mapstructure:"-" json:"-"` // issuer spec + SessionTags; read-only, may alias the issuer's map
@@ -1123,9 +1125,14 @@ func (c *Config) Validate() error {
 		m.Roles = roles
 
 		m.resolvedSubject = subject
-		m.compiledPattern, err = compileAnchoredSubject(subject, patterns)
+		subjectMatcher, err := compileAnchoredSubject(subject, patterns)
 		if err != nil {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, subject, err)
+		}
+		m.subjectKey, m.subjectClass = classifySubject(subject)
+		// A literal subject is proven equal by its exact-bucket hit; no regexp.
+		if m.subjectClass != subjectExact {
+			m.compiledPattern = subjectMatcher.re
 		}
 
 		// Clone into effective-private memory BEFORE compiling: compileCondition
@@ -1456,7 +1463,7 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 //
 // The empty guard lives here, not in the caller, so every subject path shares
 // it: "" anchors to "^(?:)$", which reads as a gate but matches nothing real.
-func compileAnchoredSubject(pattern string, rc regexCache) (*regexp.Regexp, error) {
+func compileAnchoredSubject(pattern string, rc regexCache) (*matcher, error) {
 	if pattern == "" {
 		return nil, errors.New("subject pattern must not be empty")
 	}
@@ -1784,15 +1791,11 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 		return d
 	}
 
-	for _, mapping := range candidatesFor(idx, subject) {
-		if mapping.compiledPattern == nil || !mapping.compiledPattern.MatchString(subject) {
-			continue
+	res := newClaimResolver(claims)
+	take := func(mapping *RoleMapping) {
+		if !res.satisfies(mapping.Conditions) {
+			return
 		}
-
-		if !satisfiesConditions(mapping.Conditions, claims) {
-			continue
-		}
-
 		d.Matched = true
 		d.Roles = append(d.Roles, mapping.Roles...)
 
@@ -1800,6 +1803,20 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 			if d.authorizing == nil || mapping.order < d.authorizing.order {
 				d.authorizing = mapping
 			}
+		}
+	}
+
+	for _, mapping := range idx.exact[subject] {
+		take(mapping)
+	}
+	for _, mapping := range idx.byOwner[ownerOf(subject)] {
+		if mapping.compiledPattern != nil && mapping.compiledPattern.MatchString(subject) {
+			take(mapping)
+		}
+	}
+	for _, mapping := range idx.any {
+		if mapping.compiledPattern != nil && mapping.compiledPattern.MatchString(subject) {
+			take(mapping)
 		}
 	}
 

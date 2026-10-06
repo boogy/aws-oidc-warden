@@ -55,8 +55,8 @@ func TestConditionPatternCannotEscapeAnchor(t *testing.T) {
 
 func TestAnchorStillAcceptsValidPatterns(t *testing.T) {
 	for _, p := range []string{`refs/heads/main`, `(a|b)`, `a|b`, `(?i)acme/.*`, `refs/tags/v[0-9]+\.[0-9]+`} {
-		re, err := regexCache{}.anchor(p)
+		m, err := regexCache{}.anchor(p)
 		require.NoError(t, err, p)
-		assert.False(t, re.MatchString("zzz/evil"), p)
+		assert.False(t, m.match("zzz/evil"), p)
 	}
 }
