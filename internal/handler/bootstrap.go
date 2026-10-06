@@ -43,6 +43,23 @@ func warmJWKSCache(mode string, v jwksWarmer) bool {
 	return true
 }
 
+// callerWarmTimeout bounds the cold-start STS caller-identity warm-up.
+const callerWarmTimeout = 3 * time.Second
+
+// warmRoleARN is a syntactically valid placeholder; the warm-up only needs the account check to resolve the hub identity.
+const warmRoleARN = "arn:aws:iam::000000000000:role/warm"
+
+// warmCallerIdentity primes the consumer's cached STS caller identity so the first AssumeRole skips that round trip.
+// Best-effort: a failure is logged and the first request retries lazily.
+func warmCallerIdentity(logger *slog.Logger, c aws.AwsConsumerInterface) {
+	ctx, cancel := context.WithTimeout(context.Background(), callerWarmTimeout)
+	defer cancel()
+	if _, err := c.IsTargetAccountAllowed(ctx, warmRoleARN); err != nil {
+		logevent.Warn(ctx, logger, logevent.AppWarmFailure, "sts caller identity not warmed at startup; retrying lazily",
+			slog.String("component", "sts_caller_identity"), slog.String("error", err.Error()))
+	}
+}
+
 // Bootstrap contains all the initialized components needed by handlers
 type Bootstrap struct {
 	Config    *config.Config
@@ -126,6 +143,7 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 	warmJWKSCache(cfg.JWTValidation.Mode, tokenValidator)
 
 	idpSvc := NewIdPService(provider, kms, logger)
+	warmCallerIdentity(logger, consumer)
 
 	return &Bootstrap{
 		Config:    cfg,

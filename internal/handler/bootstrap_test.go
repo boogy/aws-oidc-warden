@@ -301,7 +301,14 @@ func TestBootstrapIdPDisabledNoKeyLoad(t *testing.T) {
 
 type overlayConsumer struct {
 	aws.AwsConsumerInterface
-	overlay []byte
+	overlay   []byte
+	warmCalls int
+	warmErr   error
+}
+
+func (c *overlayConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
+	c.warmCalls++
+	return false, c.warmErr
 }
 
 func (c *overlayConsumer) SetConfigSource(func() *config.Config) {}
@@ -332,6 +339,35 @@ func TestBootstrapIdPUsesOverlay(t *testing.T) {
 	r := NewRequestProcessor(b.Provider, nil, nil, nil, "test").WithIdP(b.IdP)
 	r.warnFrozenDrift(context.Background(), logger, b.Provider.Get())
 	require.Equal(t, 0, strings.Count(buf.String(), "config.idp.reload_ignored"))
+	require.Equal(t, 1, consumer.warmCalls, "STS caller identity is warmed once at cold start")
+}
+
+func TestBootstrapWarmCallerIdentityNeverFailsBootstrap(t *testing.T) {
+	tests := []struct {
+		name     string
+		warmErr  error
+		wantWarn int
+	}{
+		{"warm succeeds", nil, 0},
+		{"warm fails", errors.New("sts unreachable"), 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := bootstrapBaseConfig(t, bootstrapIdPConfig("https://a.example.com", false))
+			base.JWTValidation.Mode = "apigw"
+			base.Cache = &config.Cache{Type: "memory", TTL: time.Hour}
+			base.S3ConfigBucket, base.S3ConfigPath = "bucket", "config.yaml"
+			consumer := &overlayConsumer{overlay: []byte("{}"), warmErr: tt.warmErr}
+
+			var buf bytes.Buffer
+			logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil)))
+			b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return nil })
+			require.NoError(t, err)
+			require.NotNil(t, b)
+			assert.Equal(t, 1, consumer.warmCalls)
+			assert.Equal(t, tt.wantWarn, strings.Count(buf.String(), `"eventType":"app.warm.failure"`))
+		})
+	}
 }
 
 func TestBootstrapAdaptersAttachIdP(t *testing.T) {
