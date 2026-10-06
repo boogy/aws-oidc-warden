@@ -2,6 +2,8 @@
 # Allowed top-level keys: default_issuer, role_sets, role_mappings, role_groups.
 # Any other key rejects the whole file; the warden keeps the last good version.
 # Set issuer on every entry: with several issuers, one omitted falls back to default_issuer.
+# Docs: docs/CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets.
+# Every mapping key and condition form: /example-config.yaml (ROLE MAPPINGS).
 #
 # Every caller POSTs to /verify with optional durationSeconds and sessionName.
 # - Without idp_token a role is issued by AssumeRole: 900-3600s, default 3600.

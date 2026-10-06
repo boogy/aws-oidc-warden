@@ -15,6 +15,9 @@
 # Account layout used throughout this example:
 #   Hub (runs the warden):  111111111111
 #   Member accounts:        222222222222 (staging), 333333333333 (production)
+#
+# Docs: docs/CONFIGURATION.md#cross-account-settings. Every other key, with
+# its options and defaults: /example-config.yaml.
 ####################################################################################
 
 issuers:

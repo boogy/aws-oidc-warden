@@ -1,5 +1,7 @@
 # service.yaml: the warden's own config, owned by the platform team.
 # It holds no role mappings; those live in the file named by mappings_file.
+# Docs: docs/CONFIGURATION.md#split-configuration, docs/IDP.md.
+# Every key, with its options and defaults: /example-config.yaml.
 
 issuers:
   - issuer: "https://token.actions.githubusercontent.com"
@@ -23,6 +25,8 @@ idp:
   enabled: true
   issuer: "https://idp.example.com" # the warden's own issuer, registered as an IAM OIDC provider
   audience: "idp-audience-example"
+  # Full key ARN only. Multi-region (key/mrk-...) also needs kms_allowed_regions;
+  # see docs/IDP.md#multi-region-deployment.
   signing_keys:
     - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/00000000-0000-0000-0000-000000000000"
       algorithm: ES256
