@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,7 +38,14 @@ const (
 	idpJWKSSufx      = "/.well-known/jwks.json"
 )
 
-var idpKMSKeyARN = regexp.MustCompile(`^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key/[0-9a-f-]{36}$`)
+var idpKMSKeyARN = regexp.MustCompile(`^arn:aws[a-z-]*:kms:[a-z0-9-]+:\d{12}:key/(?:[0-9a-f-]{36}|mrk-[0-9a-f]{32})$`)
+
+var idpRegion = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d+$`)
+
+// IsMultiRegionKMSKey reports whether a KMS key ARN names a multi-region key.
+func IsMultiRegionKMSKey(arn string) bool {
+	return strings.Contains(arn, ":key/mrk-")
+}
 
 // IdPConfig configures the optional token-minting identity provider.
 type IdPConfig struct {
@@ -56,6 +64,7 @@ type IdPConfig struct {
 	SignTimeout            time.Duration   `mapstructure:"sign_timeout"             json:"sign_timeout,omitempty"`
 	JWKSCacheMaxAge        time.Duration   `mapstructure:"jwks_cache_max_age"       json:"jwks_cache_max_age,omitempty"`
 	SigningKeys            []IdPSigningKey `mapstructure:"signing_keys"             json:"signing_keys"`
+	KMSAllowedRegions      []string        `mapstructure:"kms_allowed_regions"      json:"kms_allowed_regions,omitempty"`
 }
 
 // IdPPaths are the exact request paths the IdP endpoints answer on.
@@ -227,17 +236,20 @@ func (c *IdPConfig) validateKeys(allowInsecure bool) error {
 	if len(c.SigningKeys) > idpMaxKeys {
 		return fmt.Errorf("idp.signing_keys: at most %d keys", idpMaxKeys)
 	}
+	if err := c.validateAllowedRegions(); err != nil {
+		return err
+	}
 	active := 0
 	seen := map[string]bool{}
 	for i, k := range c.SigningKeys {
 		if (k.KMSKeyID == "") == (k.File == "") {
 			return fmt.Errorf("idp.signing_keys[%d]: exactly one of kms_key_id or file", i)
 		}
-		if strings.Contains(k.KMSKeyID, ":key/mrk-") {
-			return fmt.Errorf("idp.signing_keys[%d]: kms_key_id is a multi-region key; use a single-region key", i)
-		}
 		if k.KMSKeyID != "" && !idpKMSKeyARN.MatchString(k.KMSKeyID) {
 			return fmt.Errorf("idp.signing_keys[%d]: kms_key_id must be a full key ARN (aliases and bare IDs are rejected)", i)
+		}
+		if err := c.checkKeyRegion(i, k.KMSKeyID); err != nil {
+			return err
 		}
 		if k.File != "" && utils.OnLambda() && !allowInsecure {
 			return fmt.Errorf("idp.signing_keys[%d]: file keys are not allowed on Lambda (the key would ship in the deployment package); use kms_key_id", i)
@@ -259,6 +271,37 @@ func (c *IdPConfig) validateKeys(allowInsecure bool) error {
 	}
 	if active != 1 {
 		return errors.New("idp.signing_keys: exactly one active key is required")
+	}
+	return nil
+}
+
+func (c *IdPConfig) validateAllowedRegions() error {
+	seen := map[string]bool{}
+	for _, r := range c.KMSAllowedRegions {
+		if !idpRegion.MatchString(r) {
+			return fmt.Errorf("idp.kms_allowed_regions: %q is not a valid region", r)
+		}
+		if seen[r] {
+			return fmt.Errorf("idp.kms_allowed_regions: duplicate region %q", r)
+		}
+		seen[r] = true
+	}
+	return nil
+}
+
+func (c *IdPConfig) checkKeyRegion(i int, arn string) error {
+	if arn == "" {
+		return nil
+	}
+	if IsMultiRegionKMSKey(arn) && len(c.KMSAllowedRegions) == 0 {
+		return fmt.Errorf("idp.signing_keys[%d]: multi-region key %s requires idp.kms_allowed_regions", i, arn)
+	}
+	if len(c.KMSAllowedRegions) == 0 {
+		return nil
+	}
+	region := strings.Split(arn, ":")[3]
+	if !slices.Contains(c.KMSAllowedRegions, region) {
+		return fmt.Errorf("idp.signing_keys[%d]: key %s region %q is not in idp.kms_allowed_regions", i, arn, region)
 	}
 	return nil
 }
