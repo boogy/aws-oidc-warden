@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
@@ -60,7 +59,6 @@ func (f *vRecorder) GetS3Object(context.Context, string, string) (io.ReadCloser,
 func (f *vRecorder) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
 	return nil, "", errors.New("not implemented")
 }
-func (f *vRecorder) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) { return nil, nil }
 func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, error) {
 	f.tagAuthCalled++
 	return f.tags, f.tagsErr

@@ -8,7 +8,6 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). STS/S3/IAM via AWS SDK v2. `consumer
 type AwsConsumerInterface interface {
     AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, tags []types.Tag) (*types.Credentials, error)
     GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
-    GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
     GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
     IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
@@ -40,7 +39,7 @@ IAM: execution role needs `sts:AssumeRole`+`sts:TagSession` on target roles, `s3
 
 `AssumeRole` always assumes the target role **directly** with the warden's own (hub) credentials, one hop, whether same-account or cross-account — it never uses spoke credentials. `cfg.CrossAccount.Enabled` is a policy gate, checked inline in `AssumeRole`: if the target account differs from the hub (`ParseRoleARN` + `GetCallerIdentityInfo`) and `CrossAccount` is nil/disabled, the call fails closed with an error; otherwise `accountAllowed` enforces `cfg.CrossAccount.AllowedAccounts` (hub implicit, empty=any).
 
-`GetRoleTags` authorizes the target account against the **live** config (`IsTargetAccountAllowed`) **before** consulting its 60s `roleTagCache`, so a revoked account is refused on the next request instead of being served from a warm entry until the TTL lapses; it does not rely on `ProcessRequest` having run the same check earlier. It is also the one operation that _is_ account-aware via the spoke: for a non-hub account it calls `spokeCredsFor` (assumes the convention-named spoke role, cached) and reads tags with `GetRoleAs`; `spokeCredsFor` itself fails closed if `CrossAccount` is nil/disabled or the account isn't allowed. This is independent of `cfg.TagAuth.Enabled` — explicit mappings targeting member-account ARNs still get their tags read the same way if tag_auth is also on. Same-account → default hub clients via `GetRole` (identical to legacy).
+`GetRoleTags` authorizes the target account against the **live** config (`IsTargetAccountAllowed`) **before** consulting its 60s `roleTagCache`, so a revoked account is refused on the next request instead of being served from a warm entry until the TTL lapses; it does not rely on `ProcessRequest` having run the same check earlier. It is also the one operation that _is_ account-aware via the spoke: for a non-hub account it calls `spokeCredsFor` (assumes the convention-named spoke role, cached) and reads tags with `GetRoleAs`; `spokeCredsFor` itself fails closed if `CrossAccount` is nil/disabled or the account isn't allowed. This is independent of `cfg.TagAuth.Enabled` — explicit mappings targeting member-account ARNs still get their tags read the same way if tag_auth is also on. Same-account → default hub clients via the wrapper's `GetRole`.
 
 Hub execution role IAM: `sts:GetCallerIdentity` (`GetCallerIdentityInfo`, also used for the hub account ID and the chained-session check), `sts:AssumeRole`+`sts:TagSession` directly on member-account target roles (prefer per-account patterns over `arn:aws:iam::*:role/*`), and — only if `tag_auth` reads roles cross-account — `sts:AssumeRole` on `arn:aws:iam::*:role/<spoke>`.
 

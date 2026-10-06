@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/iam"
-	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
@@ -517,51 +515,6 @@ func TestBuildSessionTags(t *testing.T) {
 		tags := BuildSessionTags(context.Background(), raw, spec)
 		assert.Len(t, tags, maxSessionTags)
 	})
-}
-
-func TestAwsConsumer_GetRole(t *testing.T) {
-	mockAWS := new(MockAwsServiceWrapper)
-	consumer := &AwsConsumer{
-		AWS:    mockAWS,
-		Config: &gtvcfg.Config{},
-	}
-
-	roleName := "test-role"
-	roleArn := "arn:aws:iam::123456789012:role/test-role"
-
-	// Success case
-	mockAWS.On("GetRole", mock.Anything, &iam.GetRoleInput{
-		RoleName: aws.String(roleName),
-	}).Return(&iam.GetRoleOutput{
-		Role: &iamtypes.Role{
-			RoleName: aws.String(roleName),
-			Arn:      aws.String(roleArn),
-		},
-	}, nil).Once()
-
-	role, err := consumer.GetRole(context.Background(), roleName)
-	assert.NoError(t, err)
-	assert.NotNil(t, role)
-	assert.Equal(t, roleName, *role.Role.RoleName)
-	assert.Equal(t, roleArn, *role.Role.Arn)
-
-	// Error case - empty role name
-	role, err = consumer.GetRole(context.Background(), "")
-	assert.Error(t, err)
-	assert.Nil(t, role)
-	assert.Contains(t, err.Error(), "role name cannot be empty")
-
-	// Error case - AWS error
-	mockAWS.On("GetRole", mock.Anything, &iam.GetRoleInput{
-		RoleName: aws.String("nonexistent-role"),
-	}).Return(nil, errors.New("role not found")).Once()
-
-	role, err = consumer.GetRole(context.Background(), "nonexistent-role")
-	assert.Error(t, err)
-	assert.Nil(t, role)
-	assert.Contains(t, err.Error(), "role not found")
-
-	mockAWS.AssertExpectations(t)
 }
 
 func TestAwsConsumer_GetS3Object(t *testing.T) {

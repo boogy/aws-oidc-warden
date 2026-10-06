@@ -28,7 +28,6 @@ type AwsConsumerInterface interface {
 	AssumeRoleWithWebIdentity(ctx context.Context, roleARN, sessionName, token string, policy *string, duration int32) (*types.Credentials, error)
 	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 	GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error)
-	GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
 	GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
 	IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
@@ -418,17 +417,6 @@ func (a *AwsConsumer) targetAllowed(account, hub string) bool {
 		return account == hub
 	}
 	return a.accountAllowed(account, hub)
-}
-
-// GetRole retrieves information about the specified AWS IAM role
-func (a *AwsConsumer) GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error) {
-	if role == "" {
-		return nil, errors.New("role name cannot be empty")
-	}
-
-	return a.AWS.GetRole(ctx, &iam.GetRoleInput{
-		RoleName: aws.String(role),
-	})
 }
 
 // roleTagCacheTTL bounds how long role tags are cached to cut IAM calls under

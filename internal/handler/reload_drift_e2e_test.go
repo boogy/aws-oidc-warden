@@ -43,7 +43,6 @@ import (
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
-	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
@@ -120,9 +119,6 @@ func (c *driftConsumer) GetS3Object(context.Context, string, string) (io.ReadClo
 
 func (c *driftConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
 	return nil, "", errors.New("not implemented")
-}
-func (c *driftConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
-	return nil, nil
 }
 func (c *driftConsumer) GetRoleTags(context.Context, string) (map[string]string, error) {
 	return nil, nil

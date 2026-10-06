@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	gtvaws "github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
@@ -168,9 +167,6 @@ func (f *fakeConsumer) GetS3Object(context.Context, string, string) (io.ReadClos
 
 func (f *fakeConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
 	return nil, "", errors.New("not implemented")
-}
-func (f *fakeConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
-	return nil, nil
 }
 func (f *fakeConsumer) GetRoleTags(context.Context, string) (map[string]string, error) {
 	f.tagCalls++
