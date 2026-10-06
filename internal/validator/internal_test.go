@@ -763,7 +763,7 @@ func TestIsBlockedAddr_ReservedRanges(t *testing.T) {
 		// public
 		{"8.8.8.8", false}, {"140.82.121.4", false},
 		// IPv6
-		{"64:ff9b::1", true}, {"64:ff9b::808:808", true}, {"64:ff9b:1::1", false}, {"64:ff9c::1", false},
+		{"64:ff9b::1", true}, {"64:ff9b::808:808", false}, {"64:ff9b:1::1", false}, {"64:ff9c::1", false},
 		{"2001:db8::1", true}, {"2001:db8:ffff::1", true}, {"2001:db9::1", false},
 		{"fc00::1", true}, {"fd12:3456::1", true}, {"fe00::1", false},
 		{"fe80::1", true}, {"ff02::1", true}, {"::", true},

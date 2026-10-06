@@ -28,7 +28,6 @@ var blockedPrefixes = mustParsePrefixes(
 	"198.51.100.0/24", // TEST-NET-2
 	"203.0.113.0/24",  // TEST-NET-3
 	"240.0.0.0/4",     // reserved, includes 255.255.255.255
-	"64:ff9b::/96",    // NAT64 well-known prefix
 	"2001:db8::/32",   // documentation
 	"fc00::/7",        // unique local
 )
@@ -125,16 +124,17 @@ func isBlockedAddr(addr netip.Addr, allowLoopback bool) bool {
 			return true
 		}
 	}
-	// The deprecated IPv4-compatible form ::x.x.x.x carries an IPv4
-	// destination the classifiers above don't see through.
+	// ::x.x.x.x and NAT64 64:ff9b::x.x.x.x carry an IPv4 destination the classifiers don't see through.
 	if addr.Is6() {
 		b := addr.As16()
-		if allZero(b[:12]) {
+		if allZero(b[:12]) || nat64Prefix.Contains(addr) {
 			return isBlockedAddr(netip.AddrFrom4([4]byte(b[12:])), allowLoopback)
 		}
 	}
 	return false
 }
+
+var nat64Prefix = netip.MustParsePrefix("64:ff9b::/96")
 
 func allZero(b []byte) bool {
 	for _, v := range b {

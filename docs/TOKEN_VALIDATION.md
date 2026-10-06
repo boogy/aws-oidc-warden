@@ -216,7 +216,7 @@ Two providers ship; the seam is open/closed (add a provider by implementing `pro
 
 Discovery and JWKS fetches are the only outbound requests validation makes. They go through a single hardened `http.Client`, built once at construction:
 
-- **Dial-time IP blocking** — every address the dialer actually connects to is checked _before_ the connection opens (a `net.Dialer` `Control` hook); private, loopback, link-local (covers the `169.254.169.254` cloud-metadata address), unspecified, multicast, CGNAT, NAT64, benchmarking, documentation and reserved ranges are refused. Applied on the original request **and every redirect hop**.
+- **Dial-time IP blocking** — every address the dialer actually connects to is checked _before_ the connection opens (a `net.Dialer` `Control` hook); private, loopback, link-local (covers the `169.254.169.254` cloud-metadata address), unspecified, multicast, CGNAT, benchmarking, documentation and reserved ranges are refused, as is any IPv4-compatible or NAT64 (`64:ff9b::/96`) address whose embedded IPv4 is. Applied on the original request **and every redirect hop**.
 - **DNS-rebinding safe** — the check runs on the connect address itself, so no DNS answer can reach the socket unvalidated.
 - **TLS 1.2+** enforced; **HTTPS required** (plain `http://` allowed only for loopback and only under `allow_insecure_issuers`, a dev/test escape hatch).
 - **Redirects** capped at 5 hops, each re-validated (scheme + host).
