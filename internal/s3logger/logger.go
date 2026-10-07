@@ -272,7 +272,7 @@ func (l *S3Logger) writeLogToS3(data []byte) error {
 		return nil
 	}
 	defer l.flushMu.Unlock()
-	if time.Now().Before(l.retryAfter) {
+	if l.timeNow().Before(l.retryAfter) {
 		return nil
 	}
 	return l.flushBatch()
@@ -318,27 +318,33 @@ func (l *S3Logger) flushBatch() error {
 	}
 	if err != nil {
 		l.requeue(batch)
-		l.retryAfter = time.Now().Add(l.flushBackoff)
-		return err
+		l.retryAfter = l.timeNow().Add(l.flushBackoff)
+	} else {
+		l.retryAfter = time.Time{}
 	}
-
-	l.retryAfter = time.Time{}
-	return nil
+	l.reportDropped()
+	return err
 }
 
-// requeue puts a failed batch back ahead of newer records, then reports any drops.
+// requeue puts a failed batch back ahead of newer records.
 func (l *S3Logger) requeue(batch [][]byte) {
 	l.mu.Lock()
 	l.logBatch = slices.Concat(batch, l.logBatch)
 	l.capPendingLocked()
-	dropped := l.dropped
+	l.mu.Unlock()
+}
+
+// reportDropped logs and resets the count of records dropped since the last report.
+func (l *S3Logger) reportDropped() {
+	l.mu.Lock()
+	dropped, pending := l.dropped, len(l.logBatch)
 	l.dropped = 0
 	l.mu.Unlock()
 
 	if dropped > 0 {
 		logevent.Error(l.ctx, nil, logevent.AuditBatchDropped, "dropped oldest audit records while S3 is unavailable",
 			slog.Int("dropped", dropped),
-			slog.Int("pending", maxPendingRecords))
+			slog.Int("pending", pending))
 	}
 }
 

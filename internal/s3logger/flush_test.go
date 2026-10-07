@@ -98,7 +98,9 @@ func TestFlushFailure_BackoffSkipsPerRequestRetries(t *testing.T) {
 
 func TestFlushFailure_RecoversAfterBackoffAndKeepsOrder(t *testing.T) {
 	l, f := newFlakyLogger(t, 2)
-	l.flushBackoff = time.Millisecond
+	now := time.Unix(0, 0)
+	l.timeNow = func() time.Time { return now }
+	l.flushBackoff = time.Hour
 	f.fail = true
 
 	require.NoError(t, l.BufferRecord([]byte("a\n")))
@@ -107,7 +109,7 @@ func TestFlushFailure_RecoversAfterBackoffAndKeepsOrder(t *testing.T) {
 	f.mu.Lock()
 	f.fail = false
 	f.mu.Unlock()
-	time.Sleep(5 * time.Millisecond)
+	now = now.Add(time.Hour)
 	require.NoError(t, l.BufferRecord([]byte("c\n")))
 
 	require.Equal(t, 0, pending(l))
@@ -138,6 +140,9 @@ func TestFlushFailure_PendingIsCapped(t *testing.T) {
 	f.mu.Unlock()
 	require.NoError(t, l.Close())
 	assert.Equal(t, 0, pending(l))
+	l.mu.Lock()
+	assert.Zero(t, l.dropped, "a successful flush reports and resets the drop count")
+	l.mu.Unlock()
 }
 
 func TestClose_WaitsForInFlightFlush(t *testing.T) {
