@@ -156,3 +156,59 @@ func TestConfigStaleNotAppliedToFreshOrDisabled(t *testing.T) {
 		})
 	}
 }
+
+type failSecondExtractor struct{ countingExtractor }
+
+func (f *failSecondExtractor) Extract(ctx context.Context, in validator.ExtractionInput) (*types.Claims, error) {
+	if f.calls.Add(1) > 1 {
+		return nil, errors.New("issuer removed by refresh")
+	}
+	return f.inner.Extract(ctx, in)
+}
+
+func TestConfigStaleReExtractDenyIsPostAuth(t *testing.T) {
+	t.Parallel()
+	cfg := idpConfig(t, true, "", func(c *config.Config) {
+		c.RoleMappings = nil
+		c.MappingsFile = "s3://b/m.yaml"
+		c.S3ConfigBucketOwner = "123456789012"
+		c.ConfigReloadInterval = time.Second
+		c.MappingsMaxStale = new(2 * time.Second)
+		c.AuditRequired, c.LogToS3, c.LogBucket = true, true, "audit"
+	})
+	var gate atomic.Pointer[chan struct{}]
+	entered := make(chan struct{}, 1)
+	fn := func(context.Context, string, string, string) ([]byte, string, error) {
+		if g := gate.Load(); g != nil {
+			entered <- struct{}{}
+			<-*g
+		}
+		return []byte(staleMappingsBody), "sha256:fixed", nil
+	}
+	p := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, config.WithFragmentFetcher(fn))
+	require.NoError(t, p.Refresh(context.Background()))
+
+	cons := mockConsumer(t)
+	ext := &failSecondExtractor{countingExtractor{inner: idpClaims(nil)}}
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(p, cons, ext, sink, "apigatewayv2").
+		WithIdP(idpService(t, p.Get(), &countingSigner{Signer: idptest.NewSigner(t)}, nil))
+
+	time.Sleep(2100 * time.Millisecond)
+	release := make(chan struct{})
+	gate.Store(&release)
+	go p.MaybeRefresh(context.Background())
+	<-entered
+	time.AfterFunc(200*time.Millisecond, func() { close(release) })
+
+	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Token: "t", Role: testRoleARN},
+		validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))
+
+	require.ErrorIs(t, err, handler.ErrTokenValidationFailed)
+	require.Equal(t, int32(2), ext.calls.Load())
+	assert.Equal(t, 1, sink.writes, "an authenticated caller's deny is written synchronously")
+	assert.Zero(t, sink.buffers)
+	rec := sink.last(t)
+	assert.Equal(t, "extract", rec["stage"])
+	assert.Equal(t, testIssuer, rec["issuer"])
+}

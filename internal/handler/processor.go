@@ -152,9 +152,10 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		}
 		cfg = r.provider.Get()
 		input.Config, o.cfg = cfg, cfg
+		authed := claims
 		if claims, err = r.extractor.Extract(ctx, input); err != nil {
+			rec.setIdentity(cfg, authed)
 			rec.setErrorReason("extract", err)
-			rec.preAuth = true
 			return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
 		}
 	}
