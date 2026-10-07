@@ -1549,7 +1549,8 @@ func mergeSessionTags(issuerTags, extra map[string]string) (map[string]string, e
 	if err := checkSessionTagSet(issuerTags, extra); err != nil {
 		return nil, err
 	}
-	merged := make(map[string]string, len(issuerTags)+len(extra))
+	// checkSessionTagSet bounded the union, so the constant hint always fits.
+	merged := make(map[string]string, maxSessionTags)
 	maps.Copy(merged, extra)
 	maps.Copy(merged, issuerTags)
 	return merged, nil
