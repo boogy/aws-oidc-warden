@@ -8,15 +8,10 @@ import (
 	"github.com/aws/smithy-go"
 )
 
-// ErrAssumeRoleDenied marks an sts:AssumeRole failure AWS refused on
-// authorization grounds. AccessDenied cannot separate a target trust policy
-// that rejected the request from this service's own role missing
-// sts:AssumeRole/sts:TagSession; only the wrapped STS message can.
+// ErrAssumeRoleDenied marks an sts:AssumeRole failure AWS refused on authorization grounds.
 var ErrAssumeRoleDenied = errors.New("sts:AssumeRole denied by AWS authorization")
 
-// deniedCodes: STS error codes meaning "authorization refused" rather than a
-// transport, throttling, credential or policy-document failure. Lower-cased
-// because the SDK's own deserializer matches wire codes with EqualFold.
+// deniedCodes are lower-cased STS codes meaning authorization refused.
 var deniedCodes = map[string]struct{}{
 	"accessdenied":          {},
 	"accessdeniedexception": {},
@@ -31,9 +26,7 @@ func STSErrorCode(err error) string {
 	return ""
 }
 
-// classifyAssumeRoleError wraps an authorization refusal in ErrAssumeRoleDenied
-// so the handler can map it to a 403; every other failure passes through
-// unchanged and stays a 5xx.
+// classifyAssumeRoleError wraps an authorization refusal in ErrAssumeRoleDenied; other failures pass through.
 func classifyAssumeRoleError(err error) error {
 	if _, denied := deniedCodes[strings.ToLower(STSErrorCode(err))]; denied {
 		return fmt.Errorf("%w: %w", ErrAssumeRoleDenied, err)

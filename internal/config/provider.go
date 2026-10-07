@@ -17,8 +17,7 @@ import (
 // FetchFunc retrieves the raw configuration bytes from a remote source.
 type FetchFunc func(context.Context) ([]byte, error)
 
-// FragmentFetchFunc fetches a "scheme://" config_fragments entry; (nil, prevETag, nil) means unchanged.
-// etag must be content-derived: an etag equal to prevETag is treated as unchanged whatever the data.
+// FragmentFetchFunc fetches a fragment; a content-derived etag equal to prevETag means unchanged.
 type FragmentFetchFunc func(ctx context.Context, uri, prevETag, owner string) (data []byte, etag string, err error)
 
 // cachedFragment is the last applied parse of one config_fragments entry.
@@ -234,8 +233,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	var sum [sha256.Size]byte
 	h.Sum(sum[:0])
 
-	// Same overlay bytes and every fragment etag as last time: the rebuild
-	// would reproduce current, so skip it.
+	// Same overlay bytes and fragment etags: a rebuild would reproduce current.
 	var probed map[string]fetchedFragment
 	if p.built && sum == p.overlaySum {
 		var unchanged bool
@@ -264,8 +262,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
 	} else if err := cfg.Validate(); err != nil {
-		// No primary overlay: still rebuild transient state cloneConfig
-		// doesn't copy, before fragments merge on top.
+		// No primary overlay: still rebuild transient state cloneConfig doesn't copy.
 		return fmt.Errorf("invalid base configuration: %w", err)
 	}
 
@@ -311,11 +308,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	return nil
 }
 
-// fragmentsUnchanged reports whether every fragment of cur still has its applied
-// etag. Size and pin checks run exactly as in applyFragments, so a rotated pin
-// or oversized body fails the refresh instead of being skipped.
-//
-// The fetches are returned so a rebuild after a change reuses them.
+// fragmentsUnchanged reports whether every fragment still has its applied etag, returning the fetches for reuse.
 func (p *Provider) fragmentsUnchanged(ctx context.Context, cur *Config) (bool, map[string]fetchedFragment, error) {
 	sources := cur.fragmentSources()
 	if len(sources) != len(p.fragments) {
@@ -389,18 +382,14 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config, probed map[s
 			return nil, fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, utils.MaxConfigBytes)
 		}
 
-		// Checked on EVERY cycle, before the cache-hit branch: a pin added/rotated
-		// to quarantine already-applied content must take effect immediately.
+		// Checked every cycle before the cache hit so a rotated pin takes effect immediately.
 		if expected, pinned := cfg.fragmentChecksum(uri); pinned && expected != etag {
 			return nil, fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
 		}
 
 		var frag *FragmentConfig
 		if prev != nil && etag == prevETag {
-			// Unchanged since the last successful apply — reuse the cached
-			// parse, whether the fetcher skipped the body fetch (data == nil,
-			// the cheap S3-HeadObject-style path) or returned it anyway
-			// (e.g. a local file, re-read every cycle but unchanged).
+			// Unchanged since the last apply: reuse the cached parse.
 			frag = prev.parsed
 		} else {
 			if data == nil {
