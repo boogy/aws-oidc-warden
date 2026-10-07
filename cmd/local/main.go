@@ -42,8 +42,9 @@ func main() {
 	settings, cliErr := parseCliFlags()
 	logger := setupLogging(settings.LogLevel)
 	if cliErr != nil {
-		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to set CONFIG_PATH environment variable",
-			slog.String("component", "config"), slog.String("error", cliErr.Error()))
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "invalid command-line flags",
+			slog.String("component", "flags"), slog.String("error", cliErr.Error()))
+		os.Exit(1)
 	}
 
 	versionInfo := version.Get()
