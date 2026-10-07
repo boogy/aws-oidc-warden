@@ -27,8 +27,8 @@ import (
 
 // AwsServiceWrapperInterface allows to test AWS specific code based on the AWS services
 type AwsServiceWrapperInterface interface {
-	GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
-	GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error)
+	GetS3Object(ctx context.Context, bucket, key string, maxBytes int) (io.ReadCloser, error)
+	GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string, maxBytes int) (data []byte, etag string, err error)
 	AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error)
 	AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error)
 	GetRole(ctx context.Context, input *iam.GetRoleInput) (*iam.GetRoleOutput, error)
@@ -96,14 +96,14 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 // KMS returns the KMS client.
 func (s *AwsServiceWrapper) KMS() *kms.Client { return s.kms }
 
-func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string, maxBytes int) (io.ReadCloser, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 
 	input := &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-		Range:  aws.String(fmt.Sprintf("bytes=0-%d", utils.MaxConfigBytes)),
+		Range:  aws.String(fmt.Sprintf("bytes=0-%d", maxBytes)),
 	}
 
 	result, err := s.s3Client.GetObject(ctx, input)
@@ -116,15 +116,15 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string)
 		return nil, err
 	}
 
-	if size := objectSize(result); size > utils.MaxConfigBytes {
+	if size := objectSize(result); size > int64(maxBytes) {
 		_ = result.Body.Close()
 		logevent.Warn(ctx, nil, logevent.AWSS3ObjectOversize, "S3 object exceeds maximum allowed size",
 			slog.Int64("size", size),
-			slog.Int64("maxAllowed", utils.MaxConfigBytes),
+			slog.Int("maxAllowed", maxBytes),
 			slog.String("bucket", bucket),
 			slog.String("key", key),
 		)
-		return nil, fmt.Errorf("s3://%s/%s exceeds %d bytes", bucket, key, utils.MaxConfigBytes)
+		return nil, fmt.Errorf("s3://%s/%s exceeds %d bytes", bucket, key, maxBytes)
 	}
 
 	successAttrs := []slog.Attr{slog.String("bucket", bucket), slog.String("key", key)}
@@ -135,7 +135,7 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string)
 
 	// Read before cancel runs: the body is bound to ctx.
 	defer func() { _ = result.Body.Close() }()
-	body, err := utils.ReadAllCapped(result.Body, utils.MaxConfigBytes, fmt.Sprintf("s3://%s/%s", bucket, key))
+	body, err := utils.ReadAllCapped(result.Body, int64(maxBytes), fmt.Sprintf("s3://%s/%s", bucket, key))
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +310,7 @@ func (s *AwsServiceWrapper) iamClientFor(creds aws.CredentialsProvider) *iam.Cli
 }
 
 // GetS3ObjectIfChanged reads an owner-pinned object; a 304 returns (nil, prevETag, nil).
-func (s *AwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error) {
+func (s *AwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string, maxBytes int) (data []byte, etag string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, s.defaultTimeout)
 	defer cancel()
 
@@ -338,7 +338,7 @@ func (s *AwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, ke
 		}
 	}()
 
-	data, err = utils.ReadAllCapped(out.Body, utils.MaxConfigBytes, fmt.Sprintf("s3://%s/%s", bucket, key))
+	data, err = utils.ReadAllCapped(out.Body, int64(maxBytes), fmt.Sprintf("s3://%s/%s", bucket, key))
 	if err != nil {
 		return nil, "", err
 	}

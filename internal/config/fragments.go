@@ -145,8 +145,8 @@ func ContentDigest(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// readLocalFragment reads a fragment bounded at utils.MaxConfigBytes, with ContentDigest as its etag.
-func readLocalFragment(path string) ([]byte, string, error) {
+// readLocalFragment reads a fragment bounded at limit bytes, with ContentDigest as its etag.
+func readLocalFragment(path string, limit int) ([]byte, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to open config fragment %q: %w", path, err)
@@ -155,7 +155,7 @@ func readLocalFragment(path string) ([]byte, string, error) {
 		_ = f.Close()
 	}()
 
-	data, err := utils.ReadAllCapped(f, utils.MaxConfigBytes, "config fragment")
+	data, err := utils.ReadAllCapped(f, int64(limit), "config fragment")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read config fragment %q: %w", path, err)
 	}

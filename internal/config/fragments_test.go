@@ -146,13 +146,13 @@ func TestReadLocalFragment_ReadsAndHashes(t *testing.T) {
 	path := filepath.Join(dir, "frag.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("role_mappings: []\n"), 0o600))
 
-	data, etag, err := readLocalFragment(path)
+	data, etag, err := readLocalFragment(path, utils.DefaultMaxConfigBytes)
 	require.NoError(t, err)
 	assert.NotEmpty(t, data)
 	assert.Contains(t, etag, "sha256:")
 
 	// Same content -> same etag (used for change detection).
-	_, etag2, err := readLocalFragment(path)
+	_, etag2, err := readLocalFragment(path, utils.DefaultMaxConfigBytes)
 	require.NoError(t, err)
 	assert.Equal(t, etag, etag2)
 }
@@ -160,16 +160,16 @@ func TestReadLocalFragment_ReadsAndHashes(t *testing.T) {
 func TestReadLocalFragment_BoundedRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "big.yaml")
-	big := make([]byte, utils.MaxConfigBytes+10)
+	big := make([]byte, utils.DefaultMaxConfigBytes+10)
 	require.NoError(t, os.WriteFile(path, big, 0o600))
 
-	_, _, err := readLocalFragment(path)
+	_, _, err := readLocalFragment(path, utils.DefaultMaxConfigBytes)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds")
 }
 
 func TestReadLocalFragment_MissingFile(t *testing.T) {
-	_, _, err := readLocalFragment(filepath.Join(t.TempDir(), "missing.yaml"))
+	_, _, err := readLocalFragment(filepath.Join(t.TempDir(), "missing.yaml"), utils.DefaultMaxConfigBytes)
 	require.Error(t, err)
 }
 

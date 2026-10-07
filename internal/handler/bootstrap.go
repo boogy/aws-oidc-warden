@@ -242,7 +242,7 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 		return provider, nil
 	}
 
-	bucket, key, owner := cfg.S3ConfigBucket, cfg.S3ConfigPath, cfg.S3ConfigBucketOwner
+	bucket, key, owner, limit := cfg.S3ConfigBucket, cfg.S3ConfigPath, cfg.S3ConfigBucketOwner, cfg.EffectiveMaxConfigBytes()
 	var fetch config.FetchFunc
 	if owner != "" {
 		// Refreshes are serialized by the provider, so the cache needs no lock.
@@ -273,7 +273,7 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 						slog.String("resource", "s3_config_object"), slog.String("error", cerr.Error()))
 				}
 			}()
-			return utils.ReadAllCapped(body, utils.MaxConfigBytes, fmt.Sprintf("s3://%s/%s", bucket, key))
+			return utils.ReadAllCapped(body, int64(limit), fmt.Sprintf("s3://%s/%s", bucket, key))
 		}
 	}
 

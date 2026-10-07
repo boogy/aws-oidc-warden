@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1301,4 +1302,38 @@ func TestValidate_RejectsInvalidRoleEntries(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+}
+
+func TestValidate_MaxConfigBytes(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      int
+		want    int
+		wantErr bool
+	}{
+		{name: "unset defaults to 1 MiB", in: 0, want: utils.DefaultMaxConfigBytes},
+		{name: "explicit", in: 4096, want: 4096},
+		{name: "at ceiling", in: maxConfigBytesCeiling, want: maxConfigBytesCeiling},
+		{name: "above ceiling", in: maxConfigBytesCeiling + 1, wantErr: true},
+		{name: "negative", in: -1, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Config{Issuers: singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), RoleSessionName: "warden", MaxConfigBytes: tt.in}
+			err := c.Validate()
+			if tt.wantErr {
+				require.ErrorContains(t, err, "max_config_bytes")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, c.MaxConfigBytes)
+		})
+	}
+}
+
+func TestEffectiveMaxConfigBytes(t *testing.T) {
+	var nilCfg *Config
+	assert.Equal(t, utils.DefaultMaxConfigBytes, nilCfg.EffectiveMaxConfigBytes())
+	assert.Equal(t, utils.DefaultMaxConfigBytes, (&Config{}).EffectiveMaxConfigBytes())
+	assert.Equal(t, 4096, (&Config{MaxConfigBytes: 4096}).EffectiveMaxConfigBytes())
 }

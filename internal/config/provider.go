@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
-	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 // FetchFunc retrieves the raw configuration bytes from a remote source.
@@ -258,6 +257,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		}
 		cfg.S3ConfigBucketOwner = p.base.S3ConfigBucketOwner
 		cfg.SessionPolicyBucketOwner = p.base.SessionPolicyBucketOwner
+		cfg.MaxConfigBytes = p.base.MaxConfigBytes
 		if err := cfg.validateS3ConfigOwner(); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
@@ -338,8 +338,8 @@ func (p *Provider) fragmentsUnchanged(ctx context.Context, cur *Config) (bool, m
 
 // checkFragment enforces the size cap and checksum pin on one fetched fragment.
 func (c *Config) checkFragment(uri string, data []byte, etag string) error {
-	if len(data) > utils.MaxConfigBytes {
-		return fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, utils.MaxConfigBytes)
+	if limit := c.EffectiveMaxConfigBytes(); len(data) > limit {
+		return fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, limit)
 	}
 	if expected, pinned := c.fragmentChecksum(uri); pinned && expected != etag {
 		return fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
@@ -454,7 +454,7 @@ func (p *Provider) Stale() (age, limit time.Duration, stale bool) {
 // fetchFragment reads local paths directly and remote URIs through the fragment fetcher.
 func (p *Provider) fetchFragment(ctx context.Context, uri, prevETag, owner string) ([]byte, string, error) {
 	if !isRemoteFragment(uri) {
-		return readLocalFragment(uri)
+		return readLocalFragment(uri, p.base.EffectiveMaxConfigBytes())
 	}
 	if p.fragmentFetch == nil {
 		return nil, "", fmt.Errorf("%q requires a fragment fetcher (none configured)", uri)

@@ -34,6 +34,7 @@ var (
 	defaultJWTLeeway           = 30 * time.Second  // Default clock-skew leeway for exp/iat/nbf checks
 	maxJWTLeeway               = 120 * time.Second // Hard ceiling for jwt_leeway
 	defaultMaxTokenBytes       = 8192              // Default token length cap (8 KB) before any parsing
+	maxConfigBytesCeiling      = 64 << 20          // Hard ceiling for max_config_bytes
 	defaultMaxTokenLifetime    = time.Hour         // Default cap on exp-iat when max_token_lifetime is unset
 	defaultMaxTokenAge         = time.Hour         // Default cap on now-iat when max_token_age is unset
 	defaultJWKSRefetchCooldown = 60 * time.Second  // Default minimum interval between forced JWKS refetches per (issuer,kid)
@@ -359,6 +360,7 @@ type Config struct {
 	MaxTokenLifetime     time.Duration  `mapstructure:"max_token_lifetime"     json:"max_token_lifetime,omitempty"`     // Reject if exp-iat exceeds this; 0/unset defaults to 1h in Validate (not "no cap")
 	MaxTokenAge          time.Duration  `mapstructure:"max_token_age"          json:"max_token_age,omitempty"`          // Reject if now-iat exceeds this; 0/unset defaults to 1h in Validate (not "no cap")
 	MaxTokenBytes        int            `mapstructure:"max_token_bytes"        json:"max_token_bytes,omitempty"`        // Token length cap before any parsing; default 8192 (8 KB)
+	MaxConfigBytes       int            `mapstructure:"max_config_bytes"       json:"max_config_bytes,omitempty"`       // Size cap for config objects, fragments and session policies; base-only; default 1 MiB
 	JWKSRefetchCooldown  time.Duration  `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
 	AllowInsecureIssuers bool           `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
 
@@ -512,6 +514,9 @@ var envBindings = []envBinding{
 	{"max_token_bytes", func(c *Config, v string) {
 		envInt("max_token_bytes", v, func(n int) { c.MaxTokenBytes = n })
 	}},
+	{"max_config_bytes", func(c *Config, v string) {
+		envInt("max_config_bytes", v, func(n int) { c.MaxConfigBytes = n })
+	}},
 
 	// Comma-separated list.
 	{"config_fragments", func(c *Config, v string) { c.ConfigFragments = splitCommaList(v) }},
@@ -664,6 +669,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("cross_account.spoke_session_duration", "15m")
 	viper.SetDefault("jwt_validation.mode", "self")
 	viper.SetDefault("max_token_bytes", defaultMaxTokenBytes)
+	viper.SetDefault("max_config_bytes", utils.DefaultMaxConfigBytes)
 	viper.SetDefault("jwks_refetch_cooldown", defaultJWKSRefetchCooldown)
 	viper.SetDefault("allow_insecure_issuers", false)
 	viper.SetDefault("log_level", defaultLogLevel)
@@ -998,6 +1004,12 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxTokenBytes < 0 {
 		return fmt.Errorf("max_token_bytes must not be negative, got %d", c.MaxTokenBytes)
+	}
+	if c.MaxConfigBytes == 0 {
+		c.MaxConfigBytes = utils.DefaultMaxConfigBytes
+	}
+	if c.MaxConfigBytes < 0 || c.MaxConfigBytes > maxConfigBytesCeiling {
+		return fmt.Errorf("max_config_bytes must be between 1 and %d, got %d", maxConfigBytesCeiling, c.MaxConfigBytes)
 	}
 	if c.JWKSRefetchCooldown == 0 {
 		c.JWKSRefetchCooldown = defaultJWKSRefetchCooldown
@@ -1393,6 +1405,14 @@ func (c *Config) validateMaxStale() error {
 }
 
 // effectiveMappingsMaxStale resolves the unset default: 3x the reload interval for an s3:// mappings_file.
+// EffectiveMaxConfigBytes is max_config_bytes, or the default when unset or c is nil.
+func (c *Config) EffectiveMaxConfigBytes() int {
+	if c == nil || c.MaxConfigBytes <= 0 {
+		return utils.DefaultMaxConfigBytes
+	}
+	return c.MaxConfigBytes
+}
+
 func (c *Config) effectiveMappingsMaxStale() time.Duration {
 	if c.MappingsMaxStale != nil {
 		return *c.MappingsMaxStale

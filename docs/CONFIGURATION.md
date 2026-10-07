@@ -431,10 +431,11 @@ Top-level, apply across every configured issuer and every `jwt_validation.mode`.
 | `AOW_MAX_TOKEN_LIFETIME`     | `max_token_lifetime`     | Reject if `exp - iat` exceeds this                                                                                   | `1h`               |
 | `AOW_MAX_TOKEN_AGE`          | `max_token_age`          | Reject if `now - iat` exceeds this                                                                                   | `1h`               |
 | `AOW_MAX_TOKEN_BYTES`        | `max_token_bytes`        | Raw token length cap enforced before any parsing                                                                     | `8192` (8 KB)      |
+| `AOW_MAX_CONFIG_BYTES`       | `max_config_bytes`       | Size cap for the S3 overlay, `mappings_file`, each fragment and each session policy; larger is an error (max 64 MiB) | `1048576` (1 MiB)  |
 | `AOW_JWKS_REFETCH_COOLDOWN`  | `jwks_refetch_cooldown`  | Minimum interval between forced JWKS refetches per `(issuer, kid)` — bounds the cost of an unknown-`kid` DoS attempt | `60s`              |
 | `AOW_ALLOW_INSECURE_ISSUERS` | `allow_insecure_issuers` | Dev-only escape hatch: permit `http://` issuer/`jwks_uri` (otherwise rejected)                                       | `false`            |
 
-`jwt_leeway: 0`, `max_token_bytes: 0`, `max_token_lifetime: 0`, and `max_token_age: 0` all mean "use the default", not "disable" — `Validate()` applies the default whenever the field is its zero value. There is currently no way to opt out of the `max_token_lifetime`/`max_token_age` caps entirely; set them to a large duration instead. A negative value for any of these knobs is a config validation error; `jwt_leeway` above `120s` is also rejected.
+`max_config_bytes` is base-only (file or env): the overlay cannot change the cap that bounds its own read. `jwt_leeway: 0`, `max_token_bytes: 0`, `max_config_bytes: 0`, `max_token_lifetime: 0`, and `max_token_age: 0` all mean "use the default", not "disable" — `Validate()` applies the default whenever the field is its zero value. There is currently no way to opt out of the `max_token_lifetime`/`max_token_age` caps entirely; set them to a large duration instead. A negative value for any of these knobs is a config validation error; `jwt_leeway` above `120s` is also rejected.
 
 ### Logging & Audit Settings
 
@@ -587,7 +588,7 @@ Whoever writes the mappings can grant roles and route them through the IdP (`idp
 
 `config_fragments` lists additional sources merged on top of the base config's `default_issuer`, `role_sets`, `role_mappings`, and `role_groups` (and _only_ those four keys; anything else in a fragment is a hard error). This lets teams own their own role-mapping fragment without touching the base config that defines `issuers`/hardening knobs/`tag_auth`. Each source may be listed once; a duplicate entry fails `Validate()`.
 
-`s3://` fragments are fetched with the same conditional, owner-pinned read as the mappings file (1 MiB cap, `s3_config_bucket_owner` required; see [Split configuration](#split-configuration)).
+`s3://` fragments are fetched with the same conditional, owner-pinned read as the mappings file (`max_config_bytes` cap, `s3_config_bucket_owner` required; see [Split configuration](#split-configuration)).
 
 Fragments do **not** require an S3 config overlay: they are merged once at startup (an invalid fragment fails startup) and re-resolved per `config_reload_interval` when it is > 0, whether they are local paths or `s3://` objects.
 
@@ -611,7 +612,7 @@ Rules enforced on every merge:
 - **`default_issuer`**: a fragment's `default_issuer` must already be a base-defined issuer, and cannot conflict with the base's own `default_issuer` if both set one. It binds only that fragment's own `role_mappings`/`role_groups` entries that name no `issuer`; it is never applied to the base or to other fragments, so an issuer-less entry elsewhere still needs the base's `default_issuer` (or a sole issuer).
 - **`role_sets`**: merged by name; a fragment defining a `role_sets` name the base (or another already-merged fragment) already defined is rejected.
 - **`role_mappings`/`role_groups`**: appended.
-- Each fragment is capped at 1 MiB; fetch failures (and re-validation failures after merge) fall back to the last-known-good config rather than serving a partial/invalid merge.
+- Each fragment is capped at `max_config_bytes` (default 1 MiB); fetch failures (and re-validation failures after merge) fall back to the last-known-good config rather than serving a partial/invalid merge.
 - Local-path fragments are content-hashed (sha256) for change detection; `s3://` fragments use a conditional GET (an unchanged object is not re-parsed). Either can be pinned via `config_fragment_checksums`.
 - One invalid fragment fails the whole refresh for every tenant; see [Blast radius](#blast-radius).
 

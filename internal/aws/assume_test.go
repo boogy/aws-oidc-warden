@@ -34,11 +34,11 @@ type vFake struct {
 	getRoleAsUsed bool
 }
 
-func (f *vFake) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
+func (f *vFake) GetS3Object(context.Context, string, string, int) (io.ReadCloser, error) {
 	return nil, errors.New("nope")
 }
 
-func (f *vFake) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+func (f *vFake) GetS3ObjectIfChanged(context.Context, string, string, string, string, int) ([]byte, string, error) {
 	return nil, "", errors.New("not implemented")
 }
 func (f *vFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {

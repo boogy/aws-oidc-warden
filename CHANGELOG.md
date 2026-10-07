@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`s3_config_bucket_owner`** pins the expected owner on S3 config reads; required for `s3://` mappings and fragments.
 - **`session_policy_bucket_owner`** pins the expected owner on session-policy S3 reads; startup warns (`policy.s3_owner_unpinned`) when a policy bucket is set without it.
 - **Local dev server `-host` flag**, defaulting to `127.0.0.1` instead of all interfaces.
+- **`max_config_bytes`** sets the size cap for config objects, fragments and session policies (default 1 MiB, max 64 MiB); base-only.
 
 ### Changed
 
@@ -48,7 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`s3://` entries in `config_fragments` are fetched** instead of failing every refresh.
 - **The local dev server caps request bodies, sets read timeouts** and serves only its known paths.
 - **Remote `mappings_file` and fragment URIs must use lowercase `s3://`**; `S3://` skipped the owner and staleness checks.
-- **Config objects and S3 session policies over 1 MiB are rejected** instead of silently truncated.
+- **Config objects and S3 session policies over `max_config_bytes` are rejected** instead of silently truncated.
 - **A `cross_account` refusal during role exchange** returns 403 `permission_denied`, audited at stage `account_check`.
 - **ALB responses set `multiValueHeaders`**, so credential and error responses keep `Content-Type` and security headers on multi-value target groups.
 - **Patterns that close the auto-anchor group early (`main)|(x`) are rejected**; they escaped `^(?:…)$` and matched unanchored.

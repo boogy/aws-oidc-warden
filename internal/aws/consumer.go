@@ -569,7 +569,7 @@ func (a *AwsConsumer) GetS3Object(ctx context.Context, bucket, key string) (io.R
 		return nil, errors.New("object key cannot be empty")
 	}
 
-	return a.AWS.GetS3Object(ctx, bucket, key)
+	return a.AWS.GetS3Object(ctx, bucket, key, a.Config.EffectiveMaxConfigBytes())
 }
 
 // GetS3ObjectIfChanged reads a config object pinned to expectedOwner.
@@ -583,5 +583,5 @@ func (a *AwsConsumer) GetS3ObjectIfChanged(ctx context.Context, bucket, key, pre
 	if expectedOwner == "" {
 		return nil, "", errors.New("expected bucket owner cannot be empty")
 	}
-	return a.AWS.GetS3ObjectIfChanged(ctx, bucket, key, prevETag, expectedOwner)
+	return a.AWS.GetS3ObjectIfChanged(ctx, bucket, key, prevETag, expectedOwner, a.Config.EffectiveMaxConfigBytes())
 }

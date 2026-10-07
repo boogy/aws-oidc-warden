@@ -703,3 +703,12 @@ idp:
 	require.Equal(t, "/prod/keys.json", c.IdP.Paths.JWKS)
 	require.Equal(t, "/prod/.well-known/openid-configuration", c.IdP.Paths.Discovery)
 }
+
+func TestMergeBytes_EnvMaxConfigBytesWinsOverS3(t *testing.T) {
+	t.Setenv("AOW_MAX_CONFIG_BYTES", "2048")
+	c := baseConfigForEnv(t)
+
+	require.NoError(t, c.MergeBytes([]byte("max_config_bytes: 4096\n"), "yaml"))
+
+	assert.Equal(t, 2048, c.MaxConfigBytes)
+}

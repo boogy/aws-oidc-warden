@@ -34,16 +34,16 @@ type MockAwsServiceWrapper struct {
 	mock.Mock
 }
 
-func (m *MockAwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	args := m.Called(ctx, bucket, key)
+func (m *MockAwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string, maxBytes int) (io.ReadCloser, error) {
+	args := m.Called(ctx, bucket, key, maxBytes)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(io.ReadCloser), args.Error(1)
 }
 
-func (m *MockAwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, owner string) ([]byte, string, error) {
-	args := m.Called(ctx, bucket, key, prevETag, owner)
+func (m *MockAwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, owner string, maxBytes int) ([]byte, string, error) {
+	args := m.Called(ctx, bucket, key, prevETag, owner, maxBytes)
 	b, _ := args.Get(0).([]byte)
 	return b, args.String(1), args.Error(2)
 }
@@ -116,11 +116,11 @@ func TestMockAwsServiceWrapper_GetS3Object(t *testing.T) {
 	key := "test-key"
 	content := "test content"
 
-	mockWrapper.On("GetS3Object", mock.Anything, bucket, key).Return(
+	mockWrapper.On("GetS3Object", mock.Anything, bucket, key, utils.DefaultMaxConfigBytes).Return(
 		NewMockReadCloser(content), nil,
 	).Once()
 
-	reader, err := mockWrapper.GetS3Object(context.Background(), bucket, key)
+	reader, err := mockWrapper.GetS3Object(context.Background(), bucket, key, utils.DefaultMaxConfigBytes)
 	assert.NoError(t, err)
 	assert.NotNil(t, reader)
 
@@ -195,9 +195,9 @@ func TestGetS3ObjectErrorCase(t *testing.T) {
 	key := "error-key"
 	expectedErr := errors.New("access denied")
 
-	mockWrapper.On("GetS3Object", mock.Anything, bucket, key).Return(nil, expectedErr).Once()
+	mockWrapper.On("GetS3Object", mock.Anything, bucket, key, utils.DefaultMaxConfigBytes).Return(nil, expectedErr).Once()
 
-	reader, err := mockWrapper.GetS3Object(context.Background(), bucket, key)
+	reader, err := mockWrapper.GetS3Object(context.Background(), bucket, key, utils.DefaultMaxConfigBytes)
 	assert.Error(t, err)
 	assert.Nil(t, reader)
 	assert.Equal(t, expectedErr, err)
@@ -297,7 +297,7 @@ func TestServiceWrapperImplementation(t *testing.T) {
 		bucket := "non-existent-bucket-name-123456789012"
 		key := "non-existent-key"
 
-		reader, err := wrapper.GetS3Object(context.Background(), bucket, key)
+		reader, err := wrapper.GetS3Object(context.Background(), bucket, key, utils.DefaultMaxConfigBytes)
 		assert.Error(t, err)
 		assert.Nil(t, reader)
 	})
@@ -787,8 +787,8 @@ func TestGetS3ObjectIfChanged(t *testing.T) {
 		{name: "other error", prev: `"e1"`, err: s3HTTPErr(500), wantErr: "s3 error", wantINM: `"e1"`},
 		{name: "changed", prev: `"e1"`, out: s3Out("xyz", aws.String(`"e2"`)), wantData: "xyz", wantETag: `"e2"`, wantINM: `"e1"`},
 		{name: "200 with nil etag", out: s3Out("abc", nil), wantData: "abc"},
-		{name: "at cap", out: s3Out(strings.Repeat("a", utils.MaxConfigBytes), nil), wantData: strings.Repeat("a", utils.MaxConfigBytes)},
-		{name: "oversize", out: s3Out(strings.Repeat("a", utils.MaxConfigBytes+1), nil), wantErr: "exceeds", wantNilData: true},
+		{name: "at cap", out: s3Out(strings.Repeat("a", utils.DefaultMaxConfigBytes), nil), wantData: strings.Repeat("a", utils.DefaultMaxConfigBytes)},
+		{name: "oversize", out: s3Out(strings.Repeat("a", utils.DefaultMaxConfigBytes+1), nil), wantErr: "exceeds", wantNilData: true},
 		{name: "close error", out: &s3.GetObjectOutput{Body: closeErrBody{strings.NewReader("abc")}, ETag: aws.String(`"e1"`)}, wantErr: "close failed", wantNilData: true},
 	}
 	for _, tt := range tests {
@@ -796,7 +796,7 @@ func TestGetS3ObjectIfChanged(t *testing.T) {
 			fake := &fakeS3{out: tt.out, err: tt.err}
 			w := &AwsServiceWrapper{s3Client: fake, defaultTimeout: time.Second}
 
-			data, etag, err := w.GetS3ObjectIfChanged(context.Background(), "b", "k", tt.prev, owner)
+			data, etag, err := w.GetS3ObjectIfChanged(context.Background(), "b", "k", tt.prev, owner, utils.DefaultMaxConfigBytes)
 
 			require.NotNil(t, fake.in.ExpectedBucketOwner)
 			assert.Equal(t, owner, *fake.in.ExpectedBucketOwner)
@@ -867,15 +867,16 @@ func (r *rangeRecordingS3) GetObject(_ context.Context, in *s3.GetObjectInput, _
 }
 
 func TestGetS3Object_RangeBoundsCapAndReportedOversizeFails(t *testing.T) {
+	const limit = 4096
 	tests := []struct {
 		name    string
 		length  int64
 		total   string
 		wantErr bool
 	}{
-		{name: "at cap", length: utils.MaxConfigBytes, total: strconv.Itoa(utils.MaxConfigBytes)},
-		{name: "over cap", length: utils.MaxConfigBytes + 1, total: "41943040", wantErr: true},
-		{name: "short partial of larger object", length: utils.MaxConfigBytes, total: "41943040", wantErr: true},
+		{name: "at cap", length: limit, total: strconv.Itoa(limit)},
+		{name: "over cap", length: limit + 1, total: "41943040", wantErr: true},
+		{name: "short partial of larger object", length: limit, total: "41943040", wantErr: true},
 		{name: "range ignored", length: 41943040, wantErr: true},
 	}
 	for _, tt := range tests {
@@ -883,8 +884,8 @@ func TestGetS3Object_RangeBoundsCapAndReportedOversizeFails(t *testing.T) {
 			stub := &rangeRecordingS3{length: tt.length, total: tt.total}
 			w := &AwsServiceWrapper{s3Client: stub, defaultTimeout: time.Second}
 
-			rc, err := w.GetS3Object(context.Background(), "b", "k")
-			assert.Equal(t, "bytes=0-"+strconv.Itoa(utils.MaxConfigBytes), stub.rng)
+			rc, err := w.GetS3Object(context.Background(), "b", "k", limit)
+			assert.Equal(t, "bytes=0-"+strconv.Itoa(limit), stub.rng)
 			assert.True(t, stub.body.closed)
 			if tt.wantErr {
 				require.ErrorContains(t, err, "exceeds")
@@ -921,15 +922,15 @@ func TestGetS3Object_BodyReadableAfterReturn(t *testing.T) {
 		wantErr string
 	}{
 		{name: "small", size: 10},
-		{name: "at cap", size: utils.MaxConfigBytes},
-		{name: "oversize", size: utils.MaxConfigBytes + 1, wantErr: "exceeds"},
+		{name: "at cap", size: utils.DefaultMaxConfigBytes},
+		{name: "oversize", size: utils.DefaultMaxConfigBytes + 1, wantErr: "exceeds"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body := strings.Repeat("a", tt.size)
 			w := &AwsServiceWrapper{s3Client: &ctxBoundS3{body: body}, defaultTimeout: time.Second}
 
-			rc, err := w.GetS3Object(context.Background(), "b", "k")
+			rc, err := w.GetS3Object(context.Background(), "b", "k", utils.DefaultMaxConfigBytes)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				assert.Nil(t, rc)

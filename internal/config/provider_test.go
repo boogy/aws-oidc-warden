@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -732,4 +733,21 @@ func TestProviderRefreshRejectsIdPIssuerCollision(t *testing.T) {
 			assert.Equal(t, before, p.lastRefresh.Load())
 		})
 	}
+}
+
+func TestProvider_OverlayCannotRaiseMaxConfigBytes(t *testing.T) {
+	const uri = "s3://bucket/frag.yaml"
+	base := baseConfig(t)
+	base.ConfigFragments = []string{uri}
+	base.S3ConfigBucketOwner = "111122223333"
+	base.MaxConfigBytes = 64
+	require.NoError(t, base.Validate())
+
+	fetch := func(context.Context, string, string, string) ([]byte, string, error) {
+		return []byte("role_mappings: []\n" + strings.Repeat("#", 100)), "sha256:x", nil
+	}
+	overlay := func(context.Context) ([]byte, error) { return []byte("max_config_bytes: 1048576\n"), nil }
+	p := NewProvider(base, time.Minute, "yaml", overlay, WithFragmentFetcher(fetch))
+
+	require.ErrorContains(t, p.Refresh(context.Background()), "exceeds 64 byte cap")
 }

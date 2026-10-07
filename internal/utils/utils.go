@@ -122,8 +122,8 @@ const (
 	// RoleChainingMaxSecs is STS's cap on a session assumed from role-session credentials.
 	RoleChainingMaxSecs = 3600
 
-	// MaxConfigBytes caps any config document or fragment read from disk or S3.
-	MaxConfigBytes = 1 << 20
+	// DefaultMaxConfigBytes is the max_config_bytes default.
+	DefaultMaxConfigBytes = 1 << 20
 )
 
 // STSNameRule is the pattern a RoleSessionName or SourceIdentity must match.

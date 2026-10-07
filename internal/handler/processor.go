@@ -422,7 +422,7 @@ func (r *RequestProcessor) readSessionPolicyObject(ctx context.Context, log *slo
 		}
 	}()
 
-	data, err = utils.ReadAllCapped(body, utils.MaxConfigBytes, "session policy")
+	data, err = utils.ReadAllCapped(body, int64(cfg.EffectiveMaxConfigBytes()), "session policy")
 	if err != nil {
 		return nil, "failed to read session policy data", err
 	}

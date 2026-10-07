@@ -521,7 +521,7 @@ func TestAwsConsumer_GetS3Object(t *testing.T) {
 	mockAWS := new(MockAwsServiceWrapper)
 	consumer := &AwsConsumer{
 		AWS:    mockAWS,
-		Config: &gtvcfg.Config{},
+		Config: &gtvcfg.Config{MaxConfigBytes: 4096},
 	}
 
 	bucket := "test-bucket"
@@ -529,7 +529,7 @@ func TestAwsConsumer_GetS3Object(t *testing.T) {
 	content := "test content"
 
 	// Success case
-	mockAWS.On("GetS3Object", mock.Anything, bucket, key).Return(
+	mockAWS.On("GetS3Object", mock.Anything, bucket, key, 4096).Return(
 		NewMockReadCloser(content), nil,
 	).Once()
 
@@ -554,7 +554,7 @@ func TestAwsConsumer_GetS3Object(t *testing.T) {
 	assert.Contains(t, err.Error(), "object key cannot be empty")
 
 	// Error case - AWS error
-	mockAWS.On("GetS3Object", mock.Anything, bucket, "error-key").Return(
+	mockAWS.On("GetS3Object", mock.Anything, bucket, "error-key", 4096).Return(
 		nil, errors.New("access denied"),
 	).Once()
 
@@ -580,9 +580,9 @@ func TestAwsConsumer_GetS3ObjectIfChanged(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mockAWS := new(MockAwsServiceWrapper)
-			consumer := &AwsConsumer{AWS: mockAWS, Config: &gtvcfg.Config{}}
+			consumer := &AwsConsumer{AWS: mockAWS, Config: &gtvcfg.Config{MaxConfigBytes: 4096}}
 			if tt.call {
-				mockAWS.On("GetS3ObjectIfChanged", mock.Anything, "b", "k", "e1", owner).Return([]byte("d"), "e2", nil).Once()
+				mockAWS.On("GetS3ObjectIfChanged", mock.Anything, "b", "k", "e1", owner, 4096).Return([]byte("d"), "e2", nil).Once()
 			}
 
 			data, etag, err := consumer.GetS3ObjectIfChanged(context.Background(), tt.bucket, tt.key, "e1", tt.owner)
@@ -590,7 +590,7 @@ func TestAwsConsumer_GetS3ObjectIfChanged(t *testing.T) {
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)
-				mockAWS.AssertNotCalled(t, "GetS3ObjectIfChanged", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+				mockAWS.AssertNotCalled(t, "GetS3ObjectIfChanged", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 				return
 			}
 			require.NoError(t, err)
