@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,8 +46,7 @@ var (
 	wrapper  *AwsServiceWrapper
 )
 
-// AwsServiceWrapper is the implementation of AwsServiceWrapperInterface
-// it wraps the actual AWS service call but has no additional functionality implemented
+// AwsServiceWrapper implements AwsServiceWrapperInterface over the AWS SDK clients.
 type AwsServiceWrapper struct {
 	cfg       aws.Config
 	s3Client  s3GetObjectAPI
@@ -64,8 +64,7 @@ type AwsServiceWrapper struct {
 	callerAccount string
 	callerArn     string
 
-	// getCallerIdentityFn allows tests to inject a fake STS GetCallerIdentity call.
-	// When nil, s.stsClient.GetCallerIdentity is used.
+	// getCallerIdentityFn overrides stsClient.GetCallerIdentity in tests.
 	getCallerIdentityFn func(ctx context.Context) (*sts.GetCallerIdentityOutput, error)
 }
 
@@ -117,10 +116,10 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string)
 		return nil, err
 	}
 
-	if result.ContentLength != nil && *result.ContentLength > utils.MaxConfigBytes {
+	if size := objectSize(result); size > utils.MaxConfigBytes {
 		_ = result.Body.Close()
 		logevent.Warn(ctx, nil, logevent.AWSS3ObjectOversize, "S3 object exceeds maximum allowed size",
-			slog.Int64("size", *result.ContentLength),
+			slog.Int64("size", size),
 			slog.Int64("maxAllowed", utils.MaxConfigBytes),
 			slog.String("bucket", bucket),
 			slog.String("key", key),
@@ -141,6 +140,17 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string)
 		return nil, err
 	}
 	return io.NopCloser(bytes.NewReader(body)), nil
+}
+
+// objectSize is the full object size from a ranged response's Content-Range, else its ContentLength.
+func objectSize(out *s3.GetObjectOutput) int64 {
+	cr := aws.ToString(out.ContentRange)
+	if i := strings.LastIndexByte(cr, '/'); i >= 0 {
+		if n, err := strconv.ParseInt(cr[i+1:], 10, 64); err == nil {
+			return n
+		}
+	}
+	return aws.ToInt64(out.ContentLength)
 }
 
 func (s *AwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
@@ -191,10 +201,7 @@ func (s *AwsServiceWrapper) AssumeRoleWithWebIdentity(ctx context.Context, in *s
 	return s.stsClient.AssumeRoleWithWebIdentity(ctx, in)
 }
 
-// validateRoleNameLength enforces IAM's 64-character cap on a role NAME,
-// measured after the last '/' since the cap excludes any path prefix
-// (`/team/sub/Name`, up to 512 chars) — matching utils.ParseRoleARN. Rejects rather
-// than truncating, since truncating would silently look up a different role.
+// validateRoleNameLength enforces the 64-char cap on the name after the last '/'; it rejects, never truncates.
 func validateRoleNameLength(roleName string) error {
 	name := roleName
 	if i := strings.LastIndexByte(name, '/'); i >= 0 {
@@ -227,9 +234,7 @@ func (s *AwsServiceWrapper) GetRole(ctx context.Context, input *iam.GetRoleInput
 	return output, nil
 }
 
-// GetCallerIdentityInfo returns the account ID and role-session status of the
-// warden's own (hub) identity, fetched via STS GetCallerIdentity and cached
-// (a failed lookup is not cached, so a later call retries).
+// GetCallerIdentityInfo returns the hub account and role-session status, cached; failures are not cached.
 func (s *AwsServiceWrapper) GetCallerIdentityInfo(ctx context.Context) (account string, isRoleSession bool, err error) {
 	s.callerMu.Lock()
 	defer s.callerMu.Unlock()
@@ -270,8 +275,7 @@ func (s *AwsServiceWrapper) GetCallerAccount(ctx context.Context) (string, error
 
 // GetRoleAs performs iam:GetRole using the supplied credentials provider.
 func (s *AwsServiceWrapper) GetRoleAs(ctx context.Context, input *iam.GetRoleInput, creds aws.CredentialsProvider) (*iam.GetRoleOutput, error) {
-	// A nil provider would silently fall back to hub credentials and read a
-	// same-named role in the wrong (hub) account — a confused-deputy risk.
+	// A nil provider would fall back to hub credentials and read a same-named hub role.
 	if creds == nil {
 		return nil, errors.New("GetRoleAs requires explicit credentials; refusing to fall back to hub credentials")
 	}

@@ -842,24 +842,76 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
+type closeTracker struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closeTracker) Close() error { c.closed = true; return nil }
+
 type rangeRecordingS3 struct {
 	length int64
+	total  string
 	rng    string
+	body   *closeTracker
 }
 
 func (r *rangeRecordingS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
 	r.rng = aws.ToString(in.Range)
-	return &s3.GetObjectOutput{ContentLength: aws.Int64(r.length), Body: io.NopCloser(strings.NewReader("x"))}, nil
+	r.body = &closeTracker{Reader: strings.NewReader(strings.Repeat("a", int(r.length)))}
+	out := &s3.GetObjectOutput{ContentLength: aws.Int64(r.length), Body: r.body}
+	if r.total != "" {
+		out.ContentRange = aws.String("bytes 0-" + strconv.FormatInt(r.length-1, 10) + "/" + r.total)
+	}
+	return out, nil
 }
 
 func TestGetS3Object_RangeBoundsCapAndReportedOversizeFails(t *testing.T) {
-	stub := &rangeRecordingS3{length: utils.MaxConfigBytes + 1}
-	w := &AwsServiceWrapper{s3Client: stub, defaultTimeout: time.Second}
+	tests := []struct {
+		name    string
+		length  int64
+		total   string
+		wantErr bool
+	}{
+		{name: "at cap", length: utils.MaxConfigBytes, total: strconv.Itoa(utils.MaxConfigBytes)},
+		{name: "over cap", length: utils.MaxConfigBytes + 1, total: "41943040", wantErr: true},
+		{name: "short partial of larger object", length: utils.MaxConfigBytes, total: "41943040", wantErr: true},
+		{name: "range ignored", length: 41943040, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &rangeRecordingS3{length: tt.length, total: tt.total}
+			w := &AwsServiceWrapper{s3Client: stub, defaultTimeout: time.Second}
 
-	rc, err := w.GetS3Object(context.Background(), "b", "k")
-	require.ErrorContains(t, err, "exceeds")
-	assert.Nil(t, rc)
-	assert.Equal(t, "bytes=0-"+strconv.Itoa(utils.MaxConfigBytes), stub.rng)
+			rc, err := w.GetS3Object(context.Background(), "b", "k")
+			assert.Equal(t, "bytes=0-"+strconv.Itoa(utils.MaxConfigBytes), stub.rng)
+			assert.True(t, stub.body.closed)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "exceeds")
+				assert.Nil(t, rc)
+				return
+			}
+			require.NoError(t, err)
+			_ = rc.Close()
+		})
+	}
+}
+
+func TestObjectSize(t *testing.T) {
+	tests := []struct {
+		name string
+		out  *s3.GetObjectOutput
+		want int64
+	}{
+		{name: "content range total", out: &s3.GetObjectOutput{ContentRange: aws.String("bytes 0-1048576/41943040"), ContentLength: aws.Int64(1048577)}, want: 41943040},
+		{name: "unknown total", out: &s3.GetObjectOutput{ContentRange: aws.String("bytes 0-9/*"), ContentLength: aws.Int64(10)}, want: 10},
+		{name: "no content range", out: &s3.GetObjectOutput{ContentLength: aws.Int64(7)}, want: 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, objectSize(tt.out))
+		})
+	}
 }
 
 func TestGetS3Object_BodyReadableAfterReturn(t *testing.T) {
