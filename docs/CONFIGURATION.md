@@ -377,7 +377,7 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 `idp` is rejected in config fragments. Two traps:
 
 - `idp.paths` must match the path the front end delivers. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`), which returns 404 unless configured that way.
-- `idp-export` reads only local config; run it against the config that carries the effective `idp` block.
+- `idp-export` builds the config like the warden (overlay, mappings file, fragments) and exports the effective `idp` block; see [IDP.md](IDP.md#exporting-the-documents-idp-export).
 
 ### Request and response
 

@@ -74,15 +74,7 @@ The minted token never leaves the warden and is never logged or returned. Its cl
 
 STS fetches `idp.issuer` + `/.well-known/openid-configuration` (here `https://idp.example.com/.well-known/openid-configuration`) and the JWKS when it validates the minted token. Both must be reachable from the public internet at the `idp.issuer` URL.
 
-**Production default: static documents.** Generate them with `idp-export` and upload them to S3/CloudFront (or any static host) at the `idp.issuer` origin:
-
-```sh
-idp-export -config config.yaml -out ./site
-```
-
-The documents are written under `-out` at `idp.paths.discovery` and `idp.paths.jwks`. `idp-export` applies the `s3_config_bucket` overlay, `mappings_file` and `config_fragments` like the running service, so it needs the same S3 read access. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
-
-With an MRK config, run `idp-export` with `AWS_REGION` set to an allowed region.
+**Production default: static documents.** Generate them with `idp-export` (see [Exporting the documents](#exporting-the-documents-idp-export)) and upload them to S3/CloudFront (or any static host) at the `idp.issuer` origin. A warden-served JWKS couples STS availability to the Lambda: every exchange triggers a JWKS fetch, and the warden can DoS itself under load.
 
 **Dev and low volume: warden-served.** The warden answers `GET`/`HEAD` on `idp.paths.discovery` and `idp.paths.jwks` with `Cache-Control: public, max-age=<jwks_cache_max_age>`. If you use this:
 
@@ -90,6 +82,45 @@ With an MRK config, run `idp-export` with `AWS_REGION` set to an allowed region.
 - The routes must carry **no authorizer** (required in `apigw` delegated mode; STS cannot present a token).
 - `idp.paths.*` must match the path the caller requests. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`) and returns 404 unless configured that way. A REST API (v1) routes on `requestContext.path`, which keeps the stage on the `execute-api` domain and the base-path mapping on a custom domain.
 - Only the two `idp.paths.*` are exposed. Any other near miss of them (other case, trailing slash, one extra leading segment) returns 404 `idp_path_not_found`. A method other than `GET`/`HEAD` returns 405 `method_not_allowed` with an `Allow` header.
+
+### Exporting the documents (`idp-export`)
+
+`idp-export` writes the discovery and JWKS documents the warden would serve, as files. Build it with `make build-idp-export` or take the `idp-export` archive from a release.
+
+| Flag           | Meaning                                                                                                   |
+| -------------- | --------------------------------------------------------------------------------------------------------- |
+| `-config PATH` | Service config file, the same one the warden deploys with                                                  |
+| `-out DIR`     | Output directory (required). Files land at `DIR` + `idp.paths.discovery` and `DIR` + `idp.paths.jwks`     |
+
+It builds the config like the warden at cold start (S3 overlay, `mappings_file`, `config_fragments`), so the effective `idp` block is the one exported. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. It never signs anything.
+
+Permissions:
+
+- `kms:DescribeKey` and `kms:GetPublicKey` on every `signing_keys[].kms_key_id`, `verify_only` keys included. Not `kms:Sign`.
+- S3 read on the overlay, `mappings_file` and `s3://` fragments, if configured.
+- With an MRK key, `AWS_REGION` set to a region in `idp.kms_allowed_regions`.
+
+With default paths:
+
+```text
+site/
+└── .well-known/
+    ├── openid-configuration
+    └── jwks.json
+```
+
+Upload both with an explicit content type (`openid-configuration` has no extension, so S3 would guess wrong) and the same `Cache-Control` the warden would send:
+
+```sh
+idp-export -config config.yaml -out ./site
+aws s3 cp ./site/.well-known/ s3://idp-example-com/.well-known/ --recursive \
+  --content-type application/json --cache-control "public, max-age=300"
+curl -sf https://idp.example.com/.well-known/openid-configuration | jq -e '.jwks_uri'
+```
+
+The bucket must sit behind the `idp.issuer` origin (for example CloudFront on `idp.example.com`), and the discovery document's `jwks_uri` (`idp.jwks_uri`) must resolve to the uploaded JWKS. Both must be publicly readable: STS fetches them anonymously.
+
+Re-export and upload whenever `idp.issuer`, `idp.jwks_uri`, `idp.paths` or `idp.signing_keys` change, at each [key rotation](#key-rotation) step, before deploying the warden that uses the new key. Mapping and fragment changes do not affect the documents.
 
 One issuer URL per deployment, never shared between stages. A deployment may span regions with one multi-region key (see [Multi-region deployment](#multi-region-deployment)).
 
