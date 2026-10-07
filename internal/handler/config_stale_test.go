@@ -79,6 +79,8 @@ func TestConfigStaleDeniesRequest(t *testing.T) {
 	rec := sink.last(t)
 	assert.Equal(t, "deny", rec["decision"])
 	assert.Equal(t, "config", rec["stage"])
+	assert.Equal(t, testIssuer, rec["issuer"])
+	assert.Equal(t, "github", rec["provider"])
 }
 
 func TestConfigStaleDeniesMint(t *testing.T) {
@@ -99,6 +101,8 @@ func TestConfigStaleDeniesMint(t *testing.T) {
 	rec := sink.last(t)
 	assert.Equal(t, "deny", rec["decision"])
 	assert.Equal(t, "config", rec["stage"])
+	assert.Equal(t, testIssuer, rec["issuer"])
+	assert.Equal(t, "github", rec["provider"])
 }
 
 type rejectingExtractor struct{}

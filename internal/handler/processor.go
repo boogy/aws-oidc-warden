@@ -144,6 +144,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	if _, _, stale := r.provider.Stale(); stale {
 		r.provider.MaybeRefresh(ctx)
 		if age, limit, stale := r.provider.Stale(); stale {
+			rec.setIdentity(cfg, claims)
 			o.rec.Stage, o.rec.Reason = "config", "mappings older than mappings_max_stale"
 			logevent.Error(ctx, log, logevent.ConfigMappingsStale, "role mappings are stale; refusing request",
 				slog.Int64("ageMs", age.Milliseconds()), slog.Int64("maxStaleMs", limit.Milliseconds()))
@@ -161,15 +162,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 
 	requestedRole := requestData.Role
 
-	rec.Issuer = claims.Issuer
-	rec.Provider = issuerProvider(cfg, claims.Issuer)
-	rec.JWTSub = claims.Sub
-	rec.Subject = claims.Subject
-	rec.Audience = claimsAudience(claims)
-	// Set before authorization so deny records carry identity; redact() honours log_claim_values.
-	if cfg.LogClaimValues {
-		rec.Claims = auditClaims(cfg, claims.Issuer, claims.Raw)
-	}
+	rec.setIdentity(cfg, claims)
 
 	if cfg.LogClaimValues {
 		reqAttrs := []any{slog.String("roleArn", requestedRole)}

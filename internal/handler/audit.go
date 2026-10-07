@@ -302,6 +302,18 @@ func inputMode(input validator.ExtractionInput) string {
 	}
 }
 
+// setIdentity records the verified caller on every post-extract record; redact() honours log_claim_values.
+func (rec *auditRecord) setIdentity(cfg *config.Config, claims *gtypes.Claims) {
+	rec.Issuer = claims.Issuer
+	rec.Provider = issuerProvider(cfg, claims.Issuer)
+	rec.JWTSub = claims.Sub
+	rec.Subject = claims.Subject
+	rec.Audience = claimsAudience(claims)
+	if cfg.LogClaimValues {
+		rec.Claims = auditClaims(cfg, claims.Issuer, claims.Raw)
+	}
+}
+
 // issuerProvider looks up the configured provider name ("github"/"generic") for a verified issuer.
 func issuerProvider(cfg *config.Config, issuer string) string {
 	for i := range cfg.Issuers {
