@@ -86,7 +86,7 @@ The status code tells your client whether retrying is worth anything:
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                      | **No** — deterministic                               |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                          | **No** — deterministic                               |
 | `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                      | **Yes** — transient                                  |
-| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document                                                         | **Yes** — transient                                  |
+| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the token expired                          | **Yes** — transient                                  |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`                                                              | **Yes** — transient, retry with backoff or fail over |
 | `502` / `503` / timeout           | The endpoint is unhealthy or unreachable                                                                       | **Yes**                                              |
 

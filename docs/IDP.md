@@ -448,6 +448,6 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                       |
 | `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags           |
 | `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer over 1h               |
-| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS                                           |
+| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS, or reported the token expired            |
 
 The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `durationSeconds`, `requestedDurationSeconds` when the caller sent one, `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).

@@ -7,7 +7,9 @@ Extends [../../CLAUDE.md](../../CLAUDE.md). STS/S3/IAM via AWS SDK v2. `consumer
 ```go
 type AwsConsumerInterface interface {
     AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, tags []types.Tag) (*types.Credentials, error)
+    AssumeRoleWithWebIdentity(ctx context.Context, roleARN, sessionName, token string, policy *string, duration int32) (*types.Credentials, error)
     GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
+    GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, expectedOwner string) (data []byte, etag string, err error)
     GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
     IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
@@ -22,7 +24,8 @@ Handlers accept the interface for mockability. Clients are built once in `servic
 ## Conventions
 
 - Wrap AWS errors with context; use `errors.As` for typed errors (e.g. `AccessDeniedException`).
-- `GetS3Object` returns an `io.ReadCloser` — the caller must close it.
+- `GetS3Object` returns an `io.ReadCloser` — the caller must close it. Reads are capped at `utils.MaxConfigBytes`; a larger object is an error, never truncated.
+- `GetS3ObjectIfChanged` is the owner-pinned conditional GET for config overlays/fragments; a 304 returns `(nil, prevETag, nil)`.
 - `AwsConsumer.SessionName` cleans the STS session name (64 chars max, `[\w+=,.@-]`) by **substituting** disallowed characters with `-`, never deleting them: deletion collapses distinct identities onto one name (`acme/api` and `ac/meapi` both become `acmeapi`), which matters because the name is conditionable via `sts:RoleSessionName` and appears in `aws:userid`/CloudTrail — a collision there is an audit-attribution failure, not just a cosmetic one. Config-declared names are already rejected at boot by `config.validateRoleSessionName`, so in practice this only reshapes the global default; it stays as defense in depth. Truncation past 64 chars logs `logevent.STSSessionNameTruncated` (Warn).
 
 ## Gotchas
