@@ -33,9 +33,7 @@ func (t *TokenValidator) FetchJWKS(ctx context.Context, issuer string) (*types.J
 	return t.fetchJWKS(ctx, &issuerSpec{Issuer: issuer}, false)
 }
 
-// jwksCacheKey is the cache, singleflight and bookkeeping key for spec. A
-// jwks_uri override is part of it, so issuers sharing a persistent cache table
-// never read each other's override-sourced keys.
+// jwksCacheKey keys the cache, singleflight and bookkeeping by issuer plus any jwks_uri override.
 func jwksCacheKey(spec *issuerSpec) string {
 	if spec.cacheKey != "" {
 		return spec.cacheKey
@@ -99,11 +97,7 @@ type discoveredURI struct {
 	storedAt time.Time
 }
 
-// storeJWKS caches jwks under key. A forced refetch that returned the same
-// key set as the last write, which is less than half the TTL old and still
-// cached, skips the write: it would only extend the expiry and cost a
-// DynamoDB PutItem / S3 PutObject. Past half the TTL it rewrites, so a stable
-// key set is never left to expire under steady unknown-kid traffic.
+// storeJWKS caches jwks under key; a forced refetch skips rewriting an unchanged, still-cached set younger than half the TTL.
 func (t *TokenValidator) storeJWKS(ctx context.Context, key string, jwks *types.JWKS, force bool) {
 	ttl := cache.GetConfiguredTTL(t.currentConfig())
 	now := t.timeNow()

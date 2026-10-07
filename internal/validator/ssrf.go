@@ -72,10 +72,7 @@ func newSecureHTTPClient(allowInsecureIssuers bool, timeout time.Duration) *http
 	}
 }
 
-// blockedDialControl returns a net.Dialer.Control hook that vets the address
-// of every connect attempt, after resolution, so each candidate address of a
-// multi-address host is checked and a second DNS lookup can't slip in an
-// unvalidated one (DNS rebinding). Fails closed on an unparseable address.
+// blockedDialControl vets every resolved connect address, failing closed on one it cannot parse.
 func blockedDialControl(allowLoopback bool) func(network, address string, c syscall.RawConn) error {
 	return func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
