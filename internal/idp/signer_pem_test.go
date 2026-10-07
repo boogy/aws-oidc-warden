@@ -10,6 +10,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -86,6 +87,28 @@ func TestPEMSigner(t *testing.T) {
 			require.Equal(t, kid, s.KeyID())
 			require.Equal(t, tt.alg, s.Algorithm())
 		})
+	}
+}
+
+func TestCheckKeyMatchesAlgRSASize(t *testing.T) {
+	tests := []struct {
+		bits    int
+		wantErr bool
+	}{
+		{2047, true},
+		{2048, false},
+		{4096, false},
+		{4097, true},
+		{8192, true},
+	}
+	for _, tt := range tests {
+		pub := &rsa.PublicKey{N: new(big.Int).Lsh(big.NewInt(1), uint(tt.bits-1)), E: 65537}
+		err := checkKeyMatchesAlg("RS256", pub)
+		if tt.wantErr {
+			require.Error(t, err, "bits=%d", tt.bits)
+		} else {
+			require.NoError(t, err, "bits=%d", tt.bits)
+		}
 	}
 }
 

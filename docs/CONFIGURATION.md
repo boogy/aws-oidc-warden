@@ -309,7 +309,7 @@ Everything else a mapping can specify — session policy, `role_session_name`, e
 
 |                    |                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Precedence**     | Per-mapping wins; then the caller `sessionName` if the mapping sets `allow_session_name: true` (else it is ignored); global is the fallback             |
+| **Precedence**     | Per-mapping wins; then the caller `sessionName` if the mapping sets `allow_session_name: true` (else it is ignored); global is the fallback            |
 | **Empty value**    | Indistinguishable from absent                                                                                                                          |
 | **Valid charset**  | STS accepts 2–64 chars from `[\w+=,.@-]`. **`/` is excluded**, so a GitHub `owner/repo` subject cannot be used verbatim                                |
 | **Invalid value**  | Fails the service at boot, rather than being silently reshaped by the runtime sanitizer                                                                |
@@ -331,10 +331,10 @@ See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefin
 
 `role_mappings[]` and `role_groups[].defaults` accept two IdP fields. They apply only when [IdP mode](IDP.md) is configured, and only to roles granted by that mapping (group defaults apply to the expanded mappings).
 
-| Field                      | Default | Notes                                                                                                                                 |
-| -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `idp_token`                | `false` | Issue this mapping's roles through the IdP while `idp.enabled`, even at 1h. Needs an `idp` block. Implied by over-1h ceilings        |
-| `max_session_duration`     | `1h`    | Ceiling for the caller's `durationSeconds` on every role this mapping grants, 15m to 12h. Over 1h routes through the IdP              |
+| Field                  | Default | Notes                                                                                                                         |
+| ---------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `idp_token`            | `false` | Issue this mapping's roles through the IdP while `idp.enabled`, even at 1h. Needs an `idp` block. Implied by over-1h ceilings |
+| `max_session_duration` | `1h`    | Ceiling for the caller's `durationSeconds` on every role this mapping grants, 15m to 12h. Over 1h routes through the IdP      |
 
 With `role_sets`, the lowest-order mapping that grants the role decides.
 
@@ -369,7 +369,7 @@ Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](ID
 | `source_identity`          | `{issuer}:{subject}`                                 | placeholders `{request_id}`, `{subject}`, `{issuer}` (inbound issuer host, not `idp.issuer`), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer                                                                                         |
 | `source_identity_overflow` | `truncate`                                           | `truncate`, `reject`                                                                                           | Over 64 characters                                                                                                                        |
 | `sign_timeout`             | `2s`                                                 | > 0                                                                                                            | Per KMS `Sign` call                                                                                                                       |
-| `jwks_cache_max_age`       | `5m`                                                 | >= 0                                                                                                           | `Cache-Control` max-age of served documents                                                                                               |
+| `jwks_cache_max_age`       | `5m`                                                 | > 0                                                                                                            | `Cache-Control` max-age of served documents; 0 uses the default                                                                           |
 | `kms_allowed_regions`      | empty                                                |                                                                                                                | Regions allowed for MRK primary and replicas; required with an MRK key ARN (`key/mrk-…`); when set, every key ARN's region must be listed |
 | `signing_keys[]`           |                                                      | at most 5, exactly one `active`                                                                                | `kms_key_id` (full key ARN) **or** `file` (dev only, refused on Lambda), `algorithm` (`ES256`/`RS256`), `status` (`active`/`verify_only`) |
 
@@ -481,18 +481,18 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 
 Applied only when the config file or S3 object already carries an `idp:` block; env alone never creates it. `signing_keys` and `paths` are file/S3 only. Env beats S3 on every reload, including `AOW_IDP_ENABLED`.
 
-| Environment Variable               | Config File Key                | Default                              |
-| ---------------------------------- | ------------------------------ | ------------------------------------ |
-| `AOW_IDP_ENABLED`                  | `idp.enabled`                  | `false`                              |
-| `AOW_IDP_ISSUER`                   | `idp.issuer`                   |                                      |
-| `AOW_IDP_AUDIENCE`                 | `idp.audience`                 |                                      |
-| `AOW_IDP_AUDIENCE_MODE`            | `idp.audience_mode`            | `static`                             |
-| `AOW_IDP_TOKEN_TTL`                | `idp.token_ttl`                | `2m` (1m to 5m)                      |
-| `AOW_IDP_JWKS_URI`                 | `idp.jwks_uri`                 | issuer origin + `idp.paths.jwks`     |
-| `AOW_IDP_SUBJECT_TEMPLATE`         | `idp.subject_template`         | `{role_arn}`                         |
-| `AOW_IDP_INCLUDE_SOURCE_IDENTITY`  | `idp.include_source_identity`  | `true`                               |
-| `AOW_IDP_SOURCE_IDENTITY`          | `idp.source_identity`          | `{issuer}:{subject}`                 |
-| `AOW_IDP_SOURCE_IDENTITY_OVERFLOW` | `idp.source_identity_overflow` | `truncate`                           |
+| Environment Variable               | Config File Key                | Default                          |
+| ---------------------------------- | ------------------------------ | -------------------------------- |
+| `AOW_IDP_ENABLED`                  | `idp.enabled`                  | `false`                          |
+| `AOW_IDP_ISSUER`                   | `idp.issuer`                   |                                  |
+| `AOW_IDP_AUDIENCE`                 | `idp.audience`                 |                                  |
+| `AOW_IDP_AUDIENCE_MODE`            | `idp.audience_mode`            | `static`                         |
+| `AOW_IDP_TOKEN_TTL`                | `idp.token_ttl`                | `2m` (1m to 5m)                  |
+| `AOW_IDP_JWKS_URI`                 | `idp.jwks_uri`                 | issuer origin + `idp.paths.jwks` |
+| `AOW_IDP_SUBJECT_TEMPLATE`         | `idp.subject_template`         | `{role_arn}`                     |
+| `AOW_IDP_INCLUDE_SOURCE_IDENTITY`  | `idp.include_source_identity`  | `true`                           |
+| `AOW_IDP_SOURCE_IDENTITY`          | `idp.source_identity`          | `{issuer}:{subject}`             |
+| `AOW_IDP_SOURCE_IDENTITY_OVERFLOW` | `idp.source_identity_overflow` | `truncate`                       |
 
 ### JWT Validation Mode Settings
 
@@ -583,7 +583,7 @@ Whoever writes the mappings can grant roles and route them through the IdP (`idp
 
 ## Config fragments
 
-`config_fragments` lists additional sources merged on top of the base config's `default_issuer`, `role_sets`, `role_mappings`, and `role_groups` (and _only_ those four keys; anything else in a fragment is a hard error). This lets teams own their own role-mapping fragment without touching the base config that defines `issuers`/hardening knobs/`tag_auth`.
+`config_fragments` lists additional sources merged on top of the base config's `default_issuer`, `role_sets`, `role_mappings`, and `role_groups` (and _only_ those four keys; anything else in a fragment is a hard error). This lets teams own their own role-mapping fragment without touching the base config that defines `issuers`/hardening knobs/`tag_auth`. Each source may be listed once; a duplicate entry fails `Validate()`.
 
 `s3://` fragments are fetched with the same conditional, owner-pinned read as the mappings file (1 MiB cap, `s3_config_bucket_owner` required; see [Split configuration](#split-configuration)).
 

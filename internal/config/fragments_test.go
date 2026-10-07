@@ -713,24 +713,7 @@ func TestAudit_DuplicateFragmentURI(t *testing.T) {
 
 	base := a2Base(t)
 	base.ConfigFragments = []string{f, f}
-	require.NoError(t, base.Validate())
-
-	p := NewProvider(base, time.Minute, "yaml", nil)
-	err := p.Refresh(context.Background())
-	t.Logf("duplicate URI refresh: err=%v", err)
-
-	// Merged twice (the p.fragments cache is only swapped in after the loop, so
-	// the second pass sees the same prev). Additive only: 2 identical mappings,
-	// no widening. A duplicate that defines role_sets errors on collision.
-	require.NoError(t, err)
-	cfg := p.Get()
-	require.Len(t, cfg.RoleMappings, 2, "duplicate URI merges twice")
-	assert.Equal(t, cfg.RoleMappings[0], cfg.RoleMappings[1])
-	_, roles := cfg.AuthorizeRoles(cfg.Issuers[0].Issuer, "o/r", map[string]any{})
-	assert.Equal(t, []string{
-		"arn:aws:iam::111111111111:role/x",
-		"arn:aws:iam::111111111111:role/x",
-	}, roles, "duplicate grant must not widen beyond the same role")
+	require.ErrorContains(t, base.Validate(), "config_fragments[1]: duplicate source")
 }
 
 // ---------------------------------------------------------------------------

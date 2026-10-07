@@ -957,6 +957,9 @@ func (c *Config) Validate() error {
 		if err := validateRemoteScheme(uri); err != nil {
 			return fmt.Errorf("config_fragments[%d]: %w", i, err)
 		}
+		if slices.Contains(c.ConfigFragments[:i], uri) {
+			return fmt.Errorf("config_fragments[%d]: duplicate source %q", i, uri)
+		}
 	}
 	if err := validateRemoteScheme(c.MappingsFile); err != nil {
 		return fmt.Errorf("mappings_file: %w", err)

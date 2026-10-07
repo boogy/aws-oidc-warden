@@ -23,8 +23,8 @@ func checkKeyMatchesAlg(alg string, pub crypto.PublicKey) error {
 		if alg != "RS256" {
 			return fmt.Errorf("RSA key does not match algorithm %s", alg)
 		}
-		if k.N.BitLen() < 2048 {
-			return fmt.Errorf("RSA key must be at least 2048 bits, got %d", k.N.BitLen())
+		if n := k.N.BitLen(); n < 2048 || n > maxSigBytes*8 {
+			return fmt.Errorf("RSA key must be 2048 to %d bits, got %d", maxSigBytes*8, n)
 		}
 	case *ecdsa.PublicKey:
 		if alg != "ES256" {

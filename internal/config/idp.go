@@ -159,7 +159,7 @@ func (c *IdPConfig) validate(allowInsecure bool, inbound []IssuerConfig) error {
 		return fmt.Errorf("idp.token_ttl must be between %s and %s", idpMinTTL, idpMaxTTL)
 	}
 	if c.SignTimeout <= 0 || c.JWKSCacheMaxAge < 0 {
-		return errors.New("idp.sign_timeout must be > 0 and idp.jwks_cache_max_age >= 0")
+		return errors.New("idp.sign_timeout and idp.jwks_cache_max_age must be > 0")
 	}
 	if err := validateSubjectTemplate(c.SubjectTemplate); err != nil {
 		return err
@@ -307,7 +307,7 @@ func validateIdPURL(field, raw string, allowInsecure bool) error {
 	if u.Host != strings.ToLower(u.Host) {
 		return fmt.Errorf("%s host must be lowercase", field)
 	}
-	if u.RawQuery != "" || u.Fragment != "" {
+	if strings.ContainsAny(raw, "?#") {
 		return fmt.Errorf("%s must not contain a query or fragment", field)
 	}
 	if strings.HasSuffix(raw, "/") {
