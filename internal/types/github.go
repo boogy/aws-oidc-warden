@@ -4,7 +4,7 @@ import "github.com/golang-jwt/jwt/v5"
 
 // Claims is the canonical verified-claims structure produced by the validator
 // for every provider. GitHub-specific fields are populated only when the
-// token's issuer is configured with provider: "github" (native unmarshal);
+// token's issuer is configured with provider: "github";
 // for any other provider only the embedded RegisteredClaims, Subject, and Raw
 // are populated.
 //

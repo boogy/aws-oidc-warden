@@ -400,9 +400,7 @@ type providerAdapter interface {
 	populate(raw jwt.MapClaims, claims *types.Claims) error
 }
 
-// githubAdapter is the native GitHub Actions OIDC provider: it copies the
-// GitHub claims into types.Claims and defaults the canonical subject to the
-// "repository" claim (overridable via claim_mappings.subject).
+// githubAdapter is the GitHub Actions provider; the subject defaults to "repository".
 type githubAdapter struct{}
 
 func (githubAdapter) subject(raw jwt.MapClaims, mappings map[string]string) (string, error) {
@@ -421,8 +419,7 @@ func (githubAdapter) populate(raw jwt.MapClaims, claims *types.Claims) error {
 	return nil
 }
 
-// githubClaimFields maps GitHub claim names onto the log-only typed fields;
-// authorization reads Claims.Raw, so a value of any JSON type is accepted.
+// githubClaimFields maps GitHub claim names onto the log-only typed fields.
 var githubClaimFields = []struct {
 	name  string
 	field func(*types.Claims) *string
@@ -452,9 +449,7 @@ var githubClaimFields = []struct {
 	{"workflow_sha", func(c *types.Claims) *string { return &c.WorkflowSha }},
 }
 
-// genericAdapter is the mapped-only provider for any non-GitHub issuer: no
-// native struct unmarshal, so the canonical subject must come from an
-// explicit claim_mappings.subject entry (also enforced at config.Validate).
+// genericAdapter is the mapped-only provider; the subject must come from claim_mappings.subject.
 type genericAdapter struct{}
 
 func (genericAdapter) subject(raw jwt.MapClaims, mappings map[string]string) (string, error) {
