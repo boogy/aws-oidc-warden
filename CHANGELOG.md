@@ -52,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **A newline in a claim value no longer slips past a `none_of` veto.**
 - **ALB mode honors `jwt_leeway`**, and the ALB adapter picks the token source from `jwt_validation.mode`, so self mode behind an ALB OIDC action works.
 - **EC JWKS keys must match the token's curve.**
+- **A GitHub claim sent as a number or bool (e.g. `run_id`) no longer rejects the token**; the log-only typed fields are copied as text instead of JSON-decoded into strings.
 - **JWKS warm-up and fetches honor the caller's deadline**; issuers warm concurrently, so a hung IdP no longer stalls cold start.
 - **Session policies read from S3 are fully read before their request context is cancelled**; large objects could truncate.
 - **The audit batch no longer grows without bound or blocks requests during an S3 outage**; past 5000 records the oldest are dropped (`audit.batch.dropped`).

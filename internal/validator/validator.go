@@ -21,6 +21,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/sync/singleflight"
 )
@@ -399,9 +400,9 @@ type providerAdapter interface {
 	populate(raw jwt.MapClaims, claims *types.Claims) error
 }
 
-// githubAdapter is the native GitHub Actions OIDC provider: it unmarshals the
-// full set of GitHub claims into types.Claims and defaults the canonical
-// subject to the "repository" claim (overridable via claim_mappings.subject).
+// githubAdapter is the native GitHub Actions OIDC provider: it copies the
+// GitHub claims into types.Claims and defaults the canonical subject to the
+// "repository" claim (overridable via claim_mappings.subject).
 type githubAdapter struct{}
 
 func (githubAdapter) subject(raw jwt.MapClaims, mappings map[string]string) (string, error) {
@@ -412,16 +413,43 @@ func (githubAdapter) subject(raw jwt.MapClaims, mappings map[string]string) (str
 }
 
 func (githubAdapter) populate(raw jwt.MapClaims, claims *types.Claims) error {
-	// Round-trips raw through JSON into the GitHub-specific fields; safe only
-	// for provider: github. Subject is set separately, never by this unmarshal.
-	data, err := json.Marshal(map[string]any(raw))
-	if err != nil {
-		return fmt.Errorf("failed to marshal raw claims: %w", err)
-	}
-	if err := json.Unmarshal(data, claims); err != nil {
-		return fmt.Errorf("failed to unmarshal github claims: %w", err)
+	for _, f := range githubClaimFields {
+		if v, ok := raw[f.name]; ok && v != nil {
+			*f.field(claims) = utils.FormatClaimValue(v)
+		}
 	}
 	return nil
+}
+
+// githubClaimFields maps GitHub claim names onto the log-only typed fields;
+// authorization reads Claims.Raw, so a value of any JSON type is accepted.
+var githubClaimFields = []struct {
+	name  string
+	field func(*types.Claims) *string
+}{
+	{"actor", func(c *types.Claims) *string { return &c.Actor }},
+	{"actor_id", func(c *types.Claims) *string { return &c.ActorID }},
+	{"base_ref", func(c *types.Claims) *string { return &c.BaseRef }},
+	{"event_name", func(c *types.Claims) *string { return &c.EventName }},
+	{"head_ref", func(c *types.Claims) *string { return &c.HeadRef }},
+	{"job_workflow_ref", func(c *types.Claims) *string { return &c.JobWorkflowRef }},
+	{"job_workflow_sha", func(c *types.Claims) *string { return &c.JobWorkflowSha }},
+	{"ref", func(c *types.Claims) *string { return &c.Ref }},
+	{"ref_protected", func(c *types.Claims) *string { return &c.RefProtected }},
+	{"ref_type", func(c *types.Claims) *string { return &c.RefType }},
+	{"repository", func(c *types.Claims) *string { return &c.Repository }},
+	{"repository_id", func(c *types.Claims) *string { return &c.RepositoryID }},
+	{"repository_owner", func(c *types.Claims) *string { return &c.RepositoryOwner }},
+	{"repository_owner_id", func(c *types.Claims) *string { return &c.RepositoryOwnerID }},
+	{"repository_visibility", func(c *types.Claims) *string { return &c.RepositoryVisibility }},
+	{"run_attempt", func(c *types.Claims) *string { return &c.RunAttempt }},
+	{"run_id", func(c *types.Claims) *string { return &c.RunID }},
+	{"run_number", func(c *types.Claims) *string { return &c.RunNumber }},
+	{"runner_environment", func(c *types.Claims) *string { return &c.RunnerEnvironment }},
+	{"sha", func(c *types.Claims) *string { return &c.Sha }},
+	{"workflow", func(c *types.Claims) *string { return &c.Workflow }},
+	{"workflow_ref", func(c *types.Claims) *string { return &c.WorkflowRef }},
+	{"workflow_sha", func(c *types.Claims) *string { return &c.WorkflowSha }},
 }
 
 // genericAdapter is the mapped-only provider for any non-GitHub issuer: no
