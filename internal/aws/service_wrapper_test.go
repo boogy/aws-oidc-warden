@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -841,6 +842,26 @@ func (c *ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
+type rangeRecordingS3 struct {
+	length int64
+	rng    string
+}
+
+func (r *rangeRecordingS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	r.rng = aws.ToString(in.Range)
+	return &s3.GetObjectOutput{ContentLength: aws.Int64(r.length), Body: io.NopCloser(strings.NewReader("x"))}, nil
+}
+
+func TestGetS3Object_RangeBoundsCapAndReportedOversizeFails(t *testing.T) {
+	stub := &rangeRecordingS3{length: utils.MaxConfigBytes + 1}
+	w := &AwsServiceWrapper{s3Client: stub, defaultTimeout: time.Second}
+
+	rc, err := w.GetS3Object(context.Background(), "b", "k")
+	require.ErrorContains(t, err, "exceeds")
+	assert.Nil(t, rc)
+	assert.Equal(t, "bytes=0-"+strconv.Itoa(utils.MaxConfigBytes), stub.rng)
+}
+
 func TestGetS3Object_BodyReadableAfterReturn(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -854,7 +875,7 @@ func TestGetS3Object_BodyReadableAfterReturn(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body := strings.Repeat("a", tt.size)
-			w := &AwsServiceWrapper{s3Client: &ctxBoundS3{body: body}, defaultTimeout: time.Second, maxS3ObjectSize: 5 << 20}
+			w := &AwsServiceWrapper{s3Client: &ctxBoundS3{body: body}, defaultTimeout: time.Second}
 
 			rc, err := w.GetS3Object(context.Background(), "b", "k")
 			if tt.wantErr != "" {

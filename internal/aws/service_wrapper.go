@@ -54,8 +54,7 @@ type AwsServiceWrapper struct {
 	iamClient *iam.Client
 	kms       *kms.Client
 
-	maxS3ObjectSize int64
-	defaultTimeout  time.Duration
+	defaultTimeout time.Duration
 
 	iamMu      sync.Mutex
 	iamClients map[aws.CredentialsProvider]*iam.Client // GetRoleAs clients by credentials
@@ -83,13 +82,12 @@ func NewAwsServiceWrapper() *AwsServiceWrapper {
 		}
 
 		wrapper = &AwsServiceWrapper{
-			cfg:             cfg,
-			s3Client:        s3.NewFromConfig(cfg),
-			stsClient:       sts.NewFromConfig(cfg),
-			iamClient:       iam.NewFromConfig(cfg),
-			kms:             kms.NewFromConfig(cfg),
-			maxS3ObjectSize: 5 * 1024 * 1024,
-			defaultTimeout:  30 * time.Second,
+			cfg:            cfg,
+			s3Client:       s3.NewFromConfig(cfg),
+			stsClient:      sts.NewFromConfig(cfg),
+			iamClient:      iam.NewFromConfig(cfg),
+			kms:            kms.NewFromConfig(cfg),
+			defaultTimeout: 30 * time.Second,
 		}
 	})
 
@@ -106,8 +104,7 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string)
 	input := &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-		// We expect objects below maxS3ObjectSize (5MB)
-		Range: aws.String(fmt.Sprintf("bytes=0-%d", s.maxS3ObjectSize)),
+		Range:  aws.String(fmt.Sprintf("bytes=0-%d", utils.MaxConfigBytes)),
 	}
 
 	result, err := s.s3Client.GetObject(ctx, input)
@@ -120,14 +117,15 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string)
 		return nil, err
 	}
 
-	if result.ContentLength != nil && *result.ContentLength > s.maxS3ObjectSize {
+	if result.ContentLength != nil && *result.ContentLength > utils.MaxConfigBytes {
+		_ = result.Body.Close()
 		logevent.Warn(ctx, nil, logevent.AWSS3ObjectOversize, "S3 object exceeds maximum allowed size",
 			slog.Int64("size", *result.ContentLength),
-			slog.Int64("maxAllowed", s.maxS3ObjectSize),
+			slog.Int64("maxAllowed", utils.MaxConfigBytes),
 			slog.String("bucket", bucket),
 			slog.String("key", key),
 		)
-		// Returned anyway; the Range header above already truncated it.
+		return nil, fmt.Errorf("s3://%s/%s exceeds %d bytes", bucket, key, utils.MaxConfigBytes)
 	}
 
 	successAttrs := []slog.Attr{slog.String("bucket", bucket), slog.String("key", key)}
