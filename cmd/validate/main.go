@@ -53,9 +53,6 @@ func main() {
 	if *configPath == "" {
 		fail("flags", errors.New("-config is required"))
 	}
-	if _, err := os.Stat(*configPath); err != nil {
-		fail("flags", err)
-	}
 	if err := config.UseConfigFile(*configPath); err != nil {
 		fail("flags", err)
 	}

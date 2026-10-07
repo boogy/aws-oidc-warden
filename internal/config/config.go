@@ -643,9 +643,13 @@ func (c *Config) LoadConfig() error {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	viper.AutomaticEnv()
 
-	viper.AddConfigPath("/etc/aws-oidc-warden/")
-	viper.AddConfigPath(configPath)
-	viper.SetConfigName(configName)
+	if f := os.Getenv("CONFIG_FILE"); f != "" {
+		viper.SetConfigFile(f)
+	} else {
+		viper.AddConfigPath("/etc/aws-oidc-warden/")
+		viper.AddConfigPath(configPath)
+		viper.SetConfigName(configName)
+	}
 
 	// Set default values
 	viper.SetDefault("role_session_name", role_session_name)
