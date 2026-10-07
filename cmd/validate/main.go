@@ -15,6 +15,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 // overrides maps a configured source URI to a local file read in its place.
@@ -83,11 +84,11 @@ func run(c *config.Config, ov overrides, offline bool, consumer aws.AwsConsumerI
 
 	if uri := overlayURI(c); uri != "" {
 		if path, ok := ov[uri]; ok {
-			data, err := os.ReadFile(path)
+			data, err := readCapped(path, c.EffectiveMaxConfigBytes())
 			if err != nil {
 				return nil, fmt.Errorf("overlay override: %w", err)
 			}
-			if err := c.MergeBytes(data, config.FormatFromPath(path)); err != nil {
+			if err := c.MergeOverlay(data, config.FormatFromPath(path)); err != nil {
 				return nil, fmt.Errorf("overlay %s: %w", path, err)
 			}
 			c.S3ConfigBucket, c.S3ConfigPath = "", ""
@@ -95,21 +96,22 @@ func run(c *config.Config, ov overrides, offline bool, consumer aws.AwsConsumerI
 		}
 	}
 
-	if path, ok := ov[c.MappingsFile]; ok && c.MappingsFile != "" {
-		used[c.MappingsFile] = true
-		c.MappingsFile = path
-	}
-	for i, uri := range c.ConfigFragments {
-		path, ok := ov[uri]
-		if !ok {
-			continue
-		}
+	repin := func(uri, path string) {
 		used[uri] = true
-		c.ConfigFragments[i] = path
 		for j := range c.ConfigFragmentChecksums {
 			if c.ConfigFragmentChecksums[j].URI == uri {
 				c.ConfigFragmentChecksums[j].URI = path
 			}
+		}
+	}
+	if path, ok := ov[c.MappingsFile]; ok && c.MappingsFile != "" {
+		repin(c.MappingsFile, path)
+		c.MappingsFile = path
+	}
+	for i, uri := range c.ConfigFragments {
+		if path, ok := ov[uri]; ok {
+			repin(uri, path)
+			c.ConfigFragments[i] = path
 		}
 	}
 
@@ -155,4 +157,14 @@ func remoteSources(c *config.Config) []string {
 		}
 	}
 	return out
+}
+
+// readCapped reads path under the same max_config_bytes cap the service applies to the S3 overlay.
+func readCapped(path string, limit int) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return utils.ReadAllCapped(f, int64(limit), path)
 }

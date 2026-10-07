@@ -252,13 +252,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	}
 
 	if p.fetch != nil {
-		if err := cfg.MergeBytes(data, p.format); err != nil {
-			return fmt.Errorf("invalid configuration after reload: %w", err)
-		}
-		cfg.S3ConfigBucketOwner = p.base.S3ConfigBucketOwner
-		cfg.SessionPolicyBucketOwner = p.base.SessionPolicyBucketOwner
-		cfg.MaxConfigBytes = p.base.MaxConfigBytes
-		if err := cfg.validateS3ConfigOwner(); err != nil {
+		if err := cfg.MergeOverlay(data, p.format); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
 	} else if err := cfg.Validate(); err != nil {

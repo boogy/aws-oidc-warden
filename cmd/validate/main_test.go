@@ -190,3 +190,52 @@ func TestRunOffline(t *testing.T) {
 		})
 	}
 }
+
+func TestRunOverrideKeepsMappingsFilePin(t *testing.T) {
+	sum := sha256.Sum256([]byte(goodFragment))
+	pin := "sha256:" + hex.EncodeToString(sum[:])
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "pinned content passes", body: goodFragment},
+		{name: "edited content fails pin", body: strings.Replace(goodFragment, "data-pipeline", "other", 1), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := loadBase(t, baseYAML+"mappings_file: \"s3://cfg/mappings.yaml\"\nconfig_fragment_checksums:\n  - uri: \"s3://cfg/mappings.yaml\"\n    checksum: \""+pin+"\"\n")
+			dir := t.TempDir()
+			_, err := run(c, overrides{
+				"s3://cfg/mappings.yaml":            writeFile(t, dir, "mappings.yaml", tt.body),
+				"s3://cfg/fragments/team-data.yaml": writeFile(t, dir, "team-data.yaml", "role_sets: {}\n"),
+			}, true, nil)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "failed integrity check")
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestRunOverlayOverCapRejected(t *testing.T) {
+	c := loadBase(t, baseYAML+"max_config_bytes: 64\ns3_config_bucket: \"cfg\"\ns3_config_path: \"overlay.yaml\"\n")
+	overlay := writeFile(t, t.TempDir(), "overlay.yaml", "role_session_name: \""+strings.Repeat("a", 60)+"\"\n")
+	_, err := run(c, overrides{"s3://cfg/overlay.yaml": overlay}, true, nil)
+	require.ErrorContains(t, err, "overlay override")
+}
+
+func TestRunOverlayCannotSetBaseOnlyKeys(t *testing.T) {
+	c := loadBase(t, baseYAML+"s3_config_bucket: \"cfg\"\ns3_config_path: \"overlay.yaml\"\n")
+	dir := t.TempDir()
+	overlay := writeFile(t, dir, "overlay.yaml", "s3_config_bucket_owner: \"444455556666\"\nsession_policy_bucket_owner: \"999988887777\"\nmax_config_bytes: 2048\n")
+	cfg, err := run(c, overrides{
+		"s3://cfg/overlay.yaml":             overlay,
+		"s3://cfg/fragments/team-data.yaml": writeFile(t, dir, "team-data.yaml", goodFragment),
+	}, true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "111122223333", cfg.S3ConfigBucketOwner)
+	assert.Empty(t, cfg.SessionPolicyBucketOwner)
+	assert.Equal(t, 1<<20, cfg.MaxConfigBytes)
+}

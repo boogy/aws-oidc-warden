@@ -785,6 +785,16 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 	return nil
 }
 
+// MergeOverlay merges an S3 overlay via MergeBytes, then restores the base-only owner pins and read cap from c.
+func (c *Config) MergeOverlay(data []byte, format string) error {
+	s3Owner, policyOwner, maxBytes := c.S3ConfigBucketOwner, c.SessionPolicyBucketOwner, c.MaxConfigBytes
+	if err := c.MergeBytes(data, format); err != nil {
+		return err
+	}
+	c.S3ConfigBucketOwner, c.SessionPolicyBucketOwner, c.MaxConfigBytes = s3Owner, policyOwner, maxBytes
+	return c.validateS3ConfigOwner()
+}
+
 // clearOnDeclare zeroes a declared slice of structs before decoding, because
 // mapstructure decodes element i onto the struct already at index i and an
 // omitted field would inherit the displaced entry's value.
@@ -973,6 +983,9 @@ func (c *Config) Validate() error {
 	}
 	if err := validateRemoteScheme(c.MappingsFile); err != nil {
 		return fmt.Errorf("mappings_file: %w", err)
+	}
+	if c.MappingsFile != "" && slices.Contains(c.ConfigFragments, c.MappingsFile) {
+		return fmt.Errorf("mappings_file %q is also listed in config_fragments", c.MappingsFile)
 	}
 
 	if d := c.ConfigReloadInterval; d > 0 && d < minConfigReloadInterval {

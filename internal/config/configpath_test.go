@@ -14,6 +14,8 @@ func TestUseConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "svc.yaml")
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), nil, 0o600))
+	emptyDir := t.TempDir()
 
 	tests := []struct {
 		name     string
@@ -23,7 +25,8 @@ func TestUseConfigFile(t *testing.T) {
 		wantErr  bool
 	}{
 		{"empty is a no-op", "", "", "", false},
-		{"directory sets CONFIG_PATH", dir, dir, "", false},
+		{"directory resolves its config file", dir, "", filepath.Join(dir, "config.yaml"), false},
+		{"directory without a config file errors", emptyDir, "", "", true},
 		{"file sets CONFIG_FILE", file, "", file, false},
 		{"missing file errors", filepath.Join(dir, "typo.yml"), "", "", true},
 	}

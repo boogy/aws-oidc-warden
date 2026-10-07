@@ -73,6 +73,7 @@ func TestIdPValidate(t *testing.T) {
 		{name: "source_identity_overflow invalid", mutate: func(c *IdPConfig) { c.SourceIdentityOverflow = "clip" }, wantErr: "source_identity_overflow"},
 		{name: "negative sign_timeout", mutate: func(c *IdPConfig) { c.SignTimeout = -1 }, wantErr: "sign_timeout"},
 		{name: "negative jwks_cache_max_age", mutate: func(c *IdPConfig) { c.JWKSCacheMaxAge = -1 }, wantErr: "jwks_cache_max_age"},
+		{name: "sub-second jwks_cache_max_age", mutate: func(c *IdPConfig) { c.JWKSCacheMaxAge = 500 * time.Millisecond }, wantErr: "jwks_cache_max_age"},
 
 		{name: "bad alg", mutate: func(c *IdPConfig) { c.SigningKeys[0].Algorithm = "HS256" }, wantErr: "algorithm"},
 		{name: "bad key status", mutate: func(c *IdPConfig) { c.SigningKeys[0].Status = "retired" }, wantErr: "status must be"},

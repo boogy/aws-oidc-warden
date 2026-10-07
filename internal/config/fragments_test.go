@@ -716,6 +716,16 @@ func TestAudit_DuplicateFragmentURI(t *testing.T) {
 	require.ErrorContains(t, base.Validate(), "config_fragments[1]: duplicate source")
 }
 
+func TestMappingsFileListedAsFragmentRejected(t *testing.T) {
+	dir := t.TempDir()
+	f := a2Write(t, dir, "f.yaml", "role_mappings:\n  - subject: \"o/r\"\n    roles: [\"arn:aws:iam::111111111111:role/x\"]\n")
+
+	base := a2Base(t)
+	base.MappingsFile = f
+	base.ConfigFragments = []string{f}
+	require.ErrorContains(t, base.Validate(), "also listed in config_fragments")
+}
+
 // ---------------------------------------------------------------------------
 // H. Fragment removal from the list: are its grants actually revoked?
 // ---------------------------------------------------------------------------

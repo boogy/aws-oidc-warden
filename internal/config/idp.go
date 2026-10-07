@@ -158,8 +158,11 @@ func (c *IdPConfig) validate(allowInsecure bool, inbound []IssuerConfig) error {
 	if c.TokenTTL < idpMinTTL || c.TokenTTL > idpMaxTTL {
 		return fmt.Errorf("idp.token_ttl must be between %s and %s", idpMinTTL, idpMaxTTL)
 	}
-	if c.SignTimeout <= 0 || c.JWKSCacheMaxAge < 0 {
-		return errors.New("idp.sign_timeout and idp.jwks_cache_max_age must be > 0")
+	if c.SignTimeout <= 0 {
+		return errors.New("idp.sign_timeout must be > 0")
+	}
+	if c.JWKSCacheMaxAge < time.Second {
+		return errors.New("idp.jwks_cache_max_age must be at least 1s")
 	}
 	if err := validateSubjectTemplate(c.SubjectTemplate); err != nil {
 		return err
