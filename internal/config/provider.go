@@ -17,7 +17,7 @@ import (
 // FetchFunc retrieves the raw configuration bytes from a remote source.
 type FetchFunc func(context.Context) ([]byte, error)
 
-// FragmentFetchFunc fetches a fragment; a content-derived etag equal to prevETag means unchanged.
+// FragmentFetchFunc fetches a fragment; (nil, prevETag, nil) means unchanged, and etag must be content-derived.
 type FragmentFetchFunc func(ctx context.Context, uri, prevETag, owner string) (data []byte, etag string, err error)
 
 // cachedFragment is the last applied parse of one config_fragments entry.
@@ -325,11 +325,8 @@ func (p *Provider) fragmentsUnchanged(ctx context.Context, cur *Config) (bool, m
 		if err != nil {
 			return false, nil, fmt.Errorf("config_fragments: %w", err)
 		}
-		if len(data) > utils.MaxConfigBytes {
-			return false, nil, fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, utils.MaxConfigBytes)
-		}
-		if expected, pinned := cur.fragmentChecksum(uri); pinned && expected != etag {
-			return false, nil, fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
+		if err := cur.checkFragment(uri, data, etag); err != nil {
+			return false, nil, err
 		}
 		fetched[uri] = fetchedFragment{data: data, etag: etag}
 		if etag != prev.etag {
@@ -337,6 +334,17 @@ func (p *Provider) fragmentsUnchanged(ctx context.Context, cur *Config) (bool, m
 		}
 	}
 	return unchanged, fetched, nil
+}
+
+// checkFragment enforces the size cap and checksum pin on one fetched fragment.
+func (c *Config) checkFragment(uri string, data []byte, etag string) error {
+	if len(data) > utils.MaxConfigBytes {
+		return fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, utils.MaxConfigBytes)
+	}
+	if expected, pinned := c.fragmentChecksum(uri); pinned && expected != etag {
+		return fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
+	}
+	return nil
 }
 
 // fetchedFragment is one fragment read already made during this refresh.
@@ -378,13 +386,9 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config, probed map[s
 		} else if data, etag, err = p.fetchFragment(ctx, uri, prevETag, cfg.S3ConfigBucketOwner); err != nil {
 			return nil, fmt.Errorf("config_fragments: %w", err)
 		}
-		if len(data) > utils.MaxConfigBytes {
-			return nil, fmt.Errorf("config_fragments: %q exceeds %d byte cap", uri, utils.MaxConfigBytes)
-		}
-
 		// Checked every cycle before the cache hit so a rotated pin takes effect immediately.
-		if expected, pinned := cfg.fragmentChecksum(uri); pinned && expected != etag {
-			return nil, fmt.Errorf("config_fragments: %q failed integrity check (expected %q, got %q)", uri, expected, etag)
+		if err := cfg.checkFragment(uri, data, etag); err != nil {
+			return nil, err
 		}
 
 		var frag *FragmentConfig
