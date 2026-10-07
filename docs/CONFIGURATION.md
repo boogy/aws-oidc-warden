@@ -13,6 +13,7 @@ The complete configuration reference. If you are setting the service up for the 
 | [IdP](#idp-optional-identity-provider)                                    | Optional identity-provider mode: `idp` keys, per-mapping `idp_token`, request fields             |
 | [Environment Variable Reference](#environment-variable-reference)         | Every `AOW_*` variable, by area                                                                  |
 | [Config fragments](#config-fragments)                                     | Splitting mappings across files                                                                  |
+| [Validating a config](#validating-a-config)                               | `validate` command for CI: single file, mappings file, fragments                                 |
 | [Hot-reloading](#hot-reloading)                                           | S3 refresh and overlay merge semantics                                                           |
 
 ## Configuration Methods
@@ -571,7 +572,7 @@ Past the limit every request gets `503 config_stale`, audited with `stage: confi
 
 ### Blast radius
 
-One invalid fragment or mappings file fails the whole refresh for every tenant. The last good config keeps serving until `mappings_max_stale`, then requests fail closed. Validate every change in CI before upload by running the config loader against the file.
+One invalid fragment or mappings file fails the whole refresh for every tenant. The last good config keeps serving until `mappings_max_stale`, then requests fail closed. Validate every change in CI before upload; see [Validating a config](#validating-a-config).
 
 ### Revocation
 
@@ -612,6 +613,56 @@ Rules enforced on every merge:
 - Each fragment is capped at 1 MiB; fetch failures (and re-validation failures after merge) fall back to the last-known-good config rather than serving a partial/invalid merge.
 - Local-path fragments are content-hashed (sha256) for change detection; `s3://` fragments use a conditional GET (an unchanged object is not re-parsed). Either can be pinned via `config_fragment_checksums`.
 - One invalid fragment fails the whole refresh for every tenant; see [Blast radius](#blast-radius).
+
+## Validating a config
+
+`cmd/validate` (`make build-validate`) builds the config exactly as the service does at cold start (service config, then S3 overlay, mappings file and fragments merged) and exits 1 on any error. It starts no server. Run it in CI on every change to the service config, the mappings file or a fragment, before deploying or uploading.
+
+| Flag                 | Meaning                                                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-config PATH`       | Service config file. Required; a missing file is an error, never a silent fallback to defaults                                                                                                   |
+| `-override URI=PATH` | Read a local file in place of a configured remote source (S3 overlay, `mappings_file` or a fragment). Repeatable; checksum pins still apply; an override naming no configured source is an error |
+| `-offline`           | Fail, naming each one, if any remote source has no `-override`, instead of fetching it. Needs no AWS credentials                                                                                 |
+
+The check covers the merged result, not each file alone: a `role_sets` name defined in two layers, or a fragment `default_issuer` that is not a base issuer, only fails once every layer is loaded. A source without an override is fetched from S3, which needs read access; with every source in git, use `-offline`.
+
+### Single config file
+
+Mappings inline in the service config; nothing remote, so `-offline` holds trivially:
+
+```sh
+validate -offline -config config.yaml
+```
+
+### Mappings file
+
+The service config sets `mappings_file`. A local path is read as is:
+
+```sh
+validate -offline -config service.yaml   # mappings_file: "./mappings.yaml"
+```
+
+An `s3://` mappings file is checked from the copy in the repo before upload:
+
+```sh
+# service.yaml: mappings_file: "s3://acme-warden-config/mappings.yaml"
+validate -offline -config service.yaml \
+  -override s3://acme-warden-config/mappings.yaml=./mappings.yaml
+aws s3 cp ./mappings.yaml s3://acme-warden-config/mappings.yaml
+```
+
+The override URI must match `mappings_file` exactly. Upload only after `validate` succeeds: the running service picks the file up within `config_reload_interval`, and an invalid one fails every refresh (see [Blast radius](#blast-radius)).
+
+### Fragments
+
+Each team checks its edited fragment against the live base config and the other teams' fragments:
+
+```sh
+validate -config service.yaml \
+  -override s3://acme-warden-config/fragments/team-data.yaml=./team-data.yaml
+```
+
+This fetches the other fragments, so it needs S3 read access. When all fragments live in one repo, override every source and add `-offline`.
 
 ## Hot-reloading
 

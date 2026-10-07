@@ -41,3 +41,6 @@ var ConfigMappingsStale = newEvent("config.mappings_stale")
 
 // ConfigS3OwnerUnpinned is emitted once at startup when the S3 config overlay is read without ExpectedBucketOwner (Warn).
 var ConfigS3OwnerUnpinned = newEvent("config.s3_owner_unpinned")
+
+// ConfigValidated is emitted by the validate command when the merged config is valid (Info).
+var ConfigValidated = newEvent("config.validated")

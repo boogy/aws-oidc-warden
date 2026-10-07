@@ -38,6 +38,11 @@ build-idp-export:
 	@mkdir -p $(BUILD_DIR)
 	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/idp-export ./cmd/idp-export
 
+.PHONY: build-validate
+build-validate:
+	@mkdir -p $(BUILD_DIR)
+	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/validate ./cmd/validate
+
 .PHONY: build-lambda
 build-lambda: build-apigateway build-apigatewayv2 build-alb build-lambdaurl
 
