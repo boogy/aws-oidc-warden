@@ -16,6 +16,10 @@ func TestUseConfigFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), nil, 0o600))
 	emptyDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(emptyDir, "config.env"), nil, 0o600))
+	twoDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(twoDir, "config.yaml"), nil, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(twoDir, "config.json"), nil, 0o600))
 
 	tests := []struct {
 		name     string
@@ -27,6 +31,7 @@ func TestUseConfigFile(t *testing.T) {
 		{"empty is a no-op", "", "", "", false},
 		{"directory resolves its config file", dir, "", filepath.Join(dir, "config.yaml"), false},
 		{"directory without a config file errors", emptyDir, "", "", true},
+		{"directory with two config files errors", twoDir, "", "", true},
 		{"file sets CONFIG_FILE", file, "", file, false},
 		{"missing file errors", filepath.Join(dir, "typo.yml"), "", "", true},
 	}
@@ -72,5 +77,15 @@ func TestLoadConfigRejectsUnsupportedConfigFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(p, []byte("role_session_name: x\n"), 0o600))
 	t.Setenv("CONFIG_FILE", p)
 
-	require.Error(t, (&Config{}).LoadConfig())
+	require.ErrorContains(t, (&Config{}).LoadConfig(), "unsupported extension")
+}
+
+func TestLoadConfigRejectsViperOnlyFormat(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	p := filepath.Join(t.TempDir(), "svc.ini")
+	require.NoError(t, os.WriteFile(p, []byte("role_session_name = x\n"), 0o600))
+	t.Setenv("CONFIG_FILE", p)
+
+	require.ErrorContains(t, (&Config{}).LoadConfig(), "unsupported extension")
 }

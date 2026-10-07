@@ -30,12 +30,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`/verify` accepts `durationSeconds` (900–3600) and `sessionName`**, like `aws-actions/configure-aws-credentials`.
 - **The `s3_config_bucket` overlay uses a conditional GET** when `s3_config_bucket_owner` is set.
 - **A mapping setting both `session_policy` and `session_policy_file`, or `allow_session_name` with `role_session_name`, fails to load** instead of silently ignoring one.
-- **Stricter config loading**: unknown nested keys (e.g. a misspelled `conditions`, which silently made a grant unconditional), malformed role entries, duplicate `config_fragments` entries (including one equal to `mappings_file`), `config_reload_interval` under 1s, and session tags STS would refuse (`aws:` prefix, case-insensitive duplicates, over 50) fail to load; unknown top-level keys only warn.
+- **Stricter config loading**: unknown nested keys (e.g. a misspelled `conditions`, which silently made a grant unconditional), malformed role entries, duplicate `config_fragments` entries, `config_reload_interval` under 1s, and session tags STS would refuse (`aws:` prefix, case-insensitive duplicates, over 50) fail to load; unknown top-level keys only warn.
 - **The wildcard guard rejects every match-everything pattern** (`.*.*`, `(?s).*`, `[\s\S]*`, `(.*)`, …), not just `.*` and `.+`.
 - **A fragment's `default_issuer` binds only that fragment's own mappings.**
 - **Unauthenticated (extract-stage) denies are always batched to the audit bucket**, so junk tokens cannot throttle the synchronous audit writes allows depend on.
 - **Stale requests fail fast once a refresh has failed** instead of waiting up to 5s each.
-- **`-config` loads exactly the named file, or `config.<ext>` in a named directory** (new `CONFIG_FILE`), and fails if it is missing or unsupported, instead of searching `/etc/aws-oidc-warden/` and other extensions.
+- **`-config` loads exactly the named file, or the single `config.{yaml,yml,json,toml}` in a named directory** (new `CONFIG_FILE`), and fails if it is missing, ambiguous or unsupported, instead of searching `/etc/aws-oidc-warden/` and other extensions.
 - **Audit S3 keys are partitioned by UTC date**, not the host's local time.
 - **Request bodies are capped at ~36 KiB**, derived from the token and role limits, instead of 1 MiB.
 - **JWKS cache entries carry a hash of the issuer's `jwks_uri` override**, so deployments sharing a cache table with different overrides no longer share keys; failed fetches are remembered for 5s and the discovered `jwks_uri` expires with the cache TTL.

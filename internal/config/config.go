@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -649,6 +650,9 @@ func (c *Config) LoadConfig() error {
 	viper.AutomaticEnv()
 
 	if f := os.Getenv("CONFIG_FILE"); f != "" {
+		if ext := strings.TrimPrefix(filepath.Ext(f), "."); !slices.Contains(configExts, ext) {
+			return fmt.Errorf("config file %s: unsupported extension %q (want %s)", f, ext, strings.Join(configExts, ", "))
+		}
 		viper.SetConfigFile(f)
 	} else {
 		viper.AddConfigPath("/etc/aws-oidc-warden/")
@@ -726,15 +730,12 @@ func (c *Config) LoadConfig() error {
 	return c.validateMappingsSplit()
 }
 
-// MergeBytes overlays serialized configuration onto c using the same snake_case
-// schema as the config file (see example-config.yaml), then re-validates. Only
-// keys present in data are overwritten. format is a viper config type
-// ("json", "yaml", "toml"); empty defaults to "json".
-//
-// Use this for remote configuration (e.g. an S3 object) instead of
-// encoding/json, which matches Go field names rather than the documented
-// snake_case keys.
+// MergeBytes overlays the keys present in data (snake_case config schema, viper format; empty means json) onto c and re-validates.
 func (c *Config) MergeBytes(data []byte, format string) error {
+	return c.mergeBytes(data, format, false)
+}
+
+func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error {
 	if format == "" {
 		format = "json"
 	}
@@ -769,6 +770,11 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 	}
 
 	reapplyEnvOverrides(next)
+	if keepBaseOnly {
+		next.S3ConfigBucketOwner = c.S3ConfigBucketOwner
+		next.SessionPolicyBucketOwner = c.SessionPolicyBucketOwner
+		next.MaxConfigBytes = c.MaxConfigBytes
+	}
 
 	if err := next.Validate(); err != nil {
 		return err
@@ -783,16 +789,6 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 
 	*c = *next
 	return nil
-}
-
-// MergeOverlay merges an S3 overlay via MergeBytes, then restores the base-only owner pins and read cap from c.
-func (c *Config) MergeOverlay(data []byte, format string) error {
-	s3Owner, policyOwner, maxBytes := c.S3ConfigBucketOwner, c.SessionPolicyBucketOwner, c.MaxConfigBytes
-	if err := c.MergeBytes(data, format); err != nil {
-		return err
-	}
-	c.S3ConfigBucketOwner, c.SessionPolicyBucketOwner, c.MaxConfigBytes = s3Owner, policyOwner, maxBytes
-	return c.validateS3ConfigOwner()
 }
 
 // clearOnDeclare zeroes a declared slice of structs before decoding, because
@@ -983,9 +979,6 @@ func (c *Config) Validate() error {
 	}
 	if err := validateRemoteScheme(c.MappingsFile); err != nil {
 		return fmt.Errorf("mappings_file: %w", err)
-	}
-	if c.MappingsFile != "" && slices.Contains(c.ConfigFragments, c.MappingsFile) {
-		return fmt.Errorf("mappings_file %q is also listed in config_fragments", c.MappingsFile)
 	}
 
 	if d := c.ConfigReloadInterval; d > 0 && d < minConfigReloadInterval {

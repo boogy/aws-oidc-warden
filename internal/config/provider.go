@@ -252,7 +252,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	}
 
 	if p.fetch != nil {
-		if err := cfg.MergeOverlay(data, p.format); err != nil {
+		if err := cfg.mergeBytes(data, p.format, true); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
 	} else if err := cfg.Validate(); err != nil {

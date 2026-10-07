@@ -2,10 +2,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"slices"
@@ -28,6 +30,9 @@ func (o overrides) Set(v string) error {
 	if !ok || uri == "" || path == "" {
 		return fmt.Errorf("want URI=PATH, got %q", v)
 	}
+	if !strings.HasPrefix(uri, "s3://") {
+		return fmt.Errorf("override URI must be s3://, got %q", uri)
+	}
 	if _, dup := o[uri]; dup {
 		return fmt.Errorf("%s overridden twice", uri)
 	}
@@ -41,7 +46,7 @@ func main() {
 
 	configPath := flag.String("config", "", "Path to the service config file (required)")
 	ov := overrides{}
-	flag.Var(ov, "override", "URI=PATH: read a local file in place of a configured source (S3 overlay, mappings_file or config_fragments entry); repeatable")
+	flag.Var(ov, "override", "s3://URI=PATH: read a local file in place of an S3 source (overlay, mappings_file or config_fragments entry), parsed as the URI's format; repeatable")
 	offline := flag.Bool("offline", false, "Fail instead of fetching any remote source that has no -override")
 	flag.Parse()
 
@@ -78,46 +83,30 @@ func main() {
 		slog.Int("totalGroups", len(cfg.RoleGroups)))
 }
 
-// run applies the overrides to c, then builds the merged config exactly as the service does at cold start.
+// run builds the merged config exactly as the service does at cold start, reading overridden S3 objects from local files.
 func run(c *config.Config, ov overrides, offline bool, consumer aws.AwsConsumerInterface) (*config.Config, error) {
-	used := map[string]bool{}
-
-	if uri := overlayURI(c); uri != "" {
-		if path, ok := ov[uri]; ok {
-			data, err := readCapped(path, c.EffectiveMaxConfigBytes())
-			if err != nil {
-				return nil, fmt.Errorf("overlay override: %w", err)
+	if offline {
+		var missing []string
+		for _, uri := range remoteSources(c) {
+			if _, ok := ov[uri]; !ok {
+				missing = append(missing, uri)
 			}
-			if err := c.MergeOverlay(data, config.FormatFromPath(path)); err != nil {
-				return nil, fmt.Errorf("overlay %s: %w", path, err)
-			}
-			c.S3ConfigBucket, c.S3ConfigPath = "", ""
-			used[uri] = true
 		}
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("offline: no -override for remote source: %s", strings.Join(missing, ", "))
+		}
+		consumer = nil
 	}
 
-	repin := func(uri, path string) {
-		used[uri] = true
-		for j := range c.ConfigFragmentChecksums {
-			if c.ConfigFragmentChecksums[j].URI == uri {
-				c.ConfigFragmentChecksums[j].URI = path
-			}
-		}
-	}
-	if path, ok := ov[c.MappingsFile]; ok && c.MappingsFile != "" {
-		repin(c.MappingsFile, path)
-		c.MappingsFile = path
-	}
-	for i, uri := range c.ConfigFragments {
-		if path, ok := ov[uri]; ok {
-			repin(uri, path)
-			c.ConfigFragments[i] = path
-		}
+	local := &localSources{AwsConsumerInterface: consumer, files: ov, limit: c.EffectiveMaxConfigBytes(), used: map[string]bool{}}
+	provider, err := handler.BuildConfigProvider(c, local)
+	if err != nil {
+		return nil, err
 	}
 
 	var unused []string
 	for uri := range ov {
-		if !used[uri] {
+		if !local.used[uri] {
 			unused = append(unused, uri)
 		}
 	}
@@ -125,17 +114,54 @@ func run(c *config.Config, ov overrides, offline bool, consumer aws.AwsConsumerI
 		slices.Sort(unused)
 		return nil, fmt.Errorf("override matches no configured source: %s", strings.Join(unused, ", "))
 	}
-	if offline {
-		if remote := remoteSources(c); len(remote) > 0 {
-			return nil, fmt.Errorf("offline: no -override for remote source: %s", strings.Join(remote, ", "))
-		}
-	}
+	return provider.Get(), nil
+}
 
-	provider, err := handler.BuildConfigProvider(c, consumer)
+// localSources is the S3 reader the provider fetches through, serving overridden objects from local files.
+type localSources struct {
+	aws.AwsConsumerInterface // nil when offline
+	files                    overrides
+	limit                    int
+	used                     map[string]bool
+}
+
+func (l *localSources) read(bucket, key string) (data []byte, ok bool, err error) {
+	uri := "s3://" + bucket + "/" + strings.TrimPrefix(key, "/")
+	path, ok := l.files[uri]
+	if !ok {
+		if l.AwsConsumerInterface == nil {
+			return nil, false, fmt.Errorf("offline: no -override for remote source: %s", uri)
+		}
+		return nil, false, nil
+	}
+	l.used[uri] = true
+	data, err = readCapped(path, l.limit)
+	if err != nil {
+		return nil, true, fmt.Errorf("override %s: %w", uri, err)
+	}
+	return data, true, nil
+}
+
+func (l *localSources) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, owner string) ([]byte, string, error) {
+	data, ok, err := l.read(bucket, key)
+	if err != nil {
+		return nil, "", err
+	}
+	if !ok {
+		return l.AwsConsumerInterface.GetS3ObjectIfChanged(ctx, bucket, key, prevETag, owner)
+	}
+	return data, config.ContentDigest(data), nil
+}
+
+func (l *localSources) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	data, ok, err := l.read(bucket, key)
 	if err != nil {
 		return nil, err
 	}
-	return provider.Get(), nil
+	if !ok {
+		return l.AwsConsumerInterface.GetS3Object(ctx, bucket, key)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
 }
 
 func overlayURI(c *config.Config) string {

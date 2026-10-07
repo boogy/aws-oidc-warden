@@ -509,11 +509,11 @@ Applied only when the config file or S3 object already carries an `idp:` block; 
 
 ### Other Settings
 
-| Environment Variable | Description                          | Default  |
-| -------------------- | ------------------------------------ | -------- |
-| `CONFIG_NAME`        | Config file name (without extension) | `config` |
-| `CONFIG_PATH`        | Config file directory                | `.`      |
-| `CONFIG_FILE`        | Exact config file; overrides `CONFIG_NAME`/`CONFIG_PATH` and skips `/etc/aws-oidc-warden/` | (empty) |
+| Environment Variable | Description                                                                                | Default  |
+| -------------------- | ------------------------------------------------------------------------------------------ | -------- |
+| `CONFIG_NAME`        | Config file name (without extension)                                                       | `config` |
+| `CONFIG_PATH`        | Config file directory                                                                      | `.`      |
+| `CONFIG_FILE`        | Exact config file; overrides `CONFIG_NAME`/`CONFIG_PATH` and skips `/etc/aws-oidc-warden/` | (empty)  |
 
 `CONFIG_PATH` is also always checked at `/etc/aws-oidc-warden/` in addition to the configured path.
 
@@ -620,11 +620,11 @@ Rules enforced on every merge:
 
 `cmd/validate` (`make build-validate`) builds the config exactly as the service does at cold start (service config, then S3 overlay, mappings file and fragments merged) and exits 1 on any error. It starts no server. Run it in CI on every change to the service config, the mappings file or a fragment, before deploying or uploading.
 
-| Flag                 | Meaning                                                                                                                                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `-config PATH`       | Service config file. Required; a missing file is an error, never a silent fallback to defaults                                                                                                   |
-| `-override URI=PATH` | Read a local file in place of a configured remote source (S3 overlay, `mappings_file` or a fragment). Repeatable; checksum pins still apply; an override naming no configured source is an error |
-| `-offline`           | Fail, naming each one, if any remote source has no `-override`, instead of fetching it. Needs no AWS credentials                                                                                 |
+| Flag                 | Meaning                                                                                                                                                                                                                                                         |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-config PATH`       | Service config file. Required; a missing file is an error, never a silent fallback to defaults                                                                                                                                                                  |
+| `-override URI=PATH` | Serve a local file wherever the service reads the `s3://` URI (S3 overlay, `mappings_file` or a fragment, including ones the overlay adds), parsed by the URI's extension. Repeatable; checksum pins still apply; an override the build never reads is an error |
+| `-offline`           | Fail, naming each one, if any remote source has no `-override`, instead of fetching it. Needs no AWS credentials                                                                                                                                                |
 
 The check covers the merged result, not each file alone: a `role_sets` name defined in two layers, or a fragment `default_issuer` that is not a base issuer, only fails once every layer is loaded. A source without an override is fetched from S3, which needs read access; with every source in git, use `-offline`.
 

@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/utils"
-	"github.com/spf13/viper"
 )
+
+var configExts = []string{"yaml", "yml", "json", "toml"}
 
 // UseConfigFile points LoadConfig at the exact config file p, or at <CONFIG_NAME>.<ext> inside directory p. An empty p is a no-op.
 func UseConfigFile(p string) error {
@@ -20,13 +22,21 @@ func UseConfigFile(p string) error {
 	}
 	if fi.IsDir() {
 		name := utils.GetEnv("CONFIG_NAME", "config")
-		for _, ext := range viper.SupportedExts {
+		var found []string
+		for _, ext := range configExts {
 			f := filepath.Join(p, name+"."+ext)
 			if st, err := os.Stat(f); err == nil && !st.IsDir() {
-				return os.Setenv("CONFIG_FILE", f)
+				found = append(found, f)
 			}
 		}
-		return fmt.Errorf("no %s.<ext> config file in directory %s", name, p)
+		switch len(found) {
+		case 0:
+			return fmt.Errorf("no %s.{%s} config file in directory %s", name, strings.Join(configExts, ","), p)
+		case 1:
+			return os.Setenv("CONFIG_FILE", found[0])
+		default:
+			return fmt.Errorf("ambiguous config in directory %s: %s", p, strings.Join(found, ", "))
+		}
 	}
 	return os.Setenv("CONFIG_FILE", p)
 }
