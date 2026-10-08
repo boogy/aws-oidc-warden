@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -651,8 +650,8 @@ func (c *Config) LoadConfig() error {
 	viper.AutomaticEnv()
 
 	if f := os.Getenv("CONFIG_FILE"); f != "" {
-		if ext := strings.TrimPrefix(filepath.Ext(f), "."); !slices.Contains(configExts, ext) {
-			return fmt.Errorf("config file %s: unsupported extension %q (want %s)", f, ext, strings.Join(configExts, ", "))
+		if err := unsupportedExt(f); err != nil {
+			return err
 		}
 		viper.SetConfigFile(f)
 	} else {

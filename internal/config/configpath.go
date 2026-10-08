@@ -42,6 +42,9 @@ var systemConfigDir = "/etc/aws-oidc-warden/"
 // findConfigFile returns <name>.<ext> from the first dir holding one, or "" if none does; a second supported candidate, or only an unsupported one, is an error.
 func findConfigFile(dirs []string, name string) (string, error) {
 	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
 		dir = expandDir(dir)
 		var found, unsupported []string
 		for _, ext := range viper.SupportedExts {
@@ -61,10 +64,18 @@ func findConfigFile(dirs []string, name string) (string, error) {
 		case len(found) == 1:
 			return found[0], nil
 		case len(unsupported) > 0:
-			return "", fmt.Errorf("config file %s: unsupported extension %q (want %s)", unsupported[0], strings.TrimPrefix(filepath.Ext(unsupported[0]), "."), strings.Join(configExts, ", "))
+			return "", unsupportedExt(unsupported[0])
 		}
 	}
 	return "", nil
+}
+
+// unsupportedExt is nil when f has a yaml/yml/json/toml extension.
+func unsupportedExt(f string) error {
+	if ext := strings.TrimPrefix(filepath.Ext(f), "."); !slices.Contains(configExts, ext) {
+		return fmt.Errorf("config file %s: unsupported extension %q (want %s)", f, ext, strings.Join(configExts, ", "))
+	}
+	return nil
 }
 
 // expandDir expands $HOME and env vars the way viper.AddConfigPath does.

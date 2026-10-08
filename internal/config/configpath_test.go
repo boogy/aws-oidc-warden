@@ -105,8 +105,9 @@ func TestLoadConfigSearch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			viper.Reset()
 			t.Cleanup(viper.Reset)
+			prev := systemConfigDir
 			systemConfigDir = t.TempDir()
-			t.Cleanup(func() { systemConfigDir = "/etc/aws-oidc-warden/" })
+			t.Cleanup(func() { systemConfigDir = prev })
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			searchPath := t.TempDir()
@@ -135,4 +136,19 @@ func TestLoadConfigSearch(t *testing.T) {
 			require.ErrorContains(t, UseConfigFile(dir), tt.wantErr)
 		})
 	}
+}
+
+func TestLoadConfigEmptySearchPathIsNotWorkingDir(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for _, f := range []string{"config.yaml", "config.json"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, f), nil, 0o600))
+	}
+	t.Setenv("CONFIG_FILE", "")
+	t.Setenv("CONFIG_NAME", "config")
+	t.Setenv("CONFIG_PATH", "")
+
+	require.NoError(t, (&Config{}).LoadConfig())
 }
