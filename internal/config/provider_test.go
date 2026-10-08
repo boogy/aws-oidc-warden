@@ -814,3 +814,33 @@ func TestProvider_OverlayCannotMoveItself(t *testing.T) {
 	assert.Contains(t, buf.String(), "overlay_base_only_keys_ignored")
 	assert.Contains(t, buf.String(), "s3_config_path")
 }
+
+func TestProvider_EmptyOverlayKeepsPreviousConfig(t *testing.T) {
+	overlay := []byte("role_mappings:\n  - subject: \"owner/.*\"\n    roles: [\"arn:aws:iam::123456789012:role/ci\"]\n")
+	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return overlay, nil })
+	require.NoError(t, p.Refresh(context.Background()))
+	prev := p.Get()
+	require.Len(t, prev.RoleMappings, 1)
+
+	for _, empty := range [][]byte{nil, {}} {
+		overlay = empty
+		require.ErrorContains(t, p.Refresh(context.Background()), "overlay is empty")
+		assert.Same(t, prev, p.Get())
+	}
+}
+
+func TestProvider_EmptyOverlayFailsColdStart(t *testing.T) {
+	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return []byte{}, nil })
+	require.ErrorContains(t, p.Refresh(context.Background()), "overlay is empty")
+}
+
+func TestProvider_CommentOnlyOverlayResetsToBase(t *testing.T) {
+	overlay := []byte("role_mappings:\n  - subject: \"owner/.*\"\n    roles: [\"arn:aws:iam::123456789012:role/ci\"]\n")
+	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return overlay, nil })
+	require.NoError(t, p.Refresh(context.Background()))
+	require.Len(t, p.Get().RoleMappings, 1)
+
+	overlay = []byte("# intentionally empty\n")
+	require.NoError(t, p.Refresh(context.Background()))
+	assert.Empty(t, p.Get().RoleMappings)
+}

@@ -63,7 +63,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **The local dev server drains in-flight requests on shutdown** and bounds write time and header size.
 - **The local dev server exits on an invalid `-log-level`** instead of falling back to `info`.
 - **The default config search (`/etc/aws-oidc-warden/`, then `CONFIG_PATH`) fails on two yaml/yml/json/toml candidates or only an unsupported one**, as `-config` and `validate` do, instead of silently loading the first of viper's extensions.
-- **An empty S3 object read without an owner pin is parsed like a pinned read** instead of failing on S3's `InvalidRange` for the ranged GET.
+- **A zero-byte config overlay fails the refresh and keeps the last good config** (startup fails at cold start), pinned or not; a comment-only overlay still resets to the base. An unpinned empty read no longer surfaces as S3's `InvalidRange`.
 
 ### Removed
 

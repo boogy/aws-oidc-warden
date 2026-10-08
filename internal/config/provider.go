@@ -223,6 +223,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		if data, err = p.fetch(ctx); err != nil {
 			return fmt.Errorf("failed to fetch configuration: %w", err)
 		}
+		if len(data) == 0 {
+			return errors.New("configuration overlay is empty (zero bytes)")
+		}
 	}
 	// The digest covers the base too, so a changed base is never skipped.
 	h := sha256.New()
