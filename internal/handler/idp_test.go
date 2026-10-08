@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -521,13 +522,14 @@ func TestProcessMintSignErrors(t *testing.T) {
 		spec    map[string]string
 		raw     map[string]any
 		want    error
+		reason  string
 		signed  int
 	}{
 		{name: "sign_failure", signErr: errBoom, want: handler.ErrIdPUnavailable, signed: 1},
 		{name: "too_large", spec: bigSpec, raw: bigRaw, want: handler.ErrIdPTokenTooLarge},
 		{name: "loader_error", loadErr: errBoom, want: handler.ErrIdPUnavailable},
 		{name: "invalid_subject", subTmpl: "{source_issuer}#{source_subject}#{role_arn}", subject: "org/my repo", want: handler.ErrIdPSubjectInvalid},
-		{name: "source_identity", tmpl: "{claim:nope}", want: handler.ErrIdPSourceIdentityInvalid},
+		{name: "source_identity", tmpl: "{claim:nope}", want: handler.ErrIdPSourceIdentityInvalid, reason: "source identity could not be derived"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -561,6 +563,7 @@ func TestProcessMintSignErrors(t *testing.T) {
 			rec := sink.last(t)
 			assert.Equal(t, "deny", rec["decision"])
 			assert.Equal(t, "idp_mint", rec["stage"])
+			assert.Equal(t, cmp.Or(tt.reason, tt.want.Error()), rec["reason"])
 		})
 	}
 }

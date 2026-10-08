@@ -132,7 +132,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 				slog.String("roleArn", role), slog.String("error", err.Error()))
 			ret = ErrIdPUnavailable
 		}
-		rec.Stage, rec.Reason = "idp_mint", "token minting failed"
+		rec.Stage, rec.Reason = "idp_mint", ret.Error()
 		return nil, r.deny(ctx, o, "Token minting failed", fmt.Errorf("%w: %w", ret, err))
 	}
 
