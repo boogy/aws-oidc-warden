@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
@@ -943,4 +944,20 @@ func TestGetS3Object_BodyReadableAfterReturn(t *testing.T) {
 			assert.Equal(t, body, string(got))
 		})
 	}
+}
+
+type invalidRangeS3 struct{}
+
+func (invalidRangeS3) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return nil, &smithy.GenericAPIError{Code: "InvalidRange", Message: "The requested range is not satisfiable"}
+}
+
+func TestGetS3Object_EmptyObjectReadsEmpty(t *testing.T) {
+	w := &AwsServiceWrapper{s3Client: invalidRangeS3{}, defaultTimeout: time.Second}
+
+	rc, err := w.GetS3Object(context.Background(), "b", "k", 4096)
+	require.NoError(t, err)
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Empty(t, data)
 }

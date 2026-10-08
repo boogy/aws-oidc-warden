@@ -107,6 +107,9 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string,
 	}
 
 	result, err := s.s3Client.GetObject(ctx, input)
+	if STSErrorCode(err) == "InvalidRange" { // a range starting at 0 is unsatisfiable only on an empty object
+		return io.NopCloser(bytes.NewReader(nil)), nil
+	}
 	if err != nil {
 		logevent.Error(ctx, nil, logevent.AWSS3GetFailure, "error fetching S3 object",
 			slog.String("bucket", bucket),
