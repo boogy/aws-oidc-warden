@@ -515,7 +515,7 @@ Applied only when the config file or S3 object already carries an `idp:` block; 
 | `CONFIG_PATH`        | Config file directory                                                                      | `.`      |
 | `CONFIG_FILE`        | Exact config file; overrides `CONFIG_NAME`/`CONFIG_PATH` and skips `/etc/aws-oidc-warden/` | (empty)  |
 
-`CONFIG_PATH` is also always checked at `/etc/aws-oidc-warden/` in addition to the configured path.
+`CONFIG_PATH` is also always checked at `/etc/aws-oidc-warden/` in addition to the configured path. The first of those directories holding a `<CONFIG_NAME>.*` file wins, and it must hold exactly one, with a `yaml`, `yml`, `json` or `toml` extension.
 
 ## Split configuration
 

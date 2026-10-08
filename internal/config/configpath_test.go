@@ -89,3 +89,30 @@ func TestLoadConfigRejectsViperOnlyFormat(t *testing.T) {
 
 	require.ErrorContains(t, (&Config{}).LoadConfig(), "unsupported extension")
 }
+
+func TestLoadConfigSearchRejectsWhatValidateRejects(t *testing.T) {
+	tests := []struct {
+		name    string
+		files   []string
+		wantErr string
+	}{
+		{name: "two formats", files: []string{"config.yaml", "config.json"}, wantErr: "ambiguous config"},
+		{name: "viper-only format", files: []string{"config.hcl"}, wantErr: "unsupported extension"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			viper.Reset()
+			t.Cleanup(viper.Reset)
+			dir := t.TempDir()
+			for _, f := range tt.files {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte("role_session_name: x\n"), 0o600))
+			}
+			t.Setenv("CONFIG_FILE", "")
+			t.Setenv("CONFIG_NAME", "config")
+			t.Setenv("CONFIG_PATH", dir)
+
+			require.ErrorContains(t, (&Config{}).LoadConfig(), tt.wantErr)
+			require.ErrorContains(t, UseConfigFile(dir), tt.wantErr)
+		})
+	}
+}

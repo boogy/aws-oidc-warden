@@ -656,9 +656,17 @@ func (c *Config) LoadConfig() error {
 		}
 		viper.SetConfigFile(f)
 	} else {
-		viper.AddConfigPath("/etc/aws-oidc-warden/")
-		viper.AddConfigPath(configPath)
-		viper.SetConfigName(configName)
+		f, err := findConfigFile([]string{"/etc/aws-oidc-warden/", configPath}, configName)
+		if err != nil {
+			return err
+		}
+		if f != "" {
+			viper.SetConfigFile(f)
+		} else {
+			viper.AddConfigPath("/etc/aws-oidc-warden/")
+			viper.AddConfigPath(configPath)
+			viper.SetConfigName(configName)
+		}
 	}
 
 	// Set default values
