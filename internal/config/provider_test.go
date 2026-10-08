@@ -545,6 +545,41 @@ role_mappings:
 	assert.Same(t, good, p.Get())
 }
 
+func TestProvider_EmptyFragmentRetainsLastGood(t *testing.T) {
+	const uri = "s3://bucket/frag.yaml"
+	store := newFakeFragmentStore()
+	store.set(uri, []byte(`
+role_mappings:
+  - subject: "owner/v1"
+    roles: ["arn:aws:iam::111111111111:role/v1"]
+`))
+
+	base := baseConfig(t)
+	base.ConfigFragments = []string{uri}
+	require.NoError(t, base.Validate())
+
+	p := NewProvider(base, time.Minute, "yaml", noopBaseFetch, WithFragmentFetcher(store.fetch))
+	require.NoError(t, p.Refresh(context.Background()))
+	good := p.Get()
+
+	store.set(uri, []byte{})
+
+	require.ErrorContains(t, p.Refresh(context.Background()), "is empty")
+	assert.Same(t, good, p.Get())
+}
+
+func TestProvider_EmptyLocalFragmentFailsColdStart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mappings.yaml")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+
+	base := baseConfig(t)
+	base.ConfigFragments = []string{path}
+	require.NoError(t, base.Validate())
+
+	p := NewProvider(base, time.Minute, "yaml", noopBaseFetch)
+	require.ErrorContains(t, p.Refresh(context.Background()), "is empty")
+}
+
 func TestProvider_RemoteFragmentWithoutFetcherFails(t *testing.T) {
 	base := baseConfig(t)
 	base.ConfigFragments = []string{"s3://bucket/frag.yaml"}

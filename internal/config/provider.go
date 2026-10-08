@@ -393,8 +393,8 @@ func (p *Provider) applyFragments(ctx context.Context, cfg *Config, probed map[s
 			// Unchanged since the last apply: reuse the cached parse.
 			frag = prev.parsed
 		} else {
-			if data == nil {
-				return nil, fmt.Errorf("config_fragments: %q: fetch returned no data for a changed fragment", uri)
+			if len(data) == 0 {
+				return nil, fmt.Errorf("config_fragments: %q is empty (zero bytes)", uri)
 			}
 			frag, err = parseFragment(data, FormatFromPath(uri), uri)
 			if err != nil {
