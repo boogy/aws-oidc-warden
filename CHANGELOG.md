@@ -19,10 +19,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`mappings_file`** loads hot-reloaded role mappings from a separate local or `s3://` file. See `docs/CONFIGURATION.md` § Split configuration.
 - **`mappings_max_stale`** answers 503 `config_stale` once mappings are older than this (default 3x `config_reload_interval` for `s3://`).
 - **`allow_session_name`** on a mapping lets callers name their STS session; otherwise a requested `sessionName` is ignored.
-- **`s3_config_bucket_owner`** pins the expected owner on S3 config reads; required for `s3://` mappings and fragments.
-- **`session_policy_bucket_owner`** pins the expected owner on session-policy S3 reads; startup warns (`policy.s3_owner_unpinned`) when a policy bucket is set without it.
+- **`s3_config_bucket_owner`** pins the expected owner on S3 config reads; required for `s3://` mappings and fragments; base-only.
+- **`session_policy_bucket_owner`** pins the expected owner on session-policy S3 reads (base-only); startup warns (`policy.s3_owner_unpinned`) when a policy bucket is set without it.
 - **Local dev server `-host` flag**, defaulting to `127.0.0.1` instead of all interfaces.
-- **`max_config_bytes`** sets the size cap for config objects, fragments and session policies (default 1 MiB, max 64 MiB); base-only.
+- **`max_config_bytes`** sets the size cap for config objects, fragments and session policies (default 1 MiB, max 64 MiB); base-only, so an overlay changing it (or either owner pin) is ignored with a warning.
 
 ### Changed
 

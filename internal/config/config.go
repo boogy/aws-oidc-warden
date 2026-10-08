@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -770,16 +771,33 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error
 	}
 
 	reapplyEnvOverrides(next)
+	var ignored []string
 	if keepBaseOnly {
+		// c is validated, so its 0 is already the default; the overlay's 0 is not.
+		if cmp.Or(next.MaxConfigBytes, utils.DefaultMaxConfigBytes) != c.MaxConfigBytes {
+			ignored = append(ignored, "max_config_bytes")
+		}
+		if next.S3ConfigBucketOwner != c.S3ConfigBucketOwner {
+			ignored = append(ignored, "s3_config_bucket_owner")
+		}
+		if next.SessionPolicyBucketOwner != c.SessionPolicyBucketOwner {
+			ignored = append(ignored, "session_policy_bucket_owner")
+		}
+		next.MaxConfigBytes = c.MaxConfigBytes
 		next.S3ConfigBucketOwner = c.S3ConfigBucketOwner
 		next.SessionPolicyBucketOwner = c.SessionPolicyBucketOwner
-		next.MaxConfigBytes = c.MaxConfigBytes
 	}
 
 	if err := next.Validate(); err != nil {
 		return err
 	}
 
+	if len(ignored) > 0 {
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+			"overlay sets base-only keys; base values kept",
+			slog.String("warning", "overlay_base_only_keys_ignored"),
+			slog.Any("keys", ignored))
+	}
 	if dropped := lostFragmentPins(c, next); len(dropped) > 0 {
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 			"overlay replaced config_fragment_checksums and dropped pins; those fragments are no longer integrity-checked",
@@ -1410,7 +1428,6 @@ func (c *Config) validateMaxStale() error {
 	return nil
 }
 
-// effectiveMappingsMaxStale resolves the unset default: 3x the reload interval for an s3:// mappings_file.
 // EffectiveMaxConfigBytes is max_config_bytes, or the default when unset or c is nil.
 func (c *Config) EffectiveMaxConfigBytes() int {
 	if c == nil || c.MaxConfigBytes <= 0 {
@@ -1419,6 +1436,7 @@ func (c *Config) EffectiveMaxConfigBytes() int {
 	return c.MaxConfigBytes
 }
 
+// effectiveMappingsMaxStale resolves the unset default: 3x the reload interval for an s3:// mappings_file.
 func (c *Config) effectiveMappingsMaxStale() time.Duration {
 	if c.MappingsMaxStale != nil {
 		return *c.MappingsMaxStale

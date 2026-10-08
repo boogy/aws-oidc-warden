@@ -751,3 +751,49 @@ func TestProvider_OverlayCannotRaiseMaxConfigBytes(t *testing.T) {
 
 	require.ErrorContains(t, p.Refresh(context.Background()), "exceeds 64 byte cap")
 }
+
+func TestProvider_OverlayBaseOnlyKeysWarn(t *testing.T) {
+	tests := []struct {
+		name, overlay string
+		base          int
+		warn          bool
+	}{
+		{
+			name: "differing values warn", base: 64, warn: true,
+			overlay: "max_config_bytes: 1048576\ns3_config_bucket_owner: \"999999999999\"\nsession_policy_bucket_owner: \"999999999999\"\n",
+		},
+		{name: "invalid negative value warns", base: 64, overlay: "max_config_bytes: -5\n", warn: true},
+		{name: "zero overlay meaning the default differs from a custom base", base: 64, overlay: "max_config_bytes: 0\n", warn: true},
+		{name: "restated values are silent", base: 64, overlay: "max_config_bytes: 64\n"},
+		{name: "zero overlay meaning the default is silent", base: 0, overlay: "max_config_bytes: 0\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := captureUnknownKeyWarnings(t)
+			base := baseConfig(t)
+			base.MaxConfigBytes = tt.base
+			base.S3ConfigBucketOwner = "111122223333"
+			base.SessionPolicyBucketOwner = "111122223333"
+			require.NoError(t, base.Validate())
+			overlay := func(context.Context) ([]byte, error) { return []byte(tt.overlay), nil }
+			p := NewProvider(base, time.Minute, "yaml", overlay)
+			require.NoError(t, p.Refresh(context.Background()))
+			assert.Equal(t, base.MaxConfigBytes, p.Get().MaxConfigBytes)
+			assert.Equal(t, "111122223333", p.Get().S3ConfigBucketOwner)
+			assert.Equal(t, "111122223333", p.Get().SessionPolicyBucketOwner)
+			if !tt.warn {
+				assert.NotContains(t, buf.String(), "overlay_base_only_keys_ignored")
+				return
+			}
+			assert.Contains(t, buf.String(), "overlay_base_only_keys_ignored")
+			assert.Contains(t, buf.String(), "max_config_bytes")
+			if strings.Contains(tt.overlay, "owner") {
+				assert.Contains(t, buf.String(), "s3_config_bucket_owner")
+				assert.Contains(t, buf.String(), "session_policy_bucket_owner")
+			} else {
+				assert.NotContains(t, buf.String(), "s3_config_bucket_owner")
+				assert.NotContains(t, buf.String(), "session_policy_bucket_owner")
+			}
+		})
+	}
+}
