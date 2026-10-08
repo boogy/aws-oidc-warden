@@ -653,7 +653,7 @@ validate -offline -config service.yaml \
 aws s3 cp ./mappings.yaml s3://acme-warden-config/mappings.yaml
 ```
 
-The override URI must match `mappings_file` exactly. Upload only after `validate` succeeds: the running service picks the file up within `config_reload_interval`, and an invalid one fails every refresh (see [Blast radius](#blast-radius)).
+The override URI must name the same S3 object as `mappings_file` (`%2B` and `+` are the same key; `s3://b//k` and `s3://b/k` are not). Write `=` in a key as `%3D`, since the first `=` ends the URI. The overlay's `s3_config_path` is a raw key, so percent-encode it in the override URI (`a%2Bb.yaml` → `s3://cfg/a%252Bb.yaml`); an unmatched source is reported in that form. Upload only after `validate` succeeds: the running service picks the file up within `config_reload_interval`, and an invalid one fails every refresh (see [Blast radius](#blast-radius)).
 
 ### Fragments
 

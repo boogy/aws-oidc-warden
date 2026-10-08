@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -30,9 +31,11 @@ func (o overrides) Set(v string) error {
 	if !ok || uri == "" || path == "" {
 		return fmt.Errorf("want URI=PATH, got %q", v)
 	}
-	if !strings.HasPrefix(uri, "s3://") {
-		return fmt.Errorf("override URI must be s3://, got %q", uri)
+	bucket, key, err := handler.ParseS3URI(uri)
+	if err != nil {
+		return err
 	}
+	uri = s3URI(bucket, key)
 	if _, dup := o[uri]; dup {
 		return fmt.Errorf("%s overridden twice", uri)
 	}
@@ -46,7 +49,7 @@ func main() {
 
 	configPath := flag.String("config", "", "Path to the service config file (required)")
 	ov := overrides{}
-	flag.Var(ov, "override", "s3://URI=PATH: read a local file in place of an S3 source (overlay, mappings_file or config_fragments entry), parsed as the URI's format; repeatable")
+	flag.Var(ov, "override", "s3://URI=PATH: read a local file in place of an S3 source (overlay, mappings_file or config_fragments entry), parsed as the URI's format; write \"=\" in a key as %3D; repeatable")
 	offline := flag.Bool("offline", false, "Fail instead of fetching any remote source that has no -override")
 	flag.Parse()
 
@@ -126,7 +129,7 @@ type localSources struct {
 }
 
 func (l *localSources) read(bucket, key string) (data []byte, ok bool, err error) {
-	uri := "s3://" + bucket + "/" + strings.TrimPrefix(key, "/")
+	uri := s3URI(bucket, key)
 	path, ok := l.files[uri]
 	if !ok {
 		if l.AwsConsumerInterface == nil {
@@ -168,7 +171,13 @@ func overlayURI(c *config.Config) string {
 	if c.S3ConfigBucket == "" || c.S3ConfigPath == "" {
 		return ""
 	}
-	return "s3://" + c.S3ConfigBucket + "/" + strings.TrimPrefix(c.S3ConfigPath, "/")
+	return s3URI(c.S3ConfigBucket, c.S3ConfigPath)
+}
+
+// s3URI is the one form overrides, the offline check and the S3 reader match on; it round-trips through ParseS3URI.
+func s3URI(bucket, key string) string {
+	// "=" is escaped so a reported URI pasted into -override URI=PATH splits at the right "=".
+	return strings.ReplaceAll((&url.URL{Scheme: "s3", Host: bucket, Path: "/" + key}).String(), "=", "%3D")
 }
 
 // remoteSources lists the sources the provider would still fetch over the network.
@@ -178,8 +187,12 @@ func remoteSources(c *config.Config) []string {
 		out = append(out, uri)
 	}
 	for _, uri := range append([]string{c.MappingsFile}, c.ConfigFragments...) {
-		if strings.Contains(uri, "://") {
-			out = append(out, uri)
+		if !strings.Contains(uri, "://") {
+			continue
+		}
+		// An unparseable URI is left to the fetcher, which reports why.
+		if bucket, key, err := handler.ParseS3URI(uri); err == nil {
+			out = append(out, s3URI(bucket, key))
 		}
 	}
 	return out

@@ -11,8 +11,8 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 )
 
-// parseS3URI splits s3://bucket/key; the key keeps any "//" intact.
-func parseS3URI(uri string) (bucket, key string, err error) {
+// ParseS3URI splits s3://bucket/key; the key keeps any "//" intact.
+func ParseS3URI(uri string) (bucket, key string, err error) {
 	u, err := url.Parse(uri)
 	if err != nil {
 		return "", "", fmt.Errorf("invalid s3 uri %q: %w", uri, err)
@@ -45,7 +45,7 @@ func s3FragmentFetcher(consumer aws.AwsConsumerInterface) config.FragmentFetchFu
 		if owner == "" {
 			return nil, "", fmt.Errorf("s3 fragment %q: s3_config_bucket_owner must be set in the service config", uri)
 		}
-		bucket, key, err := parseS3URI(uri)
+		bucket, key, err := ParseS3URI(uri)
 		if err != nil {
 			return nil, "", err
 		}

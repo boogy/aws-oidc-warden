@@ -142,7 +142,7 @@ func TestOverridesSet(t *testing.T) {
 	assert.ErrorContains(t, o.Set("s3://b/k.yaml=./other.yaml"), "overridden twice")
 	assert.ErrorContains(t, o.Set("no-equals"), "want URI=PATH")
 	assert.ErrorContains(t, o.Set("=./k.yaml"), "want URI=PATH")
-	assert.ErrorContains(t, o.Set("./local.yaml=./k.yaml"), "must be s3://")
+	assert.ErrorContains(t, o.Set("./local.yaml=./k.yaml"), "scheme must be s3")
 }
 
 func TestRunOffline(t *testing.T) {
@@ -315,4 +315,77 @@ func TestRunOverrideDroppedByRemoteOverlayRejected(t *testing.T) {
 	consumer := overlayConsumer{body: "config_fragments: [\"" + other + "\"]\n"}
 	_, err := run(c, overrides{"s3://cfg/fragments/team-data.yaml": writeFile(t, dir, "team-data.yaml", goodFragment)}, false, consumer)
 	require.ErrorContains(t, err, "override matches no configured source: s3://cfg/fragments/team-data.yaml")
+}
+
+func TestRunOverrideMatchesFetchedObjectNotURISpelling(t *testing.T) {
+	tests := []struct {
+		name, configured, flag, wantErr string
+	}{
+		{name: "escaped key, same spelling", configured: "s3://cfg/a%2Bb.yaml", flag: "s3://cfg/a%2Bb.yaml"},
+		{name: "escaped key, decoded spelling", configured: "s3://cfg/a%2Bb.yaml", flag: "s3://cfg/a+b.yaml"},
+		{name: "leading-slash key", configured: "s3://cfg//k.yaml", flag: "s3://cfg//k.yaml"},
+		{name: "equals in key, escaped", configured: "s3://cfg/team=data.yaml", flag: "s3://cfg/team%3Ddata.yaml"},
+		{
+			name: "equals in key is reported escaped", configured: "s3://cfg/team=data.yaml", flag: "s3://cfg/team.yaml",
+			wantErr: "offline: no -override for remote source: s3://cfg/team%3Ddata.yaml",
+		},
+		{
+			name: "leading-slash key is a different object", configured: "s3://cfg//k.yaml", flag: "s3://cfg/k.yaml",
+			wantErr: "offline: no -override for remote source: s3://cfg//k.yaml",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := loadBase(t, strings.Replace(baseYAML, "s3://cfg/fragments/team-data.yaml", tt.configured, 1))
+			ov := overrides{}
+			require.NoError(t, ov.Set(tt.flag+"="+writeFile(t, t.TempDir(), "f.yaml", goodFragment)))
+			cfg, err := run(c, ov, true, nil)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, cfg.RoleMappings, 1)
+		})
+	}
+}
+
+func TestRunOverrideOverlayKeySpelling(t *testing.T) {
+	tests := []struct {
+		name, path, flag, wantErr string
+	}{
+		{name: "plain key", path: "overlay.yaml", flag: "s3://cfg/overlay.yaml"},
+		{name: "leading-slash key", path: "/overlay.yaml", flag: "s3://cfg//overlay.yaml"},
+		{
+			name: "leading-slash key is a different object", path: "/overlay.yaml", flag: "s3://cfg/overlay.yaml",
+			wantErr: "offline: no -override for remote source: s3://cfg//overlay.yaml",
+		},
+		{name: "literal percent in key", path: "100%.yaml", flag: "s3://cfg/100%25.yaml"},
+		{
+			name: "literal escape in key needs escaping", path: "a%2Bb.yaml", flag: "s3://cfg/a%2Bb.yaml",
+			wantErr: "offline: no -override for remote source: s3://cfg/a%252Bb.yaml",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := loadBase(t, baseYAML+"s3_config_bucket: \"cfg\"\ns3_config_path: \""+tt.path+"\"\n")
+			dir := t.TempDir()
+			ov := overrides{}
+			require.NoError(t, ov.Set(tt.flag+"="+writeFile(t, dir, "overlay.yaml", "role_session_name: \"from-overlay\"\n")))
+			require.NoError(t, ov.Set("s3://cfg/fragments/team-data.yaml="+writeFile(t, dir, "f.yaml", goodFragment)))
+			cfg, err := run(c, ov, true, nil)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "from-overlay", cfg.RoleSessionName)
+		})
+	}
+}
+
+func TestRunOfflineReportsUnparseableURI(t *testing.T) {
+	c := loadBase(t, strings.Replace(baseYAML, "s3://cfg/fragments/team-data.yaml", "s3://cfg/f.yaml?v=1", 1))
+	_, err := run(c, overrides{}, true, nil)
+	require.ErrorContains(t, err, "query and fragment not allowed")
 }

@@ -108,7 +108,7 @@ func TestParseS3URI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.uri, func(t *testing.T) {
-			bucket, key, err := parseS3URI(tt.uri)
+			bucket, key, err := ParseS3URI(tt.uri)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
