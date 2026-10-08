@@ -36,25 +36,43 @@ func UseConfigFile(p string) error {
 	return os.Setenv("CONFIG_FILE", p)
 }
 
-// findConfigFile returns <name>.<ext> from the first dir holding one, or "" if none does; a second candidate or an unsupported extension is an error.
+// systemConfigDir is searched before CONFIG_PATH.
+var systemConfigDir = "/etc/aws-oidc-warden/"
+
+// findConfigFile returns <name>.<ext> from the first dir holding one, or "" if none does; a second supported candidate, or only an unsupported one, is an error.
 func findConfigFile(dirs []string, name string) (string, error) {
 	for _, dir := range dirs {
-		var found []string
+		dir = expandDir(dir)
+		var found, unsupported []string
 		for _, ext := range viper.SupportedExts {
 			f := filepath.Join(dir, name+"."+ext)
-			if st, err := os.Stat(f); err == nil && !st.IsDir() {
+			if st, err := os.Stat(f); err != nil || st.IsDir() {
+				continue
+			}
+			if slices.Contains(configExts, ext) {
 				found = append(found, f)
+			} else {
+				unsupported = append(unsupported, f)
 			}
 		}
 		switch {
 		case len(found) > 1:
 			return "", fmt.Errorf("ambiguous config in directory %s: %s", dir, strings.Join(found, ", "))
 		case len(found) == 1:
-			if ext := strings.TrimPrefix(filepath.Ext(found[0]), "."); !slices.Contains(configExts, ext) {
-				return "", fmt.Errorf("config file %s: unsupported extension %q (want %s)", found[0], ext, strings.Join(configExts, ", "))
-			}
 			return found[0], nil
+		case len(unsupported) > 0:
+			return "", fmt.Errorf("config file %s: unsupported extension %q (want %s)", unsupported[0], strings.TrimPrefix(filepath.Ext(unsupported[0]), "."), strings.Join(configExts, ", "))
 		}
 	}
 	return "", nil
+}
+
+// expandDir expands $HOME and env vars the way viper.AddConfigPath does.
+func expandDir(dir string) string {
+	if dir == "$HOME" || strings.HasPrefix(dir, "$HOME"+string(os.PathSeparator)) {
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = home + dir[len("$HOME"):]
+		}
+	}
+	return os.ExpandEnv(dir)
 }

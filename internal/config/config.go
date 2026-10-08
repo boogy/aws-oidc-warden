@@ -656,16 +656,12 @@ func (c *Config) LoadConfig() error {
 		}
 		viper.SetConfigFile(f)
 	} else {
-		f, err := findConfigFile([]string{"/etc/aws-oidc-warden/", configPath}, configName)
+		f, err := findConfigFile([]string{systemConfigDir, configPath}, configName)
 		if err != nil {
 			return err
 		}
 		if f != "" {
 			viper.SetConfigFile(f)
-		} else {
-			viper.AddConfigPath("/etc/aws-oidc-warden/")
-			viper.AddConfigPath(configPath)
-			viper.SetConfigName(configName)
 		}
 	}
 
@@ -815,7 +811,7 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error
 	return nil
 }
 
-// baseOnlyStrings are keys read once at boot, so an overlay value would show in Get() without taking effect.
+// baseOnlyStrings locate or owner-pin config and policy reads, so an overlay must not change them.
 var baseOnlyStrings = []struct {
 	key   string
 	field func(*Config) *string

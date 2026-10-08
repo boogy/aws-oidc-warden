@@ -16,7 +16,6 @@ func TestUseConfigFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), nil, 0o600))
 	emptyDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(emptyDir, "config.env"), nil, 0o600))
 	twoDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(twoDir, "config.yaml"), nil, 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(twoDir, "config.json"), nil, 0o600))
@@ -90,28 +89,49 @@ func TestLoadConfigRejectsViperOnlyFormat(t *testing.T) {
 	require.ErrorContains(t, (&Config{}).LoadConfig(), "unsupported extension")
 }
 
-func TestLoadConfigSearchRejectsWhatValidateRejects(t *testing.T) {
+func TestLoadConfigSearch(t *testing.T) {
 	tests := []struct {
 		name    string
 		files   []string
+		subdir  string
 		wantErr string
 	}{
 		{name: "two formats", files: []string{"config.yaml", "config.json"}, wantErr: "ambiguous config"},
 		{name: "viper-only format", files: []string{"config.hcl"}, wantErr: "unsupported extension"},
+		{name: "viper-only sibling is ignored", files: []string{"config.yaml", "config.env"}},
+		{name: "home-relative path is searched", files: []string{"config.yaml", "config.json"}, subdir: "$HOME/cfg", wantErr: "ambiguous config"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			viper.Reset()
 			t.Cleanup(viper.Reset)
-			dir := t.TempDir()
+			systemConfigDir = t.TempDir()
+			t.Cleanup(func() { systemConfigDir = "/etc/aws-oidc-warden/" })
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			searchPath := t.TempDir()
+			dir := searchPath
+			if tt.subdir != "" {
+				searchPath, dir = tt.subdir, filepath.Join(home, "cfg")
+				require.NoError(t, os.Mkdir(dir, 0o700))
+			}
 			for _, f := range tt.files {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte("role_session_name: x\n"), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte("issuers:\n  - issuer: https://token.actions.githubusercontent.com\n    provider: github\n    audiences: [sts.amazonaws.com]\nrole_session_name: from-file\n"), 0o600))
 			}
 			t.Setenv("CONFIG_FILE", "")
 			t.Setenv("CONFIG_NAME", "config")
-			t.Setenv("CONFIG_PATH", dir)
+			t.Setenv("CONFIG_PATH", searchPath)
 
-			require.ErrorContains(t, (&Config{}).LoadConfig(), tt.wantErr)
+			c := &Config{}
+			err := c.LoadConfig()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Equal(t, "from-file", c.RoleSessionName)
+				require.NoError(t, UseConfigFile(dir))
+				assert.Equal(t, filepath.Join(dir, "config.yaml"), os.Getenv("CONFIG_FILE"))
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
 			require.ErrorContains(t, UseConfigFile(dir), tt.wantErr)
 		})
 	}
