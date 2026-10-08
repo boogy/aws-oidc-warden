@@ -290,6 +290,9 @@ func parseCliFlags() (ServerSettings, error) {
 
 	flag.Parse()
 
+	if _, err := utils.ParseLogLevel(settings.LogLevel); err != nil {
+		return settings, err
+	}
 	if err := config.UseConfigFile(settings.ConfigPath); err != nil {
 		return settings, err
 	}
@@ -307,7 +310,7 @@ func parseCliFlags() (ServerSettings, error) {
 func setupLogging(level string) *slog.Logger {
 	logLevel, err := utils.ParseLogLevel(level)
 	if err != nil {
-		logLevel = slog.LevelInfo
+		logLevel = slog.LevelInfo // parseCliFlags rejects it; info still logs that error
 	}
 	return logevent.Setup(os.Stdout, logLevel, "local")
 }

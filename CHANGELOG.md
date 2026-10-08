@@ -61,6 +61,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Session policies read from S3 are fully read before their request context is cancelled**; large objects could truncate.
 - **The audit batch no longer grows without bound or blocks requests during an S3 outage**; past 5000 records the oldest are dropped (`audit.batch.dropped`).
 - **The local dev server drains in-flight requests on shutdown** and bounds write time and header size.
+- **The local dev server exits on an invalid `-log-level`** instead of falling back to `info`.
 
 ### Removed
 
