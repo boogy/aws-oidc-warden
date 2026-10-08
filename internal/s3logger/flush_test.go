@@ -21,15 +21,17 @@ import (
 
 // flakyS3 fails every PutObject while fail is set, and keeps each uploaded body.
 type flakyS3 struct {
-	mu     sync.Mutex
-	fail   bool
-	calls  int
-	bodies [][]byte
-	block  chan struct{}
+	mu      sync.Mutex
+	fail    bool
+	calls   int
+	bodies  [][]byte
+	block   chan struct{}
+	blocked atomic.Bool
 }
 
 func (f *flakyS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	if f.block != nil {
+		f.blocked.Store(true)
 		<-f.block
 	}
 	f.mu.Lock()
@@ -62,14 +64,6 @@ func pending(l *S3Logger) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.logBatch)
-}
-
-func flushInFlight(l *S3Logger) bool {
-	if l.flushMu.TryLock() {
-		l.flushMu.Unlock()
-		return false
-	}
-	return true
 }
 
 func gunzip(t *testing.T, b []byte) string {
@@ -151,7 +145,7 @@ func TestClose_WaitsForInFlightFlush(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- l.BufferRecord([]byte("slow\n")) }()
-	require.Eventually(t, func() bool { return flushInFlight(l) }, time.Second, time.Millisecond)
+	require.Eventually(t, f.blocked.Load, time.Second, time.Millisecond)
 
 	closed := make(chan error, 1)
 	go func() { closed <- l.Close() }()
@@ -172,7 +166,7 @@ func TestBufferRecord_DoesNotBlockWhileUploadInFlight(t *testing.T) {
 	f.block = make(chan struct{})
 
 	go func() { _ = l.BufferRecord([]byte("slow\n")) }()
-	require.Eventually(t, func() bool { return flushInFlight(l) }, time.Second, time.Millisecond)
+	require.Eventually(t, f.blocked.Load, time.Second, time.Millisecond)
 
 	var returned atomic.Bool
 	go func() {
