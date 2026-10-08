@@ -797,3 +797,20 @@ func TestProvider_OverlayBaseOnlyKeysWarn(t *testing.T) {
 		})
 	}
 }
+
+func TestProvider_OverlayCannotMoveItself(t *testing.T) {
+	buf := captureUnknownKeyWarnings(t)
+	base := baseConfig(t)
+	base.S3ConfigBucket, base.S3ConfigPath = "cfg-bucket", "overlay.yaml"
+	require.NoError(t, base.Validate())
+	overlay := func(context.Context) ([]byte, error) {
+		return []byte("s3_config_bucket: other-bucket\ns3_config_path: moved.yaml\n"), nil
+	}
+	p := NewProvider(base, time.Minute, "yaml", overlay)
+	require.NoError(t, p.Refresh(context.Background()))
+
+	assert.Equal(t, "cfg-bucket", p.Get().S3ConfigBucket)
+	assert.Equal(t, "overlay.yaml", p.Get().S3ConfigPath)
+	assert.Contains(t, buf.String(), "overlay_base_only_keys_ignored")
+	assert.Contains(t, buf.String(), "s3_config_path")
+}

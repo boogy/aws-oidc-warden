@@ -22,7 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`s3_config_bucket_owner`** pins the expected owner on S3 config reads; required for `s3://` mappings and fragments; base-only.
 - **`session_policy_bucket_owner`** pins the expected owner on session-policy S3 reads (base-only); startup warns (`policy.s3_owner_unpinned`) when a policy bucket is set without it.
 - **Local dev server `-host` flag**, defaulting to `127.0.0.1` instead of all interfaces.
-- **`max_config_bytes`** sets the size cap for config objects, fragments and session policies (default 1 MiB, max 64 MiB); base-only, so an overlay changing it (or either owner pin) is ignored with a warning.
+- **`max_config_bytes`** sets the size cap for config objects, fragments and session policies (default 1 MiB, max 64 MiB); base-only, so an overlay changing it (or either owner pin, `s3_config_bucket` or `s3_config_path`) is ignored with a warning.
 
 ### Changed
 

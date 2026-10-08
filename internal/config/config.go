@@ -777,15 +777,13 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error
 		if cmp.Or(next.MaxConfigBytes, utils.DefaultMaxConfigBytes) != c.MaxConfigBytes {
 			ignored = append(ignored, "max_config_bytes")
 		}
-		if next.S3ConfigBucketOwner != c.S3ConfigBucketOwner {
-			ignored = append(ignored, "s3_config_bucket_owner")
-		}
-		if next.SessionPolicyBucketOwner != c.SessionPolicyBucketOwner {
-			ignored = append(ignored, "session_policy_bucket_owner")
-		}
 		next.MaxConfigBytes = c.MaxConfigBytes
-		next.S3ConfigBucketOwner = c.S3ConfigBucketOwner
-		next.SessionPolicyBucketOwner = c.SessionPolicyBucketOwner
+		for _, k := range baseOnlyStrings {
+			if *k.field(next) != *k.field(c) {
+				ignored = append(ignored, k.key)
+			}
+			*k.field(next) = *k.field(c)
+		}
 	}
 
 	if err := next.Validate(); err != nil {
@@ -807,6 +805,17 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error
 
 	*c = *next
 	return nil
+}
+
+// baseOnlyStrings are keys read once at boot, so an overlay value would show in Get() without taking effect.
+var baseOnlyStrings = []struct {
+	key   string
+	field func(*Config) *string
+}{
+	{"s3_config_bucket", func(c *Config) *string { return &c.S3ConfigBucket }},
+	{"s3_config_path", func(c *Config) *string { return &c.S3ConfigPath }},
+	{"s3_config_bucket_owner", func(c *Config) *string { return &c.S3ConfigBucketOwner }},
+	{"session_policy_bucket_owner", func(c *Config) *string { return &c.SessionPolicyBucketOwner }},
 }
 
 // clearOnDeclare zeroes a declared slice of structs before decoding, because
