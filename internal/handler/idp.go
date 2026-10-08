@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -111,6 +112,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	tok, err := r.idp.Mint(ctx, req)
 	if err != nil {
 		var ret error
+		reason := ""
 		switch {
 		case errors.Is(err, idp.ErrInvalidSubject):
 			logevent.Warn(ctx, log, logevent.IdPSubjectInvalid, "IdP subject could not be rendered",
@@ -130,9 +132,9 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		default:
 			logevent.Error(ctx, log, logevent.IdPSignFailure, "IdP token signing failed",
 				slog.String("roleArn", role), slog.String("error", err.Error()))
-			ret = ErrIdPUnavailable
+			ret, reason = ErrIdPUnavailable, "idp token signing failed"
 		}
-		rec.Stage, rec.Reason = "idp_mint", ret.Error()
+		rec.Stage, rec.Reason = "idp_mint", cmp.Or(reason, ret.Error())
 		return nil, r.deny(ctx, o, "Token minting failed", fmt.Errorf("%w: %w", ret, err))
 	}
 

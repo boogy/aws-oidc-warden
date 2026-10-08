@@ -90,22 +90,27 @@ func mergeHeaders(extra map[string]string) map[string]string {
 func serveIdP[T any](ctx context.Context, r *RequestProcessor, kind routeKind, method, path string, log *slog.Logger,
 	newResp func(int, string, map[string]string) T,
 ) (resp T, ok bool) {
+	var status int
+	var body string
+	var headers map[string]string
 	switch kind {
 	case routeDiscovery, routeJWKS:
 		r.warnFrozenDrift(ctx, log, r.provider.Get())
-		status, body, headers := r.idpDocument(ctx, kind, method == http.MethodHead, log)
-		return newResp(status, body, headers), true
+		status, body, headers = r.idpDocument(ctx, kind, log)
 	case routeMethodNotAllowed:
-		status, body := errorBody(ctx, ErrMethodNotAllowed, http.StatusMethodNotAllowed)
-		return newResp(status, body, map[string]string{"Allow": "GET, HEAD"}), true
+		status, body = errorBody(ctx, ErrMethodNotAllowed, http.StatusMethodNotAllowed)
+		headers = map[string]string{"Allow": "GET, HEAD"}
 	case routeNotFound:
 		logevent.Debug(ctx, log, logevent.IdPPathNotFound, "idp path not found", slog.String("path", path))
-		status, body := errorBody(ctx, ErrIdPPathNotFound, http.StatusNotFound)
-		return newResp(status, body, nil), true
+		status, body = errorBody(ctx, ErrIdPPathNotFound, http.StatusNotFound)
 	case routeIdPDisabled:
 		logevent.Debug(ctx, log, logevent.IdPPathDisabled, "idp path requested while idp is disabled", slog.String("path", path))
-		status, body := errorBody(ctx, ErrIdPPathNotFound, http.StatusNotFound)
-		return newResp(status, body, nil), true
+		status, body = errorBody(ctx, ErrIdPPathNotFound, http.StatusNotFound)
+	default:
+		return resp, false
 	}
-	return resp, false
+	if method == http.MethodHead {
+		body = ""
+	}
+	return newResp(status, body, headers), true
 }

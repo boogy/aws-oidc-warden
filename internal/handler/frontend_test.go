@@ -431,6 +431,8 @@ func TestIdPFrontends(t *testing.T) {
 			},
 		},
 		{name: "kill switch jwks", mutate: []func(*config.Config){disabled}, method: "GET", path: idpJWKSPath, wantStatus: 404, wantCode: "idp_path_not_found"},
+		{name: "head kill switch jwks", mutate: []func(*config.Config){disabled}, method: "HEAD", path: idpJWKSPath, wantStatus: 404, wantEmpty: true},
+		{name: "head stage prefixed path", method: "HEAD", path: "/prod" + idpJWKSPath, wantStatus: 404, wantEmpty: true},
 		{
 			name: "stage prefixed path", method: "GET", path: "/prod" + idpJWKSPath,
 			wantStatus: 404, wantCode: "idp_path_not_found",
@@ -440,6 +442,7 @@ func TestIdPFrontends(t *testing.T) {
 		},
 		{name: "no idp jwks path", noIdP: true, denyExtract: true, method: "GET", path: idpJWKSPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
 		{name: "no idp credential path", noIdP: true, denyExtract: true, method: "POST", path: idpTokenPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
+		{name: "head loader failure", loadErr: errBoom, method: "HEAD", path: idpJWKSPath, wantStatus: 503, wantEmpty: true},
 		{
 			name: "loader failure", loadErr: errBoom, method: "GET", path: idpJWKSPath, wantStatus: 503, wantCode: "idp_signing_unavailable",
 			wantHeaders: map[string]string{"Content-Type": "application/json"},

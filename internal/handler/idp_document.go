@@ -10,7 +10,7 @@ import (
 )
 
 // idpDocument serves the discovery or JWKS document; the 503 uses the standard error envelope.
-func (r *RequestProcessor) idpDocument(ctx context.Context, kind routeKind, head bool, log *slog.Logger) (status int, body string, headers map[string]string) {
+func (r *RequestProcessor) idpDocument(ctx context.Context, kind routeKind, log *slog.Logger) (status int, body string, headers map[string]string) {
 	ks, err := r.idp.KeySet(ctx)
 	if err != nil {
 		logevent.Warn(ctx, log, logevent.IdPUnavailable, "idp signing keys unavailable", slog.String("error", err.Error()))
@@ -24,8 +24,5 @@ func (r *RequestProcessor) idpDocument(ctx context.Context, kind routeKind, head
 	}
 	logevent.Debug(ctx, log, logevent.IdPDocumentServed, "idp document served", slog.String("path", path))
 	headers = map[string]string{"Cache-Control": "public, max-age=" + strconv.Itoa(int(cfg.JWKSCacheMaxAge.Seconds()))}
-	if head {
-		return http.StatusOK, "", headers
-	}
 	return http.StatusOK, doc, headers
 }

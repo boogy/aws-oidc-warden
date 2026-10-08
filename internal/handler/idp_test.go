@@ -525,7 +525,7 @@ func TestProcessMintSignErrors(t *testing.T) {
 		reason  string
 		signed  int
 	}{
-		{name: "sign_failure", signErr: errBoom, want: handler.ErrIdPUnavailable, signed: 1},
+		{name: "sign_failure", signErr: errBoom, want: handler.ErrIdPUnavailable, reason: "idp token signing failed", signed: 1},
 		{name: "too_large", spec: bigSpec, raw: bigRaw, want: handler.ErrIdPTokenTooLarge},
 		{name: "loader_error", loadErr: errBoom, want: handler.ErrIdPUnavailable},
 		{name: "invalid_subject", subTmpl: "{source_issuer}#{source_subject}#{role_arn}", subject: "org/my repo", want: handler.ErrIdPSubjectInvalid},
