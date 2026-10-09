@@ -536,7 +536,7 @@ No claim is privileged or evaluated in a fixed order: every key under `condition
 
 **Session Security:**
 
-- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. Only `local` server mode with IAM user credentials can exceed 1 hour, up to the target role's own max, cross-account targets included)
+- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. A session over 1 hour requires IdP mode (`idp_token`, see [IDP.md](IDP.md)); `AssumeRole` refuses one)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
 - Credentials are short-lived and expire on their own — no long-lived secrets are ever issued or stored
@@ -558,7 +558,7 @@ Both features are opt-in and default to `false`:
 2. `IsTargetAccountAllowed` checks that account against `cross_account.allowed_accounts` — before any tag read or assumption. With `cross_account` disabled only the hub is allowed; with it enabled the hub is always implicitly allowed, and an **empty list permits any account** (logged as a warning). Non-12-digit IDs are rejected at config load.
 3. _(tag-auth only, cross-account only)_ Assume the convention-named spoke role (`aow-spoke` by default, optional `ExternalID`) just to call `iam:GetRole` and read the target role's tags. Short-lived (`SpokeSessionDuration`, default 15 min), cached in-process per account.
 4. `TagAuth.Authorize` evaluates the tags — see the rules below.
-5. Assume the target role directly with the hub's credentials. Because those are themselves a role session on Lambda, the assume is clamped to 1 hour; only `local` mode with IAM user credentials avoids the clamp.
+5. Assume the target role directly with the hub's credentials. Because those are themselves a role session on Lambda, the assume is clamped to 1 hour; a longer session requires IdP mode.
 
 **Tag matching rules:**
 
