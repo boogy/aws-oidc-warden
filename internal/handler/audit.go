@@ -216,16 +216,7 @@ func subjectAttr(cfg *config.Config, subject string) slog.Attr {
 	return slog.String("subject", subject)
 }
 
-// recordDecision redacts rec per cfg.LogClaimValues, emits the standardized
-// decision log line from the redacted record, then sends it to the audit
-// sink as one JSON record: synchronously via WriteRecord when
-// cfg.AuditEnforced() and the record is not pre-auth, otherwise best-effort
-// via BufferRecord.
-//
-// Callers must set rec.Decision before calling. On the synchronous path, a
-// missing sink, marshal failure, or write failure all return an error
-// wrapping ErrAuditWriteFailed and the caller must fail closed; otherwise
-// failures are logged and swallowed so the decision still proceeds.
+// recordDecision logs the redacted rec and sends it to the sink; a synchronous-path failure wraps ErrAuditWriteFailed and must fail closed.
 func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.redact(cfg.LogClaimValues)
 	// Unauthenticated floods must not hammer the shared S3 prefix and fail real allows closed.

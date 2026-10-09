@@ -96,10 +96,7 @@ func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 	}
 }
 
-// rejectUnusedKeys fails on a nested key no struct field claimed
-// (role_mappings[0].condtions, tag_auth.enabeld): such a typo silently drops
-// the setting it was meant to carry. An unused top-level key only warns, so
-// holder keys such as YAML anchors (x-anchors) keep loading.
+// rejectUnusedKeys fails on an unclaimed nested key; an unused top-level key (e.g. YAML anchors) only warns.
 func rejectUnusedKeys(unused []string, source string) error {
 	unused = slices.Sorted(slices.Values(unused))
 	for _, key := range unused {

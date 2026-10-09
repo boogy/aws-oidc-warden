@@ -100,10 +100,7 @@ func isBlockedIP(ip net.IP, allowLoopback bool) bool {
 	return isBlockedAddr(addr, allowLoopback)
 }
 
-// isBlockedAddr reports whether addr must never be dialed: private,
-// link-local (covers the 169.254.169.254 cloud metadata address),
-// unspecified, multicast, or in blockedPrefixes. Loopback is blocked too
-// unless allowLoopback is set.
+// isBlockedAddr reports whether addr must never be dialed; loopback is allowed only with allowLoopback.
 func isBlockedAddr(addr netip.Addr, allowLoopback bool) bool {
 	addr = addr.Unmap().WithZone("")
 	if !addr.IsValid() {

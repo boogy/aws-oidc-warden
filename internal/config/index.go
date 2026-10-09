@@ -57,16 +57,7 @@ const (
 	subjectOwner
 )
 
-// classifySubject buckets a subject pattern from its parse tree. A
-// case-sensitive literal goes in exact under the string it matches; a concat
-// whose leading case-sensitive literal contains '/' goes in byOwner under the
-// text before that '/'; anything else (alternation, (?i), a quantified first
-// slash, a leading group) is "any" and always scanned.
-//
-// The tree, not string surgery on the raw text: "myorg/?prod-.*" can match
-// "myorgprod-x" and "a/b|c/d" matches owner c, so neither may be owner-bucketed.
-// The parser keeps the last rune of a literal separate when a quantifier
-// follows it, so a leading literal is genuinely mandatory.
+// classifySubject buckets a subject pattern as exact, byOwner (mandatory leading literal with '/'), or any.
 func classifySubject(pattern string) (key string, class subjectClass) {
 	re, err := parsePattern(pattern)
 	if err != nil {

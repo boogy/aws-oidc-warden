@@ -380,10 +380,7 @@ func clonePatterns(in Patterns) Patterns {
 // "always true", so anchor rejects it.
 var errUniversalPattern = errors.New("pattern matches every value")
 
-// isUniversal reports whether the simplified parse tree re provably matches
-// every string (any text, newlines aside: `.*` counts). It is sound for what
-// it accepts, not complete: it covers the shapes that reduce to "any
-// character, repeated" and not every regexp equivalent to one.
+// isUniversal reports whether parse tree re provably matches every string (newlines aside); sound, not complete.
 func isUniversal(re *syntax.Regexp) bool {
 	switch re.Op {
 	case syntax.OpCapture, syntax.OpQuest:
@@ -598,15 +595,7 @@ func (r *claimResolver) buildFolded() {
 	}
 }
 
-// claimText renders a scalar claim VALUE as the text a pattern can be compared
-// against, reporting false when the shape has no such rendering.
-//
-// It goes through utils.FormatClaimValue, so a value a condition decides on
-// reads identically to the value the audit record reports. A JSON object —
-// and nil, []any, and anything else structural — has no canonical text and
-// returns false; those are handled by the caller. types.OpaqueClaim IS
-// readable here and valueIsUndecidable still vetoes it: for that one type the
-// two are deliberately not complements.
+// claimText renders a scalar claim value via utils.FormatClaimValue; false for a structural shape.
 func claimText(v any) (string, bool) {
 	switch t := v.(type) {
 	case types.OpaqueClaim:
@@ -634,12 +623,6 @@ func claimText(v any) (string, bool) {
 // text while negation vetoes, and NOT(NOT(x)) == x does NOT hold for it. That
 // asymmetry is load-bearing — removing it reopens the apigw none_of fail-open
 // (TestOpaqueClaimPositiveAndNoneOfAreNotComplements).
-//
-// A newline is undecidable because `.` does not match it: a veto such as
-// `.*@contractor\.com` would not fire on "x\nbob@contractor.com", so the
-// refused caller would pass. It fails closed under negation, and positive
-// matching is unchanged. The same asymmetry applies, so NOT(NOT(x)) == x does
-// not hold for such a value either.
 //
 // Absence is deliberately NOT undecidable: nil, from a missing claim or a JSON
 // null, is a known state, and none_of's exact-negation semantics depend on it.
