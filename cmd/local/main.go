@@ -193,7 +193,7 @@ func newMux(logger *slog.Logger, latency time.Duration, handlerFunc func(context
 	return mux
 }
 
-// maxLocalBodyBytes sits one byte above the handler's cap so its own size check still answers.
+// maxLocalBodyBytes sits one byte above the handler's cap so an over-cap body still reaches its size check.
 const maxLocalBodyBytes = handler.MaxBodyBytes + 1
 
 // localHandler adapts the Lambda handler to net/http.
@@ -215,7 +215,8 @@ func localHandler(logger *slog.Logger, latency time.Duration, handlerFunc func(c
 		}
 
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLocalBodyBytes))
-		if err != nil {
+		var tooLarge *http.MaxBytesError
+		if err != nil && !errors.As(err, &tooLarge) {
 			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
 				slog.String("reason", "body read failed"), slog.String("error", err.Error()))
 			http.Error(w, "Error reading request body", http.StatusBadRequest)
