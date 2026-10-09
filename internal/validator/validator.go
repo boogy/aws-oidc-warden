@@ -332,9 +332,7 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 	return checkAndNormalizeClaims(raw, spec, bounds, t.timeNow())
 }
 
-// peekIssuer returns the token's unverified iss for registry routing only. It
-// decodes just the payload; ParseWithClaims re-verifies the issuer, so a wrong
-// peek can only fail closed.
+// peekIssuer returns the token's unverified, exact-key iss for registry routing only.
 func peekIssuer(tokenString string) (string, error) {
 	first := strings.IndexByte(tokenString, '.')
 	if first < 0 {
@@ -350,20 +348,15 @@ func peekIssuer(tokenString string) (string, error) {
 	if err != nil {
 		return "", malformedTokenErr("could not base64 decode claim")
 	}
-	var claims struct {
-		Iss string `json:"iss"`
-	}
+	var claims map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &typeErr) && typeErr.Field != "" {
-			return "", fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
-		}
 		return "", malformedTokenErr("could not JSON decode claim")
 	}
-	if claims.Iss == "" {
+	var iss string
+	if raw, ok := claims["iss"]; !ok || json.Unmarshal(raw, &iss) != nil || iss == "" {
 		return "", fmt.Errorf("%w: missing or invalid iss claim", ErrUnknownIssuer)
 	}
-	return claims.Iss, nil
+	return iss, nil
 }
 
 func malformedTokenErr(reason string) error {

@@ -42,7 +42,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Outbound JWKS/discovery fetches check every address actually dialed** and also block CGNAT, benchmarking, documentation and reserved ranges.
 - **Tag-auth caches IAM `NoSuchEntity` for 30s** per role, so unknown role names cannot burn the IAM quota.
 - **Audit `sessionTagKeys` lists the tags actually attached**, and a dropped tag warns once per request.
-- **Hot-path performance**: literal subjects and conditions skip regex, non-one-pass subject patterns are owner-bucketed, unchanged config refreshes skip the rebuild, audit gzip writers are pooled, the issuer peek and key memo no longer allocate, and session tags are built once per request.
+- **Hot-path performance**: literal subjects and conditions skip regex, non-one-pass subject patterns are owner-bucketed, unchanged config refreshes skip the rebuild, audit gzip writers are pooled, the issuer peek allocates less, the key memo no longer allocates, and session tags are built once per request.
 
 ### Fixed
 

@@ -72,6 +72,11 @@ func TestPeekIssuer(t *testing.T) {
 		{"array iss", hdr + "." + b64(`{"iss":["https://a"]}`) + ".sig", "", false, true},
 		{"object iss", hdr + "." + b64(`{"iss":{"a":1}}`) + ".sig", "", false, true},
 		{"null iss", hdr + "." + b64(`{"iss":null}`) + ".sig", "", false, true},
+		{"uppercase ISS ignored", hdr + "." + b64(`{"ISS":"https://a"}`) + ".sig", "", false, true},
+		{"mixed-case Iss ignored", hdr + "." + b64(`{"Iss":"https://a"}`) + ".sig", "", false, true},
+		{"long-s iss ignored", hdr + "." + b64(`{"iſs":"https://a"}`) + ".sig", "", false, true},
+		{"case variant does not override iss", hdr + "." + b64(`{"iss":"https://a","ISS":"https://b"}`) + ".sig", "https://a", false, false},
+		{"duplicate iss last wins", hdr + "." + b64(`{"iss":"https://a","iss":"https://b"}`) + ".sig", "https://b", false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
