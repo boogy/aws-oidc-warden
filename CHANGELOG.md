@@ -73,6 +73,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Dependencies
 
+- **Go toolchain** 1.27.1 → 1.27.2 (`go` directive in `go.mod`), fixing 9 standard-library vulnerabilities (GO-2026-6603 to GO-2026-6617).
 - **AWS SDK for Go v2**
   - `github.com/aws/aws-sdk-go-v2/service/kms` v1.61.1 (new)
 
