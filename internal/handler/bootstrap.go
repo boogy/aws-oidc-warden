@@ -46,11 +46,10 @@ func warmJWKSCache(mode string, v jwksWarmer) bool {
 // callerWarmTimeout bounds the cold-start STS caller-identity warm-up.
 const callerWarmTimeout = 3 * time.Second
 
-// warmRoleARN is a syntactically valid placeholder; the warm-up only needs the account check to resolve the hub identity.
+// warmRoleARN is a placeholder; warm-up only needs it to resolve the hub identity.
 const warmRoleARN = "arn:aws:iam::000000000000:role/warm"
 
-// warmCallerIdentity primes the consumer's cached STS caller identity so the first AssumeRole skips that round trip.
-// Best-effort: a failure is logged and the first request retries lazily.
+// warmCallerIdentity primes the cached STS caller identity; best-effort, failure is logged.
 func warmCallerIdentity(logger *slog.Logger, c aws.AwsConsumerInterface) {
 	ctx, cancel := context.WithTimeout(context.Background(), callerWarmTimeout)
 	defer cancel()

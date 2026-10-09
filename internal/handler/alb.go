@@ -94,8 +94,7 @@ func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, h
 	return newRequestContext(ctx, "", "", headers)
 }
 
-// parseRequest picks the body and extraction path from the configured mode, never from header presence.
-// In alb mode a missing header still reaches the extractor, which denies it.
+// parseRequest picks the extraction path from the configured mode, never from header presence.
 func (h *AwsApplicationLoadBalancer) parseRequest(body string, headers map[string]string) (*RequestData, validator.ExtractionInput, error) {
 	if !h.albMode {
 		data, err := ParseRequestBody(body)

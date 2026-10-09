@@ -112,9 +112,7 @@ func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers
 		}
 	}
 
-	// The fragment's default binds only its own entries; cfg.DefaultIssuer is
-	// never touched, so it cannot re-home another source's issuer-less entries.
-	// The appended elements are copies, so the cached parse stays unmodified.
+	// The fragment's default binds only its own entries; cfg.DefaultIssuer is never touched.
 	nm, ng := len(cfg.RoleMappings), len(cfg.RoleGroups)
 	cfg.RoleMappings = append(cfg.RoleMappings, frag.RoleMappings...)
 	cfg.RoleGroups = append(cfg.RoleGroups, frag.RoleGroups...)

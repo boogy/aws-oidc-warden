@@ -8,9 +8,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
 
-// maxKeyMemoEntries bounds the in-process pre-parsed-key memo so churn of
-// distinct (issuer, kid) pairs can't grow it unboundedly. Hitting the cap just
-// clears the memo — perf cost only, never a security regression.
+// maxKeyMemoEntries bounds the key memo; hitting it clears the memo.
 const maxKeyMemoEntries = 4096
 
 // keyMemoKey identifies a memo slot; the key material is compared on lookup.
@@ -28,10 +26,7 @@ type keyMemoEntry struct {
 	key      any
 }
 
-// keyMemo caches parsed, re-validated (RSA >=2048 / EC on-curve) public keys
-// per (issuer, kid). An entry is served only while its stored key material
-// equals the JWK's, so a key rotated under a reused kid misses and is
-// re-parsed + re-validated instead of serving a stale key.
+// keyMemo caches parsed, re-validated public keys per (issuer, kid); served only while key material is unchanged.
 type keyMemo struct {
 	entries sync.Map // keyMemoKey -> keyMemoEntry
 	size    atomic.Int64
@@ -63,9 +58,7 @@ func (m *keyMemo) store(issuer string, jwk types.JSONWebKey, key any) {
 	}
 }
 
-// resolveKey returns the parsed, re-validated public key for key, using the
-// in-process memo when it holds this (issuer, kid) with identical key
-// material, and populating it otherwise.
+// resolveKey returns the parsed, re-validated public key, via the memo when key material matches.
 func (t *TokenValidator) resolveKey(issuer string, key types.JSONWebKey) (any, error) {
 	if cached, ok := t.keyMemo.load(issuer, key); ok {
 		return cached, nil

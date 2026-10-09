@@ -2,19 +2,8 @@ package types
 
 import "github.com/golang-jwt/jwt/v5"
 
-// Claims is the canonical verified-claims structure produced by the validator
-// for every provider. GitHub-specific fields are populated only when the
-// token's issuer is configured with provider: "github";
-// for any other provider only the embedded RegisteredClaims, Subject, and Raw
-// are populated.
-//
-// Subject is the canonical authorization identity and the field authz/
-// session-tag code must read. It is set exclusively by normalizeClaims
-// (internal/validator) from the issuer's claim_mappings.subject — never from
-// token JSON directly, so a token can never self-assert its own identity; the
-// depth-0 Sub field below shadows the embedded RegisteredClaims.Subject for
-// JSON purposes and retains the raw "sub" claim instead. Do not read Subject
-// on a value that hasn't gone through Validate()/normalizeClaims.
+// Claims is the verified-claims structure the validator produces; GitHub fields are set only for provider "github".
+// Subject is the canonical identity, set only by normalizeClaims (never from token JSON); Sub keeps the raw "sub".
 type Claims struct {
 	jwt.RegisteredClaims
 	Actor                string `json:"actor"`

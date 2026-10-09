@@ -1727,9 +1727,6 @@ func TestNoneOfReadsNonStringClaimValues(t *testing.T) {
 	})
 }
 
-// `.` does not match a newline, so a veto written as `.*@contractor\.com`
-// would never fire on "x\nbob@contractor.com"; under negation that value
-// counts as matched instead.
 func TestNoneOfNewlineValueFailsClosed(t *testing.T) {
 	veto := &Condition{
 		Ref:    Patterns{"main"},

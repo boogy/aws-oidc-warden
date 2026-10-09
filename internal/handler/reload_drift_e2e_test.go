@@ -267,11 +267,6 @@ func runDrift(t *testing.T, refreshInterval time.Duration) []driftCall {
 	return append([]driftCall(nil), consumer.calls...)
 }
 
-// TestProcessRequestNeverAuthorizesAcrossGenerations is the full-pipeline
-// drift guard. With the fix in place, every successful AssumeRole call must
-// be self-consistent: runDrift sends only aud-v2 tokens (the audience only
-// generation B accepts, which is also the generation with the role retired),
-// so no call for driftAllowedRole may succeed.
 func TestProcessRequestNeverAuthorizesAcrossGenerations(t *testing.T) {
 	calls := runDrift(t, time.Nanosecond)
 

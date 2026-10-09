@@ -101,10 +101,6 @@ func fragmentTestBaseConfig(t *testing.T, fragmentPath string) *config.Config {
 	return cfg
 }
 
-// TestBuildConfigProvider_LocalFragmentsWithoutS3Source is the regression test
-// for fragments being silently dropped when no S3 config source is set: the
-// provider BuildConfigProvider returns must serve a config with the fragment's
-// role_mappings merged in, not the bare base config.
 func TestBuildConfigProvider_LocalFragmentsWithoutS3Source(t *testing.T) {
 	fragPath := filepath.Join(t.TempDir(), "team-fragment.yaml")
 	require.NoError(t, os.WriteFile(fragPath, []byte(`

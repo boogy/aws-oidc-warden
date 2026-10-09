@@ -113,8 +113,7 @@ func (c *localCache) evictLRU(ctx context.Context) {
 	}
 }
 
-// loadAWSConfig loads the default AWS config. backend labels the cache
-// backend in the error log.
+// loadAWSConfig loads the default AWS config; backend labels errors.
 func loadAWSConfig(ctx context.Context, backend string) (aws.Config, error) {
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRetryMaxAttempts(Defaults.MaxRetries),

@@ -245,8 +245,7 @@ func (l *S3Logger) onBatchTimer() {
 	l.batchTimer = time.AfterFunc(l.s3Config.MaxBatchAge, l.onBatchTimer)
 }
 
-// writeLogToS3 batches a copy of data for S3. Best-effort: checked against the
-// live config, not the boot snapshot, and no-ops (never errors) when disabled.
+// writeLogToS3 batches a copy of data; best-effort, checks live config, no-ops when disabled.
 func (l *S3Logger) writeLogToS3(data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -286,8 +285,7 @@ func (l *S3Logger) Flush() error {
 	return l.flushBatch()
 }
 
-// flushBatch uploads the pending batch outside mu; a failed batch is re-queued
-// (capped) for the next attempt. Caller must hold flushMu.
+// flushBatch uploads the pending batch outside mu, re-queuing (capped) on failure; caller holds flushMu.
 func (l *S3Logger) flushBatch() error {
 	l.mu.Lock()
 	batch := l.logBatch

@@ -322,10 +322,7 @@ type Config struct {
 	// config load rather than silently falling back at first use.
 	LogLevel string `mapstructure:"log_level" json:"log_level,omitempty"`
 
-	// LogClaimValues controls whether claim VALUES (canonical subject, raw
-	// jwtSub, audience) appear in structured logs and audit records. Default
-	// on; false logs only claim NAMES plus the decision/reason. Session tag
-	// keys are always logged; tag values follow this flag too.
+	// LogClaimValues (default on) controls whether claim values and session tag values appear in logs and audit records.
 	LogClaimValues bool `mapstructure:"log_claim_values" json:"log_claim_values,omitempty"`
 
 	// AuditRequired, when true, makes the audit trail a hard dependency of the
@@ -1180,8 +1177,7 @@ func (c *Config) Validate() error {
 		if err := validateSessionTagKeys(m.SessionTags); err != nil {
 			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
 		}
-		// Rejected rather than ignored: a silently dropped override reads
-		// as applied, and the tag feeds ABAC conditions in the target role.
+		// Rejected, not ignored: a dropped override reads as applied and feeds ABAC.
 		for tagKey := range m.SessionTags {
 			if _, dup := issuerTags[tagKey]; dup {
 				return fmt.Errorf("%s[%d] (%s): session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", source, i, subject, tagKey, resolvedIssuer)
@@ -1552,13 +1548,7 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 	return out, nil
 }
 
-// compileAnchoredSubject compiles a subject pattern as an auto-anchored
-// regex, rejecting patterns that match everything (isUniversal) like compileAnchoredCondition:
-// a subject is the primary identity gate, so ".*" would grant every subject
-// of the bound issuer.
-//
-// The empty guard lives here, not in the caller, so every subject path shares
-// it: "" anchors to "^(?:)$", which reads as a gate but matches nothing real.
+// compileAnchoredSubject compiles an auto-anchored subject regex, rejecting universal and empty patterns.
 func compileAnchoredSubject(pattern string, rc regexCache) (*matcher, error) {
 	if pattern == "" {
 		return nil, errors.New("subject pattern must not be empty")
@@ -1573,8 +1563,7 @@ func compileAnchoredSubject(pattern string, rc regexCache) (*matcher, error) {
 // maxSessionTags is the STS limit on session tags per AssumeRole call.
 const maxSessionTags = 50
 
-// validateSessionTagKeys rejects keys STS would refuse: bad charset/length, or
-// the reserved aws: prefix (case-insensitive).
+// validateSessionTagKeys rejects keys STS refuses: bad charset/length or the aws: prefix.
 func validateSessionTagKeys(tags map[string]string) error {
 	for _, key := range utils.SortedKeys(tags) {
 		if !sessionTagKeyPattern.MatchString(key) {
@@ -1587,8 +1576,7 @@ func validateSessionTagKeys(tags map[string]string) error {
 	return nil
 }
 
-// checkSessionTagSet rejects keys that collide case-insensitively (STS treats
-// them as one key) and a union of more than maxSessionTags.
+// checkSessionTagSet rejects case-insensitive key collisions and unions over maxSessionTags.
 func checkSessionTagSet(sets ...map[string]string) error {
 	seen := make(map[string]string)
 	for _, set := range sets {
@@ -1606,8 +1594,7 @@ func checkSessionTagSet(sets ...map[string]string) error {
 	return nil
 }
 
-// mergeSessionTags returns issuerTags plus extra (issuer wins) after checking
-// the union. With no extra it returns issuerTags itself, already checked.
+// mergeSessionTags returns issuerTags plus extra (issuer wins) after checking the union.
 func mergeSessionTags(issuerTags, extra map[string]string) (map[string]string, error) {
 	if len(extra) == 0 {
 		return issuerTags, nil
@@ -1766,13 +1753,8 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 	return nil
 }
 
-// EffectiveSessionTags is the session_tags spec for a granted role: the
-// issuer's spec plus whatever the authorizing mapping adds. Session tags are
-// per-issuer by design — issuers mint different claims, so there is no global
-// spec to inherit. Additive only: Validate() rejects a mapping key the issuer
-// already defines. The union is built once in Validate(); callers must treat
-// the result as read-only. A role granted by tag-auth has no authorizing
-// mapping and gets the issuer spec alone; an unconfigured issuer gets nothing.
+// EffectiveSessionTags is the issuer's session_tags spec plus the authorizing mapping's additive extras.
+// Read-only; tag-auth roles get the issuer spec alone, an unconfigured issuer nothing.
 func (c *Config) EffectiveSessionTags(issuer string, d Decision) map[string]string {
 	iss := c.issuerConfig(issuer)
 	if iss == nil {

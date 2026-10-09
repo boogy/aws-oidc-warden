@@ -10,11 +10,9 @@ import (
 )
 
 const (
-	// jwksFailureMemoTTL is how long a failed JWKS fetch suppresses further
-	// fetches for the same cache key.
+	// jwksFailureMemoTTL is how long a failed fetch suppresses retries for its cache key.
 	jwksFailureMemoTTL = 5 * time.Second
-	// maxJWKSStateEntries bounds each map below; hitting it clears the map
-	// (perf cost only).
+	// maxJWKSStateEntries bounds each map below; hitting it clears the map.
 	maxJWKSStateEntries = 256
 )
 
@@ -28,16 +26,14 @@ type jwksWrite struct {
 	at   time.Time
 }
 
-// jwksState holds per-cache-key bookkeeping for JWKS fetches: a short failure
-// memo and the hash/time of the last cache write.
+// jwksState holds per-key failure memos and last-cache-write hash/time.
 type jwksState struct {
 	mu       sync.Mutex
 	failures map[string]jwksFailure
 	writes   map[string]jwksWrite
 }
 
-// recentFailure returns the error of a fetch for key that failed within
-// jwksFailureMemoTTL of now, or nil.
+// recentFailure returns key's fetch error within jwksFailureMemoTTL of now, or nil.
 func (s *jwksState) recentFailure(key string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,8 +58,7 @@ func (s *jwksState) clearFailure(key string) {
 	delete(s.failures, key)
 }
 
-// writtenRecently reports whether key was last written with content hash
-// less than maxAge before now.
+// writtenRecently reports whether key was written with hash less than maxAge before now.
 func (s *jwksState) writtenRecently(key string, hash [sha256.Size]byte, now time.Time, maxAge time.Duration) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

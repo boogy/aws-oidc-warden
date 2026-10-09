@@ -51,13 +51,8 @@ var (
 	ErrTokenTooOld = errors.New("token age exceeds maximum allowed")
 )
 
-// TokenValidatorInterface validates an OIDC token end to end — signature,
-// issuer, audience, expiration, required claims — and normalizes the result
-// to a canonical subject + raw claims map.
-//
-// Deliberately scoped to Validate only: FetchJWKS and GenKeyFunc remain
-// exported on the concrete *TokenValidator for tests, but
-// are an unscoped, audience-less path, not a standalone validation entry point.
+// TokenValidatorInterface validates an OIDC token end to end and normalizes it to a canonical subject + raw claims.
+// Scoped to Validate only: FetchJWKS and GenKeyFunc are audience-less and not a validation entry point.
 type TokenValidatorInterface interface {
 	Validate(ctx context.Context, tokenString string) (*types.Claims, error)
 }
@@ -132,12 +127,8 @@ type TokenValidator struct {
 	// cooldowns. Defaults to time.Now; overridable via WithTimeNow for tests.
 	timeNow func() time.Time
 
-	// refetch rate-limits forced (cache-bypassing) JWKS refetches per
-	// (issuer, kid). keyMemo caches parsed, re-validated public keys per
-	// (issuer, kid, key material). jwksURICache memoizes a discovery-resolved
-	// jwks_uri per issuer. sfGroup collapses concurrent cold JWKS fetches for
-	// the same cache key into a single upstream call; jwksState remembers recent
-	// failures and cache writes.
+	// refetch limits forced refetches per (issuer, kid); keyMemo caches parsed keys; jwksURICache memoizes
+	// discovery per issuer; sfGroup dedups cold fetches; jwksState tracks recent failures and writes.
 	refetch      *refetchLimiter
 	keyMemo      *keyMemo
 	jwksURICache sync.Map // issuer -> discoveredURI
@@ -212,10 +203,7 @@ func (t *TokenValidator) rebuildSnapshot(cfg *config.Config) *snapshot {
 	return snap
 }
 
-// WarmPrefetch fetches and caches the JWKS for every configured issuer,
-// concurrently, returning once all finish or ctx ends. Intended for
-// cold-start; a fetch failure is logged and otherwise ignored — it must never
-// fail bootstrap.
+// WarmPrefetch concurrently fetches and caches every issuer's JWKS at cold start; failures are logged, never fatal.
 func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, spec := range t.currentSnapshot().registry {
@@ -317,17 +305,13 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 		return nil, errors.New("token is invalid")
 	}
 
-	// Step 4b: re-assert the now-verified issuer, closing the gap between the
-	// registry lookup (step 2) and here in case a hot reload swapped mid-call.
+	// Re-assert the verified issuer in case a hot reload swapped the registry mid-call.
 	verifiedIssuer, err := raw.GetIssuer()
 	if err != nil || verifiedIssuer != spec.Issuer {
 		return nil, fmt.Errorf("%w: verified issuer changed during validation", ErrUnknownIssuer)
 	}
 
-	// Steps 6-10: sub/iat/exp/nbf, lifetime/age caps, audience ANY-match,
-	// required_claims, and normalization — shared with the delegated
-	// (apigw/alb) extractors via checkAndNormalizeClaims so no mode can
-	// silently drift weaker.
+	// Shared with the delegated (apigw/alb) extractors so no mode drifts weaker.
 	bounds := claimBounds{leeway: leeway, maxLifetime: cfg.MaxTokenLifetime, maxAge: cfg.MaxTokenAge}
 	return checkAndNormalizeClaims(raw, spec, bounds, t.timeNow())
 }
@@ -548,16 +532,8 @@ func normalizeClaims(raw jwt.MapClaims, provider string, mappings map[string]str
 	return claims, nil
 }
 
-// genKeyFuncForIssuer returns a jwt.Keyfunc scoped to issuer that resolves a
-// token's kid to a JWKS key. Beyond a kid match, a candidate must also have
-// use "sig" or unset, alg matching the token's alg (if set), and a key type
-// matching the token alg's family (RSA for RS*, EC for ES*, with the curve
-// the alg mandates) — this blocks an
-// alg-confusion or duplicate-kid-different-type attack. Scanning continues
-// past a kid match that fails these checks, so a duplicate kid with one
-// matching and one non-matching key still resolves correctly. issuer scopes
-// the key memo (keymemo.go) so the same kid from different issuers is never
-// conflated.
+// genKeyFuncForIssuer returns a jwt.Keyfunc resolving a token's kid within issuer's JWKS.
+// A candidate must also match use, alg and key-type family (blocks alg confusion); scanning continues past mismatches.
 func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jwt.Keyfunc {
 	return func(token *jwt.Token) (any, error) {
 		kid, ok := token.Header["kid"].(string)

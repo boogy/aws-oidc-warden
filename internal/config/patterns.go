@@ -78,11 +78,8 @@ func nilConditionHookFunc() mapstructure.DecodeHookFuncType {
 	}
 }
 
-// decoderOptions returns the mapstructure options EVERY config unmarshal must
-// pass (LoadConfig, MergeBytes, parseFragment). viper.DecodeHook REPLACES
-// viper's default chain, so its defaults are re-composed here after ours.
-//
-// md, when non-nil, receives the decode metadata; see rejectUnusedKeys.
+// decoderOptions returns the mapstructure options every config unmarshal must pass; md, if non-nil, receives decode metadata.
+// viper.DecodeHook replaces viper's default chain, so the defaults are re-composed here.
 func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 	return []viper.DecoderConfigOption{
 		viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(

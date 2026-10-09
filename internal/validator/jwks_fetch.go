@@ -25,10 +25,7 @@ func issuerAttrs(issuer string, extra ...slog.Attr) []slog.Attr {
 	return append(attrs, extra...)
 }
 
-// FetchJWKS fetches the JWKS for the given issuer, using the cache when
-// available. Exposed standalone (no jwks_uri override) for tests; Validate
-// uses the issuer's registered spec instead, which may carry a jwks_uri
-// override.
+// FetchJWKS fetches the JWKS for issuer via the cache; test-only entry (no jwks_uri override).
 func (t *TokenValidator) FetchJWKS(ctx context.Context, issuer string) (*types.JWKS, error) {
 	return t.fetchJWKS(ctx, &issuerSpec{Issuer: issuer}, false)
 }
@@ -45,12 +42,7 @@ func jwksCacheKey(spec *issuerSpec) string {
 	return spec.Issuer + "|jwks_uri=" + hex.EncodeToString(sum[:8])
 }
 
-// fetchJWKS fetches (or serves from cache) the JWKS for spec.Issuer. When
-// spec.JWKSURI is set, OIDC discovery is skipped and that URL is fetched
-// directly (still required to be a secure URL). When force is true the cache
-// is bypassed — used to recover from signing-key rotation. Concurrent cold
-// fetches for the same cache key are deduplicated via a singleflight, and a
-// fetch that failed within jwksFailureMemoTTL is not retried.
+// fetchJWKS returns the JWKS for spec.Issuer from cache or network; force bypasses the cache (key rotation).
 func (t *TokenValidator) fetchJWKS(ctx context.Context, spec *issuerSpec, force bool) (*types.JWKS, error) {
 	key := jwksCacheKey(spec)
 	if !force {
@@ -68,8 +60,7 @@ func (t *TokenValidator) fetchJWKS(ctx context.Context, spec *issuerSpec, force 
 		return nil, fmt.Errorf("jwks fetch skipped after recent failure: %w", prev)
 	}
 
-	// The shared fetch ignores its initiator's cancellation; each caller still
-	// stops waiting when its own ctx ends.
+	// The shared fetch ignores its initiator's cancellation.
 	fetchCtx := context.WithoutCancel(ctx)
 	ch := t.sfGroup.DoChan(key, func() (any, error) {
 		jwks, err := t.fetchAndCacheJWKS(fetchCtx, spec, force)
@@ -113,10 +104,7 @@ func (t *TokenValidator) storeJWKS(ctx context.Context, key string, jwks *types.
 	}
 }
 
-// fetchAndCacheJWKS does the actual network work for fetchJWKS: resolve the
-// JWKS URI (explicit override, memoized discovery, or a fresh discovery
-// call), fetch + validate the JWKS, and cache it. Runs inside the
-// singleflight group, so it executes at most once per cache key per in-flight fetch.
+// fetchAndCacheJWKS resolves the JWKS URI, fetches and validates the JWKS, and caches it; runs inside the singleflight group.
 func (t *TokenValidator) fetchAndCacheJWKS(ctx context.Context, spec *issuerSpec, force bool) (*types.JWKS, error) {
 	jwksURI := spec.JWKSURI
 	// Only a discovery-resolved URI (no per-issuer override) is eligible for

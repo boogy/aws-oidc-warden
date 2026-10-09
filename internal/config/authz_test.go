@@ -309,11 +309,6 @@ func TestIndexParity(t *testing.T) {
 			if i%7 == 0 && i+1 < numOwners {
 				addMapping(iss, fmt.Sprintf("%s/special|%s/special", o, owners[i+1]))
 			}
-			// Quantified first slash: the '/' is optional/repeatable, so these
-			// also match slash-less subjects (e.g. "owner0opt-x") whose owner
-			// segment differs from the literal prefix. classifySubject must NOT
-			// bucket them as owner-scoped or Authorize would miss those
-			// matches. Only every 5th owner, to bound the count.
 			if i%5 == 0 {
 				addMapping(iss, fmt.Sprintf("%s/?opt-.*", o))
 				addMapping(iss, fmt.Sprintf("%s/*star-.*", o))
@@ -476,11 +471,6 @@ func TestLiteralSubjectsSkipRegexp(t *testing.T) {
 
 // ---------- P2: anchoring ----------
 
-// TestClassifySubject_QuantifiedFirstSlash is the regression test for the index
-// mis-bucketing bug: a subject pattern whose first '/' is quantified (optional
-// or repeatable) also matches slash-less subjects, so it must not be bucketed
-// under a literal owner — Authorize keys on ownerOf(subject) and would miss
-// those matches, diverging from a linear scan (and mis-scoping session policy).
 func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 	// (pattern, must-not-be-owner-bucketed)
 	anyShapes := []string{

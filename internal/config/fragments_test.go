@@ -803,10 +803,6 @@ func TestAudit_RoleGroupOrderingAmongstThemselves(t *testing.T) {
 	assert.Equal(t, "first.json", *polFile)
 }
 
-// ---------------------------------------------------------------------------
-// F. a fragment's default_issuer is scoped to that fragment
-// ---------------------------------------------------------------------------
-
 const (
 	fragIssA = "https://token.actions.githubusercontent.com"
 	fragIssB = "https://gitlab.example.com"

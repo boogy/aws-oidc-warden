@@ -759,10 +759,6 @@ func assumeFailingProc(t *testing.T, assumeErr error) (*fakeConsumer, *handler.R
 	return fc, handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
 }
 
-// The tags that reach AssumeRole must be built from the issuer's tags plus the
-// authorizing mapping's extras — and the audit record's sessionTagKeys must
-// report the same set, since that field is what an operator reads to confirm
-// which tags an ABAC policy actually received.
 func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 	cfg := &config.Config{
 		Issuers: []config.IssuerConfig{{

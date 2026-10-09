@@ -5,11 +5,8 @@ import (
 	"strings"
 )
 
-// issuerIndex buckets one issuer's effective RoleMappings by subject-pattern
-// specificity so AuthorizeRoles/FindSessionPolicy can skip mappings that
-// provably cannot match. Owner and any candidates are re-verified against
-// their compiledPattern (config.go); exact ones are proven by the map hit.
-// Soundness of the bucket assignment itself is classifySubject's job.
+// issuerIndex buckets an issuer's RoleMappings by subject specificity so lookups skip provable non-matches.
+// Owner and any candidates are re-verified; bucket soundness is classifySubject's job.
 type issuerIndex struct {
 	exact   map[string][]*RoleMapping // subject pattern is a literal, whole string
 	byOwner map[string][]*RoleMapping // subject pattern's first "owner/" segment is literal

@@ -11,14 +11,10 @@ import (
 	"time"
 )
 
-// maxJWKSRedirects bounds how many redirects the JWKS/discovery HTTP client
-// will follow. Each hop is re-validated by CheckRedirect; the dial-time IP
-// check below also covers every hop's connection.
+// maxJWKSRedirects caps redirects followed by the JWKS/discovery client.
 const maxJWKSRedirects = 5
 
-// blockedPrefixes are ranges that must never be dialed, beyond what the
-// netip.Addr classifiers (loopback, private, link-local, multicast,
-// unspecified) already cover.
+// blockedPrefixes are ranges never dialed, beyond the netip.Addr classifiers.
 var blockedPrefixes = mustParsePrefixes(
 	"0.0.0.0/8",       // "this network"
 	"100.64.0.0/10",   // RFC 6598 shared address space (ECS awsvpc, EKS pods)
@@ -40,13 +36,8 @@ func mustParsePrefixes(cidrs ...string) []netip.Prefix {
 	return out
 }
 
-// newSecureHTTPClient builds the single shared http.Client used for every
-// outbound JWKS/discovery fetch (built once at TokenValidator construction,
-// never per call). It blocks connections to private/loopback/link-local/
-// metadata addresses at connect time — including on redirects — enforces TLS
-// 1.2+, and caps + re-validates redirects. allowInsecureIssuers permits
-// dialing loopback (dev/test servers) only; it never relaxes the
-// private/link-local/metadata block.
+// newSecureHTTPClient builds the shared JWKS/discovery client: blocks private/link-local/metadata dials
+// (including redirects), requires TLS 1.2+, caps redirects. allowInsecureIssuers permits loopback only.
 func newSecureHTTPClient(allowInsecureIssuers bool, timeout time.Duration) *http.Client {
 	dialer := &net.Dialer{
 		Timeout: timeout,
@@ -90,8 +81,7 @@ func blockedDialControl(allowLoopback bool) func(network, address string, c sysc
 	}
 }
 
-// isBlockedIP reports whether ip must never be dialed; see isBlockedAddr.
-// A nil or malformed ip is blocked.
+// isBlockedIP reports whether ip must never be dialed (see isBlockedAddr); nil or malformed is blocked.
 func isBlockedIP(ip net.IP, allowLoopback bool) bool {
 	addr, ok := netip.AddrFromSlice(ip)
 	if !ok {
