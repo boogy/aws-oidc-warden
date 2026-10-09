@@ -1,8 +1,6 @@
 package utils_test
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"math"
@@ -278,30 +276,6 @@ func TestSanitizeSTSName(t *testing.T) {
 			assert.Equal(t, tt.want, utils.SanitizeSTSName(tt.in))
 		})
 	}
-}
-
-func TestSanitizeSTSNameHashed(t *testing.T) {
-	hashTail := regexp.MustCompile(`\+[0-9a-f]{16}$`)
-	sum := sha256.Sum256([]byte("a/b"))
-
-	t.Run("unaltered has no suffix", func(t *testing.T) {
-		assert.Equal(t, "abc-def", utils.SanitizeSTSNameHashed("abc-def"))
-	})
-	t.Run("collision-prone inputs differ", func(t *testing.T) {
-		altered := utils.SanitizeSTSNameHashed("a/b")
-		plain := utils.SanitizeSTSNameHashed("a=b")
-		assert.NotEqual(t, altered, plain)
-		assert.Regexp(t, hashTail, altered)
-		assert.Equal(t, "a=b", plain)
-	})
-	t.Run("deterministic", func(t *testing.T) {
-		assert.Equal(t, utils.SanitizeSTSNameHashed("a/b"), utils.SanitizeSTSNameHashed("a/b"))
-	})
-	t.Run("hash is over the original input", func(t *testing.T) {
-		want := utils.SanitizeSTSName("a/b") + "+" + hex.EncodeToString(sum[:8])
-		assert.Equal(t, want, utils.SanitizeSTSNameHashed("a/b"))
-		assert.Equal(t, "a=b+"+hex.EncodeToString(sum[:8]), utils.SanitizeSTSNameHashed("a/b"))
-	})
 }
 
 func TestFitSTSName(t *testing.T) {

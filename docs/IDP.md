@@ -332,9 +332,9 @@ The same rule applies to every request, IdP or `AssumeRole`:
 | `{issuer}`       | the inbound issuer's host and path (not `idp.issuer`), so two issuers sharing a subject cannot collide |
 | `{claim:<name>}` | a verified inbound claim; a missing, null or empty claim fails with 403 `idp_source_identity_invalid` |
 
-The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. A substituted value that needed sanitizing also gets `+` and 16 hex characters of its SHA-256, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo/api` renders `token.actions.githubusercontent.com=octo=api+<16 hex>` (61 characters). With this issuer, a subject over 11 characters overflows.
+The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. If any substituted value needed sanitizing, the result ends in `+` and 11 base64url characters of a SHA-256 over the raw values, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<11 chars>` (60 characters). With this issuer, a subject of up to 16 characters fits.
 
-Over 64 characters, `idp.source_identity_overflow` decides: `truncate` (default; 47 characters, `+`, 16 hex of the SHA-256) or `reject` (403 `idp_source_identity_invalid`). The audit field `sourceIdentityTruncated` flags truncation. Truncation is attribution, not an access boundary.
+Over 64 characters, `idp.source_identity_overflow` decides: `truncate` (default; the first 52 characters, then the same `+` and 11-character hash) or `reject` (403 `idp_source_identity_invalid`). The audit field `sourceIdentityTruncated` flags truncation. Truncation is attribution, not an access boundary.
 
 `{issuer}` renders the issuer URL host plus its path (trailing `/` dropped). A path issuer such as `https://kc.example.com/realms/a` contains `/`, so it is sanitized and hashed; issuers sharing a host still render distinctly.
 

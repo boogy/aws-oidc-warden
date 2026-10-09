@@ -159,16 +159,6 @@ func SanitizeSTSName(s string) string {
 	return invalidSTSNameChars.ReplaceAllLiteralString(s, "=")
 }
 
-// SanitizeSTSNameHashed sanitizes and appends "+<16 hex of sha256(s)>" when sanitizing changed s.
-func SanitizeSTSNameHashed(s string) string {
-	out := SanitizeSTSName(s)
-	if out == s {
-		return out
-	}
-	sum := sha256.Sum256([]byte(s))
-	return out + "+" + hex.EncodeToString(sum[:8])
-}
-
 // FitSanitizedSTSName caps an already-sanitized name at MaxSTSNameLen with a hash tail.
 func FitSanitizedSTSName(s string) string {
 	if len(s) <= MaxSTSNameLen {

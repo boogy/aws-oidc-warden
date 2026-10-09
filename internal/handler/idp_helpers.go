@@ -1,6 +1,9 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"net/url"
 	"regexp"
@@ -81,6 +84,8 @@ func parseSourceIdentity(tmpl, overflow string) *sourceIdentityTemplate {
 // render expands the template into an STS-safe SourceIdentity; truncated reports an overflow cut.
 func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claims map[string]any) (value string, truncated bool, err error) {
 	var b strings.Builder
+	raw := make([]string, 0, len(t.keys))
+	altered := false
 	for i, key := range t.keys {
 		b.WriteString(t.lits[i])
 
@@ -105,7 +110,10 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
 		}
-		b.WriteString(utils.SanitizeSTSNameHashed(v))
+		s := utils.SanitizeSTSName(v)
+		altered = altered || s != v
+		raw = append(raw, v)
+		b.WriteString(s)
 	}
 	b.WriteString(t.lits[len(t.keys)])
 
@@ -113,13 +121,29 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 	if len(out) < 2 {
 		return "", false, ErrIdPSourceIdentityInvalid
 	}
-	if len(out) > utils.MaxSTSNameLen && t.overflow == config.IdPOverflowReject {
+	if !altered && len(out) <= utils.MaxSTSNameLen {
+		return out, false, nil
+	}
+	tail := sourceIdentityTail(raw)
+	if len(out)+len(tail) <= utils.MaxSTSNameLen {
+		return out + tail, false, nil
+	}
+	if t.overflow == config.IdPOverflowReject {
 		return "", false, ErrIdPSourceIdentityInvalid
 	}
-	if len(out) > utils.MaxSTSNameLen {
-		return utils.FitSanitizedSTSName(out), true, nil
+	return out[:utils.MaxSTSNameLen-len(tail)] + tail, true, nil
+}
+
+// sourceIdentityTail is "+" and 11 base64url chars of SHA-256 over the length-prefixed raw values.
+func sourceIdentityTail(raw []string) string {
+	h := sha256.New()
+	var n [8]byte
+	for _, v := range raw {
+		binary.BigEndian.PutUint64(n[:], uint64(len(v)))
+		h.Write(n[:])
+		h.Write([]byte(v))
 	}
-	return out, false, nil
+	return "+" + base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:8])
 }
 
 func isEmptyClaim(raw any) bool {

@@ -91,6 +91,7 @@ func TestRenderSourceIdentity(t *testing.T) {
 	const gh = "https://token.actions.githubusercontent.com"
 	const ghHost = "token.actions.githubusercontent.com"
 	long := strings.Repeat("r", 65)
+	tail := func(raw ...string) string { return sourceIdentityTail(raw) }
 	tests := []struct {
 		name      string
 		tmpl      string
@@ -103,12 +104,16 @@ func TestRenderSourceIdentity(t *testing.T) {
 		wantErr   error
 	}{
 		{"request id", "{request_id}", "", gh, "s", nil, "req-1", false, nil},
-		{"subject altered gets hash", "{subject}", "", gh, "org/repo", nil, utils.SanitizeSTSNameHashed("org/repo"), false, nil},
+		{"subject altered gets hash", "{subject}", "", gh, "org/repo", nil, "org=repo" + tail("org/repo"), false, nil},
 		{"subject unaltered no hash", "{subject}", "", gh, "orgrepo", nil, "orgrepo", false, nil},
-		{"claim", "{claim:repository}", "", gh, "s", map[string]any{"repository": "org/repo"}, utils.SanitizeSTSNameHashed("org/repo"), false, nil},
+		{"claim", "{claim:repository}", "", gh, "s", map[string]any{"repository": "org/repo"}, "org=repo" + tail("org/repo"), false, nil},
 		{"issuer host", "{issuer}", "", gh, "s", nil, ghHost, false, nil},
-		{"default template shape", "{issuer}:{subject}", "", gh, "org/repo", nil, ghHost + "=" + utils.SanitizeSTSNameHashed("org/repo"), false, nil},
-		{"over 64 truncate", "{claim:repository}", config.IdPOverflowTruncate, gh, "s", map[string]any{"repository": long}, utils.FitSanitizedSTSName(long), true, nil},
+		{"default template shape", "{issuer}:{subject}", "", gh, "org/repo", nil, ghHost + "=org=repo" + tail(ghHost, "org/repo"), false, nil},
+		{"default template fits 16-char github subject", "{issuer}:{subject}", config.IdPOverflowReject, gh, "octo-org/api-svc", nil, ghHost + "=octo-org=api-svc" + tail(ghHost, "octo-org/api-svc"), false, nil},
+		{"default template truncates long github subject", "{issuer}:{subject}", "", gh, "octo-org/api-service", nil, (ghHost + "=octo-org=api-service")[:52] + tail(ghHost, "octo-org/api-service"), true, nil},
+		{"default template rejects long github subject", "{issuer}:{subject}", config.IdPOverflowReject, gh, "octo-org/api-service", nil, "", false, ErrIdPSourceIdentityInvalid},
+		{"altered value overflowing only with tail rejects", "{subject}", config.IdPOverflowReject, gh, strings.Repeat("r", 60) + "/x", nil, "", false, ErrIdPSourceIdentityInvalid},
+		{"over 64 truncate", "{claim:repository}", config.IdPOverflowTruncate, gh, "s", map[string]any{"repository": long}, strings.Repeat("r", 52) + tail(long), true, nil},
 		{"over 64 reject", "{claim:repository}", config.IdPOverflowReject, gh, "s", map[string]any{"repository": long}, "", false, ErrIdPSourceIdentityInvalid},
 		{"under 2", "{claim:repository}", "", gh, "s", map[string]any{"repository": "a"}, "", false, ErrIdPSourceIdentityInvalid},
 		{"missing claim", "{claim:repository}", "", gh, "s", map[string]any{}, "", false, ErrIdPSourceIdentityInvalid},
@@ -155,6 +160,20 @@ func TestRenderSourceIdentity(t *testing.T) {
 	})
 	t.Run("a/b vs a=b differ", func(t *testing.T) {
 		require.NotEqual(t, render("{subject}", gh, "a/b"), render("{subject}", gh, "a=b"))
+	})
+	t.Run("truncated values sharing a prefix differ", func(t *testing.T) {
+		prefix := strings.Repeat("r", 70)
+		require.NotEqual(t, render("{subject}", gh, prefix+"a"), render("{subject}", gh, prefix+"b"))
+	})
+	t.Run("tail separates value boundaries", func(t *testing.T) {
+		a, _, err := parseSourceIdentity("{subject}{claim:x}", "").render("r", gh, "a/", map[string]any{"x": "b"})
+		require.NoError(t, err)
+		b, _, err := parseSourceIdentity("{subject}{claim:x}", "").render("r", gh, "a", map[string]any{"x": "/b"})
+		require.NoError(t, err)
+		require.NotEqual(t, a, b)
+	})
+	t.Run("tail is STS-safe", func(t *testing.T) {
+		require.Regexp(t, `^\+[\w-]{11}$`, tail("a/b"))
 	})
 }
 

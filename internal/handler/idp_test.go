@@ -25,7 +25,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/idp/idptest"
-	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -363,10 +362,10 @@ func TestProcessMintSourceIdentity(t *testing.T) {
 		truncated bool
 		err       error
 	}{
-		{"default", "", "", inbound + "=" + utils.SanitizeSTSNameHashed("org/repo"), false, nil},
+		{"default", "", "", inbound + "=org=repo" + handler.SourceIdentityTail([]string{inbound, "org/repo"}), false, nil},
 		{"request_id", "{request_id}", "", "req-1", false, nil},
-		{"claim", "{claim:repository}", "", utils.SanitizeSTSNameHashed("org/repo"), false, nil},
-		{"truncate", strings.Repeat("a", 70), "", strings.Repeat("a", 47), true, nil},
+		{"claim", "{claim:repository}", "", "org=repo" + handler.SourceIdentityTail([]string{"org/repo"}), false, nil},
+		{"truncate", strings.Repeat("a", 70), "", strings.Repeat("a", 52) + handler.SourceIdentityTail(nil), true, nil},
 		{"reject_overflow", strings.Repeat("a", 70), config.IdPOverflowReject, "", false, handler.ErrIdPSourceIdentityInvalid},
 		{"too_short", "a", "", "", false, handler.ErrIdPSourceIdentityInvalid},
 		{"missing_claim", "{claim:nope}", "", "", false, handler.ErrIdPSourceIdentityInvalid},
@@ -392,12 +391,7 @@ func TestProcessMintSourceIdentity(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			if tt.truncated {
-				assert.Len(t, res.SourceIdentity, 64)
-				assert.True(t, strings.HasPrefix(res.SourceIdentity, tt.want))
-			} else {
-				assert.Equal(t, tt.want, res.SourceIdentity)
-			}
+			assert.Equal(t, tt.want, res.SourceIdentity)
 			assert.Equal(t, tt.truncated, sink.last(t)["sourceIdentityTruncated"] == true)
 		})
 	}
@@ -663,7 +657,7 @@ func TestProcessMintNeverLeaksTokenSegments(t *testing.T) {
 }
 
 func TestProcessMintRedactsSourceIdentity(t *testing.T) {
-	srcID := "token.actions.githubusercontent.com=" + utils.SanitizeSTSNameHashed("org/repo")
+	srcID := "token.actions.githubusercontent.com=org=repo" + handler.SourceIdentityTail([]string{"token.actions.githubusercontent.com", "org/repo"})
 	tests := []struct {
 		name      string
 		lcv       bool
