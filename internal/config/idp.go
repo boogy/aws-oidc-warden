@@ -186,7 +186,11 @@ func (c *IdPConfig) checkInbound(inbound []IssuerConfig) error {
 			return fmt.Errorf("issuers[] %q must not contain # when idp is configured", in.Issuer)
 		}
 	}
-	return validateSourceIdentityTemplate(c.SourceIdentity, len(inbound))
+	n := len(inbound)
+	if !c.IncludeSourceIdentityClaim() {
+		n = 0
+	}
+	return validateSourceIdentityTemplate(c.SourceIdentity, n)
 }
 
 func (c *IdPConfig) validatePaths() error {

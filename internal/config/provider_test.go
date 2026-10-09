@@ -734,26 +734,29 @@ func TestProviderRefreshRejectsIdPIssuerCollision(t *testing.T) {
 		return []byte(out)
 	}
 	tests := []struct {
-		name     string
-		freeze   bool
-		sourceID string
-		overlay  []byte
-		wantErr  bool
-		errHas   string
+		name      string
+		freeze    bool
+		sourceID  string
+		overlay   []byte
+		wantErr   bool
+		errHas    string
+		omitSrcID bool
 	}{
-		{"inbound equals idp issuer", true, IdPDefaultSourceIdentity, overlay(idpIssuer), true, "must differ"},
-		{"inbound contains hash", true, IdPDefaultSourceIdentity, overlay("https://other.example.com/a#b"), true, "must not contain #"},
-		{"unrelated inbound issuer", true, IdPDefaultSourceIdentity, overlay("https://other.example.com"), false, ""},
-		{"collision with frozen only", true, IdPDefaultSourceIdentity, overlay("https://token.actions.githubusercontent.com", idpIssuer), true, "must differ"},
-		{"second issuer with issuer-less frozen source identity", true, "{subject}", overlay("https://a.example.com", "https://b.example.com"), true, "must contain {issuer}"},
-		{"second issuer with issuer-bound frozen source identity", true, IdPDefaultSourceIdentity, overlay("https://a.example.com", "https://b.example.com"), false, ""},
+		{"inbound equals idp issuer", true, IdPDefaultSourceIdentity, overlay(idpIssuer), true, "must differ", false},
+		{"inbound contains hash", true, IdPDefaultSourceIdentity, overlay("https://other.example.com/a#b"), true, "must not contain #", false},
+		{"unrelated inbound issuer", true, IdPDefaultSourceIdentity, overlay("https://other.example.com"), false, "", false},
+		{"collision with frozen only", true, IdPDefaultSourceIdentity, overlay("https://token.actions.githubusercontent.com", idpIssuer), true, "must differ", false},
+		{"second issuer with issuer-less frozen source identity", true, "{subject}", overlay("https://a.example.com", "https://b.example.com"), true, "must contain {issuer}", false},
+		{"second issuer with issuer-bound frozen source identity", true, IdPDefaultSourceIdentity, overlay("https://a.example.com", "https://b.example.com"), false, "", false},
+		{"second issuer with unrendered issuer-less source identity", true, "{subject}", overlay("https://a.example.com", "https://b.example.com"), false, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			base := baseConfig(t)
 			p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) { return tt.overlay, nil })
 			if tt.freeze {
-				p.FreezeIdP(&IdPConfig{Issuer: idpIssuer, SourceIdentity: tt.sourceID})
+				include := !tt.omitSrcID
+				p.FreezeIdP(&IdPConfig{Issuer: idpIssuer, SourceIdentity: tt.sourceID, IncludeSourceIdentity: &include})
 			}
 			before := p.lastRefresh.Load()
 
