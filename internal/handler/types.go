@@ -5,13 +5,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 const (
 	DefaultTimeout = 10 * time.Second
-	MaxTokenLength = 16384 // 16KB
-	MaxRoleLength  = 2048  // 2KB
+	MaxTokenLength = config.MaxTokenBytesCeiling
+	MaxRoleLength  = 2048 // 2KB
 )
 
 // contextKey avoids string collisions among context values.

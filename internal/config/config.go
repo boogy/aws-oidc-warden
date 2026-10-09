@@ -22,6 +22,9 @@ import (
 	"github.com/spf13/viper"
 )
 
+// MaxTokenBytesCeiling is the hard ceiling for max_token_bytes and the handler's token cap.
+const MaxTokenBytesCeiling = 16384
+
 var (
 	once              sync.Once
 	instance          *Config
@@ -1038,8 +1041,8 @@ func (c *Config) Validate() error {
 	if c.MaxTokenBytes == 0 {
 		c.MaxTokenBytes = defaultMaxTokenBytes
 	}
-	if c.MaxTokenBytes < 0 {
-		return fmt.Errorf("max_token_bytes must not be negative, got %d", c.MaxTokenBytes)
+	if c.MaxTokenBytes < 0 || c.MaxTokenBytes > MaxTokenBytesCeiling {
+		return fmt.Errorf("max_token_bytes must be between 1 and %d, got %d", MaxTokenBytesCeiling, c.MaxTokenBytes)
 	}
 	if c.MaxConfigBytes == 0 {
 		c.MaxConfigBytes = utils.DefaultMaxConfigBytes

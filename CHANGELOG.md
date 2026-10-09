@@ -30,7 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`/verify` accepts `durationSeconds` (900–3600) and `sessionName`**, like `aws-actions/configure-aws-credentials`.
 - **The `s3_config_bucket` overlay uses a conditional GET** when `s3_config_bucket_owner` is set.
 - **A mapping setting both `session_policy` and `session_policy_file`, or `allow_session_name` with `role_session_name`, fails to load** instead of silently ignoring one.
-- **Stricter config loading**: unknown nested keys (e.g. a misspelled `conditions`, which silently made a grant unconditional), malformed role entries, duplicate `config_fragments` entries, `config_reload_interval` under 1s, and session tags STS would refuse (`aws:` prefix, case-insensitive duplicates, over 50) fail to load; unknown top-level keys only warn.
+- **Stricter config loading**: unknown nested keys (e.g. a misspelled `conditions`, which silently made a grant unconditional), malformed role entries, duplicate `config_fragments` entries, `config_reload_interval` under 1s, `max_token_bytes` over 16384 (the handler never accepted a longer token), and session tags STS would refuse (`aws:` prefix, case-insensitive duplicates, over 50) fail to load; unknown top-level keys only warn.
 - **The wildcard guard rejects every match-everything pattern** (`.*.*`, `(?s).*`, `[\s\S]*`, `(.*)`, …), not just `.*` and `.+`.
 - **A fragment's `default_issuer` binds only that fragment's own mappings.**
 - **Unauthenticated (extract-stage) denies are always batched to the audit bucket**, so junk tokens cannot throttle the synchronous audit writes allows depend on.

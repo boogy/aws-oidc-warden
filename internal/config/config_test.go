@@ -1331,6 +1331,32 @@ func TestValidate_MaxConfigBytes(t *testing.T) {
 	}
 }
 
+func TestValidate_MaxTokenBytes(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      int
+		want    int
+		wantErr bool
+	}{
+		{name: "unset defaults to 8 KiB", in: 0, want: defaultMaxTokenBytes},
+		{name: "at ceiling", in: MaxTokenBytesCeiling, want: MaxTokenBytesCeiling},
+		{name: "above ceiling", in: MaxTokenBytesCeiling + 1, wantErr: true},
+		{name: "negative", in: -1, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Config{Issuers: singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), RoleSessionName: "warden", MaxTokenBytes: tt.in}
+			err := c.Validate()
+			if tt.wantErr {
+				require.ErrorContains(t, err, "max_token_bytes")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, c.MaxTokenBytes)
+		})
+	}
+}
+
 func TestEffectiveMaxConfigBytes(t *testing.T) {
 	var nilCfg *Config
 	assert.Equal(t, utils.DefaultMaxConfigBytes, nilCfg.EffectiveMaxConfigBytes())

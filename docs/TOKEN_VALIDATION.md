@@ -232,7 +232,7 @@ All optional, top-level, hot-reloadable (except `allow_insecure_issuers`, which 
 | `jwt_leeway`             | `30s`   | Clock-skew allowance for `exp`/`iat`/`nbf`; hard max `120s`     |
 | `max_token_lifetime`     | `1h`    | Reject if `exp - iat` exceeds it; `0`/unset applies the default |
 | `max_token_age`          | `1h`    | Reject if `now - iat` exceeds it; `0`/unset applies the default |
-| `max_token_bytes`        | `8192`  | Pre-parse token length cap                                      |
+| `max_token_bytes`        | `8192`  | Pre-parse token length cap; at most `16384`                     |
 | `jwks_refetch_cooldown`  | `60s`   | Min interval between forced JWKS refetches per `(issuer,kid)`   |
 | `allow_insecure_issuers` | `false` | Dev-only: permit `http://` loopback issuer/`jwks_uri`           |
 
