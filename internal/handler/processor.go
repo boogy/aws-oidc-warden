@@ -150,13 +150,15 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 				slog.Int64("ageMs", age.Milliseconds()), slog.Int64("maxStaleMs", limit.Milliseconds()))
 			return nil, r.deny(ctx, o, "Configuration stale", ErrConfigStale)
 		}
-		cfg = r.provider.Get()
-		input.Config, o.cfg = cfg, cfg
-		authed := claims
-		if claims, err = r.extractor.Extract(ctx, input); err != nil {
-			rec.setIdentity(cfg, authed)
-			rec.setErrorReason("extract", err)
-			return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
+		if fresh := r.provider.Get(); fresh != cfg {
+			cfg = fresh
+			input.Config, o.cfg = cfg, cfg
+			authed := claims
+			if claims, err = r.extractor.Extract(ctx, input); err != nil {
+				rec.setIdentity(cfg, authed)
+				rec.setErrorReason("extract", err)
+				return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
+			}
 		}
 	}
 	o.claims = claims

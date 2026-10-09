@@ -166,6 +166,45 @@ func (f *failSecondExtractor) Extract(ctx context.Context, in validator.Extracti
 	return f.inner.Extract(ctx, in)
 }
 
+func TestConfigStaleUnchangedRefreshSkipsReExtract(t *testing.T) {
+	t.Parallel()
+	cfg := idpConfig(t, true, "", func(c *config.Config) {
+		c.RoleMappings = nil
+		c.MappingsFile = "s3://b/m.yaml"
+		c.S3ConfigBucketOwner = "123456789012"
+		c.ConfigReloadInterval = time.Second
+		c.MappingsMaxStale = new(2 * time.Second)
+	})
+	var gate atomic.Pointer[chan struct{}]
+	entered := make(chan struct{}, 1)
+	fn := func(context.Context, string, string, string) ([]byte, string, error) {
+		if g := gate.Load(); g != nil {
+			entered <- struct{}{}
+			<-*g
+		}
+		return []byte(staleMappingsBody), "sha256:fixed", nil
+	}
+	p := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, config.WithFragmentFetcher(fn))
+	require.NoError(t, p.Refresh(context.Background()))
+
+	ext := &failSecondExtractor{countingExtractor{inner: idpClaims(nil)}}
+	proc := handler.NewRequestProcessor(p, mockConsumer(t), ext, &fakeAuditSink{}, "apigatewayv2").
+		WithIdP(idpService(t, p.Get(), &countingSigner{Signer: idptest.NewSigner(t)}, nil))
+
+	time.Sleep(2100 * time.Millisecond)
+	release := make(chan struct{})
+	gate.Store(&release)
+	go p.MaybeRefresh(context.Background())
+	<-entered
+	time.AfterFunc(200*time.Millisecond, func() { close(release) })
+
+	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Token: "t", Role: testRoleARN},
+		validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), ext.calls.Load())
+}
+
 func TestConfigStaleReExtractDenyIsPostAuth(t *testing.T) {
 	t.Parallel()
 	cfg := idpConfig(t, true, "", func(c *config.Config) {
@@ -182,6 +221,7 @@ func TestConfigStaleReExtractDenyIsPostAuth(t *testing.T) {
 		if g := gate.Load(); g != nil {
 			entered <- struct{}{}
 			<-*g
+			return []byte(staleMappingsBody), "sha256:changed", nil
 		}
 		return []byte(staleMappingsBody), "sha256:fixed", nil
 	}
