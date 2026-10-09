@@ -114,6 +114,8 @@ func TestRenderSourceIdentity(t *testing.T) {
 		{"missing claim", "{claim:repository}", "", gh, "s", map[string]any{}, "", false, ErrIdPSourceIdentityInvalid},
 		{"null claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": nil}, "", false, ErrIdPSourceIdentityInvalid},
 		{"empty claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": ""}, "", false, ErrIdPSourceIdentityInvalid},
+		{"empty list claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": []any{}}, "", false, ErrIdPSourceIdentityInvalid},
+		{"empty object claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": map[string]any{}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"claim of non-string type", "{claim:n}", "", gh, "s", map[string]any{"n": 42}, "42", false, nil},
 		{"unparsable issuer", "{issuer}", "", "://bad", "s", nil, "", false, ErrIdPSourceIdentityInvalid},
 	}

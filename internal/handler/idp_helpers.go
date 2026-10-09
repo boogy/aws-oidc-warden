@@ -98,7 +98,7 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 			v = u.Host + strings.TrimSuffix(u.Path, "/")
 		default:
 			raw, ok := claims[strings.TrimPrefix(key, "claim:")]
-			if !ok || raw == nil {
+			if !ok || isEmptyClaim(raw) {
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
 			if v = utils.FormatClaimValue(raw); v == "" {
@@ -120,6 +120,18 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 		return utils.FitSanitizedSTSName(out), true, nil
 	}
 	return out, false, nil
+}
+
+func isEmptyClaim(raw any) bool {
+	switch c := raw.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(c) == 0
+	case map[string]any:
+		return len(c) == 0
+	}
+	return false
 }
 
 // exchangeError maps an AssumeRoleWithWebIdentity failure to its handler sentinel.
