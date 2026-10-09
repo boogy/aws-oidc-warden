@@ -84,10 +84,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `example-config.yaml` moved to `docs/examples/`; the split-config and cross-account examples are production-shaped.
 - `docs/examples/multi-region/` and `ARCHITECTURE.md` § Multi-region: shared config, per-region resources via `AOW_*` env.
 
-### Tests
-
-- Fixed a flaky in-flight-upload probe in `internal/s3logger` that took the flush lock and starved the upload it waited for.
-
 ## [3.5.2] - 2026-09-26
 
 ### Fixed

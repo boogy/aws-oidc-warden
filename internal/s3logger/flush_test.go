@@ -165,7 +165,8 @@ func TestBufferRecord_DoesNotBlockWhileUploadInFlight(t *testing.T) {
 	l, f := newFlakyLogger(t, 1)
 	f.block = make(chan struct{})
 
-	go func() { _ = l.BufferRecord([]byte("slow\n")) }()
+	slow := make(chan error, 1)
+	go func() { slow <- l.BufferRecord([]byte("slow\n")) }()
 	require.Eventually(t, f.blocked.Load, time.Second, time.Millisecond)
 
 	var returned atomic.Bool
@@ -175,6 +176,12 @@ func TestBufferRecord_DoesNotBlockWhileUploadInFlight(t *testing.T) {
 	}()
 	require.Eventually(t, returned.Load, time.Second, time.Millisecond, "BufferRecord stalled behind an in-flight upload")
 	close(f.block)
+	require.NoError(t, <-slow)
+	require.NoError(t, l.Close())
+
+	require.Len(t, f.bodies, 2)
+	assert.Equal(t, "slow\n", gunzip(t, f.bodies[0]))
+	assert.Equal(t, "fast\n", gunzip(t, f.bodies[1]), "a record queued during an upload must be flushed by Close")
 }
 
 func TestBufferRecord_CopiesCallerSlice(t *testing.T) {
