@@ -98,10 +98,12 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 			v = u.Host + strings.TrimSuffix(u.Path, "/")
 		default:
 			raw, ok := claims[strings.TrimPrefix(key, "claim:")]
-			if !ok {
+			if !ok || raw == nil {
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
-			v = utils.FormatClaimValue(raw)
+			if v = utils.FormatClaimValue(raw); v == "" {
+				return "", false, ErrIdPSourceIdentityInvalid
+			}
 		}
 		b.WriteString(utils.SanitizeSTSNameHashed(v))
 	}

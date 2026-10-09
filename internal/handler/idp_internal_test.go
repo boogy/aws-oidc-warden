@@ -112,6 +112,8 @@ func TestRenderSourceIdentity(t *testing.T) {
 		{"over 64 reject", "{claim:repository}", config.IdPOverflowReject, gh, "s", map[string]any{"repository": long}, "", false, ErrIdPSourceIdentityInvalid},
 		{"under 2", "{claim:repository}", "", gh, "s", map[string]any{"repository": "a"}, "", false, ErrIdPSourceIdentityInvalid},
 		{"missing claim", "{claim:repository}", "", gh, "s", map[string]any{}, "", false, ErrIdPSourceIdentityInvalid},
+		{"null claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": nil}, "", false, ErrIdPSourceIdentityInvalid},
+		{"empty claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": ""}, "", false, ErrIdPSourceIdentityInvalid},
 		{"claim of non-string type", "{claim:n}", "", gh, "s", map[string]any{"n": 42}, "42", false, nil},
 		{"unparsable issuer", "{issuer}", "", "://bad", "s", nil, "", false, ErrIdPSourceIdentityInvalid},
 	}
