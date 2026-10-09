@@ -66,7 +66,7 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		*statusCode = http.StatusNotFound
 	case errors.Is(err, ErrIdPTokenTooLarge):
 		errCode = "idp_token_too_large"
-		errMsg = "IdP token exceeds the STS size limit; reduce session tags"
+		errMsg = "IdP token exceeds the STS size limit; reduce session tags or the session policy"
 		*statusCode = http.StatusInternalServerError
 	case errors.Is(err, ErrInvalidDuration):
 		errCode = "invalid_duration"

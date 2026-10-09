@@ -446,7 +446,7 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                 |
 | `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false |
 | `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                       |
-| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags           |
+| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags or policy |
 | `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer over 1h               |
 | `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS, or reported the token expired            |
 

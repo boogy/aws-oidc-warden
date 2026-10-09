@@ -84,7 +84,7 @@ The status code tells your client whether retrying is worth anything:
 | `400 invalid_session_name`        | A used `sessionName` (`allow_session_name`) is not 2-64 characters of `[\w+=,.@-]`                             | **No** — deterministic                               |
 | `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                   | **No** — deterministic                               |
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                      | **No** — deterministic                               |
-| `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                          | **No** — deterministic                               |
+| `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags or the session policy                    | **No** — deterministic                               |
 | `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                      | **Yes** — transient                                  |
 | `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the token expired                          | **Yes** — transient                                  |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`                                                              | **Yes** — transient, retry with backoff or fail over |

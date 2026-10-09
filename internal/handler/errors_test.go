@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/sts/types"
@@ -90,6 +91,14 @@ func TestClassifyErrorIdPSentinelsDistinct(t *testing.T) {
 				t.Errorf("%v matches %v", a, b)
 			}
 		}
+	}
+}
+
+func TestClassifyErrorIdPTokenTooLargeNamesSessionPolicy(t *testing.T) {
+	status := http.StatusOK
+	_, msg := classifyError(ErrIdPTokenTooLarge, &status)
+	if !strings.Contains(msg, "session policy") {
+		t.Errorf("message %q must name the session policy, which STS packs with the tags", msg)
 	}
 }
 

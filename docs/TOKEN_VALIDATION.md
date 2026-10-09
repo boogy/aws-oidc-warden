@@ -262,7 +262,7 @@ Validation failures propagate as sentinel errors mapped to HTTP status by the fr
 | IdP mode: `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                     | `ErrInvalidSessionName`       | 400  | `invalid_session_name`        |
 | IdP mode: a near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false             | `ErrIdPPathNotFound`          | 404  | `idp_path_not_found`          |
 | IdP mode: not `GET`/`HEAD` on a discovery/JWKS path                                                                | `ErrMethodNotAllowed`         | 405  | `method_not_allowed`          |
-| IdP mode: minted token or packed policy over the STS limit; reduce session tags                                    | `ErrIdPTokenTooLarge`         | 500  | `idp_token_too_large`         |
+| IdP mode: minted token or packed policy over the STS limit; reduce session tags or the session policy              | `ErrIdPTokenTooLarge`         | 500  | `idp_token_too_large`         |
 | IdP mode: KMS signing unavailable or throttled; also the kill-switch answer over 1h                                | `ErrIdPUnavailable`           | 503  | `idp_signing_unavailable`     |
 | IdP mode: STS could not reach the IdP discovery or JWKS document, or reported the token expired                    | `ErrIdPExchangeUnavailable`   | 503  | `idp_exchange_unavailable`    |
 
