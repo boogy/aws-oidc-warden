@@ -453,14 +453,7 @@ func (l *S3Logger) Close() error {
 	return err
 }
 
-// WriteRecord implements handler.AuditSink (duck-typed). It persists a single
-// audit record immediately, bypassing the batch, so enforcing callers can
-// await durability before releasing credentials.
-//
-// It never no-ops: it gates on whether a durable
-// client actually exists, not on the boot-time config snapshot, so a
-// hot-reload that turns audit_required+log_to_s3 on can't silently skip the
-// audit write while still releasing credentials.
+// WriteRecord writes one audit record to S3 immediately, bypassing the batch; it never no-ops.
 func (l *S3Logger) WriteRecord(ctx context.Context, record []byte) error {
 	if err := l.ensureDurableClient(ctx); err != nil {
 		return err
