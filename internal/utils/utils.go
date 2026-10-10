@@ -1,10 +1,14 @@
 package utils
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +22,9 @@ import (
 // JSON-decode time (float64), so two distinct claim values can render
 // identically; this function can't recover that.
 func FormatClaimValue(raw any) string {
+	if s, ok := raw.(string); ok {
+		return s
+	}
 	// IsInf guard: +Inf/-Inf satisfy f == Trunc(f).
 	if f, ok := raw.(float64); ok && !math.IsInf(f, 0) && !math.IsNaN(f) &&
 		f == math.Trunc(f) {
@@ -104,3 +111,66 @@ func SortedKeys[V any](m map[string]V) []string {
 	slices.Sort(keys)
 	return keys
 }
+
+const (
+	MinSTSNameLen = 2
+	MaxSTSNameLen = 64
+
+	MinSTSSessionSecs     = 900
+	MaxSTSSessionSecs     = 43200
+	DefaultSTSSessionSecs = 3600
+	// RoleChainingMaxSecs is STS's cap on a session assumed from role-session credentials.
+	RoleChainingMaxSecs = 3600
+
+	// DefaultMaxConfigBytes is the max_config_bytes default.
+	DefaultMaxConfigBytes = 1 << 20
+)
+
+// STSNameRule is the pattern a RoleSessionName or SourceIdentity must match.
+var STSNameRule = fmt.Sprintf(`[\w+=,.@-]{%d,%d}`, MinSTSNameLen, MaxSTSNameLen)
+
+var (
+	invalidSTSNameChars = regexp.MustCompile(`[^\w=,.@-]`)
+	stsNamePattern      = regexp.MustCompile(`^` + STSNameRule + `$`)
+)
+
+// ValidSTSName reports whether s is a valid STS RoleSessionName or SourceIdentity.
+func ValidSTSName(s string) bool { return stsNamePattern.MatchString(s) }
+
+// ValidSTSSessionSecs reports whether secs is within STS's DurationSeconds bounds.
+func ValidSTSSessionSecs(secs int32) bool {
+	return secs >= MinSTSSessionSecs && secs <= MaxSTSSessionSecs
+}
+
+// ReadAllCapped reads r fully, failing rather than truncating when it exceeds limit bytes.
+func ReadAllCapped(r io.Reader, limit int64, what string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s exceeds %d bytes", what, limit)
+	}
+	return data, nil
+}
+
+// SanitizeSTSName maps every char outside [\w=,.@-] to '='; '+' is reserved for hash tails.
+func SanitizeSTSName(s string) string {
+	return invalidSTSNameChars.ReplaceAllLiteralString(s, "=")
+}
+
+// FitSanitizedSTSName caps an already-sanitized name at MaxSTSNameLen with a hash tail.
+func FitSanitizedSTSName(s string) string {
+	if len(s) <= MaxSTSNameLen {
+		return s
+	}
+	sum := sha256.Sum256([]byte(s))
+	tail := "+" + hex.EncodeToString(sum[:8])
+	return s[:MaxSTSNameLen-len(tail)] + tail
+}
+
+// FitSTSName sanitizes then caps at MaxSTSNameLen.
+func FitSTSName(s string) string { return FitSanitizedSTSName(SanitizeSTSName(s)) }
+
+// OnLambda reports whether the process runs inside AWS Lambda.
+func OnLambda() bool { return os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" }

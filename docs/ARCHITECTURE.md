@@ -168,7 +168,8 @@ sequenceDiagram
 
     Note over Processor: requested role must be in the matched mapping's roles
     Processor->>Processor: Resolve session policy (inline or S3)
-    Processor->>Consumer: AssumeRole(role, ..., session_tags spec)
+    Processor->>Processor: BuildSessionTags (once; also feeds the audit record)
+    Processor->>Consumer: AssumeRole(role, ..., built session tags)
 
     Consumer->>STS: AssumeRole with per-issuer session tags
     STS-->>Consumer: Return credentials
@@ -280,9 +281,8 @@ The AWS consumer abstracts all AWS service interactions:
 
 ```go
 type AwsConsumerInterface interface {
-    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, claims *gtypes.Claims, sessionTags map[string]string) (*types.Credentials, error)
+    AssumeRole(ctx context.Context, roleARN, sessionName string, sessionPolicy *string, duration *int32, tags []types.Tag) (*types.Credentials, error)
     GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error)
-    GetRole(ctx context.Context, role string) (*iam.GetRoleOutput, error)
     GetRoleTags(ctx context.Context, roleARN string) (map[string]string, error)
     IsTargetAccountAllowed(ctx context.Context, roleArn string) (bool, error)
 }
@@ -298,7 +298,7 @@ type AwsConsumerInterface interface {
 
 **Session Tags Applied:**
 
-Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(ctx, rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request:
+Tags are not hardcoded — each issuer declares its own `session_tags` map (STS tag key ← raw claim name), and `BuildSessionTags(ctx, rawClaims, tagSpec)` resolves that spec against the verified claims of the token that authorized this request. The handler builds the tags once per request; the same slice is handed to `AssumeRole` (or the IdP mint) and feeds the audit record's `sessionTagKeys`/`sessionTags`:
 
 ```go
 func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) []types.Tag
@@ -377,7 +377,7 @@ Each `IssuerConfig` carries `issuer`, `provider` (`github`/`generic`), `audience
 
 - `NewProvider(base, interval, format, fetch)` — reloadable provider; initial config is `base` until the first successful `Refresh`.
 - `NewStaticProvider(cfg)` — no-op provider for local/test use (no S3 source configured).
-- `MaybeRefresh(ctx)` — called at the start of every request; no-op unless `config_reload_interval` has elapsed. Uses double-checked locking so at most one S3 fetch runs per interval under concurrent load. Each refresh clones the pristine base config (env/file/defaults), overlays the fetched bytes via `MergeBytes`, re-validates (recompiling all regex patterns), then atomically swaps the result in. Errors are logged and the previous config is retained.
+- `RefreshIfDue(ctx)` / `MaybeRefresh(ctx)` — `RefreshIfDue` runs at the start of every request and never waits on an in-flight refresh; `MaybeRefresh` runs only for an authenticated request past `mappings_max_stale`. Both are no-ops unless `config_reload_interval` has elapsed since the last attempt, or 10s once stale. Uses double-checked locking so at most one S3 fetch runs per window under concurrent load. Each refresh clones the pristine base config (env/file/defaults), overlays the fetched bytes via `MergeBytes`, re-validates (recompiling all regex patterns), then atomically swaps the result in. Errors are logged and the previous config is retained.
 - `Get()` — atomic load of the current active config; zero-copy, safe for concurrent reads.
 
 The token validator is constructed via `NewTokenValidator(provider, cache)`; it reads the live config from `provider.Get()` and rebuilds its issuer registry on hot-reload (identity-checked snapshot swap) so issuer/audience/mapping changes take effect immediately without a Lambda restart. Beyond the primary S3 overlay, `config_fragments` are merged on refresh with fail-safe reload (a bad fragment retains the last-good config); fragments may only contribute `role_mappings`/`role_groups`/`role_sets`/`default_issuer`. Local filesystem-path fragments are content-hashed (sha256) for change detection and work today; a remote fetcher for `"scheme://"` sources (e.g. `s3://`, keyed on the source's own ETag) is a pluggable seam (`config.WithFragmentFetcher`) that the shipped binaries do not yet install.
@@ -536,7 +536,7 @@ No claim is privileged or evaluated in a fixed order: every key under `condition
 
 **Session Security:**
 
-- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. Only `local` server mode with IAM user credentials can exceed 1 hour, up to the target role's own max, cross-account targets included)
+- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. A session over 1 hour requires IdP mode (`idp_token`, see [IDP.md](IDP.md)); `AssumeRole` refuses one)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
 - Credentials are short-lived and expire on their own — no long-lived secrets are ever issued or stored
@@ -558,7 +558,7 @@ Both features are opt-in and default to `false`:
 2. `IsTargetAccountAllowed` checks that account against `cross_account.allowed_accounts` — before any tag read or assumption. With `cross_account` disabled only the hub is allowed; with it enabled the hub is always implicitly allowed, and an **empty list permits any account** (logged as a warning). Non-12-digit IDs are rejected at config load.
 3. _(tag-auth only, cross-account only)_ Assume the convention-named spoke role (`aow-spoke` by default, optional `ExternalID`) just to call `iam:GetRole` and read the target role's tags. Short-lived (`SpokeSessionDuration`, default 15 min), cached in-process per account.
 4. `TagAuth.Authorize` evaluates the tags — see the rules below.
-5. Assume the target role directly with the hub's credentials. Because those are themselves a role session on Lambda, the assume is clamped to 1 hour; only `local` mode with IAM user credentials avoids the clamp.
+5. Assume the target role directly with the hub's credentials. Because those are themselves a role session on Lambda, the assume is clamped to 1 hour; a longer session requires IdP mode.
 
 **Tag matching rules:**
 
@@ -632,9 +632,7 @@ Nothing in the request path holds state, so scale is AWS's problem rather than t
 | JWKS cache (S3)       | Effectively unlimited                                          | Highest latency of the three                                 |
 | Config in S3          | One read per refresh interval per environment, not per request | A bad config object is rejected and the previous one is kept |
 
-For multi-region, deploy the stack per region. Nothing coordinates between regions, so this needs no additional application config.
-
-Keep the JWKS cache **per-region** — do not reach for Global Tables. The cache holds public signing keys and is rebuildable from a single JWKS fetch, so replication buys nothing and couples two deployments that are otherwise independent. The same reasoning applies with more force to the audit bucket, where sharing one bucket makes the secondary region fail closed during a primary-region S3 outage. One more trap worth naming: a target role's trust policy must list **every** region's execution role, or failover succeeds at the gateway and then fails at `sts:AssumeRole`.
+For multi-region, deploy the stack per region: see [Multi-region](#multi-region).
 
 Measured numbers — per-request cost, load time at thousands of mappings, memory sizing: [PERFORMANCE.md](PERFORMANCE.md).
 
@@ -657,18 +655,50 @@ Version-pinned tags (`apigatewayv2-v3.3.0`) are published alongside; a prereleas
 
 **This repo ships no IaC** — it is the service, not a deployment of it. Bring your own OpenTofu/Terraform, CloudFormation, CDK, or SAM; the contract a deployment has to satisfy is small:
 
-| What           | Requirement                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Package        | Zip whose entry is named `bootstrap`, executable, on the `provided.al2023` runtime — or the published container image, whose entrypoint is already `bootstrap`.                                                                                                                                                                                                                 |
-| Architecture   | Must match the build. `make build-lambda` targets **arm64**; use `GOARCH=amd64` for x86_64 functions.                                                                                                                                                                                                                                                                           |
-| Binary ↔ mode  | Pick the `cmd/` variant matching the front-end (table above), and pair it with `jwt_validation.mode`: `apigateway`/`lambdaurl` are `self` only, `apigatewayv2` is `apigw` only, `alb` accepts `alb` or `self`. A mismatch **panics at boot**, by design — `validateAdapterMode` in `internal/handler/bootstrap.go` refuses to serve rather than mis-extract claims per request. |
-| Config         | Either bake `config.yaml` into the package (`CONFIG_NAME`/`CONFIG_PATH`) or serve it from S3 with `AOW_S3_CONFIG_BUCKET` + `AOW_S3_CONFIG_PATH`, which the provider re-reads on its refresh interval so policy changes need no redeploy. Every setting also has an `AOW_*` override (`AOW_JWT_VALIDATION_MODE`, `LOG_LEVEL`, …).                                                |
-| Execution role | The policy in [Required IAM Permissions](#required-iam-permissions), narrowed to the buckets, table, and target roles you actually enable.                                                                                                                                                                                                                                      |
-| Resources      | Only what the config turns on: the config bucket, a DynamoDB cache table (**with a TTL attribute configured**, or entries never expire), an S3 cache bucket, the audit bucket (`audit_required` needs one, or the fail-closed guarantee silently degrades to a no-op), and a session-policy bucket.                                                                             |
-| Raw logs       | Optional. The service writes operational logs to stdout (CloudWatch Logs) only — it does not ship them to S3 itself. To archive raw logs in S3, add a CloudWatch Logs subscription filter → Kinesis Data Firehose → S3 in your own IaC.                                                                                                                                         |
-| Front-end      | `apigw` mode needs one HTTP API JWT Authorizer + route per issuer (max 10 per API); WAF attaches to REST APIs only. In `apigw` mode, grant `lambda:InvokeFunction` to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — see [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).          |
+| What           | Requirement                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package        | Zip whose entry is named `bootstrap`, executable, on the `provided.al2023` runtime — or the published container image, whose entrypoint is already `bootstrap`.                                                                                                                                                                                                                                                                                         |
+| Architecture   | Must match the build. `make build-lambda` targets **arm64**; use `GOARCH=amd64` for x86_64 functions.                                                                                                                                                                                                                                                                                                                                                   |
+| Binary ↔ mode  | Pick the `cmd/` variant matching the front-end (table above), and pair it with `jwt_validation.mode`: `apigateway`/`lambdaurl` are `self` only, `apigatewayv2` is `apigw` only, `alb` accepts `alb` or `self`. A mismatch **panics at boot**, by design — `validateAdapterMode` in `internal/handler/bootstrap.go` refuses to serve rather than mis-extract claims per request.                                                                         |
+| Config         | Either bake `config.yaml` into the package (`CONFIG_NAME`/`CONFIG_PATH`) or serve it from S3 with `AOW_S3_CONFIG_BUCKET` + `AOW_S3_CONFIG_PATH`, which the provider re-reads on its refresh interval so policy changes need no redeploy. Every setting also has an `AOW_*` override (`AOW_JWT_VALIDATION_MODE`, `LOG_LEVEL`, …).                                                                                                                        |
+| Execution role | The policy in [Required IAM Permissions](#required-iam-permissions), narrowed to the buckets, table, and target roles you actually enable.                                                                                                                                                                                                                                                                                                              |
+| Mappings file  | Optional `mappings_file: s3://…`. The Lambda role needs `s3:GetObject` on that object (no `s3:ListBucket`; add `kms:Decrypt` with SSE-KMS). The bucket is owned by the account in `s3_config_bucket_owner`, versioning is required, and the bucket policy restricts writes to the deploy role. Alarm on `PutObject`/`DeleteObject` of the object (CloudTrail data events or EventBridge). See [CONFIGURATION.md](CONFIGURATION.md#split-configuration). |
+| Session policy | Optional `session_policy_file`. The Lambda role needs `s3:GetObject` on `session_policy_bucket` (add `kms:Decrypt` with SSE-KMS). Set `session_policy_bucket_owner` to the account that owns the bucket so a deleted and re-registered bucket cannot serve a different policy; unset, startup logs `policy.s3_owner_unpinned` (Warn). Restrict bucket writes to the deploy role.                                                                        |
+| Resources      | Only what the config turns on: the config bucket, a DynamoDB cache table (**with a TTL attribute configured**, or entries never expire), an S3 cache bucket, the audit bucket (`audit_required` needs one, or the fail-closed guarantee silently degrades to a no-op), and a session-policy bucket.                                                                                                                                                     |
+| Raw logs       | Optional. The service writes operational logs to stdout (CloudWatch Logs) only — it does not ship them to S3 itself. To archive raw logs in S3, add a CloudWatch Logs subscription filter → Kinesis Data Firehose → S3 in your own IaC.                                                                                                                                                                                                                 |
+| Front-end      | `apigw` mode needs one HTTP API JWT Authorizer + route per issuer (max 10 per API); WAF attaches to REST APIs only. In `apigw` mode, grant `lambda:InvokeFunction` to `apigateway.amazonaws.com` alone, narrowed by `source_arn` — see [TOKEN_VALIDATION.md §2.2](TOKEN_VALIDATION.md#22-trust-boundary-lambdainvokefunction-is-identity-impersonation-in-apigw-mode).                                                                                  |
 
 Cross-account target and spoke roles: [examples/cross-account/](examples/cross-account/README.md).
+
+**IdP mode** ([IDP.md](IDP.md)) adds this contract. One issuer URL per deployment, never shared between stages. A deployment may span regions with one multi-region key (see [IDP.md](IDP.md#multi-region-deployment)).
+
+| What               | Requirement                                                                                                                                                                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| KMS key            | Asymmetric, single-region, or an MRK whose primary and replicas are all in `idp.kms_allowed_regions`, `SIGN_VERIFY`, `ECC_NIST_P256` or `RSA_2048/3072/4096`, enabled. Configured by full key ARN; aliases are rejected                                                                                                                                                            |
+| Warden role        | `kms:Sign`, `kms:GetPublicKey`, `kms:DescribeKey` on each region's replica ARN (a role shared across regions needs all of them; a per-region role needs only its local one). No `sts:AssumeRole` on IdP target roles (the exchange is unsigned `sts:AssumeRoleWithWebIdentity`), and no IdP-related `iam:GetRole` (that stays only for `tag_auth`)                                                                                          |
+| Key policy         | Deny `kms:Sign` to every principal but the warden role; Deny `kms:PutKeyPolicy`, `kms:ScheduleKeyDeletion`, `kms:DisableKey`, `kms:CreateGrant`, `kms:ReplicateKey`, `kms:UpdateAlias`, `kms:UpdatePrimaryRegion` to everyone but a break-glass role. Alarm on any `kms:Sign` by another principal and on every tamper action |
+| Discovery and JWKS | Unauthenticated GET routes for discovery/JWKS, or static hosting. Static hosting from `idp-export` is the default; a warden-served JWKS couples STS availability to the Lambda                                                                                                                                                |
+| IAM OIDC provider  | URL = `idp.issuer`, client ID = `idp.audience` (one per target role ARN with `audience_mode: role_arn`)                                                                                                                                                                                                                       |
+| Target roles       | `MaxSessionDuration` at least the longest allowed session; trust policy allowing `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity` for the IdP provider, pinned on `aud` and `sub`                                                                                                                   |
+
+### Multi-region
+
+Deploy the same package and config file in every region. Each region is independent: nothing in the request path calls another region. Region-specific resources come from `AOW_*` environment variables on each region's Lambda, which beat the config file on every load and reload:
+
+| Per region (env var)                                                              | Shared (config file)                                    |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| JWKS cache table (`AOW_CACHE_DYNAMODB_TABLE`); never a Global Table               | `issuers`, hardening knobs, `jwt_validation`            |
+| Audit bucket (`AOW_LOG_BUCKET`); a shared one fails the secondary closed          | `idp` block: one issuer, one MRK with a replica per region |
+| Mappings file (`AOW_MAPPINGS_FILE`), same content in every region                 | Session tags, `audit_required`, reload interval         |
+| Session-policy bucket (`AOW_SESSION_POLICY_BUCKET`), same content                 |                                                         |
+| S3 config overlay (`AOW_S3_CONFIG_BUCKET`, `AOW_S3_CONFIG_PATH`), same content    |                                                         |
+
+- Authorization config must match across regions, or failover changes the answer. Upload mappings and policy files to every region in one CI job, or replicate them.
+- A target role's trust policy must list **every** region's execution role, or failover passes the gateway and fails at `sts:AssumeRole`. IdP-issued roles trust the IAM OIDC provider instead and need no per-region change.
+- IdP: one MRK, one replica per region, `idp.kms_allowed_regions`, a global static JWKS. See [IDP.md § Multi-region deployment](IDP.md#multi-region-deployment).
+- Callers list every regional endpoint and fail over on transient errors only: [GITHUB_ACTIONS.md § Multi-region failover](GITHUB_ACTIONS.md#multi-region-failover).
+
+Worked example with both regions' environment: [examples/multi-region/](examples/multi-region/README.md).
 
 ### Required IAM Permissions
 

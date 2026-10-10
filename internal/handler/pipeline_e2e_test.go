@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
@@ -39,7 +38,7 @@ type vRecorder struct {
 	assumeCalls   int
 	assumedRole   string
 	gotPolicy     *string
-	gotTagSpec    map[string]string
+	gotTags       map[string]string
 	tags          map[string]string
 	tagsErr       error
 	allowAccount  bool
@@ -47,7 +46,11 @@ type vRecorder struct {
 	s3Body        string
 	s3Err         error
 	tagAuthCalled int
+
+	pinnedCalls []pinnedRead
 }
+
+type pinnedRead struct{ bucket, key, prevETag, owner string }
 
 func (f *vRecorder) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	f.getS3Called++
@@ -56,7 +59,14 @@ func (f *vRecorder) GetS3Object(context.Context, string, string) (io.ReadCloser,
 	}
 	return io.NopCloser(stringReader(f.s3Body)), nil
 }
-func (f *vRecorder) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) { return nil, nil }
+
+func (f *vRecorder) GetS3ObjectIfChanged(_ context.Context, bucket, key, prevETag, owner string) ([]byte, string, error) {
+	f.pinnedCalls = append(f.pinnedCalls, pinnedRead{bucket, key, prevETag, owner})
+	if f.s3Err != nil {
+		return nil, "", f.s3Err
+	}
+	return []byte(f.s3Body), `"e"`, nil
+}
 func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, error) {
 	f.tagAuthCalled++
 	return f.tags, f.tagsErr
@@ -64,11 +74,15 @@ func (f *vRecorder) GetRoleTags(context.Context, string) (map[string]string, err
 func (f *vRecorder) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return f.allowAccount, nil
 }
-func (f *vRecorder) AssumeRole(_ context.Context, roleARN, _ string, policy *string, _ *int32, _ *types.Claims, spec map[string]string) (*ststypes.Credentials, error) {
+func (f *vRecorder) AssumeRoleWithWebIdentity(context.Context, string, string, string, *string, int32) (*ststypes.Credentials, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (f *vRecorder) AssumeRole(_ context.Context, roleARN, _ string, policy *string, _ *int32, tags []ststypes.Tag) (*ststypes.Credentials, error) {
 	f.assumeCalls++
 	f.assumedRole = roleARN
 	f.gotPolicy = policy
-	f.gotTagSpec = spec
+	f.gotTags = tagMap(tags)
 	return &ststypes.Credentials{
 		AccessKeyId: aws.String("AKIA"), SecretAccessKey: aws.String("s"),
 		SessionToken: aws.String("t"), Expiration: aws.Time(time.Now().Add(time.Hour)),
@@ -114,7 +128,7 @@ func vE2EClaims(subject, ref string) *types.Claims {
 	}
 }
 
-func vRun(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.Claims, role string) (*ststypes.Credentials, error) {
+func vRun(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.Claims, role string) (*handler.IssuedCredentials, error) {
 	t.Helper()
 	p := handler.NewRequestProcessor(
 		config.NewStaticProvider(cfg), rec, &vExtractor{claims: claims}, nil, "test")
@@ -140,8 +154,8 @@ func TestPipeline_ScopedPolicyReachesSTS(t *testing.T) {
 	if rec.gotPolicy == nil || *rec.gotPolicy != `{"scoped":true}` {
 		t.Fatalf("UNSCOPED ASSUMPTION: STS received policy %v for the privileged role", rec.gotPolicy)
 	}
-	if rec.gotTagSpec["repo"] != "repository" {
-		t.Errorf("issuer session_tags spec not forwarded: %v", rec.gotTagSpec)
+	if rec.gotTags["repo"] != "myorg/repo" {
+		t.Errorf("issuer session_tags not built from the verified claims: %v", rec.gotTags)
 	}
 }
 
@@ -227,6 +241,52 @@ func TestPipeline_PolicyFileFailureDenies(t *testing.T) {
 	}
 	if rec3.gotPolicy == nil || *rec3.gotPolicy != `{"Version":"2012-10-17"}` {
 		t.Errorf("policy file content not forwarded: %v", rec3.gotPolicy)
+	}
+}
+
+// ---------- E3b: session_policy_bucket_owner pins the policy read ----------
+
+func TestPipeline_PolicyFileOwnerPin(t *testing.T) {
+	role := "arn:aws:iam::111111111111:role/deploy"
+	const policy = `{"Version":"2012-10-17"}`
+	tests := []struct {
+		name       string
+		owner      string
+		s3Err      error
+		body       string
+		wantPinned []pinnedRead
+		wantPlain  int
+		wantAssume int
+	}{
+		{"owner set uses pinned read", "111122223333", nil, policy,
+			[]pinnedRead{{"policies", "scoped.json", "", "111122223333"}}, 0, 1},
+		{"owner unset uses plain read", "", nil, policy, nil, 1, 1},
+		{"pinned read failure denies", "111122223333", errors.New("AccessDenied"), "",
+			[]pinnedRead{{"policies", "scoped.json", "", "111122223333"}}, 0, 0},
+		{"pinned invalid JSON denies", "111122223333", nil, "not json{",
+			[]pinnedRead{{"policies", "scoped.json", "", "111122223333"}}, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := vE2ECfg(t, []config.RoleMapping{
+				{Subject: config.Patterns{"myorg/repo"}, Roles: []string{role}, SessionPolicyFile: "scoped.json"},
+			})
+			cfg.SessionPolicyBucketOwner = tt.owner
+			rec := &vRecorder{allowAccount: true, s3Body: tt.body, s3Err: tt.s3Err}
+
+			_, err := vRun(t, cfg, rec, vE2EClaims("myorg/repo", "refs/heads/main"), role)
+
+			assert.Equal(t, tt.wantPinned, rec.pinnedCalls)
+			assert.Equal(t, tt.wantPlain, rec.getS3Called)
+			assert.Equal(t, tt.wantAssume, rec.assumeCalls)
+			if tt.wantAssume == 0 {
+				require.ErrorIs(t, err, handler.ErrSessionPolicyAccess)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, rec.gotPolicy)
+			assert.Equal(t, policy, *rec.gotPolicy)
+		})
 	}
 }
 
@@ -381,8 +441,8 @@ func TestGenericIssuer_AllowPathReachesSTSWithPolicyAndTags(t *testing.T) {
 	assert.Equal(t, role, rec.assumedRole)
 	require.NotNil(t, rec.gotPolicy, "the mapping's session policy must reach STS")
 	assert.JSONEq(t, `{"Version":"2012-10-17","Statement":[]}`, *rec.gotPolicy)
-	assert.Equal(t, map[string]string{"project": "project_path"}, rec.gotTagSpec,
-		"the generic issuer's session_tags spec must reach AssumeRole")
+	assert.Equal(t, map[string]string{"project": "acme/platform/api"}, rec.gotTags,
+		"the generic issuer's session_tags must reach AssumeRole built from the claims")
 	assert.Zero(t, rec.tagAuthCalled, "tag-auth must not be consulted once a mapping authorizes")
 }
 
@@ -507,8 +567,8 @@ func TestGenericIssuer_TagAuthAuthorizesViaClaimDimension(t *testing.T) {
 	assert.Equal(t, 1, rec.assumeCalls)
 	assert.Equal(t, gTagRole, rec.assumedRole)
 	assert.Nil(t, rec.gotPolicy, "a tag-authorized role carries no config-declared session policy")
-	assert.Equal(t, map[string]string{"project": "project_path"}, rec.gotTagSpec,
-		"the issuer's session_tags spec still applies on the tag-auth path")
+	assert.Equal(t, map[string]string{"project": "acme/platform/api"}, rec.gotTags,
+		"the issuer's session_tags still apply on the tag-auth path")
 }
 
 // A claim tag that does not match must deny, even though the identity tag does.
@@ -724,4 +784,36 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 		}
 		assert.True(t, sawSubject, "a deny must record which subject was denied")
 	})
+}
+
+func TestPipeline_PolicyFileJSONAcceptSet(t *testing.T) {
+	role := "arn:aws:iam::111111111111:role/deploy"
+	cfg := vE2ECfg(t, []config.RoleMapping{
+		{Subject: config.Patterns{"myorg/repo"}, Roles: []string{role}, SessionPolicyFile: "scoped.json"},
+	})
+	tests := []struct {
+		name    string
+		body    string
+		allowed bool
+	}{
+		{"object", `{"Version":"2012-10-17"}`, true},
+		{"padded object", " \n{\"a\":[1,2]}\n ", true},
+		{"empty", "", false},
+		{"truncated", `{"Version":`, false},
+		{"trailing garbage", `{"a":1} x`, false},
+		{"two documents", `{"a":1}{"b":2}`, false},
+		{"unquoted key", `{a:1}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &vRecorder{allowAccount: true, s3Body: tt.body}
+			_, err := vRun(t, cfg, rec, vE2EClaims("myorg/repo", "refs/heads/main"), role)
+			if tt.allowed != (err == nil) {
+				t.Fatalf("allowed=%v, err=%v", tt.allowed, err)
+			}
+			if !tt.allowed && rec.assumeCalls != 0 {
+				t.Error("role assumed unscoped after invalid policy JSON")
+			}
+		})
+	}
 }

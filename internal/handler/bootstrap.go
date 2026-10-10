@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	s3logger "github.com/boogy/aws-oidc-warden/internal/s3logger"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
@@ -43,17 +43,32 @@ func warmJWKSCache(mode string, v jwksWarmer) bool {
 	return true
 }
 
+// callerWarmTimeout bounds the cold-start STS caller-identity warm-up.
+const callerWarmTimeout = 3 * time.Second
+
+// warmRoleARN is a placeholder; warm-up only needs it to resolve the hub identity.
+const warmRoleARN = "arn:aws:iam::000000000000:role/warm"
+
+// warmCallerIdentity primes the cached STS caller identity; best-effort, failure is logged.
+func warmCallerIdentity(logger *slog.Logger, c aws.AwsConsumerInterface) {
+	ctx, cancel := context.WithTimeout(context.Background(), callerWarmTimeout)
+	defer cancel()
+	if _, err := c.IsTargetAccountAllowed(ctx, warmRoleARN); err != nil {
+		logevent.Warn(ctx, logger, logevent.AppWarmFailure, "sts caller identity not warmed at startup; retrying lazily",
+			slog.String("component", "sts_caller_identity"), slog.String("error", err.Error()))
+	}
+}
+
 // Bootstrap contains all the initialized components needed by handlers
 type Bootstrap struct {
 	Config    *config.Config
 	Provider  *config.Provider
 	Consumer  aws.AwsConsumerInterface
-	Validator validator.TokenValidatorInterface  // kept for external use / tests
 	Extractor validator.ClaimsExtractorInterface // used by processor
-	Cache     cache.Cache
 	S3Logger  *s3logger.S3Logger
 	Logger    *slog.Logger
 	Adapter   string
+	IdP       *idp.Service
 }
 
 // NewBootstrap initializes all common components needed by Lambda handlers.
@@ -77,6 +92,20 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	consumer := aws.NewAwsConsumer(cfg)
+	return newBootstrap(adapter, logger, cfg, consumer, DefaultIdPKMS)
+}
+
+// bootstrapConsumer is the AWS consumer newBootstrap wires into the provider and handlers.
+type bootstrapConsumer interface {
+	aws.AwsConsumerInterface
+	SetConfigSource(func() *config.Config)
+}
+
+// newBootstrap wires every component from the already-loaded base config and AWS consumer.
+func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consumer bootstrapConsumer, kms func() idp.KMSAPI) (*Bootstrap, error) {
+	ctx := context.Background()
+
 	jwksCache, err := cache.NewCache(cfg)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
@@ -84,17 +113,14 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 		return nil, fmt.Errorf("failed to initialize cache: %w", err)
 	}
 
-	consumer := aws.NewAwsConsumer(cfg)
-
-	provider, err := buildConfigProvider(cfg, consumer)
+	provider, err := BuildConfigProvider(cfg, consumer)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
 			slog.String("component", "remote_config"), slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to load remote configuration: %w", err)
 	}
 
-	// Wired so hot-reloaded changes (allowed accounts, tag-auth, spoke role)
-	// take effect here too, not just on the processor's config reads.
+	// Hot-reloaded account, tag-auth and spoke-role changes reach the consumer too.
 	consumer.SetConfigSource(provider.Get)
 
 	s3log := s3logger.NewS3Logger(provider.Get())
@@ -102,8 +128,7 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 
-	// jwt_validation.mode itself is fixed at cold start (requires redeploy to
-	// change); delegated extractors still read live config per Extract() call.
+	// jwt_validation.mode is fixed at cold start.
 	extractor, err := newClaimsExtractor(provider, tokenValidator)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
@@ -116,25 +141,44 @@ func NewBootstrap(adapter string) (*Bootstrap, error) {
 	}
 	warmJWKSCache(cfg.JWTValidation.Mode, tokenValidator)
 
+	idpSvc := NewIdPService(provider, kms, logger)
+	warmCallerIdentity(logger, consumer)
+
 	return &Bootstrap{
 		Config:    cfg,
 		Provider:  provider,
 		Consumer:  consumer,
-		Validator: tokenValidator,
 		Extractor: extractor,
-		Cache:     jwksCache,
 		S3Logger:  s3log,
 		Logger:    logger,
 		Adapter:   adapter,
+		IdP:       idpSvc,
 	}, nil
 }
 
-// newClaimsExtractor creates the ClaimsExtractorInterface for the configured
-// mode. Delegated modes ("apigw"/"alb") trust an upstream that already
-// verified the signature and re-validate against the matched issuer's spec
-// for defense-in-depth. "apigw" supports multiple issuers (one JWT
-// Authorizer per route); "alb" trusts a single OIDC IdP, so multi-issuer
-// config is rejected fail-fast there.
+// DefaultIdPKMS returns the shared KMS client for the IdP's KMS signer.
+func DefaultIdPKMS() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }
+
+// NewIdPService builds the frozen IdP service from the provider's post-Refresh config and warms it.
+func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.Logger) *idp.Service {
+	cfg := provider.Get().IdP
+	if cfg == nil {
+		return nil
+	}
+	svc := idp.NewService(*cfg, idp.NewLoader(*cfg, kms, log))
+	frozen := svc.Config()
+	provider.FreezeIdP(&frozen)
+	if frozen.Enabled {
+		ctx := context.Background()
+		if err := svc.Warm(ctx); err != nil {
+			logevent.Error(ctx, log, logevent.IdPKeyLoadFailure, "idp keys not loaded at startup; retrying lazily",
+				slog.String("error", err.Error()))
+		}
+	}
+	return svc
+}
+
+// newClaimsExtractor creates the extractor for jwt_validation.mode; alb mode requires exactly one issuer.
 func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
 	cfg := provider.Get()
 	mode := cfg.JWTValidation.Mode
@@ -144,7 +188,7 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 	case "apigw":
 		return validator.NewAPIGWExtractor(provider), nil
 	case "alb":
-		if _, err := singleDelegatedIssuer(cfg, mode); err != nil {
+		if err := requireSingleIssuer(cfg, mode); err != nil {
 			return nil, err
 		}
 		return validator.NewALBExtractor(provider), nil
@@ -153,55 +197,93 @@ func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInt
 	}
 }
 
-// singleDelegatedIssuer returns the sole configured issuer for alb mode
-// (fails if more than one is configured; apigw resolves per request instead).
-func singleDelegatedIssuer(cfg *config.Config, mode string) (*config.IssuerConfig, error) {
+// requireSingleIssuer enforces alb mode's exactly-one-issuer rule.
+func requireSingleIssuer(cfg *config.Config, mode string) error {
 	if len(cfg.Issuers) != 1 {
-		return nil, fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
+		return fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
 	}
-	return &cfg.Issuers[0], nil
+	return nil
 }
 
-// buildConfigProvider wires the config provider: with an S3 config source it
-// fetches+overlays it (failing fast) and enables hot-reload when
-// ConfigReloadInterval > 0; without one, a static provider serves the local
-// config unless config_fragments are set, which need a reloadable provider
-// (nil fetch) to get merged at all.
+// BuildConfigProvider builds the config provider; any reload source triggers a fail-fast initial refresh.
+func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
+	provider, err := buildConfigProvider(cfg, consumer)
+	if err != nil {
+		return nil, err
+	}
+	if live := provider.Get(); live.S3SessionPolicyBucket != "" && live.SessionPolicyBucketOwner == "" {
+		logevent.Warn(context.Background(), nil, logevent.PolicyS3OwnerUnpinned, "session policy bucket read without owner pin",
+			slog.String("bucket", live.S3SessionPolicyBucket))
+	}
+	return provider, nil
+}
+
 func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
-	if cfg.S3ConfigBucket == "" || cfg.S3ConfigPath == "" {
-		if len(cfg.ConfigFragments) == 0 {
+	ctx := context.Background()
+	opt := config.WithFragmentFetcher(s3FragmentFetcher(consumer))
+	hasOverlay := cfg.S3ConfigBucket != "" && cfg.S3ConfigPath != ""
+
+	if !hasOverlay {
+		if cfg.MappingsFile == "" && len(cfg.ConfigFragments) == 0 {
 			return config.NewStaticProvider(cfg), nil
 		}
-		provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil)
-		if err := provider.Refresh(context.Background()); err != nil {
+		provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, opt)
+		if err := provider.Refresh(ctx); err != nil {
 			return nil, err
+		}
+		if cfg.ConfigReloadInterval > 0 {
+			attrs := []slog.Attr{slog.Int64("intervalMs", cfg.ConfigReloadInterval.Milliseconds())}
+			if cfg.MappingsFile != "" {
+				attrs = append(attrs, slog.String("mappingsFile", cfg.MappingsFile))
+			}
+			logevent.Info(ctx, nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled", attrs...)
 		}
 		return provider, nil
 	}
 
-	bucket, key := cfg.S3ConfigBucket, cfg.S3ConfigPath
-	fetch := func(ctx context.Context) ([]byte, error) {
-		body, err := consumer.GetS3Object(ctx, bucket, key)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			if cerr := body.Close(); cerr != nil {
-				logevent.Warn(ctx, nil, logevent.AppResourceCloseFailure, "failed to close resource",
-					slog.String("resource", "s3_config_object"), slog.String("error", cerr.Error()))
+	bucket, key, owner, limit := cfg.S3ConfigBucket, cfg.S3ConfigPath, cfg.S3ConfigBucketOwner, cfg.EffectiveMaxConfigBytes()
+	var fetch config.FetchFunc
+	if owner != "" {
+		// Refreshes are serialized by the provider, so the cache needs no lock.
+		var lastETag string
+		var lastData []byte
+		fetch = func(ctx context.Context) ([]byte, error) {
+			data, etag, err := consumer.GetS3ObjectIfChanged(ctx, bucket, key, lastETag, owner)
+			if err != nil {
+				return nil, err
 			}
-		}()
-		return io.ReadAll(io.LimitReader(body, maxRemoteConfigSize))
+			if data == nil && etag != "" && etag == lastETag {
+				return lastData, nil
+			}
+			lastETag, lastData = etag, data
+			return data, nil
+		}
+	} else {
+		logevent.Warn(ctx, nil, logevent.ConfigS3OwnerUnpinned, "s3 config read is not pinned to a bucket owner",
+			slog.String("bucket", bucket))
+		fetch = func(ctx context.Context) ([]byte, error) {
+			body, err := consumer.GetS3Object(ctx, bucket, key)
+			if err != nil {
+				return nil, err
+			}
+			defer func() {
+				if cerr := body.Close(); cerr != nil {
+					logevent.Warn(ctx, nil, logevent.AppResourceCloseFailure, "failed to close resource",
+						slog.String("resource", "s3_config_object"), slog.String("error", cerr.Error()))
+				}
+			}()
+			return utils.ReadAllCapped(body, int64(limit), fmt.Sprintf("s3://%s/%s", bucket, key))
+		}
 	}
 
-	provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, config.FormatFromPath(key), fetch)
+	provider := config.NewProvider(cfg, cfg.ConfigReloadInterval, config.FormatFromPath(key), fetch, opt)
 
-	if err := provider.Refresh(context.Background()); err != nil {
+	if err := provider.Refresh(ctx); err != nil {
 		return nil, err
 	}
 
 	if cfg.ConfigReloadInterval > 0 {
-		logevent.Info(context.Background(), nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled",
+		logevent.Info(ctx, nil, logevent.ConfigHotReloadEnabled, "configuration hot-reload enabled",
 			slog.Int64("intervalMs", cfg.ConfigReloadInterval.Milliseconds()),
 			slog.String("bucket", bucket),
 			slog.String("key", key))
@@ -209,9 +291,6 @@ func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 
 	return provider, nil
 }
-
-// maxRemoteConfigSize bounds the bytes read from the S3 config object.
-const maxRemoteConfigSize = 1024 * 1024 // 1MB
 
 // Cleanup flushes buffered audit records and stops the S3 logger's batch timer.
 func (b *Bootstrap) Cleanup() {
@@ -264,23 +343,23 @@ func validateAdapterMode(bootstrap *Bootstrap, allowed ...string) {
 // NewAwsApiGatewayFromBootstrap creates a new API Gateway handler using bootstrap
 func NewAwsApiGatewayFromBootstrap(bootstrap *Bootstrap) *AwsApiGateway {
 	validateAdapterMode(bootstrap, "self")
-	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	return NewAwsApiGateway(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger).WithIdP(bootstrap.IdP)
 }
 
 // NewAwsLambdaUrlFromBootstrap creates a new Lambda URL handler using bootstrap
 func NewAwsLambdaUrlFromBootstrap(bootstrap *Bootstrap) *AwsLambdaUrl {
 	validateAdapterMode(bootstrap, "self")
-	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	return NewAwsLambdaUrl(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger).WithIdP(bootstrap.IdP)
 }
 
 // NewAwsApplicationLoadBalancerFromBootstrap creates a new ALB handler using bootstrap
 func NewAwsApplicationLoadBalancerFromBootstrap(bootstrap *Bootstrap) *AwsApplicationLoadBalancer {
 	validateAdapterMode(bootstrap, "alb", "self")
-	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	return NewAwsApplicationLoadBalancer(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger).WithIdP(bootstrap.IdP)
 }
 
 // NewAwsApiGatewayV2FromBootstrap creates a new HTTP API v2 handler using bootstrap
 func NewAwsApiGatewayV2FromBootstrap(bootstrap *Bootstrap) *AwsApiGatewayV2 {
 	validateAdapterMode(bootstrap, "apigw")
-	return NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger)
+	return NewAwsApiGatewayV2(bootstrap.Provider, bootstrap.Consumer, bootstrap.Extractor, bootstrap.S3Logger).WithIdP(bootstrap.IdP)
 }

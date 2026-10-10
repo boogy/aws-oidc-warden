@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	gtvaws "github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
@@ -38,9 +37,15 @@ func (f *fixedExtractor) Extract(_ context.Context, _ validator.ExtractionInput)
 }
 
 // staticProvider builds a config.Provider that maps "org/repo" → "arn:aws:iam::123456789012:role/MyRole".
-func staticProvider(t *testing.T) *config.Provider {
+func staticProvider(t *testing.T) *config.Provider { return staticProviderMode(t, "") }
+
+// albModeProvider is staticProvider with jwt_validation.mode "alb".
+func albModeProvider(t *testing.T) *config.Provider { return staticProviderMode(t, "alb") }
+
+func staticProviderMode(t *testing.T, mode string) *config.Provider {
 	t.Helper()
 	cfg := &config.Config{
+		JWTValidation: config.JWTValidation{Mode: mode},
 		Issuers: []config.IssuerConfig{{
 			Issuer:    testIssuer,
 			Provider:  "github",
@@ -52,6 +57,9 @@ func staticProvider(t *testing.T) *config.Provider {
 			Subject: config.Patterns{"org/repo"},
 			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
 		}},
+	}
+	if mode == "alb" {
+		cfg.JWTValidation.ALBExpectedSigner = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test/abc"
 	}
 	require.NoError(t, cfg.Validate())
 	return config.NewStaticProvider(cfg)
@@ -141,32 +149,79 @@ type fakeConsumer struct {
 	tags            map[string]string
 	tagsErr         error
 	assumed         string
-	gotClaims       *types.Claims     // claims passed to AssumeRole → drive session tags (ABAC)
-	gotSessionTags  map[string]string // session_tags spec passed to AssumeRole
+	gotSessionTags  map[string]string // session tags passed to AssumeRole (key -> value)
 	gotSessionName  string            // STS session name passed to AssumeRole
 	assumeOut       *ststypes.Credentials
 	allowAccount    bool
 	allowAccountErr error
 	assumeErr       error
+
+	assumeCalls int
+	tagCalls    int
+	wiCalls     int
+	gotDuration int32
+	lastWI      struct {
+		role, name, token string
+		policy            *string
+		duration          int32
+	}
+	wiErr          error
+	wiCreds        *ststypes.Credentials
+	wiErrEchoToken bool // AssumeRoleWithWebIdentity fails with an error that quotes the token
 }
 
 func (f *fakeConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, errors.New("not used")
 }
-func (f *fakeConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
-	return nil, nil
+
+func (f *fakeConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
 }
 func (f *fakeConsumer) GetRoleTags(context.Context, string) (map[string]string, error) {
+	f.tagCalls++
 	return f.tags, f.tagsErr
 }
 func (f *fakeConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return f.allowAccount, f.allowAccountErr
 }
-func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, _ *int32, claims *types.Claims, sessionTags map[string]string) (*ststypes.Credentials, error) {
+func (f *fakeConsumer) AssumeRoleWithWebIdentity(_ context.Context, role, name, token string, policy *string, duration int32) (*ststypes.Credentials, error) {
+	f.wiCalls++
+	f.lastWI.role, f.lastWI.name, f.lastWI.token, f.lastWI.policy, f.lastWI.duration = role, name, token, policy, duration
+	if f.wiErrEchoToken {
+		return nil, fmt.Errorf("InvalidIdentityToken: %s", token)
+	}
+	if f.wiErr != nil {
+		return nil, f.wiErr
+	}
+	if f.wiCreds != nil {
+		return f.wiCreds, nil
+	}
+	exp := time.Now().Add(time.Hour)
+	return &ststypes.Credentials{
+		AccessKeyId:     aws.String("AKIAEXAMPLE"),
+		SecretAccessKey: aws.String("SECRETEXAMPLEwJalr"),
+		SessionToken:    aws.String("SESSIONTOKENEXAMPLEFwoG"),
+		Expiration:      &exp,
+	}, nil
+}
+
+// tagMap flattens STS session tags into key -> value.
+func tagMap(tags []ststypes.Tag) map[string]string {
+	m := make(map[string]string, len(tags))
+	for _, t := range tags {
+		m[aws.ToString(t.Key)] = aws.ToString(t.Value)
+	}
+	return m
+}
+
+func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string, _ *string, duration *int32, tags []ststypes.Tag) (*ststypes.Credentials, error) {
+	f.assumeCalls++
+	if duration != nil {
+		f.gotDuration = *duration
+	}
 	f.assumed = roleARN
 	f.gotSessionName = sessionName
-	f.gotClaims = claims
-	f.gotSessionTags = sessionTags
+	f.gotSessionTags = tagMap(tags)
 	if f.assumeErr != nil {
 		return nil, f.assumeErr
 	}
@@ -176,9 +231,10 @@ func (f *fakeConsumer) AssumeRole(_ context.Context, roleARN, sessionName string
 func baseTagCfg(t *testing.T) *config.Config {
 	cfg := &config.Config{
 		Issuers: []config.IssuerConfig{{
-			Issuer:    testIssuer,
-			Provider:  "github",
-			Audiences: []string{"sts.amazonaws.com"},
+			Issuer:      testIssuer,
+			Provider:    "github",
+			Audiences:   []string{"sts.amazonaws.com"},
+			SessionTags: map[string]string{"repo": "repository"},
 		}},
 		RoleSessionName: "test",
 		Cache:           &config.Cache{TTL: 0},
@@ -213,9 +269,8 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "AK", *creds.AccessKeyId)
 	assert.Equal(t, "arn:aws:iam::111111111111:role/app", fc.assumed)
-	// Claims must reach AssumeRole so session tags (repo/ref/...) are attached for ABAC.
-	require.NotNil(t, fc.gotClaims)
-	assert.Equal(t, "acme/api", fc.gotClaims.Repository)
+	// Session tags (repo/ref/...) must reach AssumeRole for ABAC.
+	assert.Equal(t, "acme/api", fc.gotSessionTags["repo"])
 }
 
 func TestProcessRequest_TagAuthDenies(t *testing.T) {
@@ -657,6 +712,25 @@ func TestProcessRequest_AssumeRoleDenied(t *testing.T) {
 	assert.Equal(t, "arn:aws:iam::111111111111:role/app", fc.assumed)
 }
 
+func TestProcessRequest_AssumeRoleAccountNotAllowed(t *testing.T) {
+	fc, _ := assumeFailingProc(t, fmt.Errorf("%w: arn:aws:iam::111111111111:role/app", gtvaws.ErrAccountNotAllowed))
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(baseTagCfg(t)), fc, &tagModeExtractor{&types.Claims{
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
+		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
+	}}, sink, "test")
+	_, err := proc.ProcessRequest(context.Background(),
+		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+		validator.ExtractionInput{Token: "t"},
+		"rid", slog.Default())
+	require.ErrorIs(t, err, handler.ErrAccountNotAllowed)
+	assert.False(t, errors.Is(err, handler.ErrAssumeRoleFailed))
+	rec := sink.last(t)
+	assert.Equal(t, "account_check", rec["stage"])
+	assert.Equal(t, "target account not allowed", rec["reason"])
+}
+
 func TestProcessRequest_AssumeRoleInfraFailure(t *testing.T) {
 	_, proc := assumeFailingProc(t, errors.New("ThrottlingException: rate exceeded"))
 	_, err := proc.ProcessRequest(context.Background(),
@@ -685,10 +759,6 @@ func assumeFailingProc(t *testing.T, assumeErr error) (*fakeConsumer, *handler.R
 	return fc, handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
 }
 
-// The spec that reaches AssumeRole must be the issuer's tags plus the
-// authorizing mapping's extras — and the audit record's sessionTagKeys must
-// report the same set, since that field is what an operator reads to confirm
-// which tags an ABAC policy actually received.
 func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 	cfg := &config.Config{
 		Issuers: []config.IssuerConfig{{
@@ -714,10 +784,10 @@ func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 	exp := time.Now()
 	for _, tc := range []struct {
 		subject, role string
-		wantKeys      map[string]string
+		wantTags      map[string]string
 	}{
-		{"acme/api", "arn:aws:iam::111111111111:role/app", map[string]string{"repo": "repository", "tier": "environment"}},
-		{"acme/web", "arn:aws:iam::111111111111:role/web", map[string]string{"repo": "repository"}},
+		{"acme/api", "arn:aws:iam::111111111111:role/app", map[string]string{"repo": "acme/api", "tier": "prod"}},
+		{"acme/web", "arn:aws:iam::111111111111:role/web", map[string]string{"repo": "acme/web"}},
 	} {
 		t.Run(tc.subject, func(t *testing.T) {
 			claims := &types.Claims{
@@ -736,11 +806,13 @@ func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 				validator.ExtractionInput{Token: "t"},
 				"rid", slog.Default())
 			require.NoError(t, err)
-			assert.Equal(t, tc.wantKeys, fc.gotSessionTags)
+			assert.Equal(t, tc.wantTags, fc.gotSessionTags)
 
-			keys := sink.last(t)["sessionTagKeys"]
+			rec := sink.last(t)
+			keys := rec["sessionTagKeys"]
 			require.NotNil(t, keys, "audit record carried no sessionTagKeys")
-			assert.Len(t, keys, len(tc.wantKeys))
+			assert.Len(t, keys, len(tc.wantTags))
+			assert.Equal(t, len(tc.wantTags), len(rec["sessionTags"].(map[string]any)))
 		})
 	}
 }

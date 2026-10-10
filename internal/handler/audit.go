@@ -8,7 +8,6 @@ import (
 	"time"
 
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
-	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
@@ -39,6 +38,7 @@ type auditRecord struct {
 	JWTMode           string `json:"jwtMode"`
 	Decision          string `json:"decision"`        // "allow" | "deny"
 	Stage             string `json:"stage,omitempty"` // failing stage; deny only
+	Action            string `json:"action,omitempty"`
 
 	// SourceIPFrom: "frontend" (AWS-attested) or "x-forwarded-for" (spoofable).
 	SourceIP     string `json:"sourceIp,omitempty"`
@@ -48,6 +48,8 @@ type auditRecord struct {
 	// values, so it must follow the log_claim_values gate. Unexported so the
 	// JSON shape is stable regardless of the gate. Set via setErrorReason.
 	reasonFromError bool
+	// preAuth marks a deny that precedes authentication; it is always batched, never a synchronous S3 write.
+	preAuth bool
 
 	Issuer   string   `json:"issuer,omitempty"`
 	Provider string   `json:"provider,omitempty"`
@@ -61,6 +63,16 @@ type auditRecord struct {
 	GrantedRole   string `json:"grantedRole,omitempty"` // allow only
 	AccountID     string `json:"accountId,omitempty"`
 	SessionName   string `json:"sessionName,omitempty"` // actual STS session name used; allow only
+
+	TokenID                  string `json:"tokenId,omitempty"`
+	IdPSessionCapSeconds     *int   `json:"idpSessionCapSeconds,omitempty"`
+	RequestedDurationSeconds int    `json:"requestedDurationSeconds,omitempty"`
+	DurationSeconds          int    `json:"durationSeconds,omitempty"`
+	SourceIdentity           string `json:"sourceIdentity,omitempty"`
+	SourceIdentityTruncated  bool   `json:"sourceIdentityTruncated,omitempty"`
+	AccessKeyID              string `json:"accessKeyId,omitempty"`
+	SessionNameSource        string `json:"sessionNameSource,omitempty"`
+	RequestedSessionName     string `json:"requestedSessionName,omitempty"`
 
 	// SessionTagKeys (names) are always safe to record. SessionTags (values)
 	// only when LogClaimValues is on and a role was actually granted.
@@ -89,6 +101,8 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.Audience = nil
 	rec.SessionTags = nil
 	rec.Claims = nil
+	rec.SourceIdentity = ""
+	rec.RequestedSessionName = ""
 	rec.Reason = rec.effectiveReason(logClaimValues) // replaced, not cleared
 	rec.reasonFromError = false
 }
@@ -130,6 +144,10 @@ func stageSummary(stage string) string {
 		return "session policy read failed"
 	case "assume_role":
 		return "role assumption failed"
+	case "idp_mint":
+		return "token minting failed"
+	case "idp_exchange":
+		return "web identity exchange failed"
 	default:
 		return "request denied"
 	}
@@ -164,8 +182,17 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []slog.Attr {
 	appendIf("accountId", rec.AccountID)
 	appendIf("sessionName", rec.SessionName)
 	appendIf("stage", rec.Stage)
+	appendIf("action", rec.Action)
+	appendIf("tokenId", rec.TokenID)
+	appendIf("sourceIdentity", rec.SourceIdentity)
+	appendIf("sessionNameSource", rec.SessionNameSource)
+	appendIf("accessKeyId", rec.AccessKeyID)
+	if rec.DurationSeconds > 0 {
+		attrs = append(attrs, slog.Int("durationSeconds", rec.DurationSeconds))
+	}
 	appendIf("reason", rec.effectiveReason(logClaimValues))
 	if logClaimValues {
+		appendIf("requestedSessionName", rec.RequestedSessionName)
 		appendIf("jwtSub", rec.JWTSub)
 		appendIf("subject", rec.Subject)
 		if len(rec.Audience) > 0 {
@@ -189,17 +216,11 @@ func subjectAttr(cfg *config.Config, subject string) slog.Attr {
 	return slog.String("subject", subject)
 }
 
-// recordDecision redacts rec per cfg.LogClaimValues, emits the standardized
-// decision log line from the redacted record, then sends it to the audit
-// sink as one JSON record: synchronously via WriteRecord when
-// cfg.AuditEnforced(), otherwise best-effort via BufferRecord.
-//
-// Callers must set rec.Decision before calling. When cfg.AuditEnforced() is
-// true, a missing sink, marshal failure, or write failure all return an
-// error wrapping ErrAuditWriteFailed and the caller must fail closed; when
-// false, failures are logged and swallowed so the decision still proceeds.
+// recordDecision logs the redacted rec and sends it to the sink; a synchronous-path failure wraps ErrAuditWriteFailed and must fail closed.
 func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.redact(cfg.LogClaimValues)
+	// Unauthenticated floods must not hammer the shared S3 prefix and fail real allows closed.
+	enforced := cfg.AuditEnforced() && !rec.preAuth
 
 	attrs := auditLogAttrs(rec, cfg.LogClaimValues)
 	decisionEvent := logevent.AuthzDecision.WithOutcome(rec.Decision)
@@ -211,7 +232,7 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 
 	if r.audit == nil {
 		// config.Validate() can't catch a missing sink; enforce here instead.
-		if cfg.AuditEnforced() {
+		if enforced {
 			err := fmt.Errorf("%w: audit_required is set but no audit sink is configured", ErrAuditWriteFailed)
 			logevent.Error(ctx, log, logevent.AuditWriteFailure, "failed to write audit record", slog.String("error", err.Error()))
 			return err
@@ -222,13 +243,13 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	data, err := json.Marshal(rec)
 	if err != nil {
 		logevent.Error(ctx, log, logevent.AuditMarshalFailure, "failed to marshal audit record", slog.String("error", err.Error()))
-		if cfg.AuditEnforced() {
+		if enforced {
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, err)
 		}
 		return nil
 	}
 
-	if cfg.AuditEnforced() {
+	if enforced {
 		if werr := r.audit.WriteRecord(ctx, data); werr != nil {
 			logevent.Error(ctx, log, logevent.AuditWriteFailure, "failed to write audit record", slog.String("error", werr.Error()))
 			return fmt.Errorf("%w: %w", ErrAuditWriteFailed, werr)
@@ -252,15 +273,10 @@ func (r *RequestProcessor) finalizeDeny(ctx context.Context, log *slog.Logger, c
 	return origErr
 }
 
-// finalizeAllow records an allow decision. The write happens synchronously
-// before this returns, so a required write failure yields (nil, error) —
-// credentials are never handed back without a durable record.
-func (r *RequestProcessor) finalizeAllow(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord, credentials *ststypes.Credentials) (*ststypes.Credentials, error) {
+// finalizeAllow records an allow decision synchronously: credentials are never handed back without a durable record.
+func (r *RequestProcessor) finalizeAllow(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord) error {
 	rec.Decision = "allow"
-	if auditErr := r.recordDecision(ctx, log, cfg, rec); auditErr != nil {
-		return nil, auditErr
-	}
-	return credentials, nil
+	return r.recordDecision(ctx, log, cfg, rec)
 }
 
 // inputMode classifies which extraction path a request used, for the "jwtMode" field.
@@ -274,6 +290,18 @@ func inputMode(input validator.ExtractionInput) string {
 		return "alb"
 	default:
 		return "unknown"
+	}
+}
+
+// setIdentity records the verified caller on every post-extract record; redact() honours log_claim_values.
+func (rec *auditRecord) setIdentity(cfg *config.Config, claims *gtypes.Claims) {
+	rec.Issuer = claims.Issuer
+	rec.Provider = issuerProvider(cfg, claims.Issuer)
+	rec.JWTSub = claims.Sub
+	rec.Subject = claims.Subject
+	rec.Audience = claimsAudience(claims)
+	if cfg.LogClaimValues {
+		rec.Claims = auditClaims(cfg, claims.Issuer, claims.Raw)
 	}
 }
 
@@ -295,10 +323,18 @@ func claimsAudience(claims *gtypes.Claims) []string {
 	return []string(claims.Audience)
 }
 
-// sessionTagKeyNames returns the sorted tag key names an issuer's session_tags
-// spec would populate. Names are always safe to log regardless of LogClaimValues.
-func sessionTagKeyNames(tagSpec map[string]string) []string {
-	return utils.SortedKeys(tagSpec)
+// sessionTagKeyNames returns the names of the attached session tags, in order.
+func sessionTagKeyNames(tags []ststypes.Tag) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t.Key != nil {
+			names = append(names, *t.Key)
+		}
+	}
+	return names
 }
 
 // claimAliases renames claims on their way into the audit record for a
@@ -361,11 +397,8 @@ func claimEmitted(rawClaims map[string]any, name string, include func(string) bo
 	return utils.FormatClaimValue(raw) != ""
 }
 
-// resolvedSessionTags computes the STS session tag values for the audit
-// record's SessionTags field, reusing aws.BuildSessionTags (the function
-// AssumeRole itself uses). Only called when cfg.LogClaimValues is true.
-func resolvedSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map[string]string) map[string]string {
-	tags := aws.BuildSessionTags(ctx, rawClaims, tagSpec)
+// sessionTagValues maps the attached session tags to their values; callers must gate on cfg.LogClaimValues.
+func sessionTagValues(tags []ststypes.Tag) map[string]string {
 	if len(tags) == 0 {
 		return nil
 	}

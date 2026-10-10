@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,12 +53,12 @@ role_mappings:
   - subject: "org/repo1"
     session_policy: "policy1"
     roles:
-      - "role1"
-      - "role2"
+      - "arn:aws:iam::123456789012:role/role1"
+      - "arn:aws:iam::123456789012:role/role2"
   - subject: "org/repo2"
     session_policy: "policy2"
     roles:
-      - "role3"
+      - "arn:aws:iam::123456789012:role/role3"
 cache_type: "memory"
 `
 	_, err = tmpFile.WriteString(configContent)
@@ -103,7 +104,7 @@ cache_type: "memory"
 	assert.Equal(t, 2, len(cfg.RoleMappings))
 	assert.Equal(t, Patterns{"org/repo1"}, cfg.RoleMappings[0].Subject)
 	assert.Equal(t, "policy1", cfg.RoleMappings[0].SessionPolicy)
-	assert.Equal(t, []string{"role1", "role2"}, cfg.RoleMappings[0].Roles)
+	assert.Equal(t, []string{"arn:aws:iam::123456789012:role/role1", "arn:aws:iam::123456789012:role/role2"}, cfg.RoleMappings[0].Roles)
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
@@ -144,7 +145,7 @@ func TestValidate(t *testing.T) {
 					{
 						Subject:       Patterns{"org/repo"},
 						SessionPolicy: "policy",
-						Roles:         []string{"role1"},
+						Roles:         []string{"arn:aws:iam::123456789012:role/role1"},
 					},
 				},
 			},
@@ -159,7 +160,7 @@ func TestValidate(t *testing.T) {
 					{
 						Subject:       Patterns{"org/repo"},
 						SessionPolicy: "policy",
-						Roles:         []string{"role1"},
+						Roles:         []string{"arn:aws:iam::123456789012:role/role1"},
 					},
 				},
 			},
@@ -335,7 +336,7 @@ func TestValidate(t *testing.T) {
 				RoleMappings: []RoleMapping{
 					{
 						SessionPolicy: "policy",
-						Roles:         []string{"role1"},
+						Roles:         []string{"arn:aws:iam::123456789012:role/role1"},
 					},
 				},
 			},
@@ -349,7 +350,7 @@ func TestValidate(t *testing.T) {
 				RoleMappings: []RoleMapping{
 					{
 						Subject: Patterns{"org/repo"},
-						Roles:   []string{"role1"},
+						Roles:   []string{"arn:aws:iam::123456789012:role/role1"},
 					},
 				},
 			},
@@ -502,12 +503,12 @@ func TestFindSessionPolicy(t *testing.T) {
 			{
 				Subject:       Patterns{"org/repo1"},
 				SessionPolicy: "policy1",
-				Roles:         []string{"role1"},
+				Roles:         []string{"arn:aws:iam::123456789012:role/role1"},
 			},
 			{
 				Subject:       Patterns{"org/repo2.*"},
 				SessionPolicy: "policy2",
-				Roles:         []string{"role2"},
+				Roles:         []string{"arn:aws:iam::123456789012:role/role2"},
 			},
 		},
 	}
@@ -522,25 +523,25 @@ func TestFindSessionPolicy(t *testing.T) {
 		{
 			name:       "exact match",
 			subject:    "org/repo1",
-			role:       "role1",
+			role:       "arn:aws:iam::123456789012:role/role1",
 			wantPolicy: strPtr("policy1"),
 		},
 		{
 			name:       "regex match",
 			subject:    "org/repo2-staging",
-			role:       "role2",
+			role:       "arn:aws:iam::123456789012:role/role2",
 			wantPolicy: strPtr("policy2"),
 		},
 		{
 			name:       "no match",
 			subject:    "org/repo3",
-			role:       "role1",
+			role:       "arn:aws:iam::123456789012:role/role1",
 			wantPolicy: nil,
 		},
 		{
 			name:       "subject matches but role not granted by that mapping",
 			subject:    "org/repo1",
-			role:       "role2",
+			role:       "arn:aws:iam::123456789012:role/role2",
 			wantPolicy: nil,
 		},
 	}
@@ -570,15 +571,15 @@ func TestAuthorizeRoles(t *testing.T) {
 		RoleMappings: []RoleMapping{
 			{
 				Subject: Patterns{"org/repo1"},
-				Roles:   []string{"role1", "role2"},
+				Roles:   []string{"arn:aws:iam::123456789012:role/role1", "arn:aws:iam::123456789012:role/role2"},
 			},
 			{
 				Subject: Patterns{"org/repo2.*"},
-				Roles:   []string{"role3"},
+				Roles:   []string{"arn:aws:iam::123456789012:role/role3"},
 			},
 			{
 				Subject: Patterns{"org/shared-.*"},
-				Roles:   []string{"shared-role"},
+				Roles:   []string{"arn:aws:iam::123456789012:role/shared-role"},
 			},
 		},
 	}
@@ -594,13 +595,13 @@ func TestAuthorizeRoles(t *testing.T) {
 			name:        "exact match",
 			subject:     "org/repo1",
 			wantMatched: true,
-			wantRoles:   []string{"role1", "role2"},
+			wantRoles:   []string{"arn:aws:iam::123456789012:role/role1", "arn:aws:iam::123456789012:role/role2"},
 		},
 		{
 			name:        "regex match",
 			subject:     "org/repo2-staging",
 			wantMatched: true,
-			wantRoles:   []string{"role3"},
+			wantRoles:   []string{"arn:aws:iam::123456789012:role/role3"},
 		},
 		{
 			name:        "multiple matches - check implementation",
@@ -608,7 +609,7 @@ func TestAuthorizeRoles(t *testing.T) {
 			wantMatched: true,
 			// The actual implementation may only match the first or most specific pattern
 			// Adjust this based on your actual implementation behavior
-			wantRoles: []string{"shared-role"},
+			wantRoles: []string{"arn:aws:iam::123456789012:role/shared-role"},
 		},
 		{
 			name:        "no match",
@@ -1226,4 +1227,139 @@ func TestValidate_RejectsUnknownProvider(t *testing.T) {
 			t.Errorf("Validate accepted provider %q", provider)
 		}
 	}
+}
+
+func TestValidate_ConfigReloadIntervalFloor(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval time.Duration
+		wantErr  bool
+	}{
+		{"unset disables reload", 0, false},
+		{"one nanosecond", time.Nanosecond, true},
+		{"yaml 300 without a unit", 300, true},
+		{"just under a second", 999 * time.Millisecond, true},
+		{"one second", time.Second, false},
+		{"five minutes", 5 * time.Minute, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := wildcardCfg("acme/repo")
+			cfg.ConfigReloadInterval = tc.interval
+			err := cfg.Validate()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "unit")
+		})
+	}
+}
+
+func TestMergeBytes_ReloadIntervalWithoutUnitRejected(t *testing.T) {
+	cfg := wildcardCfg("acme/repo")
+	err := cfg.MergeBytes([]byte("config_reload_interval: 300\n"), "yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config_reload_interval")
+
+	cfg = wildcardCfg("acme/repo")
+	require.NoError(t, cfg.MergeBytes([]byte("config_reload_interval: 300s\n"), "yaml"))
+	assert.Equal(t, 300*time.Second, cfg.ConfigReloadInterval)
+}
+
+func TestValidate_RejectsInvalidRoleEntries(t *testing.T) {
+	const good = "arn:aws:iam::123456789012:role/ok"
+	tests := []struct {
+		name    string
+		roles   []string
+		sets    map[string][]string
+		wantErr string
+	}{
+		{"valid", []string{good}, nil, ""},
+		{"valid path ARN", []string{"arn:aws:iam::123456789012:role/team/ok"}, nil, ""},
+		{"valid via set", []string{"@ci"}, map[string][]string{"ci": {good}}, ""},
+		{"empty entry", []string{good, ""}, nil, "empty"},
+		{"whitespace entry", []string{"  "}, nil, "empty"},
+		{"not an ARN", []string{"role1"}, nil, "invalid role ARN"},
+		{"not an IAM role", []string{"arn:aws:s3:::bucket"}, nil, "not an IAM role"},
+		{"user ARN", []string{"arn:aws:iam::123456789012:user/bob"}, nil, "not an IAM role"},
+		{"set holds an invalid ARN", []string{"@ci"}, map[string][]string{"ci": {"nope"}}, "invalid role ARN"},
+		{"set holds an empty entry", []string{"@ci"}, map[string][]string{"ci": {good, " "}}, "empty"},
+		{"set references another set", []string{"@ci"}, map[string][]string{"ci": {"@other"}, "other": {good}}, "role_sets cannot reference"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := wildcardCfg("acme/repo")
+			cfg.RoleSets = tc.sets
+			cfg.RoleMappings[0].Roles = tc.roles
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestValidate_MaxConfigBytes(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      int
+		want    int
+		wantErr bool
+	}{
+		{name: "unset defaults to 1 MiB", in: 0, want: utils.DefaultMaxConfigBytes},
+		{name: "explicit", in: 4096, want: 4096},
+		{name: "at ceiling", in: maxConfigBytesCeiling, want: maxConfigBytesCeiling},
+		{name: "above ceiling", in: maxConfigBytesCeiling + 1, wantErr: true},
+		{name: "negative", in: -1, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Config{Issuers: singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), RoleSessionName: "warden", MaxConfigBytes: tt.in}
+			err := c.Validate()
+			if tt.wantErr {
+				require.ErrorContains(t, err, "max_config_bytes")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, c.MaxConfigBytes)
+		})
+	}
+}
+
+func TestValidate_MaxTokenBytes(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      int
+		want    int
+		wantErr bool
+	}{
+		{name: "unset defaults to 8 KiB", in: 0, want: defaultMaxTokenBytes},
+		{name: "at ceiling", in: MaxTokenBytesCeiling, want: MaxTokenBytesCeiling},
+		{name: "above ceiling", in: MaxTokenBytesCeiling + 1, wantErr: true},
+		{name: "negative", in: -1, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Config{Issuers: singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), RoleSessionName: "warden", MaxTokenBytes: tt.in}
+			err := c.Validate()
+			if tt.wantErr {
+				require.ErrorContains(t, err, "max_token_bytes")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, c.MaxTokenBytes)
+		})
+	}
+}
+
+func TestEffectiveMaxConfigBytes(t *testing.T) {
+	var nilCfg *Config
+	assert.Equal(t, utils.DefaultMaxConfigBytes, nilCfg.EffectiveMaxConfigBytes())
+	assert.Equal(t, utils.DefaultMaxConfigBytes, (&Config{}).EffectiveMaxConfigBytes())
+	assert.Equal(t, 4096, (&Config{MaxConfigBytes: 4096}).EffectiveMaxConfigBytes())
 }

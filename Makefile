@@ -33,6 +33,16 @@ build-local:
 	@mkdir -p $(BUILD_DIR)
 	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/$(APP_NAME)-local ./cmd/local
 
+.PHONY: build-idp-export
+build-idp-export:
+	@mkdir -p $(BUILD_DIR)
+	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/idp-export ./cmd/idp-export
+
+.PHONY: build-validate
+build-validate:
+	@mkdir -p $(BUILD_DIR)
+	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/validate ./cmd/validate
+
 .PHONY: build-lambda
 build-lambda: build-apigateway build-apigatewayv2 build-alb build-lambdaurl
 
@@ -66,7 +76,7 @@ build-lambdaurl:
 .PHONY: run
 run: build-local
 	@echo "Running local development server..."
-	@$(BUILD_DIR)/$(APP_NAME)-local --port=8080 --log-level=debug --config=./example-config.yaml
+	@$(BUILD_DIR)/$(APP_NAME)-local --port=8080 --log-level=debug --config=./docs/examples/example-config.yaml
 
 .PHONY: clean
 clean:

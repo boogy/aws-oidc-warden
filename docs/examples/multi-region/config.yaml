@@ -1,0 +1,46 @@
+# config.yaml: identical in every region; ship it in the deployment package.
+# Region-specific resources (buckets, cache table, mappings file) are not set
+# here: each region's Lambda sets them through AOW_* environment variables,
+# see eu-west-1.env and us-east-1.env. Env always beats this file.
+# Docs: README.md in this directory, docs/ARCHITECTURE.md#multi-region.
+# Every key, with its options and defaults: ../example-config.yaml.
+
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: "github"
+    audiences: ["sts.amazonaws.com"] # same audience in every region, so one token works for failover
+    required_claims: ["repository", "ref"]
+    session_tags:
+      repo: "repository"
+      ref: "ref"
+      actor: "actor"
+default_issuer: "https://token.actions.githubusercontent.com"
+role_session_name: "aws-oidc-warden"
+session_tags_transitive: true
+
+jwt_validation:
+  mode: "self"
+
+cache:
+  type: "dynamodb" # table name per region: AOW_CACHE_DYNAMODB_TABLE
+  ttl: 4h
+
+log_level: "info"
+log_to_s3: true # bucket per region: AOW_LOG_BUCKET
+log_prefix: "audit/"
+audit_required: true
+
+s3_config_bucket_owner: "111122223333"
+config_reload_interval: 60s
+
+idp:
+  enabled: true
+  issuer: "https://idp.ci.octo.example" # one issuer for every region
+  audience: "aow-idp"
+  # One multi-region key. Each region signs with its local replica: the ARN's
+  # region is rewritten to the Lambda's region, so this line is the same everywhere.
+  kms_allowed_regions: ["eu-west-1", "us-east-1"]
+  signing_keys:
+    - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/mrk-1234abcd12ab34cd56ef1234567890ab"
+      algorithm: ES256
+      status: active

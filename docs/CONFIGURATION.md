@@ -1,6 +1,6 @@
 # AWS OIDC Warden Configuration
 
-The complete configuration reference. If you are setting the service up for the first time, start with [`example-config.yaml`](../example-config.yaml) — a full annotated reference config — and use this document to look up individual keys.
+The complete configuration reference. If you are setting the service up for the first time, start with [`example-config.yaml`](examples/example-config.yaml) — a full annotated reference config — and use this document to look up individual keys.
 
 **On this page**
 
@@ -10,8 +10,10 @@ The complete configuration reference. If you are setting the service up for the 
 | [The issuer model](#the-issuer-model)                                     | `issuers[]`, per-issuer fields, the zero-config seed                                             |
 | [Authorization](#authorization-role_mappings-role_groups-role_sets)       | `role_mappings`, `role_groups`, `role_sets`, conditions, boolean logic                           |
 | [How a grant resolves](#how-a-grant-its-policy-and-its-overrides-resolve) | Session policies, `role_session_name`, per-mapping `session_tags`, **and the ordering foot-gun** |
+| [IdP](#idp-optional-identity-provider)                                    | Optional identity-provider mode: `idp` keys, per-mapping `idp_token`, request fields             |
 | [Environment Variable Reference](#environment-variable-reference)         | Every `AOW_*` variable, by area                                                                  |
 | [Config fragments](#config-fragments)                                     | Splitting mappings across files                                                                  |
+| [Validating a config](#validating-a-config)                               | `validate` command for CI: single file, mappings file, fragments                                 |
 | [Hot-reloading](#hot-reloading)                                           | S3 refresh and overlay merge semantics                                                           |
 
 ## Configuration Methods
@@ -76,7 +78,7 @@ An entry's **key** is a canonical field name and its **value** is a raw claim na
 
 Keys other than `subject` are accepted rather than rejected: the validator ignores them, but every entry's **value** joins this issuer's auditable-claim set, so `pipeline: pipeline_id` is a supported way to say "also record this claim". The trade-off is that a misspelled `subject` key is not caught — on a `generic` issuer the missing `claim_mappings.subject` is still a load error, but a `github` issuer silently keeps its `repository` default.
 
-`session_tags` keys must match the STS tag-key charset `^[A-Za-z0-9 _.:/=+@-]{1,128}$`; a key that doesn't is a config validation error. **Write them lower-case.** The config loader lower-cases every key before the spec is unmarshalled, so `CostCenter: cost_center` reaches STS as `costcenter` — the case is gone before validation could object, and no error is raised. If an ABAC policy needs a mixed-case tag key, the warden cannot produce one.
+`session_tags` keys must match the STS tag-key charset `^[A-Za-z0-9 _.:/=+@-]{1,128}$`; a key that doesn't is a config validation error. Keys may not start with `aws:` (any case, reserved by STS), may not differ from another key only by case (STS compares keys case-insensitively), and the issuer's tags plus the authorizing mapping's may not exceed 50 (the STS limit). **Write them lower-case.** The config loader lower-cases every key before the spec is unmarshalled, so `CostCenter: cost_center` reaches STS as `costcenter` — the case is gone before validation could object, and no error is raised. If an ABAC policy needs a mixed-case tag key, the warden cannot produce one.
 
 **Provider-specific behavior**: `provider: "github"` unmarshals the token into the native `types.Claims` struct (all of GitHub's OIDC claims — `repository`, `ref`, `actor`, `workflow_ref`, etc. — are available for `conditions` without any `claim_mappings`), and its canonical `subject` defaults to the `repository` claim (`owner/repo`) unless overridden. Every other `provider` value is `"generic"`: only the claims listed in `claim_mappings` are given canonical names, and `claim_mappings.subject` **must** be set — `Validate()` rejects a non-`github` issuer that omits it.
 
@@ -163,9 +165,9 @@ role_groups:
 
 <!-- prettier-ignore -->
 > [!WARNING]
-> **A bare `.*` / `.+` is rejected by `Validate()`** wherever it gates an authorization decision — in `conditions` fields and as a `subject`, including every element of a `subject` list and of `role_groups.subjects`. A wildcard subject would grant its roles to every subject of the bound issuer.
+> **A pattern that matches every string (`.*`, `.+`, `(?s).*`, `[\s\S]*`, `(.*)`, `^.*$`, `a|.*`) is rejected by `Validate()`** wherever it gates an authorization decision — in `conditions` fields and as a `subject`, including every element of a `subject` list and of `role_groups.subjects`. A wildcard subject would grant its roles to every subject of the bound issuer.
 >
-> **The check is literal.** An equivalent pattern written another way (`(.*)`, `[\s\S]*`) still compiles. It stops the accident, not a determined operator.
+> **The check reads the pattern's parse tree.** It rejects "any character, repeated" however it is spelled, but it is not a proof of specificity: a pattern that happens to match everything by another route may still compile, so keep patterns specific.
 
 The other per-element rules are checked at **every** position, not only the first. All three are load errors:
 
@@ -256,7 +258,7 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 - One mapping's condition tree is capped at **64 nodes** total.
 - An empty group (`any_of: []`) is rejected — it reduces the gate to a constant.
 - A group member that gates nothing (`- {}`) is rejected — an always-true member makes an `any_of` always pass and a `none_of` always fail. The whole block is checked the same way: `conditions: {}`, `conditions:` with nothing under it (an explicit `conditions: null` included — YAML cannot tell the two apart), or a block whose every key was written with no value, is rejected — each would authorize every request that reaches the mapping. Omit `conditions` entirely for an unconditional mapping.
-- The bare-wildcard rejection (`.*`, `.+`) applies at every nesting level, exactly as it does at the top.
+- The match-everything rejection (`.*`, `.+`, `(?s).*`, `[\s\S]*`, `(.*)`, `^.*$`, `a|.*`) applies at every nesting level, exactly as it does at the top.
 - A key that names no claim (`"": "pattern"`) is rejected — it reads as a gate but can never match any claim.
 - Errors name the offending node by path, e.g. `conditions.any_of[1].all_of[0]: invalid pattern for "ref"`. When a block has more than one bad entry, the reported one is stable across restarts (claim keys are compiled in sorted order).
 
@@ -274,8 +276,8 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 
 - **A claim is matched on its VALUE, not its JSON type.** Patterns are regexes and a regex needs text, so every scalar claim is rendered to its canonical text before matching — the same rendering the audit record and the session tag use. Strings pass through unchanged; a JSON bool reads as `true`/`false`; a JSON number reads as its integer form (`42`, not `4.2e+01`). So `email_verified: "true"` matches whether the issuer mints the string `"true"` or the bool `true`, and `run_id: "42"` matches the number `42`. This matters only for issuers that mint non-string claims — every GitHub Actions claim is a string. Before v3.0.0 a positive predicate on a bool or number could never match, so a mapping gated on one silently authorized nobody.
 - **A missing or unreadable claim never satisfies a positive predicate.** Absent, `null`, and object-valued claims have no text to compare, so a positive condition on one denies.
-- **Under `none_of`, an unreadable claim fires the veto.** Inside a `none_of`, "cannot be compared" must not become "the veto does not fire", or `none_of: [{profile: "gold"}]` on an object-valued `profile` would authorize the very caller it names. So under an odd number of `none_of` groups a member whose claim has no readable text counts as **satisfied**, firing the veto and denying. Readable values are judged on their merits in both directions: `none_of: [{email_verified: "false"}]` vetoes the JSON bool `false` and does **not** veto `true`. Absence is _not_ this case and keeps its exact-negation meaning (bullet above).
-- **The two polarities are exact complements.** Both read the claim the same way, so for any readable claim a bare predicate authorizes exactly when the matching `none_of` denies. Polarity toggles per `none_of` rather than latching: a `none_of` nested inside a `none_of` is positive again and means what the bare predicate means. (Before v3.0.0 this identity did not hold for non-string claims — the negated path read values while the positive path read types.)
+- **Under `none_of`, an unreadable claim fires the veto.** Inside a `none_of`, "cannot be compared" must not become "the veto does not fire", or `none_of: [{profile: "gold"}]` on an object-valued `profile` would authorize the very caller it names. So under an odd number of `none_of` groups a member whose claim has no readable text — or whose text contains a newline, which `.` cannot match — counts as **satisfied**, firing the veto and denying. Readable values are judged on their merits in both directions: `none_of: [{email_verified: "false"}]` vetoes the JSON bool `false` and does **not** veto `true`. Absence is _not_ this case and keeps its exact-negation meaning (bullet above).
+- **The two polarities are exact complements.** Both read the claim the same way, so for any readable claim without a newline a bare predicate authorizes exactly when the matching `none_of` denies. Polarity toggles per `none_of` rather than latching: a `none_of` nested inside a `none_of` is positive again and means what the bare predicate means. (Before v3.0.0 this identity did not hold for non-string claims — the negated path read values while the positive path read types.)
 - **List-valued claims match on ANY element.** A claim like `groups: ["team-a", "team-b"]` satisfies `groups: "team-a"`. Each element is read through its canonical text just like a scalar, so a numeric element matches on its own value in both polarities. This makes `any_of`/`none_of` work directly against group, scope, and role lists from GitLab, Okta, or Entra. Under `none_of`, a list carrying an unreadable element is undecidable and fires the veto. Note the two lists are independent: a list of _patterns_ is satisfied when any pattern matches, and a list-valued _claim_ is matched when any element matches.
 - **An empty pattern (`ref: ""`), an empty list (`ref: []`), or a key written with no value at all (`ref:`) is rejected at load time.** All three read as a predicate but gate nothing; before v3.0.0 an empty string was silently ignored and a valueless key was indistinguishable from an omitted one, which quietly widened the gate.
 - **A mixed-case claim name is gateable, and matching is collision-first.** The config loader folds every key to lower case before it is read, so `emailVerified:` reaches the matcher as `emailverified`. Claim lookup compensates, in this order: **collision, then exact, then case-folded**. Write the claim name in whatever case the issuer mints — `isContractor`, `emailVerified`, `groupIds` all work. The one case that denies is genuine ambiguity: if a token carries two claims that differ only in case (`Role` and `role`), the lookup refuses to guess. Two details of that deny are deliberate and worth knowing before you reason about a `none_of` veto:
@@ -308,11 +310,13 @@ Everything else a mapping can specify — session policy, `role_session_name`, e
 
 |                    |                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Precedence**     | Per-mapping wins; global is the fallback. An override applies only where declared                                                                      |
+| **Precedence**     | Per-mapping wins; then the caller `sessionName` if the mapping sets `allow_session_name: true` (else it is ignored); global is the fallback            |
 | **Empty value**    | Indistinguishable from absent                                                                                                                          |
 | **Valid charset**  | STS accepts 2–64 chars from `[\w+=,.@-]`. **`/` is excluded**, so a GitHub `owner/repo` subject cannot be used verbatim                                |
 | **Invalid value**  | Fails the service at boot, rather than being silently reshaped by the runtime sanitizer                                                                |
 | **Not a template** | A `subject` regex matching many repos (or a subject list, or a `role_groups` entry) gets **one** name for the whole set — the field is a static string |
+
+`allow_session_name: true` (on `role_mappings[]` or `role_groups[].defaults`) lets a caller name its own session for roles granted by that mapping. Off by default: another mapping's caller could otherwise reuse a name CloudTrail attributes to someone else. A role granted by tag-based authorization has no mapping, so its caller's `sessionName` is always ignored. A mapping that sets both `allow_session_name: true` and `role_session_name` fails to load.
 
 #### Per-mapping `session_tags`
 
@@ -324,9 +328,20 @@ Everything else a mapping can specify — session policy, `role_session_name`, e
 
 See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefine-them).
 
+#### Per-mapping IdP fields
+
+`role_mappings[]` and `role_groups[].defaults` accept two IdP fields. They apply only when [IdP mode](IDP.md) is configured, and only to roles granted by that mapping (group defaults apply to the expanded mappings).
+
+| Field                  | Default | Notes                                                                                                                         |
+| ---------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `idp_token`            | `false` | Issue this mapping's roles through the IdP while `idp.enabled`, even at 1h. Needs an `idp` block. Implied by over-1h ceilings |
+| `max_session_duration` | `1h`    | Ceiling for the caller's `durationSeconds` on every role this mapping grants, 15m to 12h. Over 1h routes through the IdP      |
+
+With `role_sets`, the lowest-order mapping that grants the role decides.
+
 #### Multi-subject entries share one policy
 
-This is the question a multi-subject entry usually raises: **both** an inline `session_policy` and an S3 `session_policy_file` apply to **every** subject the entry lists. The S3 key is a literal string with no subject interpolation, so one entry cannot vary the policy per subject. If you need per-subject policies, declare separate entries.
+This is the question a multi-subject entry usually raises: the entry's session policy, inline `session_policy` or S3 `session_policy_file`, applies to **every** subject the entry lists. An entry sets one or the other; setting both fails to load. The S3 key is a literal string with no subject interpolation, so one entry cannot vary the policy per subject. If you need per-subject policies, declare separate entries.
 
 ### Owner-bucketed index
 
@@ -336,18 +351,61 @@ Bucketing happens per resolved subject, so each element of a `subject` list is c
 
 Concretely, a mapping is `byOwner`-bucketed only when its compiled pattern's guaranteed literal prefix contains a `/`. So `"octo-org/(api|web)"` is owner-scoped (every match starts `octo-org/`), while `"octo-org/api|other-org/web"` — whose top-level alternation spans two owners — falls into `any`, where it is checked against every subject, just not via the fast path. (Its branches do share the literal prefix `"o"`, but a prefix with no `/` in it cannot pin down an owner, so the fast path is correctly declined.) The same rule covers patterns whose first slash is quantified (`"octo-org/?api"`, which also matches the slash-less `octo-orgapi`): no guaranteed `/` in the prefix means `any`, never a wrong owner bucket. Before v2.1.0 the owner was inferred from the raw pattern text before its first `/`, which mis-filed exactly those quantified-slash patterns and could drop a mapping the authorize path should have seen.
 
+## `idp` (optional identity provider)
+
+Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](IDP.md).
+
+| Key                        | Default                                              | Bounds / values                                                                                                         | Notes                                                                                                                                        |
+| -------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                  | `false`                                              |                                                                                                                         | Live. Kill switch                                                                                                                            |
+| `issuer`                   |                                                      | https URL, no trailing slash, lowercase host                                                                            | Must differ from every `issuers[]` entry; none of those may contain `#`                                                                      |
+| `audience`                 |                                                      | required                                                                                                                | Token `aud` (`audience_mode: static`)                                                                                                        |
+| `audience_mode`            | `static`                                             | `static`, `role_arn`                                                                                                    | `role_arn` sets `aud` to the target role ARN                                                                                                 |
+| `token_ttl`                | `2m`                                                 | 1m to 5m                                                                                                                | Lifetime of the minted token only, not of the credentials                                                                                    |
+| `jwks_uri`                 | issuer origin + `paths.jwks`                         | https URL                                                                                                               | Advertised in discovery                                                                                                                      |
+| `paths.discovery`          | `<idp.issuer path>/.well-known/openid-configuration` | must end with that suffix                                                                                               |                                                                                                                                              |
+| `paths.jwks`               | `<idp.issuer path>/.well-known/jwks.json`            |                                                                                                                         |                                                                                                                                              |
+| `subject_template`         | `{role_arn}`                                         | must end with `{role_arn}`; also `{account_id}`, `{role_name}`, `{source_issuer}`, `{source_subject}`                   | `{source_subject}` needs `{source_issuer}#` before it                                                                                        |
+| `include_source_identity`  | `true`                                               |                                                                                                                         | Adds the AWS source-identity claim to the minted token                                                                                       |
+| `source_identity`          | `{issuer}:{subject}`                                 | placeholders `{request_id}`, `{subject}`, `{issuer}` (inbound issuer host and path, not `idp.issuer`), `{claim:<name>}` | Must contain `{issuer}` with more than one issuer, and no two issuers may render the same `{issuer}`, when `include_source_identity` is true |
+| `source_identity_overflow` | `truncate`                                           | `truncate`, `reject`                                                                                                    | Over 64 characters                                                                                                                           |
+| `sign_timeout`             | `2s`                                                 | > 0                                                                                                                     | Per KMS `Sign` call                                                                                                                          |
+| `jwks_cache_max_age`       | `5m`                                                 | ≥ 1s                                                                                                                    | `Cache-Control` max-age of served documents; 0 uses the default                                                                              |
+| `kms_allowed_regions`      | empty                                                |                                                                                                                         | Regions allowed for MRK primary and replicas; required with an MRK key ARN (`key/mrk-…`); when set, every key ARN's region must be listed    |
+| `signing_keys[]`           |                                                      | at most 5, exactly one `active`                                                                                         | `kms_key_id` (full key ARN) **or** `file` (dev only, refused on Lambda), `algorithm` (`ES256`/`RS256`), `status` (`active`/`verify_only`)    |
+
+`idp` is rejected in config fragments. Two traps:
+
+- `idp.paths` must match the path the front end delivers. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`), which returns 404 unless configured that way.
+- `idp-export` builds the config like the warden (overlay, mappings file, fragments) and exports the effective `idp` block; see [IDP.md](IDP.md#exporting-the-documents-idp-export).
+
+### Request and response
+
+Every request goes to `/verify`. The body takes `token` and `role`, plus:
+
+| Field             | Notes                                                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `durationSeconds` | 900..43200. `AssumeRole` roles: up to 3600, omitted = 3600. IdP roles: up to the ceiling, omitted = `min(3600, ceiling)`; never clamped |
+| `sessionName`     | `^[\w+=,.@-]{2,64}$`. Used only with the mapping's `allow_session_name: true`, else ignored; a `role_session_name` overrides it         |
+
+A mapping with `max_session_duration` over 1h or `idp_token: true` is issued through the IdP while `idp.enabled`; any other uses `AssumeRole`, capped at 1h ([IDP.md § When the IdP is used](IDP.md#when-the-idp-is-used)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
+
 ## Environment Variable Reference
 
 ### Core Settings
 
-| Environment Variable         | Config File Key          | Description                                                                                                                  | Default           |
-| ---------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `AOW_ROLE_SESSION_NAME`      | `role_session_name`      | AWS STS role session name; overridable per-mapping (see [role_mappings](#authorization-role_mappings-role_groups-role_sets)) | `aws-oidc-warden` |
-| `AOW_S3_CONFIG_BUCKET`       | `s3_config_bucket`       | S3 bucket holding the remote config object                                                                                   | (empty)           |
-| `AOW_S3_CONFIG_PATH`         | `s3_config_path`         | Key/path of the remote config object in that bucket                                                                          | (empty)           |
-| `AOW_CONFIG_RELOAD_INTERVAL` | `config_reload_interval` | Hot-reload the S3 config at most this often (e.g. `5m`); `0` disables                                                        | `0` (disabled)    |
-| `AOW_CONFIG_FRAGMENTS`       | `config_fragments`       | Comma-separated fragment sources merged onto base config (local paths only — see [Config fragments](#config-fragments))      | (empty)           |
-| `AOW_SESSION_POLICY_BUCKET`  | `session_policy_bucket`  | S3 bucket for `session_policy_file` lookups                                                                                  | (empty)           |
+| Environment Variable              | Config File Key               | Description                                                                                                                    | Default                           |
+| --------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| `AOW_ROLE_SESSION_NAME`           | `role_session_name`           | AWS STS role session name; overridable per-mapping (see [role_mappings](#authorization-role_mappings-role_groups-role_sets))   | `aws-oidc-warden`                 |
+| `AOW_S3_CONFIG_BUCKET`            | `s3_config_bucket`            | S3 bucket holding the remote config object                                                                                     | (empty)                           |
+| `AOW_S3_CONFIG_PATH`              | `s3_config_path`              | Key/path of the remote config object in that bucket                                                                            | (empty)                           |
+| `AOW_CONFIG_RELOAD_INTERVAL`      | `config_reload_interval`      | Hot-reload the S3 config at most this often (e.g. `5m`, at least `1s`); `0` disables                                           | `0` (disabled)                    |
+| `AOW_CONFIG_FRAGMENTS`            | `config_fragments`            | Comma-separated fragment sources merged onto base config (local paths or `s3://` — see [Config fragments](#config-fragments))  | (empty)                           |
+| `AOW_MAPPINGS_FILE`               | `mappings_file`               | Local path or `s3://` URI of the role-mappings file (see [Split configuration](#split-configuration))                          | (empty)                           |
+| `AOW_MAPPINGS_MAX_STALE`          | `mappings_max_stale`          | Refuse requests with `503 config_stale` once mappings are older than this; `0` disables                                        | 3x reload interval (`s3://` only) |
+| `AOW_S3_CONFIG_BUCKET_OWNER`      | `s3_config_bucket_owner`      | 12-digit account ID sent as `ExpectedBucketOwner` on S3 config reads; required for `s3://` mappings or fragments               | (empty)                           |
+| `AOW_SESSION_POLICY_BUCKET`       | `session_policy_bucket`       | S3 bucket for `session_policy_file` lookups                                                                                    | (empty)                           |
+| `AOW_SESSION_POLICY_BUCKET_OWNER` | `session_policy_bucket_owner` | 12-digit account ID sent as `ExpectedBucketOwner` on `session_policy_file` reads; unset logs `policy.s3_owner_unpinned` (Warn) | (empty)                           |
 
 `issuers`, `default_issuer`, `role_sets`, `role_mappings`, `role_groups`, and `config_fragment_checksums` are structured values with no flat env-var equivalent — set them in the config file (or a fragment).
 
@@ -372,11 +430,12 @@ Top-level, apply across every configured issuer and every `jwt_validation.mode`.
 | `AOW_JWT_LEEWAY`             | `jwt_leeway`             | Clock-skew leeway applied to `exp`/`iat`/`nbf` checks                                                                | `30s` (max `120s`) |
 | `AOW_MAX_TOKEN_LIFETIME`     | `max_token_lifetime`     | Reject if `exp - iat` exceeds this                                                                                   | `1h`               |
 | `AOW_MAX_TOKEN_AGE`          | `max_token_age`          | Reject if `now - iat` exceeds this                                                                                   | `1h`               |
-| `AOW_MAX_TOKEN_BYTES`        | `max_token_bytes`        | Raw token length cap enforced before any parsing                                                                     | `8192` (8 KB)      |
+| `AOW_MAX_TOKEN_BYTES`        | `max_token_bytes`        | Raw token length cap enforced before any parsing; at most `16384`                                                    | `8192` (8 KB)      |
+| `AOW_MAX_CONFIG_BYTES`       | `max_config_bytes`       | Size cap for the S3 overlay, `mappings_file`, each fragment and each session policy; larger is an error (max 64 MiB) | `1048576` (1 MiB)  |
 | `AOW_JWKS_REFETCH_COOLDOWN`  | `jwks_refetch_cooldown`  | Minimum interval between forced JWKS refetches per `(issuer, kid)` — bounds the cost of an unknown-`kid` DoS attempt | `60s`              |
 | `AOW_ALLOW_INSECURE_ISSUERS` | `allow_insecure_issuers` | Dev-only escape hatch: permit `http://` issuer/`jwks_uri` (otherwise rejected)                                       | `false`            |
 
-`jwt_leeway: 0`, `max_token_bytes: 0`, `max_token_lifetime: 0`, and `max_token_age: 0` all mean "use the default", not "disable" — `Validate()` applies the default whenever the field is its zero value. There is currently no way to opt out of the `max_token_lifetime`/`max_token_age` caps entirely; set them to a large duration instead. A negative value for any of these knobs is a config validation error; `jwt_leeway` above `120s` is also rejected.
+`max_config_bytes` is base-only (file or env): the overlay cannot change the cap that bounds its own read, and one that sets it (or `s3_config_bucket_owner` / `session_policy_bucket_owner` / `s3_config_bucket` / `s3_config_path`) to a different value logs an `overlay_base_only_keys_ignored` warning. `jwt_leeway: 0`, `max_token_bytes: 0`, `max_config_bytes: 0`, `max_token_lifetime: 0`, and `max_token_age: 0` all mean "use the default", not "disable" — `Validate()` applies the default whenever the field is its zero value. There is currently no way to opt out of the `max_token_lifetime`/`max_token_age` caps entirely; set them to a large duration instead. A negative value for any of these knobs is a config validation error; `jwt_leeway` above `120s` and `max_token_bytes` above `16384` (the handler's fixed token cap) are also rejected.
 
 ### Logging & Audit Settings
 
@@ -420,6 +479,23 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 | `AOW_CROSS_ACCOUNT_SPOKE_SESSION_DURATION` | `cross_account.spoke_session_duration` | Hub→spoke session length; capped at `1h` (the spoke hop is a chained session, which AWS limits to 1 h)                                                       | `15m`       |
 | `AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS`       | `cross_account.allowed_accounts`       | Comma-separated member account IDs allowed as assume targets (must be 12 digits; hub always allowed; empty = any once enabled — a startup warning is logged) | (empty)     |
 
+### IdP Settings
+
+Applied only when the config file or S3 object already carries an `idp:` block; env alone never creates it. `signing_keys` and `paths` are file/S3 only. Env beats S3 on every reload, including `AOW_IDP_ENABLED`.
+
+| Environment Variable               | Config File Key                | Default                          |
+| ---------------------------------- | ------------------------------ | -------------------------------- |
+| `AOW_IDP_ENABLED`                  | `idp.enabled`                  | `false`                          |
+| `AOW_IDP_ISSUER`                   | `idp.issuer`                   |                                  |
+| `AOW_IDP_AUDIENCE`                 | `idp.audience`                 |                                  |
+| `AOW_IDP_AUDIENCE_MODE`            | `idp.audience_mode`            | `static`                         |
+| `AOW_IDP_TOKEN_TTL`                | `idp.token_ttl`                | `2m` (1m to 5m)                  |
+| `AOW_IDP_JWKS_URI`                 | `idp.jwks_uri`                 | issuer origin + `idp.paths.jwks` |
+| `AOW_IDP_SUBJECT_TEMPLATE`         | `idp.subject_template`         | `{role_arn}`                     |
+| `AOW_IDP_INCLUDE_SOURCE_IDENTITY`  | `idp.include_source_identity`  | `true`                           |
+| `AOW_IDP_SOURCE_IDENTITY`          | `idp.source_identity`          | `{issuer}:{subject}`             |
+| `AOW_IDP_SOURCE_IDENTITY_OVERFLOW` | `idp.source_identity_overflow` | `truncate`                       |
+
 ### JWT Validation Mode Settings
 
 | Environment Variable                     | Config File Key                      | Description                                                                           | Default                                     |
@@ -433,20 +509,88 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 
 ### Other Settings
 
-| Environment Variable | Description                          | Default  |
-| -------------------- | ------------------------------------ | -------- |
-| `CONFIG_NAME`        | Config file name (without extension) | `config` |
-| `CONFIG_PATH`        | Config file directory                | `.`      |
+| Environment Variable | Description                                                                                | Default  |
+| -------------------- | ------------------------------------------------------------------------------------------ | -------- |
+| `CONFIG_NAME`        | Config file name (without extension)                                                       | `config` |
+| `CONFIG_PATH`        | Config file directory                                                                      | `.`      |
+| `CONFIG_FILE`        | Exact config file; overrides `CONFIG_NAME`/`CONFIG_PATH` and skips `/etc/aws-oidc-warden/` | (empty)  |
 
-`CONFIG_PATH` is also always checked at `/etc/aws-oidc-warden/` in addition to the configured path.
+`CONFIG_PATH` is also always checked at `/etc/aws-oidc-warden/` in addition to the configured path. The first of those directories holding a `<CONFIG_NAME>.{yaml,yml,json,toml}` file wins; two such files there is an error, as is a directory holding only another viper format (e.g. `config.hcl`). `$HOME` and `$VAR` in `CONFIG_PATH` are expanded; an empty `CONFIG_PATH` searches only `/etc/aws-oidc-warden/`.
+
+## Split configuration
+
+`mappings_file` moves `role_mappings`, `role_groups` and `role_sets` out of the service config into a separate file. The platform team owns `service.yaml` (issuers, hardening, `idp`); workload owners own `mappings.yaml`. The two are reviewed and deployed separately, and a bucket policy scopes who may write the mappings. Worked example, with both files annotated, the access each caller gets, rejected files and the stale timeline: [`docs/examples/split-config/README.md`](examples/split-config/README.md).
+
+```yaml
+s3_config_bucket_owner: "111122223333"
+mappings_file: "s3://EXAMPLE-BUCKET/mappings.yaml"
+config_reload_interval: 60s
+# mappings_max_stale: 180s   # default: 3x config_reload_interval; 0 disables
+```
+
+| Key                      | Env                          | Notes                                                               |
+| ------------------------ | ---------------------------- | ------------------------------------------------------------------- |
+| `mappings_file`          | `AOW_MAPPINGS_FILE`          | Local path or `s3://bucket/key`. `-mappings` sets it on `cmd/local` |
+| `mappings_max_stale`     | `AOW_MAPPINGS_MAX_STALE`     | See [Freshness](#freshness)                                         |
+| `s3_config_bucket_owner` | `AOW_S3_CONFIG_BUCKET_OWNER` | Exactly 12 digits; never auto-resolved                              |
+
+With `mappings_file` set, the service config may not carry inline `role_mappings`, `role_groups` or `role_sets`.
+
+### What the mappings file may contain
+
+Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner`, `session_policy_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment".
+
+The mappings file is a layer beside the base config and the S3 overlay (`s3_config_bucket`/`s3_config_path`). It merges first, then `config_fragments` in order; fragments are rejected inside it. A `role_sets` name defined twice across layers is an error.
+
+### Bucket owner
+
+`s3_config_bucket_owner` is sent as `ExpectedBucketOwner` on config reads only: the mappings file, `s3://` fragments and the S3 overlay. JWKS-cache and audit S3 calls do not use it. Only the service config (env or file) sets it: an S3 overlay can neither set nor change it, so an overlay that adds an `s3://` mappings file or fragment needs the pin in the service config.
+
+- Required for an `s3://` `mappings_file` or `s3://` fragment; a missing value fails `Validate()`.
+- Recommended for the S3 overlay. Unset, the overlay still loads and startup logs `config.s3_owner_unpinned` (Warn).
+
+### Session policy bucket owner
+
+`session_policy_bucket_owner` pins `session_policy_file` reads the same way, as a separate key because the policy bucket may live in another account. Exactly 12 digits; service config only (env or file), never an S3 overlay or fragment. Unset, the read is unpinned and startup logs `policy.s3_owner_unpinned` (Warn) when `session_policy_bucket` is set.
+
+### Reload
+
+With `config_reload_interval` > 0, the mappings are re-read lazily at most once per interval, with a conditional GET: a 304 means no re-parse. A failed or invalid refresh keeps the last good config; a zero-byte overlay, mappings file or fragment counts as invalid, while a comment-only one resets to the base config. A refresh whose overlay bytes and fragment etags are unchanged keeps the running config without rebuilding it. A refresh that fails backs off: the next attempt waits 2x, 4x, then 8x the interval, resetting on success; a refresh that times out counts as a failure. Requests do not wait on a refresh in progress, except once mappings are stale: then backoff pauses, refreshes retry every 10s (or the interval, if shorter), and a request waits for the refresh in progress, up to 5s or its own deadline, whichever is sooner, rather than failing at once (unless the last refresh failed: then it does not wait). A missing, invalid or zero-byte file at cold start fails startup.
+
+### Freshness
+
+`mappings_max_stale` bounds how old the last successful refresh may be.
+
+- Unset with an `s3://` `mappings_file` and `config_reload_interval` > 0: 3x the interval.
+- Explicit `0` disables the check.
+- An explicit value must be at least 2x `config_reload_interval`.
+- A local-path `mappings_file` rejects any value > 0.
+
+Past the limit every request gets `503 config_stale`, audited with `stage: config` and logged as `config.mappings_stale`. This covers `/verify` and the IdP mint path; the IdP discovery and JWKS documents keep serving. Static providers are never stale. The status is transient: retry with backoff or fail over ([GITHUB_ACTIONS.md](GITHUB_ACTIONS.md#request--response-contract)).
+
+### Integrity
+
+`config_fragment_checksums` pins (`sha256:<hex>` of the content) are impractical for a hot-reloaded mappings file, because every legitimate edit invalidates the pin. Use them for rarely-changing fragments. For the mappings file rely on bucket policy, versioning and object lock. Never use S3 ETags as pins.
+
+### Blast radius
+
+One invalid fragment or mappings file fails the whole refresh for every tenant. The last good config keeps serving until `mappings_max_stale`, then requests fail closed. Validate every change in CI before upload; see [Validating a config](#validating-a-config).
+
+### Revocation
+
+Deleting or breaking the file is not revocation: the last good config keeps granting until it goes stale. To revoke, publish a file without the grant.
+
+### Security
+
+Whoever writes the mappings can grant roles and route them through the IdP (`idp_token`, `max_session_duration`), but never set `idp.*` or `issuers`. The target role's trust policy (in IdP mode, the `sub` pin on the warden's IAM OIDC provider) and IAM `MaxSessionDuration` remain the final gate.
 
 ## Config fragments
 
-`config_fragments` lists additional sources merged on top of the base config's `default_issuer`, `role_sets`, `role_mappings`, and `role_groups` (and _only_ those four keys; anything else in a fragment is a hard error). This lets teams own their own role-mapping fragment without touching the base config that defines `issuers`/hardening knobs/`tag_auth`.
+`config_fragments` lists additional sources merged on top of the base config's `default_issuer`, `role_sets`, `role_mappings`, and `role_groups` (and _only_ those four keys; anything else in a fragment is a hard error). This lets teams own their own role-mapping fragment without touching the base config that defines `issuers`/hardening knobs/`tag_auth`. Each source may be listed once; a duplicate entry fails `Validate()`.
 
-> **Local paths only, for now.** `config.Provider` supports remote (`"scheme://"`, e.g. `s3://`) fragment URIs through an injected `FragmentFetchFunc` (`config.WithFragmentFetcher`), but the shipped binaries (Lambda and `cmd/local`) never install one — `bootstrap.go` calls `config.NewProvider(...)` with no `ProviderOption`s. A `config_fragments` entry with a `scheme://` prefix will hard-fail to fetch in every current deployment. Use local filesystem paths only until a fetcher is wired in.
+`s3://` fragments are fetched with the same conditional, owner-pinned read as the mappings file (`max_config_bytes` cap, `s3_config_bucket_owner` required; see [Split configuration](#split-configuration)).
 
-Fragments do **not** require an S3 config source: with only local-path fragments, they're merged once at startup (an invalid fragment fails startup) and re-resolved per `config_reload_interval` when it's > 0. With an S3 config source they're re-resolved on that same reload cadence.
+Fragments do **not** require an S3 config overlay: they are merged once at startup (an invalid fragment fails startup) and re-resolved per `config_reload_interval` when it is > 0, whether they are local paths or `s3://` objects.
 
 ```yaml
 config_fragments:
@@ -465,15 +609,66 @@ config_fragment_checksums:
 Rules enforced on every merge:
 
 - **Allowlist**: a fragment may only set `default_issuer`, `role_sets`, `role_mappings`, `role_groups`. Any other top-level key is rejected.
-- **`default_issuer`**: a fragment's `default_issuer` must already be a base-defined issuer, and cannot conflict with the base's own `default_issuer` if both set one.
+- **`default_issuer`**: a fragment's `default_issuer` must already be a base-defined issuer, and cannot conflict with the base's own `default_issuer` if both set one. It binds only that fragment's own `role_mappings`/`role_groups` entries that name no `issuer`; it is never applied to the base or to other fragments, so an issuer-less entry elsewhere still needs the base's `default_issuer` (or a sole issuer).
 - **`role_sets`**: merged by name; a fragment defining a `role_sets` name the base (or another already-merged fragment) already defined is rejected.
 - **`role_mappings`/`role_groups`**: appended.
-- Each fragment is capped at 1 MiB; fetch failures (and re-validation failures after merge) fall back to the last-known-good config rather than serving a partial/invalid merge.
-- Local-path fragments are content-hashed (sha256) for change detection; a remote fetcher (once wired) would use its own scheme's native change-detection token (e.g. an S3 ETag). Either can be pinned via `config_fragment_checksums`.
+- Each fragment is capped at `max_config_bytes` (default 1 MiB); fetch failures (and re-validation failures after merge) fall back to the last-known-good config rather than serving a partial/invalid merge.
+- Local-path fragments are content-hashed (sha256) for change detection; `s3://` fragments use a conditional GET (an unchanged object is not re-parsed). Either can be pinned via `config_fragment_checksums`.
+- One invalid fragment fails the whole refresh for every tenant; see [Blast radius](#blast-radius).
+
+## Validating a config
+
+`cmd/validate` (`make build-validate`) builds the config exactly as the service does at cold start (service config, then S3 overlay, mappings file and fragments merged) and exits 1 on any error. It starts no server. Run it in CI on every change to the service config, the mappings file or a fragment, before deploying or uploading.
+
+| Flag                 | Meaning                                                                                                                                                                                                                                                         |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-config PATH`       | Service config file. Required; a missing file is an error, never a silent fallback to defaults                                                                                                                                                                  |
+| `-override URI=PATH` | Serve a local file wherever the service reads the `s3://` URI (S3 overlay, `mappings_file` or a fragment, including ones the overlay adds), parsed by the URI's extension. Repeatable; checksum pins still apply; an override the build never reads is an error |
+| `-offline`           | Fail, naming each one, if any remote source has no `-override`, instead of fetching it. Needs no AWS credentials                                                                                                                                                |
+
+The check covers the merged result, not each file alone: a `role_sets` name defined in two layers, or a fragment `default_issuer` that is not a base issuer, only fails once every layer is loaded. A source without an override is fetched from S3, which needs read access; with every source in git, use `-offline`.
+
+### Single config file
+
+Mappings inline in the service config; nothing remote, so `-offline` holds trivially:
+
+```sh
+validate -offline -config config.yaml
+```
+
+### Mappings file
+
+The service config sets `mappings_file`. A local path is read as is:
+
+```sh
+validate -offline -config service.yaml   # mappings_file: "./mappings.yaml"
+```
+
+An `s3://` mappings file is checked from the copy in the repo before upload:
+
+```sh
+# service.yaml: mappings_file: "s3://acme-warden-config/mappings.yaml"
+validate -offline -config service.yaml \
+  -override s3://acme-warden-config/mappings.yaml=./mappings.yaml
+aws s3 cp ./mappings.yaml s3://acme-warden-config/mappings.yaml
+```
+
+The override URI must name the same S3 object as `mappings_file` (`%2B` and `+` are the same key; `s3://b//k` and `s3://b/k` are not). Write `=` in a key as `%3D`, since the first `=` ends the URI. The overlay's `s3_config_path` is a raw key, so percent-encode it in the override URI (`a%2Bb.yaml` → `s3://cfg/a%252Bb.yaml`); an unmatched source is reported in that form. Upload only after `validate` succeeds: the running service picks the file up within `config_reload_interval`, and an invalid one fails every refresh (see [Blast radius](#blast-radius)).
+
+### Fragments
+
+Each team checks its edited fragment against the live base config and the other teams' fragments:
+
+```sh
+validate -config service.yaml \
+  -override s3://acme-warden-config/fragments/team-data.yaml=./team-data.yaml
+```
+
+This fetches the other fragments, so it needs S3 read access. When all fragments live in one repo, override every source and add `-offline`.
 
 ## Hot-reloading
 
-When `s3_config_bucket`/`s3_config_path` are set, the process fetches and overlays that object at startup (failing fast if it's unreachable or invalid). If `config_reload_interval` is also > 0, the running service re-fetches the object at most once per that interval — checked lazily, once per request, via `Provider.MaybeRefresh` — and atomically swaps in a re-validated config; an invalid or unreachable reload is logged and the previous config is kept. `config_fragments` are re-resolved on the same cadence. Everything read per-request off the live `*config.Config` (issuers, `role_mappings`/`role_groups`/`role_sets`, `tag_auth`, session tags, ...) picks up a reload immediately with no restart; the `jwt_validation.mode`-selected extractor is fixed at cold start (see above).
+When `s3_config_bucket`/`s3_config_path` are set, the process fetches and overlays that object at startup (failing fast if it's unreachable or invalid). If `config_reload_interval` is also > 0, the running service re-fetches the object at most once per that interval — checked lazily, once per request, via `Provider.RefreshIfDue` — and atomically swaps in a re-validated config; an invalid or unreachable reload is logged and the previous config is kept. `config_fragments` are re-resolved on the same cadence. Everything read per-request off the live `*config.Config` (issuers, `role_mappings`/`role_groups`/`role_sets`, `tag_auth`, session tags, ...) picks up a reload immediately with no restart; the `jwt_validation.mode`-selected extractor is fixed at cold start (see above).
 
 ### Overlay merge semantics
 
@@ -492,4 +687,4 @@ An overlay that fails validation is never served, and never partially applied: t
 
 ## Configuration File Format
 
-AWS OIDC Warden supports YAML, JSON, and TOML configuration files (format auto-detected from the file extension via `FormatFromPath`; anything other than `.yaml`/`.yml`/`.toml` is treated as JSON). See [example-config.yaml](../example-config.yaml) for a complete annotated example covering a two-issuer (GitHub + GitLab) setup, `role_sets`/`role_groups`/`default_issuer`, `tag_auth`, `jwt_validation`, and hardening/logging knobs.
+AWS OIDC Warden supports YAML, JSON, and TOML configuration files (format auto-detected from the file extension via `FormatFromPath`; anything other than `.yaml`/`.yml`/`.toml` is treated as JSON). See [example-config.yaml](examples/example-config.yaml) for a complete annotated example covering a two-issuer (GitHub + GitLab) setup, `role_sets`/`role_groups`/`default_issuer`, `tag_auth`, `jwt_validation`, and hardening/logging knobs.

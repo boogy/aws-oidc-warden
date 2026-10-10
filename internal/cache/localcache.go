@@ -58,12 +58,13 @@ func (c *localCache) get(key string) (*types.JWKS, localLookup) {
 		return nil, localMiss
 	}
 
-	if time.Now().After(entry.expiration) {
+	now := time.Now()
+	if now.After(entry.expiration) {
 		delete(c.entries, key)
 		return nil, localExpired
 	}
 
-	entry.lastAccess = time.Now()
+	entry.lastAccess = now
 	return entry.value, localHit
 }
 
@@ -74,8 +75,9 @@ func (c *localCache) put(ctx context.Context, key string, value *types.JWKS, exp
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	now := time.Now()
 	if expiration.IsZero() {
-		expiration = time.Now().Add(c.defaultTTL)
+		expiration = now.Add(c.defaultTTL)
 	}
 
 	// Evict only when adding a new key at capacity; overwrites don't grow the map
@@ -86,7 +88,7 @@ func (c *localCache) put(ctx context.Context, key string, value *types.JWKS, exp
 	c.entries[key] = &localEntry{
 		value:      value,
 		expiration: expiration,
-		lastAccess: time.Now(),
+		lastAccess: now,
 	}
 }
 
@@ -103,18 +105,16 @@ func (c *localCache) evictLRU(ctx context.Context) {
 	}
 
 	if oldestKey != "" {
-		logevent.Debug(ctx, nil, logevent.CacheEvict, "evicting LRU cache entry",
-			cacheAttrs(c.backend, oldestKey, slog.Time("lastAccess", oldestTime))...)
+		if debugEnabled(ctx) {
+			logevent.Debug(ctx, nil, logevent.CacheEvict, "evicting LRU cache entry",
+				cacheAttrs(c.backend, oldestKey, slog.Time("lastAccess", oldestTime))...)
+		}
 		delete(c.entries, oldestKey)
 	}
 }
 
-// resolveAWSConfig returns the caller-supplied AWS config, or loads the
-// default one. backend labels the cache backend in the error log.
-func resolveAWSConfig(ctx context.Context, supplied aws.Config, backend string) (aws.Config, error) {
-	if supplied.Credentials != nil {
-		return supplied, nil
-	}
+// loadAWSConfig loads the default AWS config; backend labels errors.
+func loadAWSConfig(ctx context.Context, backend string) (aws.Config, error) {
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRetryMaxAttempts(Defaults.MaxRetries),
 	)

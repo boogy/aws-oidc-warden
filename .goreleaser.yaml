@@ -94,6 +94,50 @@ builds:
       - amd64
       - arm64
 
+  - id: idp-export
+    dir: .
+    main: ./cmd/idp-export/main.go
+    binary: idp-export
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Date={{.Date}}
+      - -s -w
+      - -extldflags "-static"
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+  - id: validate
+    dir: .
+    main: ./cmd/validate/main.go
+    binary: validate
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Version={{.Version}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/boogy/aws-oidc-warden/internal/version.Date={{.Date}}
+      - -s -w
+      - -extldflags "-static"
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
 archives:
   - id: apigateway
     ids:
@@ -130,6 +174,24 @@ archives:
     files:
       - src: dist/lambdaurl_{{ .Os }}_{{ .Arch }}*/bootstrap
         dst: bootstrap
+
+  - id: idp-export
+    ids:
+      - idp-export
+    formats: ["zip"]
+    name_template: "{{ .ProjectName }}_idp-export_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: dist/idp-export_{{ .Os }}_{{ .Arch }}*/idp-export
+        dst: idp-export
+
+  - id: validate
+    ids:
+      - validate
+    formats: ["zip"]
+    name_template: "{{ .ProjectName }}_validate_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: dist/validate_{{ .Os }}_{{ .Arch }}*/validate
+        dst: validate
 
 snapshot:
   version_template: "{{ .Tag }}-next"

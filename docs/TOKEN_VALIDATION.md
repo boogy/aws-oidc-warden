@@ -216,8 +216,8 @@ Two providers ship; the seam is open/closed (add a provider by implementing `pro
 
 Discovery and JWKS fetches are the only outbound requests validation makes. They go through a single hardened `http.Client`, built once at construction:
 
-- **Dial-time IP blocking** — the resolved IP is checked _before_ connecting; private, loopback, link-local (covers the `169.254.169.254` cloud-metadata address), unspecified, and multicast addresses are refused. Applied on the original request **and every redirect hop**.
-- **DNS-rebinding safe** — the validated IP is dialed directly, so a second DNS lookup inside the dialer cannot swap in a different, unvalidated address.
+- **Dial-time IP blocking** — every address the dialer actually connects to is checked _before_ the connection opens (a `net.Dialer` `Control` hook); private, loopback, link-local (covers the `169.254.169.254` cloud-metadata address), unspecified, multicast, CGNAT, benchmarking, documentation and reserved ranges are refused, as is any IPv4-compatible or NAT64 (`64:ff9b::/96`) address whose embedded IPv4 is. Applied on the original request **and every redirect hop**.
+- **DNS-rebinding safe** — the check runs on the connect address itself, so no DNS answer can reach the socket unvalidated.
 - **TLS 1.2+** enforced; **HTTPS required** (plain `http://` allowed only for loopback and only under `allow_insecure_issuers`, a dev/test escape hatch).
 - **Redirects** capped at 5 hops, each re-validated (scheme + host).
 
@@ -232,7 +232,7 @@ All optional, top-level, hot-reloadable (except `allow_insecure_issuers`, which 
 | `jwt_leeway`             | `30s`   | Clock-skew allowance for `exp`/`iat`/`nbf`; hard max `120s`     |
 | `max_token_lifetime`     | `1h`    | Reject if `exp - iat` exceeds it; `0`/unset applies the default |
 | `max_token_age`          | `1h`    | Reject if `now - iat` exceeds it; `0`/unset applies the default |
-| `max_token_bytes`        | `8192`  | Pre-parse token length cap                                      |
+| `max_token_bytes`        | `8192`  | Pre-parse token length cap; at most `16384`                     |
 | `jwks_refetch_cooldown`  | `60s`   | Min interval between forced JWKS refetches per `(issuer,kid)`   |
 | `allow_insecure_issuers` | `false` | Dev-only: permit `http://` loopback issuer/`jwks_uri`           |
 
@@ -242,15 +242,29 @@ All optional, top-level, hot-reloadable (except `allow_insecure_issuers`, which 
 
 Validation failures propagate as sentinel errors mapped to HTTP status by the frontend adapters (`internal/handler/errors.go`):
 
-| Condition                                                                | Sentinel                   | HTTP | `errorCode`          |
-| ------------------------------------------------------------------------ | -------------------------- | ---- | -------------------- |
-| Empty/oversized token, bad role, malformed JSON                          | `ErrTokenTooLarge`, …      | 400  | `invalid_request`    |
-| Unknown issuer, bad signature, expired, missing claim, audience mismatch | `ErrTokenValidationFailed` | 401  | `token_invalid`      |
-| Role not permitted / account not allowed                                 | `ErrRoleNotPermitted`      | 403  | `permission_denied`  |
-| Session policy read error                                                | `ErrSessionPolicyAccess`   | 500  | `policy_error`       |
-| AssumeRole refused by AWS (`AccessDenied`)                               | `ErrAssumeRoleDenied`      | 403  | `assume_role_denied` |
-| AssumeRole failed for any other reason                                   | `ErrAssumeRoleFailed`      | 500  | `assume_role_failed` |
-| Required audit write failed (`audit_required=true`)                      | `ErrAuditWriteFailed`      | 500  | `audit_write_failed` |
+| Condition                                                                                                          | Sentinel                      | HTTP | `errorCode`                   |
+| ------------------------------------------------------------------------------------------------------------------ | ----------------------------- | ---- | ----------------------------- |
+| Empty/oversized token, bad role, malformed JSON                                                                    | `ErrTokenTooLarge`, …         | 400  | `invalid_request`             |
+| Unknown issuer, bad signature, expired, missing claim, audience mismatch                                           | `ErrTokenValidationFailed`    | 401  | `token_invalid`               |
+| Role not permitted / account not allowed                                                                           | `ErrRoleNotPermitted`         | 403  | `permission_denied`           |
+| Session policy read error                                                                                          | `ErrSessionPolicyAccess`      | 500  | `policy_error`                |
+| AssumeRole refused by AWS (`AccessDenied`)                                                                         | `ErrAssumeRoleDenied`         | 403  | `assume_role_denied`          |
+| AssumeRole failed for any other reason                                                                             | `ErrAssumeRoleFailed`         | 500  | `assume_role_failed`          |
+| Required audit write failed (`audit_required=true`)                                                                | `ErrAuditWriteFailed`         | 500  | `audit_write_failed`          |
+| Role mappings older than `mappings_max_stale` (retryable)                                                          | `ErrConfigStale`              | 503  | `config_stale`                |
+| IdP mode: over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h                                    | `ErrIdPNotPermitted`          | 403  | `idp_not_permitted`           |
+| IdP mode: `subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                  | `ErrIdPSubjectInvalid`        | 403  | `idp_subject_invalid`         |
+| IdP mode: the source identity could not be derived (missing claim) or overflowed with `reject`                     | `ErrIdPSourceIdentityInvalid` | 403  | `idp_source_identity_invalid` |
+| IdP mode: STS refused the minted token: fix the role trust policy or the IAM OIDC provider                         | `ErrIdPExchangeDenied`        | 403  | `idp_exchange_denied`         |
+| IdP mode: `durationSeconds` outside 900..43200                                                                     | `ErrInvalidDuration`          | 400  | `invalid_duration`            |
+| `durationSeconds` above the mapping's `max_session_duration` (1h for `AssumeRole`), or over 1h with no `idp` block | `ErrDurationExceedsCap`       | 400  | `duration_exceeds_cap`        |
+| IdP mode: `durationSeconds` above the role's `MaxSessionDuration`                                                  | `ErrDurationExceedsRoleMax`   | 400  | `duration_exceeds_role_max`   |
+| IdP mode: `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                     | `ErrInvalidSessionName`       | 400  | `invalid_session_name`        |
+| IdP mode: a near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false             | `ErrIdPPathNotFound`          | 404  | `idp_path_not_found`          |
+| IdP mode: not `GET`/`HEAD` on a discovery/JWKS path                                                                | `ErrMethodNotAllowed`         | 405  | `method_not_allowed`          |
+| IdP mode: minted token or packed policy over the STS limit; reduce session tags or the session policy              | `ErrIdPTokenTooLarge`         | 500  | `idp_token_too_large`         |
+| IdP mode: KMS signing unavailable or throttled; also the kill-switch answer over 1h                                | `ErrIdPUnavailable`           | 503  | `idp_signing_unavailable`     |
+| IdP mode: STS could not reach the IdP discovery or JWKS document, or reported the token expired                    | `ErrIdPExchangeUnavailable`   | 503  | `idp_exchange_unavailable`    |
 
 ---
 

@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
@@ -21,15 +21,48 @@ import (
 
 // RequestProcessor contains the core business logic for processing authentication requests
 type RequestProcessor struct {
-	provider  *config.Provider
-	consumer  aws.AwsConsumerInterface
-	extractor validator.ClaimsExtractorInterface
-	audit     AuditSink // structured audit trail sink; nil is a safe no-op (see audit.go)
-	frontend  string    // adapter name (apigateway/apigatewayv2/alb/lambdaurl), for the audit record
+	provider       *config.Provider
+	consumer       aws.AwsConsumerInterface
+	extractor      validator.ClaimsExtractorInterface
+	audit          AuditSink // nil is a no-op
+	frontend       string
+	idp            *idp.Service
+	routes         *idpRoutes
+	idpIssuer      string
+	sourceIdentity *sourceIdentityTemplate // nil when the source_identity claim is off
+	frozenFP       string
+	lastChecked    atomic.Pointer[config.Config]
 }
 
-// NewRequestProcessor creates a new instance of request processor. audit may
-// be nil (audit trail becomes a no-op; standardized logging still happens).
+// WithIdP enables the IdP mint path; a nil service leaves it disabled.
+func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
+	r.idp, r.routes, r.sourceIdentity = s, nil, nil
+	if s != nil {
+		frozen := s.Config()
+		r.frozenFP = frozen.Fingerprint()
+		r.routes, r.idpIssuer = newIdPRoutes(frozen.Paths), frozen.Issuer
+		if frozen.IncludeSourceIdentityClaim() {
+			r.sourceIdentity = parseSourceIdentity(frozen.SourceIdentity, frozen.SourceIdentityOverflow)
+		}
+	}
+	return r
+}
+
+// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added or removed idp block.
+func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
+	if r.lastChecked.Load() == cfg || r.lastChecked.Swap(cfg) == cfg {
+		return
+	}
+	fp := ""
+	if cfg.IdP != nil {
+		fp = cfg.IdP.Fingerprint()
+	}
+	if fp != r.frozenFP {
+		logevent.Warn(ctx, log, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")
+	}
+}
+
+// NewRequestProcessor creates a request processor; a nil audit sink disables the audit trail.
 func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink, frontend string) *RequestProcessor {
 	return &RequestProcessor{
 		provider:  provider,
@@ -40,15 +73,42 @@ func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInte
 	}
 }
 
-// ProcessRequest contains the main business logic for processing requests
-func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error) {
+const (
+	actionAssumeRole = "assume_role"
+	actionMintToken  = "mint_token"
+)
+
+// authzOutcome carries the state of an authorized (or denied) request between pipeline stages.
+type authzOutcome struct {
+	cfg       *config.Config
+	claims    *gtypes.Claims
+	claimsMap map[string]any
+	decision  config.Decision
+	rec       *auditRecord
+	log       *slog.Logger
+	elapsed   func() int64
+}
+
+const reasonAccountNotAllowed = "target account not allowed"
+
+var errInvalidPolicyJSON = errors.New("session policy is not valid JSON")
+
+// deny finishes a rejected request. o.rec.Stage and o.rec.Reason must already be set.
+func (r *RequestProcessor) deny(ctx context.Context, o *authzOutcome, msg string, ret error, attrs ...slog.Attr) error {
+	o.rec.ProcessingMS = o.elapsed()
+	sattrs := append([]slog.Attr{slog.String("stage", o.rec.Stage)}, attrs...)
+	logevent.Debug(ctx, o.log, logevent.AuthzStageDeny, msg, sattrs...)
+	return r.finalizeDeny(ctx, o.log, o.cfg, o.rec, ret)
+}
+
+// authorizeRequest runs refresh, extraction, account check and authorization; it records the deny itself on failure.
+func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*authzOutcome, error) {
 	startTime, _ := ctx.Value(StartTimeContextKey).(time.Time)
 
-	r.provider.MaybeRefresh(ctx)
+	r.provider.RefreshIfDue(ctx)
 	cfg := r.provider.Get()
 
-	// Pin this snapshot for extraction too, so a reload landing mid-request
-	// can't validate and authorize against different config generations.
+	// One config generation for both extraction and authorization.
 	input.Config = cfg
 
 	jwtMode := inputMode(input)
@@ -63,8 +123,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	rec.SourceIP, _ = ctx.Value(SourceIPContextKey).(string)
 	rec.SourceIPFrom, _ = ctx.Value(SourceIPSourceContextKey).(string)
 	rec.FrontendRequestID, _ = ctx.Value(FrontendRequestIDContextKey).(string)
-	// Single source for every ms timing here; guards the zero case since
-	// time.Since(time.Time{}) would otherwise read as ~64000 years.
+	// time.Since(time.Time{}) would read as ~64000 years.
 	elapsed := func() int64 {
 		if startTime.IsZero() {
 			return 0
@@ -72,62 +131,70 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return time.Since(startTime).Milliseconds()
 	}
 
-	// deny finishes a rejected request. rec.Stage and rec.Reason must already
-	// be set; log is read at call time, so it picks up the enriched logger.
-	deny := func(msg string, ret error, attrs ...slog.Attr) error {
-		rec.ProcessingMS = elapsed()
-		sattrs := append([]slog.Attr{slog.String("stage", rec.Stage)}, attrs...)
-		logevent.Debug(ctx, log, logevent.AuthzStageDeny, msg, sattrs...)
-		return r.finalizeDeny(ctx, log, cfg, rec, ret)
-	}
+	o := &authzOutcome{cfg: cfg, rec: rec, log: log, elapsed: elapsed}
 
 	claims, err := r.extractor.Extract(ctx, input)
 	if err != nil {
 		rec.setErrorReason("extract", err)
-		return nil, deny("Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
+		rec.preAuth = true
+		return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
 	}
+
+	// Stale is gated only after authentication so anonymous callers cannot wait on a refresh or trigger the Error log.
+	if _, _, stale := r.provider.Stale(); stale {
+		r.provider.MaybeRefresh(ctx)
+		if age, limit, stale := r.provider.Stale(); stale {
+			rec.setIdentity(cfg, claims)
+			o.rec.Stage, o.rec.Reason = "config", "mappings older than mappings_max_stale"
+			logevent.Error(ctx, log, logevent.ConfigMappingsStale, "role mappings are stale; refusing request",
+				slog.Int64("ageMs", age.Milliseconds()), slog.Int64("maxStaleMs", limit.Milliseconds()))
+			return nil, r.deny(ctx, o, "Configuration stale", ErrConfigStale)
+		}
+		if fresh := r.provider.Get(); fresh != cfg {
+			cfg = fresh
+			input.Config, o.cfg = cfg, cfg
+			authed := claims
+			if claims, err = r.extractor.Extract(ctx, input); err != nil {
+				rec.setIdentity(cfg, authed)
+				rec.setErrorReason("extract", err)
+				return nil, r.deny(ctx, o, "Claims extraction failed", fmt.Errorf("%w: %w", ErrTokenValidationFailed, err), rec.reasonAttr(cfg.LogClaimValues))
+			}
+		}
+	}
+	o.claims = claims
 
 	requestedRole := requestData.Role
 
-	rec.Issuer = claims.Issuer
-	rec.Provider = issuerProvider(cfg, claims.Issuer)
-	rec.JWTSub = claims.Sub
-	rec.Subject = claims.Subject
-	rec.Audience = claimsAudience(claims)
-	// Attached before the authorization stages too, so a deny record still
-	// carries "who did this"; redact() drops these when log_claim_values is off.
-	if cfg.LogClaimValues {
-		rec.Claims = auditClaims(cfg, claims.Issuer, claims.Raw)
-	}
+	rec.setIdentity(cfg, claims)
 
 	if cfg.LogClaimValues {
 		reqAttrs := []any{slog.String("roleArn", requestedRole)}
 		for _, a := range identityAttrs(claims) {
 			reqAttrs = append(reqAttrs, a)
 		}
-		log = log.With(slog.Group("request", reqAttrs...))
+		o.log = o.log.With(slog.Group("request", reqAttrs...))
 	} else {
-		log = log.With(slog.Group("request", slog.String("roleArn", requestedRole)))
+		o.log = o.log.With(slog.Group("request", slog.String("roleArn", requestedRole)))
 	}
+	log = o.log
 
 	// IsTargetAccountAllowed encodes disabled-means-hub-only (fail closed).
 	ok, aerr := r.consumer.IsTargetAccountAllowed(ctx, requestedRole)
 	if aerr != nil {
 		rec.setErrorReason("account_check", aerr)
-		return nil, deny("Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
 	}
 	if !ok {
-		rec.Stage = "account_check"
-		rec.Reason = "target account not allowed"
-		return nil, deny("Target account not allowed", ErrAccountNotAllowed)
+		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
+		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
 	}
 
-	// claims.Raw, not the typed struct: generic issuers' claims have no
-	// struct field, and a JSON round-trip of the struct drops claims.Raw (json:"-").
+	// claims.Raw: generic issuers' claims have no typed struct field.
 	claimsMap := claims.Raw
 	if claimsMap == nil {
 		claimsMap = map[string]any{}
 	}
+	o.claimsMap = claimsMap
 
 	logevent.Debug(ctx, log, logevent.TokenValidated, "token validated",
 		slog.Int64("validationMs", elapsed()),
@@ -137,6 +204,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 
 	decision := cfg.Authorize(claims.Issuer, claims.Subject, requestedRole, claimsMap)
+	o.decision = decision
 	roles := decision.Roles
 	explicitlyAllowed := decision.Matched && slices.Contains(roles, requestedRole)
 
@@ -163,56 +231,108 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		if cfg.LogClaimValues {
 			denyAttrs = append(denyAttrs, identityAttrs(claims)...)
 		}
-		return nil, deny("Role not allowed for this subject or its conditions are not met", ErrRoleNotPermitted, denyAttrs...)
+		return nil, r.deny(ctx, o, "Role not allowed for this subject or its conditions are not met", ErrRoleNotPermitted, denyAttrs...)
 	}
 
-	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, decision)
+	return o, nil
+}
+
+// ProcessRequest authorizes once, then issues credentials through the IdP for an IdP-enabled role or AssumeRole otherwise.
+func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*IssuedCredentials, error) {
+	o, err := r.authorizeRequest(ctx, requestData, input, requestID, log)
+	if err != nil {
+		return nil, err
+	}
+	r.warnFrozenDrift(ctx, o.log, o.cfg)
+	o.rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
+	if err := checkDuration(requestData.DurationSeconds); err != nil {
+		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
+		return nil, r.deny(ctx, o, "Duration refused", err)
+	}
+	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requestData.DurationSeconds)
+	if err != nil {
+		o.rec.Stage, o.rec.Reason = "duration", reason
+		return nil, r.deny(ctx, o, "Duration refused", err)
+	}
+	o.rec.Action = actionAssumeRole
+	if useIdP {
+		o.rec.Action = actionMintToken
+	}
+	sessionName, nameSource, err := resolveSessionName(o.decision.RoleSessionName(), requestData.SessionName, o.cfg.RoleSessionName, o.decision.SessionNameAllowed())
+	if err != nil {
+		o.rec.Stage, o.rec.Reason = "session_name", "session name refused"
+		return nil, r.deny(ctx, o, "Session name refused", err)
+	}
+	o.rec.SessionNameSource, o.rec.RequestedSessionName = nameSource, auditSessionName(requestData.SessionName)
+	if requestData.SessionName != "" && nameSource != "request" {
+		logevent.Warn(ctx, o.log, logevent.AuthzSessionNameIgnored, "requested session name ignored", slog.String("sessionNameSource", nameSource))
+	}
+	if useIdP {
+		return r.issueIdP(ctx, o, requestData, sessionName, requestID)
+	}
+	return r.issueAssumeRole(ctx, o, requestData, sessionName)
+}
+
+// issueAssumeRole assumes the role from the warden's own credentials.
+func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestData *RequestData, sessionName string) (*IssuedCredentials, error) {
+	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
+	requestedRole := requestData.Role
+
+	ceiling := time.Duration(utils.RoleChainingMaxSecs) * time.Second
+	if m := o.decision.MaxSessionDuration(); m > 0 && m < ceiling {
+		ceiling = m
+	}
+	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
+	if err != nil {
+		rec.Stage, rec.Reason = "duration", "invalid or excessive duration"
+		return nil, r.deny(ctx, o, "Duration refused", err)
+	}
+
+	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, o.decision)
 	if err != nil {
 		rec.setErrorReason("session_policy", err)
-		return nil, deny("Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	// Per-mapping override, resolved via the same mapping that authorized the
-	// role, so CloudTrail can name the requester rather than the service.
-	sessionName := cfg.RoleSessionName
-	if override := decision.RoleSessionName(); override != "" {
-		sessionName = override
+	tags := aws.BuildSessionTags(ctx, claims.Raw, cfg.EffectiveSessionTags(claims.Issuer, o.decision))
+	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, tags)
+	if errors.Is(err, aws.ErrAccountNotAllowed) {
+		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
+		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
 	}
-
-	sessionTagSpec := cfg.EffectiveSessionTags(claims.Issuer, decision)
-	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, nil, claims, sessionTagSpec)
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
-		// A trust-policy/IAM refusal is the caller's answer (403); anything else
-		// (throttling, expired hub creds, bad policy document) is ours (500).
+		// IAM refusal is 403; any other failure is ours (500).
 		ret := ErrAssumeRoleFailed
 		if errors.Is(err, aws.ErrAssumeRoleDenied) {
 			ret = ErrAssumeRoleDenied
 		}
-		return nil, deny("Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
 	rec.GrantedRole = requestedRole
 	rec.SessionName = sessionName
-	rec.SessionTagKeys = sessionTagKeyNames(sessionTagSpec)
+	rec.DurationSeconds = int(duration)
+	rec.SessionTagKeys = sessionTagKeyNames(tags)
 	if cfg.LogClaimValues {
-		rec.SessionTags = resolvedSessionTags(ctx, claims.Raw, sessionTagSpec)
+		rec.SessionTags = sessionTagValues(tags)
 	}
 	rec.SessionPolicyRef = policyRef
-	if account, _, aerr := aws.ParseRoleARN(requestedRole); aerr == nil {
+	if account, _, aerr := utils.ParseRoleARN(requestedRole); aerr == nil {
 		rec.AccountID = account
 	}
 	if credentials.Expiration != nil {
 		rec.Expiry = credentials.Expiration
 	}
-	rec.ProcessingMS = elapsed()
+	rec.ProcessingMS = o.elapsed()
 
-	return r.finalizeAllow(ctx, log, cfg, rec, credentials)
+	if err := r.finalizeAllow(ctx, log, cfg, rec); err != nil {
+		return nil, err
+	}
+	return &IssuedCredentials{Credentials: *credentials}, nil
 }
 
-// getSessionPolicy retrieves the session policy for an (issuer, subject) pair
-// (config inline or S3 file), plus a policyRef label ("inline", the S3 key,
-// or "") for the audit record's SessionPolicyRef field.
+// getSessionPolicy returns the session policy and its audit label ("inline", the S3 key, or "").
 func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Config, log *slog.Logger, subject string, decision config.Decision) (sessionPolicyString *string, policyRef string, err error) {
 	opStart := time.Now()
 	durationMs := func() int64 { return time.Since(opStart).Milliseconds() }
@@ -229,28 +349,14 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 				slog.String("error", err.Error()))
 		}
 
-		sessionPolicyData, err := r.consumer.GetS3Object(ctx, cfg.S3SessionPolicyBucket, *sessionPolicyFile)
+		policyBytes, failMsg, err := r.readSessionPolicyObject(ctx, log, cfg, *sessionPolicyFile)
 		if err != nil {
-			logPolicyErr("failed to read session policy file", err)
-			return nil, "", fmt.Errorf("failed to read session policy file: %w", ErrSessionPolicyAccess)
+			logPolicyErr(failMsg, err)
+			return nil, "", fmt.Errorf("%s: %w", failMsg, ErrSessionPolicyAccess)
 		}
 
-		defer func() {
-			if cerr := sessionPolicyData.Close(); cerr != nil {
-				logevent.Warn(ctx, log, logevent.AppResourceCloseFailure, "failed to close resource",
-					slog.String("resource", "session_policy_s3_object"), slog.String("error", cerr.Error()))
-			}
-		}()
-
-		policyBytes, err := io.ReadAll(io.LimitReader(sessionPolicyData, 1024*1024)) // 1MB limit
-		if err != nil {
-			logPolicyErr("failed to read session policy data", err)
-			return nil, "", fmt.Errorf("failed to read session policy data: %w", ErrSessionPolicyAccess)
-		}
-
-		var jsonCheck any
-		if err := json.Unmarshal(policyBytes, &jsonCheck); err != nil {
-			logPolicyErr("invalid JSON in session policy file", err)
+		if !json.Valid(policyBytes) {
+			logPolicyErr("invalid JSON in session policy file", errInvalidPolicyJSON)
 			return nil, "", fmt.Errorf("invalid JSON in session policy file: %w", ErrSessionPolicyAccess)
 		}
 
@@ -264,10 +370,7 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 			slog.String("key", *sessionPolicyFile),
 			slog.Int("policySize", len(policy)),
 			slog.Int64("durationMs", durationMs()))
-	}
-
-	// Inline overrides the S3 file if both are set.
-	if sessionPolicy != nil {
+	} else if sessionPolicy != nil {
 		sessionPolicyString = sessionPolicy
 		policyRef = "inline"
 		logevent.Debug(ctx, log, logevent.PolicySessionLoaded, "session policy loaded",
@@ -280,9 +383,7 @@ func (r *RequestProcessor) getSessionPolicy(ctx context.Context, cfg *config.Con
 	return sessionPolicyString, policyRef, nil
 }
 
-// identityAttrs builds "who made this request" log attributes for a verified
-// token. repository/ref/actor are GitHub-native and omitted (not emitted
-// empty) for other providers. Callers must gate on cfg.LogClaimValues.
+// identityAttrs builds caller-identity log attributes; callers must gate on cfg.LogClaimValues.
 func identityAttrs(claims *gtypes.Claims) []slog.Attr {
 	if claims == nil {
 		return nil
@@ -300,4 +401,32 @@ func identityAttrs(claims *gtypes.Claims) []slog.Attr {
 		attrs = append(attrs, slog.String("actor", claims.Actor))
 	}
 	return attrs
+}
+
+// readSessionPolicyObject reads a session policy object, owner-pinned when session_policy_bucket_owner is set.
+func (r *RequestProcessor) readSessionPolicyObject(ctx context.Context, log *slog.Logger, cfg *config.Config, key string) (data []byte, failMsg string, err error) {
+	if owner := cfg.SessionPolicyBucketOwner; owner != "" {
+		data, _, err = r.consumer.GetS3ObjectIfChanged(ctx, cfg.S3SessionPolicyBucket, key, "", owner)
+		if err != nil {
+			return nil, "failed to read session policy file", err
+		}
+		return data, "", nil
+	}
+
+	body, err := r.consumer.GetS3Object(ctx, cfg.S3SessionPolicyBucket, key)
+	if err != nil {
+		return nil, "failed to read session policy file", err
+	}
+	defer func() {
+		if cerr := body.Close(); cerr != nil {
+			logevent.Warn(ctx, log, logevent.AppResourceCloseFailure, "failed to close resource",
+				slog.String("resource", "session_policy_s3_object"), slog.String("error", cerr.Error()))
+		}
+	}()
+
+	data, err = utils.ReadAllCapped(body, int64(cfg.EffectiveMaxConfigBytes()), "session policy")
+	if err != nil {
+		return nil, "failed to read session policy data", err
+	}
+	return data, "", nil
 }

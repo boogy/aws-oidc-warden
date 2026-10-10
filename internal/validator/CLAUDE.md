@@ -10,7 +10,7 @@ type TokenValidatorInterface interface {
 }
 ```
 
-Deliberately scoped to `Validate` only. `FetchJWKS`/`GenKeyFunc` remain exported on the concrete `*TokenValidator` (used by tests and `WarmPrefetch`) but are not part of the interface — they're an unscoped, audience-less path, not a standalone validation entry point.
+Deliberately scoped to `Validate` only. `FetchJWKS`/`GenKeyFunc` remain exported on the concrete `*TokenValidator` (used by tests only; `WarmPrefetch` and `Validate` go through the unexported `fetchJWKS` with the issuer's registered spec) but are not part of the interface — they're an unscoped, audience-less path, not a standalone validation entry point.
 
 `NewTokenValidator(provider *config.Provider, jwksCache cache.Cache) *TokenValidator` builds the shared `http.Client` and the initial issuer registry once, at construction — call it once during bootstrap, never per request.
 
@@ -21,15 +21,15 @@ Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec
 ## Flow (`Validate()`)
 
 0. Length guard (`max_token_bytes`) before any parsing.
-1. Unverified `iss` peek — routing only, never used for identity/authorization.
+1. Unverified `iss` peek (`peekIssuer`: payload-only decode) — routing only, never used for identity/authorization.
 2. Registry lookup by exact issuer match. Unknown issuer denies **before any JWKS fetch is attempted**.
 3. Per-call parser scoped to the matched issuer (algorithm allowlist, `WithExpirationRequired`, `WithIssuedAt`, `WithLeeway`).
-4. Fetch JWKS (cached per issuer); verify signature. A `kid` miss (`ErrKeyNotFound`) triggers one cache-bypassing refetch (key-rotation recovery), then fails. 4b. Re-assert the verified issuer matches the spec used, guarding a hot-reload race between steps 2 and 4.
+4. Fetch JWKS (cached per issuer, plus a hash of the `jwks_uri` override when one is set — `jwksCacheKey`); verify signature. A `kid` miss (`ErrKeyNotFound`) triggers one cache-bypassing refetch (key-rotation recovery), then fails. 4b. Re-assert the verified issuer matches the spec used, guarding a hot-reload race between steps 2 and 4.
 5. Audience ANY-match against the issuer's configured audiences (`audienceMatches`).
 6. `required_claims` present and non-empty on the verified raw claims.
 7. `normalizeClaims` — see below.
 
-The hardening steps — key-pinning refinement (`kid` + `alg` + `use=sig` + key-type↔alg-family), `sub`/`nbf` enforcement, the optional lifetime/age caps, and per-`(issuer, kid)` refetch rate limiting — are not entries of their own in the list above. They layer onto the baseline the per-call parser and `GenKeyFunc` already provide, inside steps 3-7.
+The hardening steps — key-pinning refinement (`kid` + `alg` + `use=sig` + key-type↔alg-family + EC curve↔alg), `sub`/`nbf` enforcement, the optional lifetime/age caps, and per-`(issuer, kid)` refetch rate limiting — are not entries of their own in the list above. They layer onto the baseline the per-call parser and `GenKeyFunc` already provide, inside steps 3-7.
 
 ## `normalizeClaims` and the `providerAdapter` seam
 
@@ -42,7 +42,7 @@ type providerAdapter interface {
 }
 ```
 
-- `githubAdapter` — native unmarshal of the full GitHub claim set; subject defaults to `repository`, overridable via `claim_mappings.subject`.
+- `githubAdapter` — copies the GitHub claims into the log-only typed fields via `githubClaimFields` and `utils.FormatClaimValue`, so a number or bool never rejects a token (authorization reads `Raw`); subject defaults to `repository`, overridable via `claim_mappings.subject`.
 - `genericAdapter` — no native struct; subject _must_ come from `claim_mappings.subject` (also enforced at `config.Validate()`, re-checked here as defense in depth).
 
 Adding a new OIDC provider = implement `providerAdapter` and register it in `providerAdapters`; no `Validate()`/`normalizeClaims` edits required (open/closed).
@@ -53,14 +53,17 @@ Adding a new OIDC provider = implement `providerAdapter` and register it in `pro
 
 - Allowed algorithms only: ES256/384/512, RS256/384/512. Never `none`.
 - Verify in order: signature, issuer (registry lookup + re-assert), audience (ANY-match against the matched issuer only — no cross-issuer leakage), expiration, required claims.
-- JWKS fetched from `<issuer>/.well-known/openid-configuration` (or the issuer's `jwks_uri` override, skipping discovery); JWKS responses and discovery documents are bound-read (`io.LimitReader`, 1 MB) and capped at 20 keys. Cached per issuer with `config.Cache.TTL`.
+- JWKS fetched from `<issuer>/.well-known/openid-configuration` (or the issuer's `jwks_uri` override, skipping discovery); JWKS responses and discovery documents are bound-read (`io.LimitReader`, 1 MB) and capped at 20 keys. Cached per issuer (and per `jwks_uri` override) with `config.Cache.TTL`.
 - An issuer's audience set is isolated from every other issuer's — a token's `aud` is only ever checked against the spec resolved by its own verified `iss`.
 
 ## Gotchas
 
 - `kid` must match a JWKS key; a miss forces one cache-bypassing refetch, not an automatic retry loop.
+- A failed JWKS fetch is not retried for 5s per cache key (`jwksState`); a forced refetch of an unchanged key set skips the cache write until half the TTL has passed. The discovered `jwks_uri` is trusted for one cache TTL.
+- Callers wait on the shared fetch with their own `ctx` (`DoChan`); `WarmPrefetch` fetches issuers concurrently and returns when `ctx` ends.
+- The HTTP client checks every connect address in `net.Dialer.Control` (`blockedDialControl`), has no env proxy, and blocks the ranges in `blockedPrefixes`.
 
-Tests: `validator_test.go` (core `Validate()` cases, unknown-issuer denial, per-issuer audience isolation, required claims), `jwks_test.go` (key rotation, refetch limiter under flood, audience ANY-match, end-to-end mock JWKS server), `hardening_test.go` (`GenKeyFunc` alg confusion RS/ES, `use:enc` rejection, duplicate-kid selection, discovery issuer mismatch, algorithms outside the allowlist), `delegated_test.go` (self-vs-delegated parity single and multi-issuer, cross-issuer key confusion, `alg:none`, time bounds, and proof an unconfigured `iss` triggers zero network fetches), `extractor_test.go` (the three `ClaimsExtractorInterface` implementations), `internal_test.go` (SSRF guards: blocked IPs, secure-URL and redirect policy, refetch limiter).
+Tests: `validator_test.go` (core `Validate()` cases, unknown-issuer denial, per-issuer audience isolation, required claims), `jwks_test.go` (key rotation, refetch limiter under flood, audience ANY-match, end-to-end mock JWKS server), `hardening_test.go` (`GenKeyFunc` alg confusion RS/ES, `use:enc` rejection, duplicate-kid selection, discovery issuer mismatch, algorithms outside the allowlist), `delegated_test.go` (self-vs-delegated parity single and multi-issuer, cross-issuer key confusion, `alg:none`, time bounds, and proof an unconfigured `iss` triggers zero network fetches), `extractor_test.go` (the three `ClaimsExtractorInterface` implementations), `internal_test.go` (SSRF guards: blocked IPs, dial control, secure-URL and redirect policy, refetch limiter, key memo), `peek_test.go` (the unverified `iss` peek), `jwks_state_test.go` (cache key, failure memo, discovery memo, skipped writes), `github_claims_test.go` (GitHub docs example token, any-JSON-type claims, `githubClaimFields` parity with `types.Claims`).
 
 ## Extractors
 
@@ -90,4 +93,4 @@ Populate only the `ExtractionInput` fields relevant to the configured mode:
 
 `ExtractionInput.Config` pins the config generation for the request. `ProcessRequest` captures one `*Config` and puts it here, so extraction and the authorization that follows are decided by the SAME generation. Extractors must not call `provider.Get()` themselves — a second read of a pointer a concurrent hot reload can swap in between splits one request across two generations: validated by N+1's issuers/audiences/claim mappings, authorized by N's role mappings. That is not the benign "in-flight request sees a stale config" case, where one consistent generation decides everything; a refresh that widens validation while narrowing authorization (rotating an audience while retiring a role mapping in the same push) authorizes a caller NEITHER generation allows alone. Nil means "read the provider", so hand-built inputs and tests are unchanged. `SelfExtractor` reaches the pinned path through the unexported `pinnedValidator` seam (`validateWith`), which only `*TokenValidator` can satisfy — an external mock of `TokenValidatorInterface` cannot accidentally implement it and simply takes the `Validate` path. Guarded by `TestSelfExtractorIsDecidedByThePinnedConfig` and `TestSelfExtractorFallsBackWhenNoConfigPinned`.
 
-The factory `newClaimsExtractor(provider, validator)` in `bootstrap.go` selects the implementation from `cfg.JWTValidation.Mode`. Only `alb` mode additionally requires exactly one configured issuer at cold start (`singleDelegatedIssuer`) — an ALB has exactly one OIDC IdP, so a multi-issuer config is genuinely ambiguous there. `apigw` mode has no such restriction: each route's JWT Authorizer pins its own issuer, so `APIGWExtractor` resolves the spec per request instead of at cold start.
+The factory `newClaimsExtractor(provider, validator)` in `bootstrap.go` selects the implementation from `cfg.JWTValidation.Mode`. Only `alb` mode additionally requires exactly one configured issuer at cold start (`requireSingleIssuer`) — an ALB has exactly one OIDC IdP, so a multi-issuer config is genuinely ambiguous there. `apigw` mode has no such restriction: each route's JWT Authorizer pins its own issuer, so `APIGWExtractor` resolves the spec per request instead of at cold start.

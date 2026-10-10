@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -17,8 +18,12 @@ import (
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
+
+// MaxTokenBytesCeiling is the hard ceiling for max_token_bytes and the handler's token cap.
+const MaxTokenBytesCeiling = 16384
 
 var (
 	once              sync.Once
@@ -33,24 +38,21 @@ var (
 	defaultJWTLeeway           = 30 * time.Second  // Default clock-skew leeway for exp/iat/nbf checks
 	maxJWTLeeway               = 120 * time.Second // Hard ceiling for jwt_leeway
 	defaultMaxTokenBytes       = 8192              // Default token length cap (8 KB) before any parsing
+	maxConfigBytesCeiling      = 64 << 20          // Hard ceiling for max_config_bytes
 	defaultMaxTokenLifetime    = time.Hour         // Default cap on exp-iat when max_token_lifetime is unset
 	defaultMaxTokenAge         = time.Hour         // Default cap on now-iat when max_token_age is unset
 	defaultJWKSRefetchCooldown = 60 * time.Second  // Default minimum interval between forced JWKS refetches per (issuer,kid)
 	defaultLogLevel            = "info"            // Default slog level name
+	minConfigReloadInterval    = time.Second       // Smallest accepted non-zero config_reload_interval
 
 	validLogLevels = map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
 
-	accountIDPattern     = regexp.MustCompile(`^\d{12}$`)
+	accountIDPattern     = regexp.MustCompile(`^\d{12}$`) // also the S3 bucket-owner format
 	sessionTagKeyPattern = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]{1,128}$`)
 
 	// tagPrefixPattern is the IAM tag-key charset minus the space, bounded so a
 	// dimension suffix still fits inside IAM's 128-char key limit.
 	tagPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9_.:/=+@-]{1,64}$`)
-
-	// sessionNameCharset is STS's accepted RoleSessionName charset. Note the
-	// absence of "/": a GitHub canonical subject ("owner/repo") is NOT a valid
-	// session name, which is the most likely thing an operator will try.
-	sessionNameCharset = regexp.MustCompile(`^[\w+=,.@-]+$`)
 
 	// nonIdentityClaims are claims claim_mappings.subject may never target:
 	// each is either identical for every token (iss, aud) or carries no
@@ -61,29 +63,50 @@ var (
 	}
 )
 
+const (
+	idpMinSessionCap = utils.MinSTSSessionSecs * time.Second
+	idpMaxSessionCap = utils.MaxSTSSessionSecs * time.Second
+)
+
+// validateIdPSessionCap accepts 0 (unset) or 15m..12h in whole seconds.
+func validateIdPSessionCap(field string, d time.Duration) error {
+	if d == 0 {
+		return nil
+	}
+	if d < idpMinSessionCap || d > idpMaxSessionCap {
+		return fmt.Errorf("%s must be 0 or between %s and %s", field, idpMinSessionCap, idpMaxSessionCap)
+	}
+	if d%time.Second != 0 {
+		return fmt.Errorf("%s must be a whole number of seconds", field)
+	}
+	return nil
+}
+
 // RoleMapping binds a subject (pattern) to a set of assumable roles, scoped
 // to a single issuer, optionally gated by conditions on the raw claims.
 type RoleMapping struct {
-	Subject           Patterns   `mapstructure:"subject"             json:"subject"`                       // One subject pattern or a list of them (OR'd); each element anchored and validated independently
-	Issuer            string     `mapstructure:"issuer"              json:"issuer,omitempty"`              // Trusted issuer this mapping applies to; resolved at Validate() (see resolveIssuer)
-	SessionPolicy     string     `mapstructure:"session_policy"      json:"session_policy,omitempty"`      // Inline session policy (JSON string)
-	SessionPolicyFile string     `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"` // S3 session policy file
-	Roles             []string   `mapstructure:"roles"               json:"roles"`                         // IAM roles (or "@role_set" aliases, resolved at Validate()) that can be assumed
-	Conditions        *Condition `mapstructure:"conditions"          json:"conditions,omitempty"`          // Conditions for role assumption
-	RoleSessionName   string     `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`   // Optional STS session name override for roles granted by THIS mapping; falls back to the global role_session_name
+	Subject            Patterns      `mapstructure:"subject"             json:"subject"` // One pattern or an OR'd list
+	Issuer             string        `mapstructure:"issuer"              json:"issuer,omitempty"`
+	SessionPolicy      string        `mapstructure:"session_policy"      json:"session_policy,omitempty"`
+	SessionPolicyFile  string        `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
+	Roles              []string      `mapstructure:"roles"               json:"roles"` // ARNs or "@role_set" aliases
+	Conditions         *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`
+	RoleSessionName    string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
+	AllowSessionName   bool          `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`
+	IDPToken           bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`
+	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"` // 0 = 1h
 
-	// SessionTags are STS tags ADDED to the issuer's session_tags for roles
-	// granted by this mapping. Additive only: a key the issuer already defines
-	// is rejected by Validate(), never silently overridden.
+	// Additive to the issuer's session_tags; overlapping keys are rejected.
 	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
 
-	// Resolved state, rebuilt by Validate() and not serialized. An effective
-	// mapping carries exactly ONE resolvedSubject (Validate() fans a Subject
-	// list out into one mapping per element); index.go and the warnings read it,
-	// never the list. order preserves first-match-wins for FindSessionPolicy.
+	// Rebuilt by Validate(): one resolvedSubject per effective mapping; order keeps first-match-wins.
 	resolvedSubject string         `mapstructure:"-" json:"-"`
-	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"`
+	compiledPattern *regexp.Regexp `mapstructure:"-" json:"-"` // nil for a literal subject (subjectExact)
+	subjectKey      string         `mapstructure:"-" json:"-"` // exact literal or owner, per subjectClass
+	subjectClass    subjectClass   `mapstructure:"-" json:"-"`
 	order           int            `mapstructure:"-" json:"-"`
+
+	effectiveTags map[string]string `mapstructure:"-" json:"-"` // issuer spec + SessionTags; read-only, may alias the issuer's map
 }
 
 // RoleGroupDefaults are the fields a role_group applies uniformly to every
@@ -94,7 +117,11 @@ type RoleGroupDefaults struct {
 	SessionPolicy     string            `mapstructure:"session_policy"      json:"session_policy,omitempty"`
 	SessionPolicyFile string            `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
 	RoleSessionName   string            `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
+	AllowSessionName  bool              `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`
 	SessionTags       map[string]string `mapstructure:"session_tags"  json:"session_tags,omitempty"`
+
+	IDPToken           bool          `mapstructure:"idp_token"                json:"idp_token,omitempty"`
+	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"`
 }
 
 // RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
@@ -262,6 +289,18 @@ type Config struct {
 	// not by this field's type.
 	ConfigFragments []string `mapstructure:"config_fragments" json:"config_fragments,omitempty"`
 
+	// MappingsFile is a local path or s3:// URI of the role-mappings file (fragment #0); base-only.
+	MappingsFile string `mapstructure:"mappings_file" json:"mappings_file,omitempty"`
+
+	// MappingsMaxStale refuses requests once mappings are older than this; nil = unset.
+	MappingsMaxStale *time.Duration `mapstructure:"mappings_max_stale" json:"mappings_max_stale,omitempty"`
+
+	// S3ConfigBucketOwner is sent as ExpectedBucketOwner on every S3 config read.
+	S3ConfigBucketOwner string `mapstructure:"s3_config_bucket_owner" json:"s3_config_bucket_owner,omitempty"`
+
+	// SessionPolicyBucketOwner is sent as ExpectedBucketOwner on session_policy_file reads; base-only.
+	SessionPolicyBucketOwner string `mapstructure:"session_policy_bucket_owner" json:"session_policy_bucket_owner,omitempty"`
+
 	// ConfigFragmentChecksums optionally pins an expected integrity value
 	// (etag, or sha256 content hash for local paths) per config_fragments
 	// entry; a mismatch on fetch is rejected. Unpinned entries use their etag
@@ -283,10 +322,7 @@ type Config struct {
 	// config load rather than silently falling back at first use.
 	LogLevel string `mapstructure:"log_level" json:"log_level,omitempty"`
 
-	// LogClaimValues controls whether claim VALUES (canonical subject, raw
-	// jwtSub, audience) appear in structured logs and audit records. Default
-	// off: only claim NAMES plus the decision/reason are logged. Session tag
-	// keys are always logged; tag values follow this flag too.
+	// LogClaimValues (default on) controls whether claim values and session tag values appear in logs and audit records.
 	LogClaimValues bool `mapstructure:"log_claim_values" json:"log_claim_values,omitempty"`
 
 	// AuditRequired, when true, makes the audit trail a hard dependency of the
@@ -313,6 +349,9 @@ type Config struct {
 	// other AWS accounts.
 	CrossAccount *CrossAccount `mapstructure:"cross_account" json:"cross_account,omitempty"`
 
+	// Optional token-minting IdP; frozen at cold start except the live fields
+	IdP *IdPConfig `mapstructure:"idp" json:"idp,omitempty"`
+
 	// JWTValidation controls whether the service validates JWT signatures itself
 	// or trusts pre-validation by an upstream AWS service.
 	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation,omitempty"`
@@ -322,6 +361,7 @@ type Config struct {
 	MaxTokenLifetime     time.Duration  `mapstructure:"max_token_lifetime"     json:"max_token_lifetime,omitempty"`     // Reject if exp-iat exceeds this; 0/unset defaults to 1h in Validate (not "no cap")
 	MaxTokenAge          time.Duration  `mapstructure:"max_token_age"          json:"max_token_age,omitempty"`          // Reject if now-iat exceeds this; 0/unset defaults to 1h in Validate (not "no cap")
 	MaxTokenBytes        int            `mapstructure:"max_token_bytes"        json:"max_token_bytes,omitempty"`        // Token length cap before any parsing; default 8192 (8 KB)
+	MaxConfigBytes       int            `mapstructure:"max_config_bytes"       json:"max_config_bytes,omitempty"`       // Size cap for config objects, fragments and session policies; base-only; default 1 MiB
 	JWKSRefetchCooldown  time.Duration  `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
 	AllowInsecureIssuers bool           `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
 
@@ -467,14 +507,23 @@ var envBindings = []envBinding{
 	{"jwt_leeway", func(c *Config, v string) {
 		envDuration("jwt_leeway", v, func(d time.Duration) { c.JWTLeeway = &d })
 	}},
+	{"mappings_max_stale", func(c *Config, v string) {
+		envDuration("mappings_max_stale", v, func(d time.Duration) { c.MappingsMaxStale = &d })
+	}},
 
 	// Int (warn-and-skip on parse error).
 	{"max_token_bytes", func(c *Config, v string) {
 		envInt("max_token_bytes", v, func(n int) { c.MaxTokenBytes = n })
 	}},
+	{"max_config_bytes", func(c *Config, v string) {
+		envInt("max_config_bytes", v, func(n int) { c.MaxConfigBytes = n })
+	}},
 
 	// Comma-separated list.
 	{"config_fragments", func(c *Config, v string) { c.ConfigFragments = splitCommaList(v) }},
+	{"mappings_file", func(c *Config, v string) { c.MappingsFile = v }},
+	{"s3_config_bucket_owner", func(c *Config, v string) { c.S3ConfigBucketOwner = v }},
+	{"session_policy_bucket_owner", func(c *Config, v string) { c.SessionPolicyBucketOwner = v }},
 
 	// Cache knobs (c.Cache is guaranteed non-nil before these run).
 	{"cache.type", func(c *Config, v string) { c.Cache.Type = v }},
@@ -522,6 +571,58 @@ var envBindings = []envBinding{
 		envDuration("cross_account.spoke_session_duration", v, func(d time.Duration) { ensureCrossAccount(c).SpokeSessionDuration = d })
 	}},
 
+	// IdP env knobs apply only to an existing idp block.
+	{"idp.enabled", func(c *Config, v string) {
+		if c.IdP != nil {
+			envBool("idp.enabled", v, func(b bool) { c.IdP.Enabled = b })
+		}
+	}},
+	{"idp.issuer", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.Issuer = v
+		}
+	}},
+	{"idp.audience", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.Audience = v
+		}
+	}},
+	{"idp.token_ttl", func(c *Config, v string) {
+		if c.IdP != nil {
+			envDuration("idp.token_ttl", v, func(d time.Duration) { c.IdP.TokenTTL = d })
+		}
+	}},
+	{"idp.audience_mode", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.AudienceMode = v
+		}
+	}},
+	{"idp.source_identity", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SourceIdentity = v
+		}
+	}},
+	{"idp.source_identity_overflow", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SourceIdentityOverflow = v
+		}
+	}},
+	{"idp.include_source_identity", func(c *Config, v string) {
+		if c.IdP != nil {
+			envBool("idp.include_source_identity", v, func(b bool) { c.IdP.IncludeSourceIdentity = &b })
+		}
+	}},
+	{"idp.jwks_uri", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.JWKSURI = v
+		}
+	}},
+	{"idp.subject_template", func(c *Config, v string) {
+		if c.IdP != nil {
+			c.IdP.SubjectTemplate = v
+		}
+	}},
+
 	// JWT validation settings (value struct, always present).
 	{"jwt_validation.mode", func(c *Config, v string) { c.JWTValidation.Mode = v }},
 	{"jwt_validation.alb_expected_signer", func(c *Config, v string) { c.JWTValidation.ALBExpectedSigner = v }},
@@ -548,9 +649,20 @@ func (c *Config) LoadConfig() error {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	viper.AutomaticEnv()
 
-	viper.AddConfigPath("/etc/aws-oidc-warden/")
-	viper.AddConfigPath(configPath)
-	viper.SetConfigName(configName)
+	if f := os.Getenv("CONFIG_FILE"); f != "" {
+		if err := unsupportedExt(f); err != nil {
+			return err
+		}
+		viper.SetConfigFile(f)
+	} else {
+		f, err := findConfigFile([]string{systemConfigDir, configPath}, configName)
+		if err != nil {
+			return err
+		}
+		if f != "" {
+			viper.SetConfigFile(f)
+		}
+	}
 
 	// Set default values
 	viper.SetDefault("role_session_name", role_session_name)
@@ -565,6 +677,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("cross_account.spoke_session_duration", "15m")
 	viper.SetDefault("jwt_validation.mode", "self")
 	viper.SetDefault("max_token_bytes", defaultMaxTokenBytes)
+	viper.SetDefault("max_config_bytes", utils.DefaultMaxConfigBytes)
 	viper.SetDefault("jwks_refetch_cooldown", defaultJWKSRefetchCooldown)
 	viper.SetDefault("allow_insecure_issuers", false)
 	viper.SetDefault("log_level", defaultLogLevel)
@@ -576,7 +689,9 @@ func (c *Config) LoadConfig() error {
 	// envBindings (see below) so this list and reapplyEnvOverrides cannot
 	// drift apart.
 	for _, b := range envBindings {
-		_ = viper.BindEnv(b.key)
+		if !strings.HasPrefix(b.key, "idp.") {
+			_ = viper.BindEnv(b.key)
+		}
 	}
 
 	configFileFound := true
@@ -588,8 +703,21 @@ func (c *Config) LoadConfig() error {
 		}
 	}
 
-	if err := viper.Unmarshal(c, decoderOptions()...); err != nil {
+	// A bound idp.* key would let env alone create the block.
+	if viper.InConfig("idp") {
+		for _, b := range envBindings {
+			if strings.HasPrefix(b.key, "idp.") {
+				_ = viper.BindEnv(b.key)
+			}
+		}
+	}
+
+	var md mapstructure.Metadata
+	if err := viper.Unmarshal(c, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	if err := rejectUnusedKeys(md.Unused, "config file"); err != nil {
+		return err
 	}
 
 	// Zero-config GitHub seed: only when there is truly no configuration
@@ -600,18 +728,18 @@ func (c *Config) LoadConfig() error {
 		c.Issuers = []IssuerConfig{defaultGitHubIssuer()}
 	}
 
-	return c.Validate()
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	return c.validateMappingsSplit()
 }
 
-// MergeBytes overlays serialized configuration onto c using the same snake_case
-// schema as the config file (see example-config.yaml), then re-validates. Only
-// keys present in data are overwritten. format is a viper config type
-// ("json", "yaml", "toml"); empty defaults to "json".
-//
-// Use this for remote configuration (e.g. an S3 object) instead of
-// encoding/json, which matches Go field names rather than the documented
-// snake_case keys.
+// MergeBytes overlays the keys present in data (snake_case config schema, viper format; empty means json) onto c and re-validates.
 func (c *Config) MergeBytes(data []byte, format string) error {
+	return c.mergeBytes(data, format, false)
+}
+
+func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error {
 	if format == "" {
 		format = "json"
 	}
@@ -633,20 +761,44 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 	keys := v.AllKeys()
 	for key, zero := range clearOnDeclare {
 		if slices.Contains(keys, key) {
-			zero(next)
+			zero(next, v)
 		}
 	}
 
-	if err := v.Unmarshal(next, decoderOptions()...); err != nil {
+	var md mapstructure.Metadata
+	if err := v.Unmarshal(next, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %w", err)
+	}
+	if err := rejectUnusedKeys(md.Unused, "overlay"); err != nil {
+		return err
 	}
 
 	reapplyEnvOverrides(next)
+	var ignored []string
+	if keepBaseOnly {
+		// c is validated, so its 0 is already the default; the overlay's 0 is not.
+		if cmp.Or(next.MaxConfigBytes, utils.DefaultMaxConfigBytes) != c.MaxConfigBytes {
+			ignored = append(ignored, "max_config_bytes")
+		}
+		next.MaxConfigBytes = c.MaxConfigBytes
+		for _, k := range baseOnlyStrings {
+			if *k.field(next) != *k.field(c) {
+				ignored = append(ignored, k.key)
+			}
+			*k.field(next) = *k.field(c)
+		}
+	}
 
 	if err := next.Validate(); err != nil {
 		return err
 	}
 
+	if len(ignored) > 0 {
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+			"overlay sets base-only keys; base values kept",
+			slog.String("warning", "overlay_base_only_keys_ignored"),
+			slog.Any("keys", ignored))
+	}
 	if dropped := lostFragmentPins(c, next); len(dropped) > 0 {
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 			"overlay replaced config_fragment_checksums and dropped pins; those fragments are no longer integrity-checked",
@@ -658,14 +810,37 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 	return nil
 }
 
+// baseOnlyStrings locate or owner-pin config and policy reads, so an overlay must not change them.
+var baseOnlyStrings = []struct {
+	key   string
+	field func(*Config) *string
+}{
+	{"s3_config_bucket", func(c *Config) *string { return &c.S3ConfigBucket }},
+	{"s3_config_path", func(c *Config) *string { return &c.S3ConfigPath }},
+	{"s3_config_bucket_owner", func(c *Config) *string { return &c.S3ConfigBucketOwner }},
+	{"session_policy_bucket_owner", func(c *Config) *string { return &c.SessionPolicyBucketOwner }},
+}
+
 // clearOnDeclare zeroes a declared slice of structs before decoding, because
 // mapstructure decodes element i onto the struct already at index i and an
 // omitted field would inherit the displaced entry's value.
-var clearOnDeclare = map[string]func(*Config){
-	"issuers":                   func(c *Config) { c.Issuers = nil },
-	"role_mappings":             func(c *Config) { c.RoleMappings = nil },
-	"role_groups":               func(c *Config) { c.RoleGroups = nil },
-	"config_fragment_checksums": func(c *Config) { c.ConfigFragmentChecksums = nil },
+var clearOnDeclare = map[string]func(*Config, *viper.Viper){
+	"issuers":                   func(c *Config, _ *viper.Viper) { c.Issuers = nil },
+	"role_mappings":             func(c *Config, _ *viper.Viper) { c.RoleMappings = nil },
+	"role_groups":               func(c *Config, _ *viper.Viper) { c.RoleGroups = nil },
+	"config_fragment_checksums": func(c *Config, _ *viper.Viper) { c.ConfigFragmentChecksums = nil },
+	"idp.signing_keys": func(c *Config, _ *viper.Viper) {
+		if c.IdP != nil {
+			c.IdP.SigningKeys = nil
+		}
+	},
+	// re-derive jwks_uri and paths only when the issuer changes
+	"idp.issuer": func(c *Config, v *viper.Viper) {
+		if c.IdP != nil && c.IdP.Issuer != v.GetString("idp.issuer") {
+			c.IdP.JWKSURI = ""
+			c.IdP.Paths = IdPPaths{}
+		}
+	},
 }
 
 // lostFragmentPins returns fragments still listed after a merge that were
@@ -677,7 +852,7 @@ func lostFragmentPins(prev, next *Config) []string {
 		if _, pinned := next.fragmentChecksum(p.URI); pinned {
 			continue
 		}
-		if slices.Contains(next.ConfigFragments, p.URI) {
+		if slices.Contains(next.fragmentSources(), p.URI) {
 			dropped = append(dropped, p.URI)
 		}
 	}
@@ -798,10 +973,11 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}
 
-		for tagKey := range iss.SessionTags {
-			if !sessionTagKeyPattern.MatchString(tagKey) {
-				return fmt.Errorf("issuers[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", i, iss.Issuer, tagKey)
-			}
+		if err := validateSessionTagKeys(iss.SessionTags); err != nil {
+			return fmt.Errorf("issuers[%d] (%s): session_tags: %w", i, iss.Issuer, err)
+		}
+		if err := checkSessionTagSet(iss.SessionTags); err != nil {
+			return fmt.Errorf("issuers[%d] (%s): session_tags: %w", i, iss.Issuer, err)
 		}
 
 		if iss.TagPrefix != "" && !tagPrefixPattern.MatchString(iss.TagPrefix) {
@@ -824,6 +1000,28 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(uri) == "" {
 			return fmt.Errorf("config_fragments[%d]: must not be empty", i)
 		}
+		if err := validateRemoteScheme(uri); err != nil {
+			return fmt.Errorf("config_fragments[%d]: %w", i, err)
+		}
+		if slices.Contains(c.ConfigFragments[:i], uri) {
+			return fmt.Errorf("config_fragments[%d]: duplicate source %q", i, uri)
+		}
+	}
+	if err := validateRemoteScheme(c.MappingsFile); err != nil {
+		return fmt.Errorf("mappings_file: %w", err)
+	}
+
+	if d := c.ConfigReloadInterval; d > 0 && d < minConfigReloadInterval {
+		return fmt.Errorf("config_reload_interval %s is under %s; a bare number is read as nanoseconds, so write a unit such as 300s or 5m", d, minConfigReloadInterval)
+	}
+	if err := c.validateMaxStale(); err != nil {
+		return err
+	}
+	if err := c.validateS3ConfigOwner(); err != nil {
+		return err
+	}
+	if c.SessionPolicyBucketOwner != "" && !accountIDPattern.MatchString(c.SessionPolicyBucketOwner) {
+		return errors.New("session_policy_bucket_owner must be exactly 12 digits")
 	}
 
 	// Hardening knobs: apply defaults, then enforce bounds.
@@ -840,8 +1038,14 @@ func (c *Config) Validate() error {
 	if c.MaxTokenBytes == 0 {
 		c.MaxTokenBytes = defaultMaxTokenBytes
 	}
-	if c.MaxTokenBytes < 0 {
-		return fmt.Errorf("max_token_bytes must not be negative, got %d", c.MaxTokenBytes)
+	if c.MaxTokenBytes < 0 || c.MaxTokenBytes > MaxTokenBytesCeiling {
+		return fmt.Errorf("max_token_bytes must be between 1 and %d, got %d", MaxTokenBytesCeiling, c.MaxTokenBytes)
+	}
+	if c.MaxConfigBytes == 0 {
+		c.MaxConfigBytes = utils.DefaultMaxConfigBytes
+	}
+	if c.MaxConfigBytes < 0 || c.MaxConfigBytes > maxConfigBytesCeiling {
+		return fmt.Errorf("max_config_bytes must be between 1 and %d, got %d", maxConfigBytesCeiling, c.MaxConfigBytes)
 	}
 	if c.JWKSRefetchCooldown == 0 {
 		c.JWKSRefetchCooldown = defaultJWKSRefetchCooldown
@@ -881,6 +1085,13 @@ func (c *Config) Validate() error {
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 			"tag_auth.transitive_session_tags is deprecated; use the top-level session_tags_transitive",
 			slog.String("warning", "transitive_session_tags_deprecated"))
+	}
+
+	if c.IdP != nil {
+		c.IdP.applyDefaults()
+		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
+			return err
+		}
 	}
 
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {
@@ -941,6 +1152,21 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("%s[%d] (%s): role_session_name: %w", source, i, subject, err)
 			}
 		}
+		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): max_session_duration", source, i, subject), m.MaxSessionDuration); err != nil {
+			return err
+		}
+		if m.MaxSessionDuration > IdPDefaultMaxSessionDuration && c.IdP == nil {
+			return fmt.Errorf("%s[%d] (%s): max_session_duration over 1h requires an idp block", source, i, subject)
+		}
+		if m.IDPToken && c.IdP == nil {
+			return fmt.Errorf("%s[%d] (%s): idp_token requires an idp block", source, i, subject)
+		}
+		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
+			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
+		}
+		if m.AllowSessionName && m.RoleSessionName != "" {
+			return fmt.Errorf("%s[%d] (%s): set allow_session_name or role_session_name, not both", source, i, subject)
+		}
 		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
@@ -948,15 +1174,18 @@ func (c *Config) Validate() error {
 		m.Issuer = resolvedIssuer
 
 		issuerTags := c.IssuerSessionTags(resolvedIssuer)
+		if err := validateSessionTagKeys(m.SessionTags); err != nil {
+			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
+		}
+		// Rejected, not ignored: a dropped override reads as applied and feeds ABAC.
 		for tagKey := range m.SessionTags {
-			if !sessionTagKeyPattern.MatchString(tagKey) {
-				return fmt.Errorf("%s[%d] (%s): session_tags key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", source, i, subject, tagKey)
-			}
-			// Rejected rather than ignored: a silently dropped override reads
-			// as applied, and the tag feeds ABAC conditions in the target role.
 			if _, dup := issuerTags[tagKey]; dup {
 				return fmt.Errorf("%s[%d] (%s): session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", source, i, subject, tagKey, resolvedIssuer)
 			}
+		}
+		m.effectiveTags, err = mergeSessionTags(issuerTags, m.SessionTags)
+		if err != nil {
+			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
 		}
 
 		roles, err := c.resolveRoleSet(m.Roles)
@@ -969,9 +1198,14 @@ func (c *Config) Validate() error {
 		m.Roles = roles
 
 		m.resolvedSubject = subject
-		m.compiledPattern, err = compileAnchoredSubject(subject, patterns)
+		subjectMatcher, err := compileAnchoredSubject(subject, patterns)
 		if err != nil {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, subject, err)
+		}
+		m.subjectKey, m.subjectClass = classifySubject(subject)
+		// A literal subject is proven equal by its exact-bucket hit; no regexp.
+		if m.subjectClass != subjectExact {
+			m.compiledPattern = subjectMatcher.re
 		}
 
 		// Clone into effective-private memory BEFORE compiling: compileCondition
@@ -1036,7 +1270,11 @@ func (c *Config) Validate() error {
 				SessionPolicy:     group.Defaults.SessionPolicy,
 				SessionPolicyFile: group.Defaults.SessionPolicyFile,
 				RoleSessionName:   group.Defaults.RoleSessionName,
+				AllowSessionName:  group.Defaults.AllowSessionName,
 				SessionTags:       group.Defaults.SessionTags,
+
+				IDPToken:           group.Defaults.IDPToken,
+				MaxSessionDuration: group.Defaults.MaxSessionDuration,
 			}
 			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
 				return err
@@ -1164,6 +1402,95 @@ func (c *Config) fragmentChecksum(uri string) (string, bool) {
 	return "", false
 }
 
+// fragmentSources lists mappings_file (first) and config_fragments in merge order.
+func (c *Config) fragmentSources() []string {
+	if c.MappingsFile == "" {
+		return c.ConfigFragments
+	}
+	return append([]string{c.MappingsFile}, c.ConfigFragments...)
+}
+
+func isS3URI(uri string) bool { return strings.HasPrefix(uri, "s3://") }
+
+// validateRemoteScheme keeps the owner-pin and max-stale checks in step with the case-insensitive fetch path.
+func validateRemoteScheme(uri string) error {
+	if strings.Contains(uri, "://") && !isS3URI(uri) {
+		return fmt.Errorf("remote source %q must use the lowercase s3:// scheme", uri)
+	}
+	return nil
+}
+
+func (c *Config) validateMaxStale() error {
+	if c.MappingsMaxStale == nil {
+		return nil
+	}
+	switch d := *c.MappingsMaxStale; {
+	case d < 0:
+		return errors.New("mappings_max_stale must not be negative")
+	case d == 0:
+		return nil
+	case !isS3URI(c.MappingsFile):
+		return errors.New("mappings_max_stale requires an s3:// mappings_file")
+	case c.ConfigReloadInterval <= 0:
+		return errors.New("mappings_max_stale requires config_reload_interval > 0")
+	case d < 2*c.ConfigReloadInterval:
+		return errors.New("mappings_max_stale must be at least twice config_reload_interval")
+	}
+	return nil
+}
+
+// EffectiveMaxConfigBytes is max_config_bytes, or the default when unset or c is nil.
+func (c *Config) EffectiveMaxConfigBytes() int {
+	if c == nil || c.MaxConfigBytes <= 0 {
+		return utils.DefaultMaxConfigBytes
+	}
+	return c.MaxConfigBytes
+}
+
+// effectiveMappingsMaxStale resolves the unset default: 3x the reload interval for an s3:// mappings_file.
+func (c *Config) effectiveMappingsMaxStale() time.Duration {
+	if c.MappingsMaxStale != nil {
+		return *c.MappingsMaxStale
+	}
+	if !isS3URI(c.MappingsFile) || c.ConfigReloadInterval <= 0 {
+		return 0
+	}
+	return 3 * c.ConfigReloadInterval
+}
+
+func (c *Config) validateS3ConfigOwner() error {
+	needsOwner := isS3URI(c.MappingsFile)
+	for _, uri := range c.ConfigFragments {
+		if isS3URI(uri) {
+			needsOwner = true
+		}
+	}
+	if needsOwner && c.S3ConfigBucketOwner == "" {
+		return errors.New("s3_config_bucket_owner is required when mappings_file or config_fragments use s3://")
+	}
+	if c.S3ConfigBucketOwner != "" && !accountIDPattern.MatchString(c.S3ConfigBucketOwner) {
+		return errors.New("s3_config_bucket_owner must be exactly 12 digits")
+	}
+	return nil
+}
+
+// validateMappingsSplit rejects service configs that inline mappings while mappings_file owns them.
+func (c *Config) validateMappingsSplit() error {
+	if c.MappingsFile == "" {
+		return nil
+	}
+	if c.MappingsFile != strings.TrimSpace(c.MappingsFile) {
+		return errors.New("mappings_file must not have leading or trailing whitespace")
+	}
+	if slices.Contains(c.ConfigFragments, c.MappingsFile) {
+		return errors.New("mappings_file must not also be listed in config_fragments")
+	}
+	if len(c.RoleMappings) > 0 || len(c.RoleGroups) > 0 || len(c.RoleSets) > 0 {
+		return errors.New("mappings_file is set: role_mappings, role_groups and role_sets belong in the mappings file, not the service config")
+	}
+	return nil
+}
+
 // validateFragmentChecksums rejects malformed or inert pins: a pin naming a
 // URI absent from config_fragments would look integrity-checked while
 // nothing is ever verified against it — fail at boot instead.
@@ -1177,19 +1504,15 @@ func (c *Config) validateFragmentChecksums() error {
 			return fmt.Errorf("config_fragment_checksums[%d] (%s): checksum is required", i, p.URI)
 		case seen[p.URI]:
 			return fmt.Errorf("config_fragment_checksums[%d]: duplicate pin for %q", i, p.URI)
-		case !slices.Contains(c.ConfigFragments, p.URI):
-			return fmt.Errorf("config_fragment_checksums[%d]: %q is not listed in config_fragments, so nothing would ever be checked against it", i, p.URI)
+		case !slices.Contains(c.fragmentSources(), p.URI):
+			return fmt.Errorf("config_fragment_checksums[%d]: %q is not listed in config_fragments or mappings_file, so nothing would ever be checked against it", i, p.URI)
 		}
 		seen[p.URI] = true
 	}
 	return nil
 }
 
-// resolveRoleSet expands any "@name" alias in roles to c.RoleSets[name],
-// leaving literal role ARNs untouched. Resolution happens once, at Validate()
-// time, before AuthorizeRoles' role∈roles security gate ever runs, so an
-// alias can never widen a request beyond what's statically configured
-// (the token never selects the role set, config does).
+// resolveRoleSet expands "@name" aliases to c.RoleSets[name] at Validate() time.
 func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 	out := make([]string, 0, len(roles))
 	for _, r := range roles {
@@ -1198,9 +1521,7 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 			continue
 		}
 		name := strings.TrimPrefix(r, "@")
-		// Exact first, then case-folded: viper lower-cases the role_set's map
-		// KEY but not this reference (a map VALUE), so a mixed-case name needs
-		// the folded retry to resolve at all. Same order as condition keys.
+		// Viper lower-cases map keys but not this reference.
 		set, ok := c.RoleSets[name]
 		if !ok {
 			set, ok = c.RoleSets[strings.ToLower(name)]
@@ -1213,24 +1534,79 @@ func (c *Config) resolveRoleSet(roles []string) ([]string, error) {
 		}
 		out = append(out, set...)
 	}
+	for _, r := range out {
+		switch {
+		case strings.TrimSpace(r) == "":
+			return nil, errors.New("roles: an entry is empty")
+		case strings.HasPrefix(r, "@"):
+			return nil, fmt.Errorf("roles: %q is not a role ARN (role_sets cannot reference other sets)", r)
+		}
+		if _, _, err := utils.ParseRoleARN(r); err != nil {
+			return nil, fmt.Errorf("roles: %w", err)
+		}
+	}
 	return out, nil
 }
 
-// compileAnchoredSubject compiles a subject pattern as an auto-anchored
-// regex, rejecting bare wildcards (bareWildcards) like compileAnchoredCondition:
-// a subject is the primary identity gate, so ".*" would grant every subject
-// of the bound issuer.
-//
-// The empty guard lives here, not in the caller, so every subject path shares
-// it: "" anchors to "^(?:)$", which reads as a gate but matches nothing real.
-func compileAnchoredSubject(pattern string, rc regexCache) (*regexp.Regexp, error) {
+// compileAnchoredSubject compiles an auto-anchored subject regex, rejecting universal and empty patterns.
+func compileAnchoredSubject(pattern string, rc regexCache) (*matcher, error) {
 	if pattern == "" {
 		return nil, errors.New("subject pattern must not be empty")
 	}
-	if bareWildcards[pattern] {
+	m, err := rc.anchor(pattern)
+	if errors.Is(err, errUniversalPattern) {
 		return nil, fmt.Errorf("subject pattern %q is too permissive; it matches every subject for this issuer — use a specific pattern", pattern)
 	}
-	return rc.anchor(pattern)
+	return m, err
+}
+
+// maxSessionTags is the STS limit on session tags per AssumeRole call.
+const maxSessionTags = 50
+
+// validateSessionTagKeys rejects keys STS refuses: bad charset/length or the aws: prefix.
+func validateSessionTagKeys(tags map[string]string) error {
+	for _, key := range utils.SortedKeys(tags) {
+		if !sessionTagKeyPattern.MatchString(key) {
+			return fmt.Errorf("key %q is not a valid STS tag key (charset [A-Za-z0-9 _.:/=+@-], max 128 chars)", key)
+		}
+		if len(key) >= 4 && strings.EqualFold(key[:4], "aws:") {
+			return fmt.Errorf("key %q uses the aws: prefix, which STS reserves", key)
+		}
+	}
+	return nil
+}
+
+// checkSessionTagSet rejects case-insensitive key collisions and unions over maxSessionTags.
+func checkSessionTagSet(sets ...map[string]string) error {
+	seen := make(map[string]string)
+	for _, set := range sets {
+		for _, key := range utils.SortedKeys(set) {
+			folded := strings.ToLower(key)
+			if prev, ok := seen[folded]; ok && prev != key {
+				return fmt.Errorf("keys %q and %q are the same STS tag key (STS compares keys case-insensitively)", prev, key)
+			}
+			seen[folded] = key
+		}
+	}
+	if len(seen) > maxSessionTags {
+		return fmt.Errorf("%d session tags exceed the STS limit of %d", len(seen), maxSessionTags)
+	}
+	return nil
+}
+
+// mergeSessionTags returns issuerTags plus extra (issuer wins) after checking the union.
+func mergeSessionTags(issuerTags, extra map[string]string) (map[string]string, error) {
+	if len(extra) == 0 {
+		return issuerTags, nil
+	}
+	if err := checkSessionTagSet(issuerTags, extra); err != nil {
+		return nil, err
+	}
+	// checkSessionTagSet bounded the union, so the constant hint always fits.
+	merged := make(map[string]string, maxSessionTags)
+	maps.Copy(merged, extra)
+	maps.Copy(merged, issuerTags)
+	return merged, nil
 }
 
 // validateRoleSessionName rejects a session name STS would refuse or the
@@ -1239,10 +1615,10 @@ func compileAnchoredSubject(pattern string, rc regexCache) (*regexp.Regexp, erro
 // conditions on sts:RoleSessionName), so a silently-mangled name is a mystery
 // to debug later instead of a config error caught at boot.
 func validateRoleSessionName(name string) error {
-	if len(name) < 2 || len(name) > 64 {
-		return fmt.Errorf("must be 2-64 characters, got %d", len(name))
+	if len(name) < 2 || len(name) > utils.MaxSTSNameLen {
+		return fmt.Errorf("must be 2-%d characters, got %d", utils.MaxSTSNameLen, len(name))
 	}
-	if !sessionNameCharset.MatchString(name) {
+	if !utils.ValidSTSName(name) {
 		return fmt.Errorf("%q contains characters STS does not accept; allowed: letters, digits, and +=,.@-_ (note: \"/\" is not allowed, so a repository name cannot be used verbatim)", name)
 	}
 	return nil
@@ -1377,26 +1753,17 @@ func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 	return nil
 }
 
-// EffectiveSessionTags is the session_tags spec for a granted role: the
-// issuer's spec plus whatever the authorizing mapping adds. Session tags are
-// per-issuer by design — issuers mint different claims, so there is no global
-// spec to inherit. Additive only: Validate() rejects a mapping key the issuer
-// already defines, and the issuer's value still wins here so the issuer's
-// contract holds regardless. A role granted by tag-auth has no authorizing
-// mapping and gets the issuer spec alone; an unconfigured issuer gets nothing.
+// EffectiveSessionTags is the issuer's session_tags spec plus the authorizing mapping's additive extras.
+// Read-only; tag-auth roles get the issuer spec alone, an unconfigured issuer nothing.
 func (c *Config) EffectiveSessionTags(issuer string, d Decision) map[string]string {
 	iss := c.issuerConfig(issuer)
 	if iss == nil {
 		return nil
 	}
-	extra := d.sessionTags()
-	if len(extra) == 0 {
-		return iss.SessionTags
+	if m := d.authorizing; m != nil && m.Issuer == issuer && m.effectiveTags != nil {
+		return m.effectiveTags
 	}
-	merged := make(map[string]string, len(iss.SessionTags)+len(extra))
-	maps.Copy(merged, extra)
-	maps.Copy(merged, iss.SessionTags)
-	return merged
+	return iss.SessionTags
 }
 
 // FindSessionPolicy returns the session policy from the mapping that
@@ -1450,13 +1817,20 @@ func (d Decision) SessionPolicy() (*string, *string) {
 	return nil, nil
 }
 
-// sessionTags returns the additional tags declared by the mapping that
-// authorized the role; nil when no mapping did.
-func (d Decision) sessionTags() map[string]string {
+// IDPTokenAllowed reports whether the authorizing mapping sets idp_token or a ceiling over 1h.
+func (d Decision) IDPTokenAllowed() bool {
+	return d.authorizing != nil && (d.authorizing.IDPToken || d.authorizing.MaxSessionDuration > IdPDefaultMaxSessionDuration)
+}
+
+// MaxSessionDuration is the authorizing mapping's session ceiling, 1h when unset; 0 when nothing authorized.
+func (d Decision) MaxSessionDuration() time.Duration {
 	if d.authorizing == nil {
-		return nil
+		return 0
 	}
-	return d.authorizing.SessionTags
+	if d.authorizing.MaxSessionDuration == 0 {
+		return IdPDefaultMaxSessionDuration
+	}
+	return d.authorizing.MaxSessionDuration
 }
 
 // RoleSessionName returns the authorizing mapping's session-name override, or
@@ -1468,30 +1842,27 @@ func (d Decision) RoleSessionName() string {
 	return d.authorizing.RoleSessionName
 }
 
+// SessionNameAllowed reports whether the authorizing mapping lets the caller choose the session name.
+func (d Decision) SessionNameAllowed() bool {
+	return d.authorizing != nil && d.authorizing.AllowSessionName
+}
+
 // Authorize evaluates every mapping bound to issuer whose subject pattern
 // matches subject and whose conditions are satisfied by claims, in one walk.
 // Pass "" for role when only the role union is wanted.
 func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) Decision {
-	capacity := c.estimatedRolesPerMapping
-	if capacity < 4 {
-		capacity = 4
-	}
-	d := Decision{Roles: make([]string, 0, capacity)}
+	d := Decision{Roles: make([]string, 0, max(c.estimatedRolesPerMapping, 4))}
 
 	idx, ok := c.index[issuer]
 	if !ok {
 		return d
 	}
 
-	for _, mapping := range candidatesFor(idx, subject) {
-		if mapping.compiledPattern == nil || !mapping.compiledPattern.MatchString(subject) {
-			continue
+	res := newClaimResolver(claims)
+	take := func(mapping *RoleMapping) {
+		if !res.satisfies(mapping.Conditions) {
+			return
 		}
-
-		if !satisfiesConditions(mapping.Conditions, claims) {
-			continue
-		}
-
 		d.Matched = true
 		d.Roles = append(d.Roles, mapping.Roles...)
 
@@ -1499,6 +1870,20 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 			if d.authorizing == nil || mapping.order < d.authorizing.order {
 				d.authorizing = mapping
 			}
+		}
+	}
+
+	for _, mapping := range idx.exact[subject] {
+		take(mapping)
+	}
+	for _, mapping := range idx.byOwner[ownerOf(subject)] {
+		if mapping.compiledPattern != nil && mapping.compiledPattern.MatchString(subject) {
+			take(mapping)
+		}
+	}
+	for _, mapping := range idx.any {
+		if mapping.compiledPattern != nil && mapping.compiledPattern.MatchString(subject) {
+			take(mapping)
 		}
 	}
 

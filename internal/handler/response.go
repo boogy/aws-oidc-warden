@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
 
@@ -16,6 +15,9 @@ import (
 // A constant, never fmt.Sprintf with err.Error(), so an internal error
 // string can't leak to the caller or break the JSON via unescaped chars.
 const fallbackErrorBody = `{"success":false,"statusCode":500,"errorCode":"internal_error","message":"An internal error occurred"}`
+
+// msgAssumed is the success message for a role assumption.
+const msgAssumed = "Token validation successful and role assumed"
 
 // requestMeta extracts the request ID and elapsed time from ctx. No fallback
 // on empty: minting a second UUID would report an ID absent from any log line.
@@ -50,9 +52,8 @@ func buildErrorResponse(ctx context.Context, err error, statusCode int) (Respons
 	}, statusCode
 }
 
-// buildSuccessResponse builds the shared Response for a successful role
-// assumption and logs it. Shared by every adapter's respondJSON.
-func buildSuccessResponse(ctx context.Context, credentials *ststypes.Credentials) Response {
+// buildSuccessResponse builds and logs the shared success Response.
+func buildSuccessResponse(ctx context.Context, data any, message string) Response {
 	requestID, processingMS := requestMeta(ctx)
 
 	logevent.Debug(ctx, nil, logevent.RequestResponse.WithOutcome("success"), "response sent",
@@ -61,30 +62,36 @@ func buildSuccessResponse(ctx context.Context, credentials *ststypes.Credentials
 	return Response{
 		Success:      true,
 		StatusCode:   http.StatusOK,
-		Message:      "Token validation successful and role assumed",
+		Message:      message,
 		RequestID:    requestID,
 		ProcessingMS: processingMS,
-		Data:         credentials,
+		Data:         data,
 	}
 }
 
-// errorResponse renders the shared error Response into a frontend's own
-// response type via newResp(status, body). Shared by every adapter's
-// respondError.
+// errorResponse renders the shared error Response into a frontend's response type.
 func errorResponse[T any](ctx context.Context, err error, statusCode int, newResp func(int, string) T) T {
-	response, statusCode := buildErrorResponse(ctx, err, statusCode)
+	return newResp(errorBody(ctx, err, statusCode))
+}
 
+// errorBody renders the standard error envelope as JSON.
+func errorBody(ctx context.Context, err error, statusCode int) (int, string) {
+	response, status := buildErrorResponse(ctx, err, statusCode)
 	body, jsonErr := json.Marshal(response)
 	if jsonErr != nil {
-		return newResp(http.StatusInternalServerError, fallbackErrorBody)
+		return http.StatusInternalServerError, fallbackErrorBody
 	}
-	return newResp(statusCode, string(body))
+	return status, string(body)
 }
 
-// successResponse renders the shared success Response the same way, falling
-// back to errorResponse when the credentials themselves fail to marshal.
-func successResponse[T any](ctx context.Context, credentials *ststypes.Credentials, newResp func(int, string) T) T {
-	response := buildSuccessResponse(ctx, credentials)
+// successResponse renders issued credentials into a frontend's response type.
+func successResponse[T any](ctx context.Context, credentials *IssuedCredentials, newResp func(int, string) T) T {
+	return successResponseMsg(ctx, credentials, credentials.message(), newResp)
+}
+
+// successResponseMsg renders a success Response carrying data and message.
+func successResponseMsg[T any](ctx context.Context, data any, message string, newResp func(int, string) T) T {
+	response := buildSuccessResponse(ctx, data, message)
 
 	body, err := json.Marshal(response)
 	if err != nil {

@@ -16,7 +16,9 @@ This file is the map. Each package below has its own `CLAUDE.md` with the detail
 
 - **`internal/cache/`** → [CLAUDE.md](internal/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects). _Go here when_ changing cache backends, TTL handling, or eviction.
 
-- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-resolved `sessionTags` (built by `BuildSessionTags(ctx, rawClaims, tagSpec)` from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
+- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-built `[]types.Tag` (the handler runs `BuildSessionTags(ctx, rawClaims, tagSpec)` once per request from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
+
+- **`internal/idp/`** → [CLAUDE.md](internal/idp/CLAUDE.md) — optional warden-as-IdP: KMS/PEM signer, self-verified token mint, JWKS/discovery documents; the handler exchanges the minted token via unsigned `AssumeRoleWithWebIdentity`. Operator guide: `docs/IDP.md`. _Go here when_ touching minting, signing keys, or the `idp` config.
 
 ## Other folders (no CLAUDE.md of their own)
 
@@ -30,7 +32,7 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 
 - `make check` — fmt + lint + vuln + test. Run before every commit.
 - `make test` / `make test-coverage` — tests / HTML coverage.
-- `make run` — local server on :8080 with `example-config.yaml`.
+- `make run` — local server on 127.0.0.1:8080 with `docs/examples/example-config.yaml`.
 - `make build-lambda` — all Lambda variants (ARM64). Binary must be named `bootstrap`.
 
 ## Conventions
@@ -40,16 +42,16 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 - Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
 - Sentinel errors in `internal/handler/types.go`, mapped to HTTP status by `classifyError` (`internal/handler/errors.go`).
 - Config precedence: env vars > YAML > defaults.
-- Maintain a clean, up-to-date `CHANGELOG.md`.
+- Maintain a clean, up-to-date `CHANGELOG.md`: one phrase per entry, at most two or three sentences for complex topics; detail goes in `docs/`.
 
 ## Security
 
 - Never log full tokens/credentials — redact via `internal/utils`.
 - Validate JWT signature, issuer, audience, expiration.
-- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific. A bare `.*`/`.+` is **rejected by `Validate()`** for both (shared `bareWildcards` guard) — the check is literal, so an equivalent pattern still compiles. Conditions at the same level are AND'd; `all_of`/`any_of`/`none_of` groups nest inside for richer logic (capped at 5 levels / 64 nodes, enforced in `Validate()`).
+- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific. A pattern that provably matches every string (`.*`, `.+`, `(?s).*`, `[\s\S]*`, `(.*)`, `^.*$`, `a|.*`) is **rejected by `Validate()`** for both (shared `isUniversal` parse-tree check); it is sound for what it accepts, not complete, so keep patterns specific anyway. Conditions at the same level are AND'd; `all_of`/`any_of`/`none_of` groups nest inside for richer logic (capped at 5 levels / 64 nodes, enforced in `Validate()`).
 - Validate JSON and bound reads (`io.LimitReader`) before processing external input.
 - Never commit credentials/secrets. Sign commits and tags. Do not add a Claude co-author.
 
 ## Git
 
-Branch from `main` (`feature/…`, `fix/…`). Conventional Commits. PRs need passing CI (test, lint, security scan). Ask before editing `example-config.yaml` with real values, force-pushing, or changing CI workflows.
+Branch from `main` (`feature/…`, `fix/…`). Conventional Commits. PRs need passing CI (test, lint, security scan). Ask before editing `docs/examples/example-config.yaml` with real values, force-pushing, or changing CI workflows.

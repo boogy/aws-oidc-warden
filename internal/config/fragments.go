@@ -5,17 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strings"
 
+	"github.com/boogy/aws-oidc-warden/internal/utils"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
-
-// maxFragmentBytes mirrors the 1 MiB cap applied elsewhere to remote/S3-sourced
-// documents (internal/handler's maxRemoteConfigSize, S3 session policy reads).
-const maxFragmentBytes = 1024 * 1024
 
 // fragmentAllowedKeys is the config_fragments merge allowlist. Everything
 // else (issuers, hardening knobs, tag_auth, ...) is base-only and rejected by
@@ -56,8 +53,12 @@ func parseFragment(data []byte, format, source string) (*FragmentConfig, error) 
 	}
 
 	var frag FragmentConfig
-	if err := v.Unmarshal(&frag, decoderOptions()...); err != nil {
+	var md mapstructure.Metadata
+	if err := v.Unmarshal(&frag, decoderOptions(&md)...); err != nil {
 		return nil, fmt.Errorf("config fragment %q: failed to unmarshal: %w", source, err)
+	}
+	if err := rejectUnusedKeys(md.Unused, fmt.Sprintf("config fragment %q", source)); err != nil {
+		return nil, err
 	}
 	return &frag, nil
 }
@@ -81,13 +82,7 @@ func rejectDisallowedFragmentKeys(keys []string) error {
 	return nil
 }
 
-// mergeFragment applies frag's allowed fields onto cfg:
-//   - default_issuer must be base-defined; a conflicting value from an
-//     earlier fragment/base is rejected (result must not depend on fetch order).
-//   - role_sets are merged by name; a name colliding with an existing
-//     role_set is rejected, so a fragment can't silently repoint "@prod".
-//   - role_mappings/role_groups are appended; resolution/compilation/indexing
-//     happen later in Validate() (config.go), not here.
+// mergeFragment applies frag's allowed fields onto cfg; Validate() resolves and indexes them afterwards.
 func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers map[string]bool) error {
 	if frag.DefaultIssuer != "" {
 		if !baseIssuers[frag.DefaultIssuer] {
@@ -96,7 +91,6 @@ func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers
 		if cfg.DefaultIssuer != "" && cfg.DefaultIssuer != frag.DefaultIssuer {
 			return fmt.Errorf("config fragment %q: default_issuer %q conflicts with already-set %q", source, frag.DefaultIssuer, cfg.DefaultIssuer)
 		}
-		cfg.DefaultIssuer = frag.DefaultIssuer
 	}
 
 	if len(frag.RoleSets) > 0 {
@@ -118,8 +112,22 @@ func mergeFragment(cfg *Config, frag *FragmentConfig, source string, baseIssuers
 		}
 	}
 
+	// The fragment's default binds only its own entries; cfg.DefaultIssuer is never touched.
+	nm, ng := len(cfg.RoleMappings), len(cfg.RoleGroups)
 	cfg.RoleMappings = append(cfg.RoleMappings, frag.RoleMappings...)
 	cfg.RoleGroups = append(cfg.RoleGroups, frag.RoleGroups...)
+	if frag.DefaultIssuer != "" {
+		for i := nm; i < len(cfg.RoleMappings); i++ {
+			if cfg.RoleMappings[i].Issuer == "" {
+				cfg.RoleMappings[i].Issuer = frag.DefaultIssuer
+			}
+		}
+		for i := ng; i < len(cfg.RoleGroups); i++ {
+			if cfg.RoleGroups[i].Issuer == "" {
+				cfg.RoleGroups[i].Issuer = frag.DefaultIssuer
+			}
+		}
+	}
 	return nil
 }
 
@@ -129,10 +137,14 @@ func isRemoteFragment(uri string) bool {
 	return strings.Contains(uri, "://")
 }
 
-// readLocalFragment reads a fragment from the local filesystem, bounded at
-// maxFragmentBytes, with a sha256 content hash as its etag (local files have
-// no native ETag; lets Provider.applyFragments skip re-parsing when unchanged).
-func readLocalFragment(path string) ([]byte, string, error) {
+// ContentDigest is the fragment etag: "sha256:" plus the hex digest of data.
+func ContentDigest(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// readLocalFragment reads a fragment bounded at limit bytes, with ContentDigest as its etag.
+func readLocalFragment(path string, limit int) ([]byte, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to open config fragment %q: %w", path, err)
@@ -141,14 +153,9 @@ func readLocalFragment(path string) ([]byte, string, error) {
 		_ = f.Close()
 	}()
 
-	data, err := io.ReadAll(io.LimitReader(f, maxFragmentBytes+1))
+	data, err := utils.ReadAllCapped(f, int64(limit), "config fragment")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read config fragment %q: %w", path, err)
 	}
-	if len(data) > maxFragmentBytes {
-		return nil, "", fmt.Errorf("config fragment %q exceeds %d byte cap", path, maxFragmentBytes)
-	}
-
-	sum := sha256.Sum256(data)
-	return data, "sha256:" + hex.EncodeToString(sum[:]), nil
+	return data, ContentDigest(data), nil
 }

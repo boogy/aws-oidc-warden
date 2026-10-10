@@ -1,0 +1,355 @@
+####################################################################################
+# AWS OIDC Warden — Example Configuration (v3, multi-issuer)
+#
+# Precedence: AOW_ env vars > this file > defaults. Optional keys are commented.
+# Env var: AOW_ + key path upper-cased, "." -> "_" (AOW_CACHE_TYPE). Lists and
+# nested blocks are file/S3 only.
+#
+#   Every key, default, env var       docs/CONFIGURATION.md
+#   Issuers and providers             docs/MULTI_ISSUER.md
+#   Session tags / ABAC               docs/SESSION_TAGGING.md
+#   Tag-based authorization           docs/TAG_BASED_AUTHORIZATION.md
+#   Token checks, hardening knobs     docs/TOKEN_VALIDATION.md
+#   Logs and audit records            docs/LOGGING.md
+#   Warden-as-IdP (sessions > 1h)     docs/IDP.md
+#   GitHub Actions setup              docs/GITHUB_ACTIONS.md
+#   Deployment contract               docs/ARCHITECTURE.md
+#   Upgrading                         docs/MIGRATION_V2.md, docs/MIGRATION_V3.md
+#   Worked examples                   docs/examples/
+####################################################################################
+
+####################################################################################
+# TRUSTED OIDC ISSUERS — docs/MULTI_ISSUER.md
+#
+# provider:        github (subject defaults to `repository`) | generic
+# audiences:       accepted `aud` values; any one matches
+# jwks_uri:        optional; omitted = OIDC discovery
+# claim_mappings:  subject: <claim> — required for generic
+# required_claims: claims that must be present and non-empty
+# session_tags:    STS tag key <- claim name; keys lower-case
+# tag_prefix:      per-issuer tag_auth namespace, e.g. "gh/"
+#
+# `iss` must match exactly. A file with no issuers is an error.
+####################################################################################
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: "github"
+    audiences:
+      - "sts.amazonaws.com"
+    required_claims:
+      - "repository"
+    session_tags:
+      repo: "repository" # full "owner/repo"
+      repo-owner: "repository_owner"
+      ref: "ref"
+      ref-type: "ref_type"
+      actor: "actor"
+      event-name: "event_name"
+    # tag_prefix: "gh/"
+
+  - issuer: "https://gitlab.com"
+    provider: "generic"
+    audiences:
+      - "https://gitlab.com"
+    claim_mappings:
+      subject: "project_path" # e.g. "mygroup/myproject"
+    required_claims:
+      - "project_path"
+    session_tags:
+      project: "project_path"
+      ref: "ref"
+      ref-type: "ref_type"
+    # tag_prefix: "gl/"
+
+## STS session name, 2-64 chars of [\w+=,.@-] (no "/"). Order: mapping's
+## role_session_name, else caller's sessionName if allow_session_name, else this.
+role_session_name: aws-oidc-warden
+
+## Issuer for mappings that omit `issuer`. Set `issuer` on every mapping in a
+## real multi-issuer config; this file's boot WARN about unbound mappings is expected.
+default_issuer: "https://token.actions.githubusercontent.com"
+
+####################################################################################
+# TOKEN HARDENING (defaults shown; 0 = default) — docs/TOKEN_VALIDATION.md
+####################################################################################
+jwt_leeway: "30s" # clock skew, max 120s
+max_token_lifetime: "1h" # max exp - iat
+max_token_age: "1h" # max now - iat
+max_token_bytes: 8192 # checked before parsing
+jwks_refetch_cooldown: "60s" # per (issuer, kid)
+allow_insecure_issuers: false # dev only: allow http:// loopback issuers
+
+####################################################################################
+# LOGGING & AUDIT — docs/LOGGING.md
+####################################################################################
+log_level: "info" # debug | info | warn | error
+log_claim_values: true # false = log claim names only
+# audit_required: true # default; write the S3 audit record before returning credentials
+# session_tags_transitive: true # recommended: tags survive role chaining (docs/SESSION_TAGGING.md)
+log_to_s3: false
+log_bucket: "aws-oidc-warden-logs"
+log_prefix: "logs/"
+
+####################################################################################
+# JWKS CACHE — docs/CONFIGURATION.md#cache-settings
+####################################################################################
+cache:
+  type: "memory" # memory (default) | dynamodb | s3
+  ttl: 4h # default 1h
+  max_local_size: 20 # default 10
+  # dynamodb_table: "aws-oidc-warden-cache"     # type: dynamodb
+  # s3_bucket: "arn:aws:s3:::aws-oidc-warden-cache" # type: s3
+  # s3_prefix: "jwks-cache"                     # type: s3
+  # s3_cleanup: true                            # type: s3
+
+####################################################################################
+# S3 CONFIG — docs/CONFIGURATION.md#split-configuration, #hot-reloading
+####################################################################################
+session_policy_bucket: "aws-oidc-warden-session-policies" # for session_policy_file
+# session_policy_bucket_owner: "111122223333" # pins policy reads with ExpectedBucketOwner
+
+# s3_config_bucket: "aws-oidc-warden-config"
+# s3_config_path: "config.yaml"
+# config_reload_interval: "5m" # 0 (default) disables
+
+# mappings_file: s3://EXAMPLE-BUCKET/mappings.yaml # role mappings in their own file
+# s3_config_bucket_owner: "111122223333" # required for any s3:// source
+# mappings_max_stale: 180s # default 3x reload interval; 0 disables
+
+####################################################################################
+# CONFIG FRAGMENTS — docs/CONFIGURATION.md#config-fragments
+# May set only role_mappings, role_groups, role_sets, default_issuer.
+####################################################################################
+# config_fragments:
+#   - "/etc/aws-oidc-warden/fragments/team-a.yaml"
+#   - "s3://EXAMPLE-BUCKET/fragments/team-b.yaml"
+# config_fragment_checksums:
+#   - uri: "/etc/aws-oidc-warden/fragments/team-a.yaml"
+#     checksum: "sha256:..."
+
+####################################################################################
+# ROLE SETS — reuse in `roles` as "@name"
+####################################################################################
+role_sets:
+  readonly:
+    - arn:aws:iam::123456789012:role/github-actions-readonly
+  deployers:
+    - arn:aws:iam::123456789012:role/github-actions-deploy
+    - arn:aws:iam::123456789012:role/github-actions-create-repo
+
+####################################################################################
+# ROLE MAPPINGS — docs/CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets
+#
+#   subject              regex or list, auto-anchored (required)
+#   roles                ARNs and/or "@set" (required)
+#   issuer               default: default_issuer
+#   conditions           claim name -> regex or list (OR); keys AND'd;
+#                        all_of / any_of / none_of nest; `claims:` for reserved names
+#   session_policy       inline JSON  } one or the other
+#   session_policy_file  S3 key       }
+#   role_session_name    forced session name
+#   allow_session_name   honor the caller's sessionName (default false)
+#   session_tags         extra tags; may not redefine the issuer's
+#   idp_token            issue via the IdP even at a 1h ceiling (see IDP MODE)
+#   max_session_duration 15m..12h (default 1h); over 1h issues via the IdP
+#
+# Rejected at load: empty `conditions`, empty patterns/lists/groups, bare `.*`.
+####################################################################################
+role_mappings:
+  - subject: "org/some-repo-name"
+    roles: ["@deployers"]
+    conditions:
+      ref: "refs/heads/main"
+    allow_session_name: true
+    session_tags:
+      workflow: "workflow"
+
+  - subject: # list: one mapping per subject, shared settings
+      - "org/frontend-app"
+      - "org/backend-api"
+    roles: ["@deployers"]
+    conditions:
+      ref: "refs/heads/main"
+      environment: ["production", "canary"]
+
+  # Keep policy-scoped roles out of policy-less mappings, or the policy is skipped.
+  - subject: "org/main-branch-repo"
+    session_policy_file: "session-policies/org/main-branch-repo/policy.json"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-scoped-deploy
+    conditions:
+      ref: "refs/heads/main"
+
+  - subject: "org/service-.*"
+    roles: ["@readonly"]
+    session_policy: >
+      {"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":["iam:*"],"Resource":"*"}]}
+    role_session_name: "org-services" # one name for every matched repo
+
+  - subject: "org/prod-repo"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-prod
+    conditions:
+      ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
+      ref_type: "tag"
+      environment: "production" # deployment environment
+      runner_environment: "github-hosted" # runner type
+      actor: ["release-bot", "release-manager"]
+      sha: "[0-9a-f]{40}"
+    role_session_name: "org-prod-repo-deploy"
+
+  - subject: "org/release-repo"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-release
+    conditions:
+      ref_type: "tag"
+      any_of:
+        - ref: "refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+"
+        - all_of:
+            - ref: "refs/tags/hotfix-.+"
+            - actor: ["release-bot", "release-manager"]
+      none_of:
+        - runner_environment: "self-hosted"
+      claims:
+        environment: "production"
+
+  # Pin a reusable workflow to a tag or SHA, never a branch.
+  - subject: "org/.+"
+    roles: ["@deployers"]
+    conditions:
+      job_workflow_ref: "org/ci-workflows/\\.github/workflows/deploy\\.yml@refs/tags/v[0-9]+"
+      repository_owner: "org"
+      runner_environment: "github-hosted"
+
+  - subject: "org/pr-checks"
+    roles: ["@readonly"]
+    conditions:
+      event_name: "pull_request"
+      base_ref: "main"
+      repository_visibility: "public"
+      ref_protected: "true" # string claim; quote it
+
+  # Numeric IDs survive renames; names do not.
+  - subject: "org/high-value-repo"
+    roles:
+      - arn:aws:iam::123456789012:role/github-actions-sensitive
+    conditions:
+      repository_id: "123456789"
+      repository_owner_id: "987654"
+      ref: "refs/heads/main"
+
+  # One none_of member per thing to refuse; a multi-key member vetoes only when all hold.
+  - subject: "org/guarded-repo"
+    roles: ["@readonly"]
+    conditions:
+      ref: "refs/heads/(main|release/.+)"
+      none_of:
+        - runner_environment: "self-hosted"
+        - event_name: "workflow_dispatch"
+
+  - subject: "mygroup/myproject"
+    issuer: "https://gitlab.com"
+    roles:
+      - arn:aws:iam::123456789012:role/gitlab-ci-deploy
+    conditions:
+      ref: "main"
+      project_path: "mygroup/myproject"
+      groups: ["platform-team", "sre"] # list claim: any element matches
+
+####################################################################################
+# ROLE GROUPS — one mapping per subject; `defaults` takes the mapping keys above.
+####################################################################################
+role_groups:
+  - issuer: "https://token.actions.githubusercontent.com"
+    subjects:
+      - "org/frontend"
+      - "org/backend"
+      - "org/mobile"
+    defaults:
+      roles: ["@readonly"]
+      conditions:
+        event_name: "push"
+      role_session_name: "org-readonly-group"
+
+####################################################################################
+# TAG-BASED AUTHORIZATION — docs/TAG_BASED_AUTHORIZATION.md
+# Role IAM tags (aow/subject, aow/issuer, aow/ref, aow/claim.<name>, ...) grant
+# access without a mapping. Values match exactly; spaces mean OR.
+####################################################################################
+tag_auth:
+  enabled: false
+  tag_prefix: "aow/" # overridden by issuers[].tag_prefix
+  default_org: "" # expands bare aow/repo values to "<default_org>/<repo>"
+  transitive_session_tags: false # deprecated: use session_tags_transitive
+
+####################################################################################
+# CROSS-ACCOUNT — docs/examples/cross-account/
+# false blocks every cross-account assume and tag read. Assumes are direct
+# hub -> target; the spoke role is only for tag_auth tag reads.
+####################################################################################
+cross_account:
+  enabled: false
+  spoke_role_name: "aow-spoke"
+  external_id: "" # hub->spoke trust only
+  spoke_session_duration: "15m"
+  allowed_accounts: [] # [] = any account once enabled; set in production
+
+####################################################################################
+# JWT VALIDATION MODE — docs/TOKEN_VALIDATION.md#2-validation-modes
+#   self   verify signatures here (default)
+#   apigw  trust an API Gateway v2 JWT authorizer; restrict lambda:InvokeFunction
+#   alb    trust ALB OIDC; exactly one issuer; set alb_expected_signer
+####################################################################################
+jwt_validation:
+  mode: "self"
+  # alb_expected_signer: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/abc"
+
+####################################################################################
+# IDP MODE (optional) — docs/IDP.md, docs/CONFIGURATION.md#idp-optional-identity-provider
+# Mints a warden-signed token for AssumeRoleWithWebIdentity, so sessions can
+# exceed 1h. A mapping uses it when max_session_duration is over 1h or
+# idp_token is true; no role list. Values are placeholders.
+####################################################################################
+# idp:
+#   enabled: true
+#   issuer: "https://idp.warden.example.com" # must differ from every issuers[] entry
+#   audience: "idp-audience-example"
+#   audience_mode: "static" # static (default) | role_arn
+#   token_ttl: "2m" # 1m..5m, default 2m
+#   subject_template: "{role_arn}" # default; must end with {role_arn}
+#   include_source_identity: true # default
+#   source_identity: "{issuer}:{subject}" # default
+#   source_identity_overflow: "truncate" # truncate (default) | reject
+#   jwks_uri: "https://idp.warden.example.com/.well-known/jwks.json" # default: issuer + paths.jwks
+#   paths:
+#     discovery: "/.well-known/openid-configuration" # default
+#     jwks: "/.well-known/jwks.json" # default
+#   jwks_cache_max_age: "5m" # default
+#   sign_timeout: "2s" # default
+#   # kms_allowed_regions: ["eu-west-1", "us-east-1"] # required for a multi-region (mrk-) key
+#   signing_keys: # max 5, exactly one active; full key ARN, no aliases
+#     - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/00000000-0000-0000-0000-000000000000"
+#       algorithm: "ES256" # ES256 | RS256
+#       status: "active" # active | verify_only
+#     # - kms_key_id: "arn:aws:kms:eu-west-1:111122223333:key/mrk-0123456789abcdef0123456789abcdef"
+#     #   algorithm: "ES256"
+#     #   status: "verify_only"
+#
+# role_mappings:
+#   - subject: "org/batch"
+#     roles: ["arn:aws:iam::123456789012:role/batch-runner"]
+#     idp_token: true # IdP at the default 1h ceiling
+#
+#   - subject: "org/nightly-backup"
+#     roles:
+#       - "arn:aws:iam::123456789012:role/backup-runner"
+#       - "arn:aws:iam::123456789012:role/backup-verify"
+#     conditions: { event_name: "schedule" }
+#     max_session_duration: 12h # over 1h: IdP
+#     role_session_name: "nightly-backup"
+#
+# role_groups:
+#   - subjects: ["org/etl-orders", "org/etl-billing"]
+#     defaults:
+#       roles: ["@etl"]
+#       max_session_duration: 6h

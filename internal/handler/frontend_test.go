@@ -6,12 +6,16 @@ package handler_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
+	"github.com/boogy/aws-oidc-warden/internal/idp/idptest"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
@@ -106,7 +110,7 @@ func albEvent(multi map[string][]string, body string) events.ALBTargetGroupReque
 // group.
 func TestALBHandler_ReadsMultiValueHeaders(t *testing.T) {
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	event := albEvent(map[string][]string{
 		"x-amzn-oidc-data": {"delegated-oidc-data"},
@@ -125,7 +129,7 @@ func TestALBHandler_ReadsMultiValueHeaders(t *testing.T) {
 // header value the extraction input uses, so the two can never disagree.
 func TestALBHandler_MultiValueHeaderSelectsRoleOnlyParser(t *testing.T) {
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	resp, err := h.Handler(context.Background(), albEvent(map[string][]string{
 		"x-amzn-oidc-data": {"delegated-oidc-data"},
@@ -135,6 +139,19 @@ func TestALBHandler_MultiValueHeaderSelectsRoleOnlyParser(t *testing.T) {
 	// 401 (token validation) not 400 (body parse): the role-only parser ran.
 	assert.Equal(t, 401, resp.StatusCode,
 		"body was parsed with the token-requiring parser despite the ALB OIDC header")
+}
+
+func TestALBHandler_ErrorResponseSetsMultiValueHeaders(t *testing.T) {
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), &captureExtractor{}, nil)
+
+	resp, err := h.Handler(context.Background(), albEvent(map[string][]string{
+		"x-amzn-oidc-data": {"delegated-oidc-data"},
+	}, `{"role":"arn:aws:iam::123456789012:role/MyRole"}`))
+	require.NoError(t, err)
+
+	require.Equal(t, 401, resp.StatusCode)
+	assert.Equal(t, []string{resp.Headers["Content-Type"]}, resp.MultiValueHeaders["Content-Type"])
+	assert.Len(t, resp.MultiValueHeaders, len(resp.Headers))
 }
 
 // TestALBHandler_MultiValueXFFPopulatesSourceIP proves the audit/log sourceIp
@@ -148,7 +165,7 @@ func TestALBHandler_MultiValueXFFPopulatesSourceIP(t *testing.T) {
 	defer slog.SetDefault(prevDefault)
 
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	_, err := h.Handler(context.Background(), albEvent(map[string][]string{
 		"x-amzn-oidc-data": {"delegated-oidc-data"},
@@ -165,7 +182,7 @@ func TestALBHandler_MultiValueXFFPopulatesSourceIP(t *testing.T) {
 }
 
 func TestALBHandler_OversizedOIDCHeaderIsInvalidRequest(t *testing.T) {
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), &captureExtractor{}, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), &captureExtractor{}, nil)
 
 	resp, err := h.Handler(context.Background(), albEvent(map[string][]string{
 		"x-amzn-oidc-data": {strings.Repeat("a", handler.MaxTokenLength+1)},
@@ -179,7 +196,7 @@ func TestALBHandler_OversizedOIDCHeaderIsInvalidRequest(t *testing.T) {
 // Single-value target groups must keep working unchanged.
 func TestALBHandler_SingleValueHeadersStillWork(t *testing.T) {
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	event := albEvent(nil, `{"role":"arn:aws:iam::123456789012:role/MyRole"}`)
 	event.Headers = map[string]string{"x-amzn-oidc-data": "single-value-oidc"}
@@ -194,7 +211,7 @@ func TestALBHandler_SingleValueHeadersStillWork(t *testing.T) {
 // when multi-value is on, and the one that can carry every hop.
 func TestALBHandler_MultiValueWinsOverSingleValue(t *testing.T) {
 	ex := &captureExtractor{}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	event := albEvent(map[string][]string{"x-amzn-oidc-data": {"multi-value-oidc"}},
 		`{"role":"arn:aws:iam::123456789012:role/MyRole"}`)
@@ -225,7 +242,7 @@ func TestALBHandler_NoXFF_OmitsEmptySourceIPKeys(t *testing.T) {
 	defer slog.SetDefault(prevDefault)
 
 	ex := &stubExtractor{err: handler.ErrTokenValidationFailed}
-	h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+	h := handler.NewAwsApplicationLoadBalancer(albModeProvider(t), mockConsumer(t), ex, nil)
 
 	event := events.ALBTargetGroupRequest{
 		HTTPMethod: "POST",
@@ -255,4 +272,340 @@ func TestALBHandler_NoXFF_OmitsEmptySourceIPKeys(t *testing.T) {
 		assert.NotContains(t, line, `"sourceIpFrom":""`, "sourceIpFrom must be omitted, not emitted empty, on the real ALB adapter: %s", line)
 	}
 	require.NotZero(t, lines, "expected at least one captured log line")
+}
+
+// idpFrontResp is a frontend response reduced to what the IdP routing tests assert on.
+type idpFrontResp struct {
+	status  int
+	body    string
+	headers map[string]string
+	multi   map[string][]string
+}
+
+func (r idpFrontResp) code(t *testing.T) string {
+	t.Helper()
+	var env struct {
+		ErrorCode string `json:"errorCode"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(r.body), &env))
+	return env.ErrorCode
+}
+
+type idpFrontend struct {
+	name  string
+	build func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(method, path, body string) idpFrontResp
+}
+
+func idpFrontends() []idpFrontend {
+	return []idpFrontend{
+		{"apigateway", func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(string, string, string) idpFrontResp {
+			h := handler.NewAwsApiGateway(p, c, ex, nil)
+			if svc != nil {
+				h.WithIdP(svc)
+			}
+			return func(m, path, body string) idpFrontResp {
+				r, err := h.Handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: m, Path: path, Body: body})
+				require.NoError(t, err)
+				return idpFrontResp{status: r.StatusCode, body: r.Body, headers: r.Headers}
+			}
+		}},
+		{"apigatewayv2", func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(string, string, string) idpFrontResp {
+			h := handler.NewAwsApiGatewayV2(p, c, ex, nil)
+			if svc != nil {
+				h.WithIdP(svc)
+			}
+			return func(m, path, body string) idpFrontResp {
+				ev := events.APIGatewayV2HTTPRequest{RawPath: path, Body: body}
+				ev.RequestContext.HTTP.Method = m
+				r, err := h.Handler(context.Background(), ev)
+				require.NoError(t, err)
+				return idpFrontResp{status: r.StatusCode, body: r.Body, headers: r.Headers}
+			}
+		}},
+		{"alb", func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(string, string, string) idpFrontResp {
+			h := handler.NewAwsApplicationLoadBalancer(p, c, ex, nil)
+			if svc != nil {
+				h.WithIdP(svc)
+			}
+			return func(m, path, body string) idpFrontResp {
+				ev := albEvent(nil, body)
+				ev.HTTPMethod, ev.Path = m, path
+				r, err := h.Handler(context.Background(), ev)
+				require.NoError(t, err)
+				return idpFrontResp{status: r.StatusCode, body: r.Body, headers: r.Headers, multi: r.MultiValueHeaders}
+			}
+		}},
+		{"lambdaurl", func(t *testing.T, p *config.Provider, c *fakeConsumer, ex validator.ClaimsExtractorInterface, svc *idp.Service) func(string, string, string) idpFrontResp {
+			h := handler.NewAwsLambdaUrl(p, c, ex, nil)
+			if svc != nil {
+				h.WithIdP(svc)
+			}
+			return func(m, path, body string) idpFrontResp {
+				ev := events.LambdaFunctionURLRequest{RawPath: path, Body: body}
+				ev.RequestContext.HTTP.Method = m
+				r, err := h.Handler(context.Background(), ev)
+				require.NoError(t, err)
+				return idpFrontResp{status: r.StatusCode, body: r.Body, headers: r.Headers}
+			}
+		}},
+	}
+}
+
+const (
+	idpTokenPath = "/verify"
+	idpDiscPath  = "/.well-known/openid-configuration"
+	idpJWKSPath  = "/.well-known/jwks.json"
+)
+
+func TestIdPFrontends(t *testing.T) {
+	mintBody := func(extra string) string {
+		return `{"token":"x","role":"` + testRoleARN + `"` + extra + `}`
+	}
+	disabled := func(c *config.Config) { c.IdP.Enabled = false }
+
+	tests := []struct {
+		name         string
+		mutate       []func(*config.Config)
+		loadErr      error
+		noIdP        bool
+		denyExtract  bool
+		method, path string
+		body         string
+		wantStatus   int
+		wantCode     string
+		wantHeaders  map[string]string
+		wantEmpty    bool
+		multi        bool
+		check        func(t *testing.T, r idpFrontResp, cons *fakeConsumer, logs string)
+	}{
+		{
+			name: "discovery", multi: true, method: "GET", path: idpDiscPath, wantStatus: 200,
+			wantHeaders: map[string]string{"Content-Type": "application/json", "Cache-Control": "public, max-age=300"},
+			check: func(t *testing.T, r idpFrontResp, _ *fakeConsumer, _ string) {
+				assert.Contains(t, r.body, `"issuer"`)
+			},
+		},
+		{
+			name: "jwks", method: "GET", path: idpJWKSPath, wantStatus: 200,
+			wantHeaders: map[string]string{"Content-Type": "application/json", "Cache-Control": "public, max-age=300"},
+			check: func(t *testing.T, r idpFrontResp, _ *fakeConsumer, _ string) {
+				var doc struct{ Keys []any }
+				require.NoError(t, json.Unmarshal([]byte(r.body), &doc))
+				assert.NotEmpty(t, doc.Keys)
+			},
+		},
+		{
+			name: "head jwks", multi: true, method: "HEAD", path: idpJWKSPath, wantStatus: 200, wantEmpty: true,
+			wantHeaders: map[string]string{"Content-Type": "application/json", "Cache-Control": "public, max-age=300"},
+		},
+		{
+			name: "mint", method: "POST", path: idpTokenPath, body: mintBody(""), wantStatus: 200,
+			wantHeaders: map[string]string{"Cache-Control": "no-store"},
+			check: func(t *testing.T, r idpFrontResp, cons *fakeConsumer, _ string) {
+				var env struct {
+					Success bool
+					Data    struct{ AccessKeyId string }
+				}
+				require.NoError(t, json.Unmarshal([]byte(r.body), &env))
+				assert.True(t, env.Success)
+				assert.Equal(t, "AKIAEXAMPLE", env.Data.AccessKeyId)
+				assert.NotContains(t, r.body, "eyJ")
+				assert.Equal(t, 1, cons.wiCalls)
+				assert.Zero(t, cons.assumeCalls)
+			},
+		},
+		{
+			name: "mint over cap", method: "POST", path: idpTokenPath, body: mintBody(`,"durationSeconds":7200`),
+			wantStatus: 400, wantCode: "duration_exceeds_cap",
+		},
+		{
+			name: "jwks wrong method", multi: true, method: "POST", path: idpJWKSPath, wantStatus: 405, wantCode: "method_not_allowed",
+			wantHeaders: map[string]string{"Allow": "GET, HEAD"},
+		},
+		{
+			name: "kill switch over 1h", mutate: []func(*config.Config){disabled}, method: "POST", path: idpTokenPath, body: mintBody(`,"durationSeconds":7200`),
+			wantStatus: 503, wantCode: "idp_signing_unavailable",
+			check: func(t *testing.T, _ idpFrontResp, cons *fakeConsumer, _ string) {
+				assert.Zero(t, cons.wiCalls)
+				assert.Zero(t, cons.assumeCalls)
+			},
+		},
+		{name: "kill switch jwks", mutate: []func(*config.Config){disabled}, method: "GET", path: idpJWKSPath, wantStatus: 404, wantCode: "idp_path_not_found"},
+		{name: "head kill switch jwks", mutate: []func(*config.Config){disabled}, method: "HEAD", path: idpJWKSPath, wantStatus: 404, wantEmpty: true},
+		{name: "head stage prefixed path", method: "HEAD", path: "/prod" + idpJWKSPath, wantStatus: 404, wantEmpty: true},
+		{
+			name: "stage prefixed path", method: "GET", path: "/prod" + idpJWKSPath,
+			wantStatus: 404, wantCode: "idp_path_not_found",
+			check: func(t *testing.T, _ idpFrontResp, _ *fakeConsumer, logs string) {
+				assert.Equal(t, 1, countEventLines(logs, "idp.path.not_found"))
+			},
+		},
+		{name: "no idp jwks path", noIdP: true, denyExtract: true, method: "GET", path: idpJWKSPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
+		{name: "no idp credential path", noIdP: true, denyExtract: true, method: "POST", path: idpTokenPath, body: mintBody(""), wantStatus: 401, wantCode: "token_invalid"},
+		{name: "head loader failure", loadErr: errBoom, method: "HEAD", path: idpJWKSPath, wantStatus: 503, wantEmpty: true},
+		{
+			name: "loader failure", loadErr: errBoom, method: "GET", path: idpJWKSPath, wantStatus: 503, wantCode: "idp_signing_unavailable",
+			wantHeaders: map[string]string{"Content-Type": "application/json"},
+		},
+	}
+
+	for _, fe := range idpFrontends() {
+		for _, tt := range tests {
+			t.Run(fe.name+"/"+tt.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				prev := slog.Default()
+				slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))))
+				defer slog.SetDefault(prev)
+
+				cfg := idpConfig(t, true, "", tt.mutate...)
+				cons := mockWI(t)
+				var ex validator.ClaimsExtractorInterface = idpClaims(nil)
+				if tt.denyExtract {
+					ex = &stubExtractor{err: handler.ErrTokenValidationFailed}
+				}
+				var svc *idp.Service
+				if !tt.noIdP {
+					svc = idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, tt.loadErr)
+				}
+				r := fe.build(t, config.NewStaticProvider(cfg), cons, ex, svc)(tt.method, tt.path, tt.body)
+
+				assert.Equal(t, tt.wantStatus, r.status, r.body)
+				if tt.wantCode != "" {
+					assert.Equal(t, tt.wantCode, r.code(t))
+				}
+				for k, v := range tt.wantHeaders {
+					assert.Equal(t, v, r.headers[k], k)
+					if fe.name == "alb" && tt.multi {
+						assert.Equal(t, []string{v}, r.multi[k], "multi "+k)
+					}
+				}
+				if tt.wantEmpty {
+					assert.Empty(t, r.body)
+				}
+				if tt.check != nil {
+					tt.check(t, r, cons, buf.String())
+				}
+			})
+		}
+	}
+}
+
+func TestIdPDocuments(t *testing.T) {
+	cfg := idpConfig(t, true, "")
+	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
+	ks, err := svc.KeySet(context.Background())
+	require.NoError(t, err)
+	paths := svc.Config().Paths
+
+	for _, fe := range idpFrontends() {
+		t.Run(fe.name, func(t *testing.T) {
+			call := fe.build(t, config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), svc)
+
+			disc := call("GET", paths.Discovery, "")
+			require.Equal(t, 200, disc.status)
+			var d struct {
+				Issuer  string `json:"issuer"`
+				JWKSURI string `json:"jwks_uri"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(disc.body), &d))
+			assert.Equal(t, d.Issuer+paths.JWKS, d.JWKSURI)
+
+			jwks := call("GET", paths.JWKS, "")
+			require.Equal(t, 200, jwks.status)
+			var want, got struct {
+				Keys []struct {
+					Kid string `json:"kid"`
+				} `json:"keys"`
+			}
+			require.NoError(t, json.Unmarshal(ks.JWKS(), &want))
+			require.NoError(t, json.Unmarshal([]byte(jwks.body), &got))
+			assert.Equal(t, want, got)
+			assert.NotEmpty(t, got.Keys)
+
+			for _, b := range []string{disc.body, jwks.body} {
+				assert.NotContains(t, b, `"d":`)
+			}
+		})
+	}
+}
+
+func TestAPIGatewayRoutesIdPOnStageQualifiedPath(t *testing.T) {
+	cfg := idpConfig(t, true, "", func(c *config.Config) { c.IdP.Issuer = "https://idp.example.com/prod" })
+	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
+	h := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), nil).WithIdP(svc)
+
+	ev := events.APIGatewayProxyRequest{HTTPMethod: "GET", Path: idpJWKSPath}
+	ev.RequestContext.Path = "/prod" + idpJWKSPath
+	r, err := h.Handler(context.Background(), ev)
+	require.NoError(t, err)
+	assert.Equal(t, 200, r.StatusCode, r.Body)
+	assert.Contains(t, r.Body, `"keys"`)
+}
+
+func TestIdPDocumentRouteWarnsOnFrozenDrift(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil))))
+	defer slog.SetDefault(prev)
+
+	cfg := idpConfig(t, true, "")
+	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
+	cfg.IdP.Audience = "drifted.example.com"
+	h := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), nil).WithIdP(svc)
+
+	r, err := h.Handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: "GET", Path: idpJWKSPath})
+	require.NoError(t, err)
+	require.Equal(t, 200, r.StatusCode, r.Body)
+	assert.Equal(t, 1, countEventLines(buf.String(), "config.idp.reload_ignored"))
+}
+
+// The body/header parse path follows the configured jwt_validation.mode, not header presence.
+func TestALBHandler_PathFollowsConfiguredMode(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/MyRole"
+	withToken := `{"token":"body-token","role":"` + role + `"}`
+	roleOnly := `{"role":"` + role + `"}`
+	hdr := map[string][]string{"x-amzn-oidc-data": {"alb-oidc-data"}}
+
+	tests := []struct {
+		name       string
+		mode       string
+		headers    map[string][]string
+		body       string
+		wantStatus int
+		wantToken  string
+		wantALB    string
+	}{
+		{"self, header present, body token used", "self", hdr, withToken, 401, "body-token", ""},
+		{"self, no header, body token used", "self", nil, withToken, 401, "body-token", ""},
+		{"self, header present, no body token rejected", "self", hdr, roleOnly, 400, "", ""},
+		{"alb, header present, header used", "alb", hdr, roleOnly, 401, "", "alb-oidc-data"},
+		{"alb, header present, body token ignored", "alb", hdr, withToken, 401, "", "alb-oidc-data"},
+		{"alb, no header still reaches the extractor", "alb", nil, roleOnly, 401, "", ""},
+		{"alb, no header, body token not honored", "alb", nil, withToken, 401, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ex := &captureExtractor{}
+			h := handler.NewAwsApplicationLoadBalancer(staticProviderMode(t, tt.mode), mockConsumer(t), ex, nil)
+			resp, err := h.Handler(context.Background(), albEvent(tt.headers, tt.body))
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantStatus, resp.StatusCode)
+			assert.Equal(t, tt.wantToken, ex.input.Token)
+			assert.Equal(t, tt.wantALB, ex.input.ALBOIDCData)
+		})
+	}
+}
+
+// alb mode with the real extractor must deny when the ALB header is absent.
+func TestALBHandler_ALBModeMissingHeaderDenies(t *testing.T) {
+	p := albModeProvider(t)
+	fc := mockConsumer(t)
+	h := handler.NewAwsApplicationLoadBalancer(p, fc, validator.NewALBExtractor(p), nil)
+
+	resp, err := h.Handler(context.Background(), albEvent(nil,
+		`{"token":"body-token","role":"arn:aws:iam::123456789012:role/MyRole"}`))
+	require.NoError(t, err)
+
+	assert.Equal(t, 401, resp.StatusCode)
+	assert.Zero(t, fc.assumeCalls, "no credentials may be issued without the ALB header")
 }

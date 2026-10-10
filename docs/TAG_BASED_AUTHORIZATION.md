@@ -344,7 +344,7 @@ Warden (hub credentials, itself a role session)
 
 When `session_tags_transitive` is enabled, the warden marks **every session tag it attaches** (the issuer's whole `session_tags` spec — e.g. `repo`, `ref`, `actor`, … for the standard GitHub spec) transitive via `TransitiveTagKeys` in the `AssumeRole` call to the target. The key set follows the issuer's configured `session_tags`; there is no separate transitive-key list.
 
-The **chained session duration is capped at 1 hour** regardless of the target role's configured maximum. This follows from the warden's own credentials always being a role session (true on every Lambda deployment, same-account assumes included) — AWS fails, rather than clamps, a chained `AssumeRole`'s `DurationSeconds` over 3600. Only `local` server mode running with IAM user credentials avoids this clamp.
+The **chained session duration is capped at 1 hour** regardless of the target role's configured maximum. This follows from the warden's own credentials always being a role session (true on every Lambda deployment, same-account assumes included) — AWS fails, rather than clamps, a chained `AssumeRole`'s `DurationSeconds` over 3600. A longer session requires IdP mode ([IDP.md](IDP.md)).
 
 ### When to use
 
@@ -427,7 +427,7 @@ For a target role in account `222…`:
 2. **Policy gate:** if `cross_account` is disabled or absent, the request is rejected immediately with an error — there is no fallback path.
 3. **Allow-list gate:** if `allowed_accounts` is non-empty and `222…` is neither the hub account nor in the list, the request is rejected with `403 ErrAccountNotAllowed`.
 4. _(tag-auth only, and only if step 3's explicit mapping didn't already authorize the role)_ Warden (hub identity) assumes `arn:aws:iam::222…:role/aow-spoke` (with the optional external ID) and, with those credentials, calls `iam:GetRole` to read the target's tags and checks them against the claims.
-5. Warden (its own hub identity — **not** spoke credentials) calls `sts:AssumeRole` directly on the target role, one hop, attaching the session tags (and transitive keys if enabled). Because the warden's own credentials are a role session (always true on Lambda), the resulting session is clamped to 1 hour regardless of the target role's configured maximum — this is a property of chained credentials, not of being cross-account. Only `local` server mode with IAM user credentials can get a longer session, up to the target role's own max.
+5. Warden (its own hub identity — **not** spoke credentials) calls `sts:AssumeRole` directly on the target role, one hop, attaching the session tags (and transitive keys if enabled). Because the warden's own credentials are a role session (always true on Lambda), the resulting session is clamped to 1 hour regardless of the target role's configured maximum — this is a property of chained credentials, not of being cross-account. A longer session requires IdP mode.
 6. The target's temporary credentials are returned to the workflow.
 
 Same-account requests (`target account == hub account`) skip the policy gate, allow-list check, and spoke entirely.

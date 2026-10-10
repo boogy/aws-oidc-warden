@@ -1,59 +1,54 @@
 package validator
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"syscall"
 	"time"
 )
 
-// maxJWKSRedirects bounds how many redirects the JWKS/discovery HTTP client
-// will follow. Each hop is re-validated by CheckRedirect; dial-time IP
-// blocking below also covers every hop's connection.
+// maxJWKSRedirects caps redirects followed by the JWKS/discovery client.
 const maxJWKSRedirects = 5
 
-// newSecureHTTPClient builds the single shared http.Client used for every
-// outbound JWKS/discovery fetch (built once at TokenValidator construction,
-// never per call). It blocks connections to private/loopback/link-local/
-// metadata addresses at dial time — including on redirects — enforces TLS
-// 1.2+, and caps + re-validates redirects. allowInsecureIssuers permits
-// dialing loopback (dev/test servers) only; it never relaxes the
-// private/link-local/metadata block.
+// blockedPrefixes are ranges never dialed, beyond the netip.Addr classifiers.
+var blockedPrefixes = mustParsePrefixes(
+	"0.0.0.0/8",       // "this network"
+	"100.64.0.0/10",   // RFC 6598 shared address space (ECS awsvpc, EKS pods)
+	"192.0.0.0/24",    // IETF protocol assignments
+	"192.0.2.0/24",    // TEST-NET-1
+	"198.18.0.0/15",   // benchmarking
+	"198.51.100.0/24", // TEST-NET-2
+	"203.0.113.0/24",  // TEST-NET-3
+	"240.0.0.0/4",     // reserved, includes 255.255.255.255
+	"2001:db8::/32",   // documentation
+	"fc00::/7",        // unique local
+)
+
+func mustParsePrefixes(cidrs ...string) []netip.Prefix {
+	out := make([]netip.Prefix, len(cidrs))
+	for i, c := range cidrs {
+		out[i] = netip.MustParsePrefix(c)
+	}
+	return out
+}
+
+// newSecureHTTPClient builds the shared JWKS/discovery client: blocks private/link-local/metadata dials
+// (including redirects), requires TLS 1.2+, caps redirects. allowInsecureIssuers permits loopback only.
 func newSecureHTTPClient(allowInsecureIssuers bool, timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{Timeout: timeout}
-
-	dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid dial address %q: %w", addr, err)
-		}
-
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve %q: %w", host, err)
-		}
-		if len(ips) == 0 {
-			return nil, fmt.Errorf("no addresses resolved for %q", host)
-		}
-
-		ip := ips[0].IP
-		if isBlockedIP(ip, allowInsecureIssuers) {
-			return nil, fmt.Errorf("connection to %s (%s) blocked: private/loopback/link-local/metadata address", host, ip)
-		}
-
-		// Dial the resolved-and-validated address, not the hostname, so a
-		// second DNS lookup inside the dialer can't return a different,
-		// unvalidated address (DNS rebinding).
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+	dialer := &net.Dialer{
+		Timeout: timeout,
+		Control: blockedDialControl(allowInsecureIssuers),
 	}
 
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			DialContext:     dialContext,
+			Proxy:           nil, // never honor HTTP(S)_PROXY: a proxy would dial the target itself, unchecked
+			DialContext:     dialer.DialContext,
 			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -68,67 +63,62 @@ func newSecureHTTPClient(allowInsecureIssuers bool, timeout time.Duration) *http
 	}
 }
 
-// isBlockedIP reports whether ip must never be dialed: private, link-local
-// (covers the 169.254.169.254 cloud metadata address), unspecified, or
-// multicast. Loopback is blocked too unless allowLoopback is set.
+// blockedDialControl vets every resolved connect address, failing closed on one it cannot parse.
+func blockedDialControl(allowLoopback bool) func(network, address string, c syscall.RawConn) error {
+	return func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return fmt.Errorf("invalid dial address %q: %w", address, err)
+		}
+		addr, err := netip.ParseAddr(host)
+		if err != nil {
+			return fmt.Errorf("invalid dial address %q: %w", address, err)
+		}
+		if isBlockedAddr(addr, allowLoopback) {
+			return fmt.Errorf("connection to %s blocked: private/loopback/link-local/metadata address", host)
+		}
+		return nil
+	}
+}
+
+// isBlockedIP reports whether ip must never be dialed (see isBlockedAddr); nil or malformed is blocked.
 func isBlockedIP(ip net.IP, allowLoopback bool) bool {
-	if ip == nil {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
 		return true
 	}
-	if ip.IsLoopback() {
+	return isBlockedAddr(addr, allowLoopback)
+}
+
+// isBlockedAddr reports whether addr must never be dialed; loopback is allowed only with allowLoopback.
+func isBlockedAddr(addr netip.Addr, allowLoopback bool) bool {
+	addr = addr.Unmap().WithZone("")
+	if !addr.IsValid() {
+		return true
+	}
+	if addr.IsLoopback() {
 		return !allowLoopback
 	}
-	if ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified() || ip.IsMulticast() || sharedOrReservedIPv4(ip) {
+	if addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() ||
+		addr.IsUnspecified() || addr.IsMulticast() {
 		return true
 	}
-	// An IPv6 literal can carry an IPv4 destination the stdlib helpers above
-	// don't see through — judge the address it actually designates.
-	if embedded := embeddedIPv4(ip); embedded != nil {
-		return isBlockedIP(embedded, allowLoopback)
+	for _, p := range blockedPrefixes {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	// ::x.x.x.x and NAT64 64:ff9b::x.x.x.x carry an IPv4 destination the classifiers don't see through.
+	if addr.Is6() {
+		b := addr.As16()
+		if allZero(b[:12]) || nat64Prefix.Contains(addr) {
+			return isBlockedAddr(netip.AddrFrom4([4]byte(b[12:])), allowLoopback)
+		}
 	}
 	return false
 }
 
-// sharedOrReservedIPv4 blocks IPv4 ranges the net helpers do not classify:
-// 100.64.0.0/10 (RFC 6598 shared address space — AWS uses it for ECS awsvpc
-// and EKS pod networking) and 0.0.0.0/8 (net.IP.IsUnspecified matches only
-// the exact 0.0.0.0).
-func sharedOrReservedIPv4(ip net.IP) bool {
-	v4 := ip.To4()
-	if v4 == nil {
-		return false
-	}
-	if v4[0] == 0 {
-		return true // 0.0.0.0/8
-	}
-	return v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 // 100.64.0.0/10
-}
-
-// embeddedIPv4 returns the IPv4 address an IPv6 address carries, or nil.
-// Handles the deprecated IPv4-compatible form ::x.x.x.x and the NAT64
-// well-known prefix 64:ff9b::/96, neither resolved by net.IP.To4 (which
-// handles only IPv4-mapped ::ffff:x.x.x.x). Callers must judge the embedded
-// address, not the wrapper.
-func embeddedIPv4(ip net.IP) net.IP {
-	ip16 := ip.To16()
-	if ip16 == nil || ip.To4() != nil {
-		return nil // not IPv6, or already resolved as v4 / v4-mapped
-	}
-
-	// NAT64 well-known prefix 64:ff9b::/96.
-	if ip16[0] == 0x00 && ip16[1] == 0x64 && ip16[2] == 0xff && ip16[3] == 0x9b {
-		if allZero(ip16[4:12]) {
-			return net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15])
-		}
-	}
-
-	// IPv4-compatible ::x.x.x.x — the entire 96-bit prefix is zero.
-	if allZero(ip16[:12]) {
-		return net.IPv4(ip16[12], ip16[13], ip16[14], ip16[15])
-	}
-	return nil
-}
+var nat64Prefix = netip.MustParsePrefix("64:ff9b::/96")
 
 func allZero(b []byte) bool {
 	for _, v := range b {

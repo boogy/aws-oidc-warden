@@ -22,6 +22,11 @@ func backendAttr(backend string) slog.Attr {
 	return slog.String("backend", backend)
 }
 
+// debugEnabled lets hot paths skip building debug attrs when debug is off.
+func debugEnabled(ctx context.Context) bool {
+	return slog.Default().Enabled(ctx, slog.LevelDebug)
+}
+
 // cacheAttrs returns the backend and key attrs every cache log line carries.
 func cacheAttrs(backend, key string, extra ...slog.Attr) []slog.Attr {
 	attrs := make([]slog.Attr, 0, len(extra)+2)

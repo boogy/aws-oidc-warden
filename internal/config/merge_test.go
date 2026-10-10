@@ -423,6 +423,7 @@ issuers:
   - issuer: "`+issuer+`"
     provider: github
     audiences: ["sts.amazonaws.com"]
+s3_config_bucket_owner: "123456789012"
 config_fragments: ["s3://cfg/a.yaml", "s3://cfg/b.yaml"]
 config_fragment_checksums:
   - uri: "s3://cfg/a.yaml"
@@ -483,6 +484,9 @@ func TestClearOnDeclareCoversEverySliceOfStructField(t *testing.T) {
 		}
 	}
 
+	// nested under the idp pointer, invisible to the top-level reflection
+	want = append(want, "idp.issuer", "idp.signing_keys")
+
 	got := make([]string, 0, len(clearOnDeclare))
 	for key := range clearOnDeclare {
 		got = append(got, key)
@@ -536,6 +540,7 @@ issuers:
   - issuer: "`+issuer+`"
     provider: github
     audiences: ["sts.amazonaws.com"]
+s3_config_bucket_owner: "123456789012"
 config_fragments: ["s3://cfg/a.yaml", "s3://cfg/b.yaml"]
 config_fragment_checksums:
   - uri: "s3://cfg/a.yaml"
@@ -624,4 +629,86 @@ func TestMergeBytes_InvalidEnvValuesLeaveConfigUntouched(t *testing.T) {
 	assert.Equal(t, 6*time.Minute, c.Cache.TTL, "invalid env is skipped, so the merged value stands")
 	assert.Equal(t, 42, c.Cache.MaxLocalSize)
 	assert.Equal(t, 7*time.Minute, c.MaxTokenAge)
+}
+
+const idpMergeBase = `
+role_session_name: "aow"
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: github
+    audiences: ["sts.amazonaws.com"]
+`
+
+func TestMergeBytesIdPSigningKeysReplaced(t *testing.T) {
+	t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "")
+	c := &Config{}
+	require.NoError(t, c.MergeBytes([]byte(idpMergeBase+`
+idp:
+  enabled: true
+  issuer: "https://idp.example.com"
+  audience: "sts.amazonaws.com"
+  signing_keys:
+    - file: /k.pem
+      algorithm: RS256
+      status: active
+    - kms_key_id: "`+kmsARN(2)+`"
+      algorithm: RS256
+      status: verify_only
+`), "yaml"))
+	require.Len(t, c.IdP.SigningKeys, 2)
+
+	require.NoError(t, c.MergeBytes([]byte(`{"idp":{"signing_keys":[{"kms_key_id":"`+kmsARN(3)+`","algorithm":"RS256","status":"active"}]}}`), "json"))
+	require.Len(t, c.IdP.SigningKeys, 1)
+	require.Equal(t, kmsARN(3), c.IdP.SigningKeys[0].KMSKeyID)
+}
+
+func TestMergeBytesIdPIssuerRederivesDefaults(t *testing.T) {
+	c := &Config{}
+	require.NoError(t, c.MergeBytes([]byte(idpMergeBase+`
+idp:
+  enabled: true
+  issuer: "https://a.example.com"
+  audience: "sts.amazonaws.com"
+  signing_keys:
+    - kms_key_id: "`+kmsARN(1)+`"
+      algorithm: RS256
+      status: active
+`), "yaml"))
+	require.Equal(t, "https://a.example.com/.well-known/jwks.json", c.IdP.JWKSURI)
+
+	require.NoError(t, c.MergeBytes([]byte("idp:\n  issuer: \"https://b.example.com\"\n"), "yaml"))
+	require.Equal(t, "https://b.example.com/.well-known/jwks.json", c.IdP.JWKSURI)
+	require.Equal(t, "/.well-known/jwks.json", c.IdP.Paths.JWKS)
+}
+
+func TestMergeBytesIdPSameIssuerKeepsCustomPaths(t *testing.T) {
+	c := &Config{}
+	require.NoError(t, c.MergeBytes([]byte(idpMergeBase+`
+idp:
+  enabled: true
+  issuer: "https://a.example.com/prod"
+  audience: "sts.amazonaws.com"
+  jwks_uri: "https://cdn.example.com/keys.json"
+  paths:
+    discovery: "/prod/.well-known/openid-configuration"
+    jwks: "/prod/keys.json"
+  signing_keys:
+    - kms_key_id: "`+kmsARN(1)+`"
+      algorithm: RS256
+      status: active
+`), "yaml"))
+
+	require.NoError(t, c.MergeBytes([]byte("idp:\n  issuer: \"https://a.example.com/prod\"\n"), "yaml"))
+	require.Equal(t, "https://cdn.example.com/keys.json", c.IdP.JWKSURI)
+	require.Equal(t, "/prod/keys.json", c.IdP.Paths.JWKS)
+	require.Equal(t, "/prod/.well-known/openid-configuration", c.IdP.Paths.Discovery)
+}
+
+func TestMergeBytes_EnvMaxConfigBytesWinsOverS3(t *testing.T) {
+	t.Setenv("AOW_MAX_CONFIG_BYTES", "2048")
+	c := baseConfigForEnv(t)
+
+	require.NoError(t, c.MergeBytes([]byte("max_config_bytes: 4096\n"), "yaml"))
+
+	assert.Equal(t, 2048, c.MaxConfigBytes)
 }

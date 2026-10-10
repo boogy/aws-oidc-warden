@@ -26,7 +26,7 @@ func loadYAML(t *testing.T, doc string) *Config {
 	require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
 
 	var c Config
-	require.NoError(t, v.Unmarshal(&c, decoderOptions()...))
+	require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
 	return &c
 }
 

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -145,13 +146,13 @@ func TestReadLocalFragment_ReadsAndHashes(t *testing.T) {
 	path := filepath.Join(dir, "frag.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("role_mappings: []\n"), 0o600))
 
-	data, etag, err := readLocalFragment(path)
+	data, etag, err := readLocalFragment(path, utils.DefaultMaxConfigBytes)
 	require.NoError(t, err)
 	assert.NotEmpty(t, data)
 	assert.Contains(t, etag, "sha256:")
 
 	// Same content -> same etag (used for change detection).
-	_, etag2, err := readLocalFragment(path)
+	_, etag2, err := readLocalFragment(path, utils.DefaultMaxConfigBytes)
 	require.NoError(t, err)
 	assert.Equal(t, etag, etag2)
 }
@@ -159,16 +160,16 @@ func TestReadLocalFragment_ReadsAndHashes(t *testing.T) {
 func TestReadLocalFragment_BoundedRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "big.yaml")
-	big := make([]byte, maxFragmentBytes+10)
+	big := make([]byte, utils.DefaultMaxConfigBytes+10)
 	require.NoError(t, os.WriteFile(path, big, 0o600))
 
-	_, _, err := readLocalFragment(path)
+	_, _, err := readLocalFragment(path, utils.DefaultMaxConfigBytes)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds")
 }
 
 func TestReadLocalFragment_MissingFile(t *testing.T) {
-	_, _, err := readLocalFragment(filepath.Join(t.TempDir(), "missing.yaml"))
+	_, _, err := readLocalFragment(filepath.Join(t.TempDir(), "missing.yaml"), utils.DefaultMaxConfigBytes)
 	require.Error(t, err)
 }
 
@@ -216,6 +217,7 @@ func TestAudit_FragmentDisallowedKeyEvasionBattery(t *testing.T) {
 		{"json_issuers", "json", `{"issuers":[{"issuer":"https://evil","audiences":["x"]}]}`, true},
 		{"toml_tag_auth", "toml", "[tag_auth]\nenabled = true\n", true},
 		{"role_session_name", "yaml", "role_session_name: pwn\n", true},
+		{"session_policy_bucket_owner", "yaml", "session_policy_bucket_owner: \"444455556666\"\n", true},
 		{"config_fragments_self", "yaml", "config_fragments: [\"/etc/passwd\"]\n", true},
 		{"trailing_space_key", "yaml", "\"issuers \": [1]\n", true}, // top segment "issuers " != allowed => rejected anyway
 	}
@@ -346,7 +348,8 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 
 	// Compiled/derived state must be rebuilt.
 	require.Len(t, clone.effective, 1)
-	assert.NotNil(t, clone.effective[0].compiledPattern)
+	assert.NotEmpty(t, clone.effective[0].resolvedSubject)
+	assert.True(t, clone.effective[0].compiledPattern != nil || clone.effective[0].subjectClass == subjectExact, "subject must be compiled or an exact literal")
 	assert.Equal(t, []string{"arn:aws:iam::111111111111:role/prod"}, clone.effective[0].Roles)
 	assert.NotEmpty(t, clone.effective[0].Conditions.compiled)
 }
@@ -457,11 +460,12 @@ func TestAudit_ChecksumPinNotReappliedToCachedFragment(t *testing.T) {
 func TestAudit_ChecksumPinTrustsFetcherETagNotContent(t *testing.T) {
 	base := a2Base(t)
 	base.ConfigFragments = []string{"s3://bucket/frag.yaml"}
+	base.S3ConfigBucketOwner = "123456789012"
 	base.ConfigFragmentChecksums = []FragmentChecksum{{URI: "s3://bucket/frag.yaml", Checksum: "pinned-etag"}}
 	require.NoError(t, base.Validate())
 
 	evil := []byte("role_mappings:\n  - subject: \"victim/.+\"\n    roles: [\"arn:aws:iam::999999999999:role/attacker\"]\n")
-	fetch := func(_ context.Context, _, _ string) ([]byte, string, error) {
+	fetch := func(_ context.Context, _, _, _ string) ([]byte, string, error) {
 		return evil, "pinned-etag", nil
 	}
 
@@ -695,6 +699,7 @@ role_groups:
 	assert.Equal(t, setLen, len(c2.parsed.RoleSets["fragset"]))
 	// Unexported per-mapping state must not have leaked into the cached parse.
 	assert.Nil(t, c2.parsed.RoleMappings[0].compiledPattern, "compiledPattern leaked into cached fragment")
+	assert.Empty(t, c2.parsed.RoleMappings[0].subjectKey, "subjectKey leaked into cached fragment")
 	assert.Empty(t, c2.parsed.RoleMappings[0].Conditions.compiled, "compiled conditions leaked into cached fragment")
 }
 
@@ -708,24 +713,7 @@ func TestAudit_DuplicateFragmentURI(t *testing.T) {
 
 	base := a2Base(t)
 	base.ConfigFragments = []string{f, f}
-	require.NoError(t, base.Validate())
-
-	p := NewProvider(base, time.Minute, "yaml", nil)
-	err := p.Refresh(context.Background())
-	t.Logf("duplicate URI refresh: err=%v", err)
-
-	// Merged twice (the p.fragments cache is only swapped in after the loop, so
-	// the second pass sees the same prev). Additive only: 2 identical mappings,
-	// no widening. A duplicate that defines role_sets errors on collision.
-	require.NoError(t, err)
-	cfg := p.Get()
-	require.Len(t, cfg.RoleMappings, 2, "duplicate URI merges twice")
-	assert.Equal(t, cfg.RoleMappings[0], cfg.RoleMappings[1])
-	_, roles := cfg.AuthorizeRoles(cfg.Issuers[0].Issuer, "o/r", map[string]any{})
-	assert.Equal(t, []string{
-		"arn:aws:iam::111111111111:role/x",
-		"arn:aws:iam::111111111111:role/x",
-	}, roles, "duplicate grant must not widen beyond the same role")
+	require.ErrorContains(t, base.Validate(), "config_fragments[1]: duplicate source")
 }
 
 // ---------------------------------------------------------------------------
@@ -813,4 +801,77 @@ func TestAudit_RoleGroupOrderingAmongstThemselves(t *testing.T) {
 		"arn:aws:iam::111111111111:role/prod", map[string]any{})
 	require.NotNil(t, polFile)
 	assert.Equal(t, "first.json", *polFile)
+}
+
+const (
+	fragIssA = "https://token.actions.githubusercontent.com"
+	fragIssB = "https://gitlab.example.com"
+)
+
+func twoIssuerFragBase(t *testing.T, fragments ...string) *Config {
+	t.Helper()
+	c := a2Base(t)
+	c.Issuers = append(c.Issuers, IssuerConfig{
+		Issuer: fragIssB, Provider: "generic", Audiences: []string{"aud"},
+		ClaimMappings: map[string]string{"subject": "sub"},
+	})
+	c.ConfigFragments = fragments
+	require.NoError(t, c.Validate())
+	return c
+}
+
+func TestFragmentDefaultIssuerBindsOnlyItsOwnEntries(t *testing.T) {
+	dir := t.TempDir()
+	const role = "arn:aws:iam::111111111111:role/r"
+	fragA := a2Write(t, dir, "a.yaml", "default_issuer: \""+fragIssB+"\"\nrole_mappings:\n  - subject: \"a/app\"\n    roles: [\""+role+"\"]\nrole_groups:\n  - subjects: [\"a/grp\"]\n    defaults: {roles: [\""+role+"\"]}\n")
+	fragB := a2Write(t, dir, "b.yaml", "role_mappings:\n  - subject: \"b/app\"\n    roles: [\""+role+"\"]\n")
+	fragBExplicit := a2Write(t, dir, "b2.yaml", "role_mappings:\n  - subject: \"b/app\"\n    issuer: \""+fragIssA+"\"\n    roles: [\""+role+"\"]\n")
+
+	t.Run("another fragment's issuer-less entry is not bound by it", func(t *testing.T) {
+		p := NewProvider(twoIssuerFragBase(t, fragA, fragB), time.Minute, "", nil)
+		err := p.Refresh(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "issuer must be set explicitly")
+		assert.Contains(t, err.Error(), "b/app")
+	})
+
+	t.Run("own entries bind to it and the config default stays empty", func(t *testing.T) {
+		p := NewProvider(twoIssuerFragBase(t, fragA, fragBExplicit), time.Minute, "", nil)
+		require.NoError(t, p.Refresh(context.Background()))
+		cfg := p.Get()
+		assert.Empty(t, cfg.DefaultIssuer)
+
+		byIssuer := map[string]string{}
+		for _, m := range cfg.effective {
+			byIssuer[m.resolvedSubject] = m.Issuer
+		}
+		assert.Equal(t, map[string]string{"a/app": fragIssB, "a/grp": fragIssB, "b/app": fragIssA}, byIssuer)
+
+		ok, _ := cfg.AuthorizeRoles(fragIssB, "a/app", map[string]any{})
+		assert.True(t, ok)
+		ok, _ = cfg.AuthorizeRoles(fragIssA, "a/app", map[string]any{})
+		assert.False(t, ok)
+	})
+
+	t.Run("the cached parse is not modified", func(t *testing.T) {
+		p := NewProvider(twoIssuerFragBase(t, fragA), time.Minute, "", nil)
+		require.NoError(t, p.Refresh(context.Background()))
+		require.NoError(t, p.Refresh(context.Background()))
+		for _, frag := range p.fragments {
+			assert.Empty(t, frag.parsed.RoleMappings[0].Issuer, "cached parse must not be modified")
+		}
+	})
+}
+
+func TestMergeFragment_DefaultIssuerNotWrittenToConfig(t *testing.T) {
+	cfg := &Config{}
+	frag := &FragmentConfig{
+		DefaultIssuer: "https://a.example.com",
+		RoleMappings:  []RoleMapping{{Subject: Patterns{"x/y"}}, {Subject: Patterns{"x/z"}, Issuer: "https://b.example.com"}},
+	}
+	require.NoError(t, mergeFragment(cfg, frag, "f", map[string]bool{"https://a.example.com": true}))
+	assert.Empty(t, cfg.DefaultIssuer)
+	assert.Equal(t, "https://a.example.com", cfg.RoleMappings[0].Issuer)
+	assert.Equal(t, "https://b.example.com", cfg.RoleMappings[1].Issuer)
+	assert.Empty(t, frag.RoleMappings[0].Issuer)
 }
