@@ -438,9 +438,7 @@ func compileAnchoredCondition(pattern string, rc regexCache) (*matcher, error) {
 	return m, err
 }
 
-// valueMatches reports whether a claim VALUE's canonical text (claimText) matches pattern;
-// an array matches when any element does. Reads the value, never the Go type, in both polarities
-// (exceptions: valueIsUndecidable).
+// valueMatches reports whether a claim value's canonical text, or any array element's, matches pattern.
 func valueMatches(v any, pattern *matcher) bool {
 	switch t := v.(type) {
 	case nil:
@@ -584,10 +582,8 @@ func claimText(v any) (string, bool) {
 	return "", false
 }
 
-// valueIsUndecidable reports whether a claim VALUE cannot answer a negated leaf; it then counts as
-// MATCHED so a none_of veto fires (fail closed). Covers objects, lists with structural elements,
-// newline-bearing text, and types.OpaqueClaim (asymmetric by design; see
-// TestOpaqueClaimPositiveAndNoneOfAreNotComplements). Absence is not undecidable.
+// valueIsUndecidable reports whether a negated leaf must treat v as matched so a none_of veto fails closed.
+// OpaqueClaim is asymmetric by design: see TestOpaqueClaimPositiveAndNoneOfAreNotComplements.
 func valueIsUndecidable(v any) bool {
 	switch t := v.(type) {
 	case nil:
