@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **IdP mode (`idp`, optional)**: the warden mints a KMS-signed OIDC token and exchanges it via unsigned `AssumeRoleWithWebIdentity`, lifting the 1h role-chaining cap. `/verify` routes a mapping through it when its `max_session_duration` is over 1h or it sets `idp_token`; no role list; over-1h requests it cannot serve get 503 `idp_signing_unavailable`, 403 `idp_not_permitted` or 400 `duration_exceeds_cap`. See `docs/IDP.md`.
 - **Multi-region KMS keys** for `idp.signing_keys`: one issuer across regions, each signing with its local replica; replicas are confined to `idp.kms_allowed_regions`.
+- **`idp.source_identity`** (default `{issuer}:{subject}`) sets the minted `aws:SourceIdentity`; inbound issuers rendering the same `{issuer}` (scheme or trailing-`/` twins) fail to load.
 - **IdP discovery and JWKS paths** answer 404 while `idp.enabled` is false, refresh config without waiting, and match `requestContext.path` on REST API (v1).
 - **`validate` command** checks the merged config (overlay, mappings file, fragments) without starting a server; `-override URI=PATH` tests a local file in place of the `s3://` object the URI names, and `-offline` fails instead of fetching one.
 - **`idp-export` command** writes the discovery and JWKS documents for S3/CloudFront hosting, with overlay and fragments applied.
@@ -42,7 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Outbound JWKS/discovery fetches check every address actually dialed** and also block CGNAT, benchmarking, documentation and reserved ranges.
 - **Tag-auth caches IAM `NoSuchEntity` for 30s** per role, so unknown role names cannot burn the IAM quota.
 - **Audit `sessionTagKeys` lists the tags actually attached**, and a dropped tag warns once per request.
-- **Hot-path performance**: literal subjects and conditions skip regex, non-one-pass subject patterns are owner-bucketed, unchanged config refreshes skip the rebuild, audit gzip writers are pooled, the issuer peek allocates less, the key memo no longer allocates, and session tags are built once per request.
+- **Hot-path performance**: literal subjects and conditions skip regex, non-one-pass subject patterns are owner-bucketed, unchanged config refreshes skip the rebuild, audit gzip writers are pooled, the issuer peek allocates less, the key memo no longer allocates, session tags are built once per request, session policy JSON is validated without decoding, concurrent spoke `AssumeRole` calls per account are coalesced, and the STS caller identity is warmed at cold start.
 
 ### Fixed
 
@@ -56,12 +57,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **A newline in a claim value no longer slips past a `none_of` veto.**
 - **ALB mode honors `jwt_leeway`**, and the ALB adapter picks the token source from `jwt_validation.mode`, so self mode behind an ALB OIDC action works.
 - **EC JWKS keys must match the token's curve.**
+- **Issuer routing reads only the exact `iss` key**; `ISS`, `Iss` or `iſs` no longer route a token to a trusted issuer's JWKS fetch.
 - **A GitHub claim sent as a number or bool (e.g. `run_id`) no longer rejects the token**; the log-only typed fields are copied as text instead of JSON-decoded into strings.
 - **JWKS warm-up and fetches honor the caller's deadline**; issuers warm concurrently, so a hung IdP no longer stalls cold start.
 - **Session policies read from S3 are fully read before their request context is cancelled**; large objects could truncate.
 - **The audit batch no longer grows without bound or blocks requests during an S3 outage**; past 5000 records the oldest are dropped (`audit.batch.dropped`).
 - **The local dev server drains in-flight requests on shutdown** and bounds write time and header size.
-- **The local dev server exits on an invalid `-log-level`** instead of falling back to `info`.
+- **The local dev server exits on an invalid flag** instead of continuing; an invalid `-log-level` fell back to `info`.
 - **The default config search (`/etc/aws-oidc-warden/`, then `CONFIG_PATH`) fails on two yaml/yml/json/toml candidates or only an unsupported one**, as `-config` and `validate` do, instead of silently loading the first of viper's extensions.
 - **A zero-byte config overlay, `mappings_file` or `config_fragments` entry fails the refresh and keeps the last good config** (startup fails at cold start), pinned or not; a comment-only overlay still resets to the base. An unpinned empty read no longer surfaces as S3's `InvalidRange`.
 - **An IdP mint failure's audit `reason` names its cause** (subject invalid, token too large, source identity rejected, keys unavailable, signing failed) instead of a generic "token minting failed".
