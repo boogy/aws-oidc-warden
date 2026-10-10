@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -96,11 +95,10 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 		case "subject":
 			v = subject
 		case "issuer":
-			u, perr := url.Parse(issuer)
-			if perr != nil || u.Host == "" {
+			var ok bool
+			if v, ok = config.SourceIdentityIssuer(issuer); !ok {
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
-			v = u.Host + strings.TrimSuffix(u.Path, "/")
 		default:
 			raw, ok := claims[strings.TrimPrefix(key, "claim:")]
 			if !ok || isEmptyClaim(raw) {

@@ -163,6 +163,32 @@ func TestIdPValidate(t *testing.T) {
 	}
 }
 
+func TestConfigValidateInboundIssuerRendering(t *testing.T) {
+	tests := []struct {
+		name    string
+		issuers []string
+		wantErr string
+	}{
+		{"scheme and trailing slash twins", []string{"https://a.example.com", "http://a.example.com/"}, "render the same {issuer}"},
+		{"same host different paths", []string{"https://kc.example.com/realms/a", "https://kc.example.com/realms/b"}, ""},
+		{"two hostless issuers", []string{"a.example.com", "b.example.com"}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Config{RoleSessionName: "aow", Cache: &Cache{Type: "memory", TTL: time.Hour}, IdP: validIdP()}
+			for _, iss := range tt.issuers {
+				c.Issuers = append(c.Issuers, singleIssuer(iss, "sts.amazonaws.com")...)
+			}
+			err := c.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestIdPValidateRejectsHashInInboundIssuer(t *testing.T) {
 	c := validIdP()
 	c.applyDefaults()

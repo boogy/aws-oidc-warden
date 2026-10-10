@@ -329,14 +329,14 @@ The same rule applies to every request, IdP or `AssumeRole`:
 | ---------------- | ------------------------------------------------------------------------------------------------------ |
 | `{request_id}`   | the warden request ID                                                                                  |
 | `{subject}`      | the canonical subject                                                                                  |
-| `{issuer}`       | the inbound issuer's host and path (not `idp.issuer`), so two issuers sharing a subject cannot collide |
+| `{issuer}`       | the inbound issuer's host and path (not `idp.issuer`), so with the default template two issuers sharing a subject cannot collide |
 | `{claim:<name>}` | a verified inbound claim; a missing, null or empty claim fails with 403 `idp_source_identity_invalid` |
 
 The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. If any substituted value needed sanitizing, the result ends in `+` and 11 base64url characters of a SHA-256 over the raw values, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<11 chars>` (60 characters). With this issuer, a subject of up to 16 characters fits.
 
 Over 64 characters, `idp.source_identity_overflow` decides: `truncate` (default; the first 52 characters, then the same `+` and 11-character hash) or `reject` (403 `idp_source_identity_invalid`). The audit field `sourceIdentityTruncated` flags truncation. Truncation is attribution, not an access boundary.
 
-`{issuer}` renders the issuer URL host plus its path (trailing `/` dropped). A path issuer such as `https://kc.example.com/realms/a` contains `/`, so it is sanitized and hashed; issuers sharing a host still render distinctly.
+`{issuer}` renders the issuer URL host plus its path (trailing `/` dropped). A path issuer such as `https://kc.example.com/realms/a` contains `/`, so it is sanitized and hashed; issuers sharing a host still render distinctly. While `{issuer}` is rendered, two inbound issuers rendering the same value (for example differing only by a trailing `/` or scheme) fail to load; an issuer without a URL host loads, but its IdP mints fail with 403 `idp_source_identity_invalid`.
 
 `aws:SourceIdentity` is the key for downstream ABAC and CloudTrail attribution. `idp.include_source_identity: false` omits it from the minted token. The template is then not rendered, so a bad template cannot fail the mint.
 
@@ -391,7 +391,7 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, plus per-mapping `idp_token`, `max_session_duration`                 |
 
-A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer, or adds a second issuer while the frozen `source_identity` lacks `{issuer}` and `include_source_identity` is true, is rejected (`config.idp.issuer_collision`).
+A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected. While `include_source_identity` is true, so is one that adds a second issuer when the frozen `source_identity` lacks `{issuer}`, or two issuers rendering the same `{issuer}`. The rejection logs `config.reload.failure`, or `config.idp.issuer_collision` when the reload itself changes frozen `idp` keys.
 
 **Kill switch:** set `idp.enabled: false` in the layer that set it. Environment beats S3: `AOW_IDP_ENABLED` is re-applied after every S3 merge, so never set `AOW_IDP_ENABLED` on Lambda if the S3 overlay is your switch. Order of operations:
 

@@ -749,6 +749,9 @@ func TestProviderRefreshRejectsIdPIssuerCollision(t *testing.T) {
 		{"second issuer with issuer-less frozen source identity", true, "{subject}", overlay("https://a.example.com", "https://b.example.com"), true, "must contain {issuer}", false},
 		{"second issuer with issuer-bound frozen source identity", true, IdPDefaultSourceIdentity, overlay("https://a.example.com", "https://b.example.com"), false, "", false},
 		{"second issuer with unrendered issuer-less source identity", true, "{subject}", overlay("https://a.example.com", "https://b.example.com"), false, "", true},
+		{"hostless inbound issuer with issuer-bound source identity", true, IdPDefaultSourceIdentity, overlay("a.example.com"), false, "", false},
+		{"inbound issuers rendering the same issuer", true, IdPDefaultSourceIdentity, overlay("https://a.example.com", "https://a.example.com/"), true, "render the same {issuer}", false},
+		{"inbound issuers rendering the same unrendered issuer", true, IdPDefaultSourceIdentity, overlay("https://a.example.com", "https://a.example.com/"), false, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

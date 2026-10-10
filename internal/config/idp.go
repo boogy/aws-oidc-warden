@@ -176,8 +176,10 @@ func (c *IdPConfig) validate(allowInsecure bool, inbound []IssuerConfig) error {
 	return c.validateKeys(allowInsecure)
 }
 
-// checkInbound rejects inbound issuers that collide with the IdP issuer, break the # sub separator, or outnumber an issuer-less source_identity.
+// checkInbound rejects inbound issuers that collide with the IdP issuer, break the # sub separator, or render the same {issuer}.
 func (c *IdPConfig) checkInbound(inbound []IssuerConfig) error {
+	renderIssuer := c.IncludeSourceIdentityClaim() && strings.Contains(c.SourceIdentity, idpIssuerPlaceholder)
+	rendered := make(map[string]string, len(inbound))
 	for _, in := range inbound {
 		if in.Issuer == c.Issuer {
 			return fmt.Errorf("idp.issuer %q must differ from every inbound issuer (issuers[])", c.Issuer)
@@ -185,6 +187,17 @@ func (c *IdPConfig) checkInbound(inbound []IssuerConfig) error {
 		if strings.Contains(in.Issuer, "#") {
 			return fmt.Errorf("issuers[] %q must not contain # when idp is configured", in.Issuer)
 		}
+		if !renderIssuer {
+			continue
+		}
+		key, ok := SourceIdentityIssuer(in.Issuer)
+		if !ok {
+			continue
+		}
+		if prev, dup := rendered[key]; dup {
+			return fmt.Errorf("issuers[] %q and %q render the same {issuer} in idp.source_identity", prev, in.Issuer)
+		}
+		rendered[key] = in.Issuer
 	}
 	n := len(inbound)
 	if !c.IncludeSourceIdentityClaim() {

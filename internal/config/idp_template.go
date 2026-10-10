@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -38,6 +39,15 @@ func validateSourceIdentityTemplate(t string, issuerCount int) error {
 		return errors.New("idp.source_identity must contain {issuer} when more than one issuer is configured")
 	}
 	return nil
+}
+
+// SourceIdentityIssuer is the {issuer} rendering of an inbound issuer: URL host plus path, trailing / dropped.
+func SourceIdentityIssuer(issuer string) (string, bool) {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	return u.Host + strings.TrimSuffix(u.Path, "/"), true
 }
 
 // validateSubjectTemplate keeps the role ARN as the sub's unambiguous suffix.
