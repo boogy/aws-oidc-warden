@@ -39,8 +39,6 @@ func vcfg(t *testing.T, mappings []RoleMapping) *Config {
 	return c
 }
 
-// ---------- reference implementations (no index) ----------
-
 // wildcardCfg builds a minimal single-issuer config whose sole role_mapping
 // uses the given subject pattern.
 func wildcardCfg(subject string) *Config {
@@ -57,9 +55,7 @@ func wildcardCfg(subject string) *Config {
 	}
 }
 
-// TestValidate_RejectsBareWildcardSubject pins the identity gate: a subject
-// pattern that matches everything would grant its roles to every repository
-// able to obtain a token from the bound issuer.
+// ---------- reference implementations (no index) ----------
 
 // subjectOracle recompiles the mapping's pattern from scratch, independent of
 // the index and of the literal fast path (compiledPattern is nil for literals).
@@ -136,30 +132,12 @@ func linearFindSessionPolicy(c *Config, issuer, subject, role string, claims map
 	return nil, nil
 }
 
-// TestIndexParity is a differential/property test: it builds a large config
-// with thousands of mappings across many owners, spanning every subject
-// class the index buckets (exact literals, owner/.* patterns, fully-generic
-// patterns, and alternation/multi-owner patterns such as "a/b|c/d"), then
-// asserts that AuthorizeRoles/FindSessionPolicy (index path) return
-// byte-identical results to a brute-force linear scan for a large sample of
-// query subjects. This must fail if classifySubject ever misclassifies an
-// alternation pattern as owner-scoped (the D-1 bug: "a/b|c/d" bucketed under
-// owner "a" would be missed for a query subject of "c/d").
-
 func deref(p *string) string {
 	if p == nil {
 		return ""
 	}
 	return *p
 }
-
-// ---------- P1: index/linear differential fuzz ----------
-
-// TestIndexDifferentialFuzz proves the owner-bucketed index is
-// observationally identical to a full linear scan for both AuthorizeRoles and
-// FindSessionPolicy. A false negative here is fail-OPEN: a policy-bearing
-// mapping dropped from the scan while a broader policy-less mapping still
-// authorizes the role yields an UNSCOPED role assumption.
 
 func patternsOf(ms []RoleMapping) []string {
 	out := make([]string, len(ms))
@@ -168,10 +146,6 @@ func patternsOf(ms []RoleMapping) []string {
 	}
 	return out
 }
-
-// TestLiteralPrefixSoundness is the direct property classifySubject
-// depends on: whatever bucket a pattern lands in, every subject it can match
-// must hash to that same bucket.
 
 // ---------- index / linear-scan equivalence ----------
 
@@ -470,7 +444,7 @@ func TestLiteralSubjectsSkipRegexp(t *testing.T) {
 	}
 }
 
-// ---------- P2: anchoring ----------
+// ---------- classifySubject ----------
 
 func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 	// (pattern, must-not-be-owner-bucketed)
@@ -499,10 +473,6 @@ func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 		}
 	}
 }
-
-// TestClassifySubject_EndToEndAuthzParity proves the fix at the API level: a
-// quantified-first-slash mapping is found by AuthorizeRoles/FindSessionPolicy
-// for a slash-less subject, matching what a compiled-pattern match asserts.
 
 // TestClassifySubject_EndToEndAuthzParity proves the fix at the API level: a
 // quantified-first-slash mapping is found by AuthorizeRoles/FindSessionPolicy
@@ -561,7 +531,7 @@ func TestSubjectAnchoringNoNewlineBypass(t *testing.T) {
 	}
 }
 
-// ---------- P3: issuer binding ----------
+// ---------- bare-wildcard gate ----------
 
 // TestValidate_RejectsBareWildcardSubject pins the identity gate: a subject
 // pattern that matches everything would grant its roles to every repository
@@ -577,10 +547,6 @@ func TestValidate_RejectsBareWildcardSubject(t *testing.T) {
 		}
 	}
 }
-
-// TestValidate_RejectsBareWildcardSubjectInRoleGroup covers the other path
-// into appendEffective — role_groups expand to role_mappings, and must not
-// dodge the check.
 
 // TestValidate_RejectsBareWildcardSubjectInRoleGroup covers the other path
 // into appendEffective — role_groups expand to role_mappings, and must not
@@ -601,10 +567,6 @@ func TestValidate_RejectsBareWildcardSubjectInRoleGroup(t *testing.T) {
 		t.Fatal("a bare wildcard in role_groups.subjects was accepted")
 	}
 }
-
-// TestValidate_AcceptsSpecificSubjectPatterns guards against over-rejection:
-// legitimate wildcard-bearing patterns must keep working. `example-config.yaml`
-// ships `org/service-.*`, so this is a real compatibility constraint.
 
 // TestValidate_AcceptsSpecificSubjectPatterns guards against over-rejection:
 // legitimate wildcard-bearing patterns must keep working. `example-config.yaml`
@@ -643,8 +605,6 @@ func TestIssuerBinding(t *testing.T) {
 		t.Errorf("CROSS-ISSUER POLICY LEAK: got %q", *p)
 	}
 }
-
-// ---------- P4: session policy scoping ----------
 
 // ---------- session-policy scoping ----------
 
@@ -705,10 +665,6 @@ func TestFindSessionPolicy_ScopedToGrantingRole(t *testing.T) {
 		t.Fatalf("ungranted role should have no policy, got policy=%v file=%v", p, f)
 	}
 }
-
-// TestFindSessionPolicy_ConditionsGateThePolicy proves the policy of a mapping
-// whose conditions are NOT satisfied does not apply, even if it grants the role
-// and matches the subject — the request was not authorized by that mapping.
 
 // TestFindSessionPolicy_ConditionsGateThePolicy proves the policy of a mapping
 // whose conditions are NOT satisfied does not apply, even if it grants the role
@@ -802,8 +758,6 @@ func TestOrderWinsAmongMappingsGrantingTheSameRole(t *testing.T) {
 	}
 }
 
-// ---------- P5: conditions ----------
-
 // ---------- conditions ----------
 
 func TestConditionSemantics(t *testing.T) {
@@ -863,10 +817,6 @@ func TestConditionSemantics(t *testing.T) {
 // TestTypoedConditionKeyFailsClosed proves an unrecognized condition
 // key is NOT silently ignored: it is read as a claim name and checked against
 // a claim that does not exist, denying the request.
-
-// TestTypoedConditionKeyFailsClosed proves an unrecognized condition
-// key is NOT silently ignored: it is read as a claim name and checked against
-// a claim that does not exist, denying the request.
 func TestTypoedConditionKeyFailsClosed(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
 		Subject:    Patterns{"myorg/repo"},
@@ -922,8 +872,6 @@ func TestPermissiveConditionPatternsRejected(t *testing.T) {
 	}
 }
 
-// ---------- P6: role set / role gate ----------
-
 // ---------- role gate ----------
 
 func TestRequestedRoleMustMatchExactly(t *testing.T) {
@@ -975,7 +923,7 @@ func TestRoleSetResolvedFromConfigNotToken(t *testing.T) {
 	}
 }
 
-// ---------- P7: tag-auth ----------
+// ---------- benchmark ----------
 
 // BenchmarkAuthorizeRoles measures one whole authorization decision — owner
 // bucket lookup, subject regex, and a nested condition tree — against a config
