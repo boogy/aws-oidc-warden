@@ -24,7 +24,10 @@ var blockedPrefixes = mustParsePrefixes(
 	"198.51.100.0/24", // TEST-NET-2
 	"203.0.113.0/24",  // TEST-NET-3
 	"240.0.0.0/4",     // reserved, includes 255.255.255.255
+	"2001::/32",       // Teredo
 	"2001:db8::/32",   // documentation
+	"2002::/16",       // 6to4, carries an IPv4 destination
+	"64:ff9b:1::/48",  // local-use NAT64
 	"fc00::/7",        // unique local
 )
 

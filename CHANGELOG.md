@@ -47,6 +47,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **SSRF guard blocks Teredo (`2001::/32`), 6to4 (`2002::/16`) and local-use NAT64 (`64:ff9b:1::/48`)**, IPv6 forms that can carry an internal IPv4 destination.
 - **`s3://` entries in `config_fragments` are fetched** instead of failing every refresh.
 - **The local dev server caps request bodies, sets read timeouts** and serves only its known paths.
 - **Remote `mappings_file` and fragment URIs must use lowercase `s3://`**; `S3://` skipped the owner and staleness checks.
