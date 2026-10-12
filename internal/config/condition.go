@@ -381,12 +381,21 @@ func isUniversal(re *syntax.Regexp) bool {
 	case syntax.OpAlternate:
 		return slices.ContainsFunc(re.Sub, isUniversal)
 	case syntax.OpConcat:
-		universal := false
+		universal, ended := false, false
 		for _, sub := range re.Sub {
 			switch {
 			case isUniversal(sub):
+				if ended {
+					return false
+				}
 				universal = true
-			case !isEmptyWidth(sub):
+			case sub.Op == syntax.OpBeginLine || sub.Op == syntax.OpBeginText:
+				if universal {
+					return false
+				}
+			case sub.Op == syntax.OpEndLine || sub.Op == syntax.OpEndText:
+				ended = true
+			case sub.Op != syntax.OpEmptyMatch:
 				return false
 			}
 		}
@@ -412,14 +421,6 @@ func isAnyChar(re *syntax.Regexp) bool {
 		case 4:
 			return r[0] == 0 && r[1] == '\n'-1 && r[2] == '\n'+1 && r[3] >= unicode.MaxRune
 		}
-	}
-	return false
-}
-
-func isEmptyWidth(re *syntax.Regexp) bool {
-	switch re.Op {
-	case syntax.OpEmptyMatch, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText:
-		return true
 	}
 	return false
 }
