@@ -44,6 +44,17 @@ No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deploym
 - Config precedence: env vars > YAML > defaults.
 - Maintain a clean, up-to-date `CHANGELOG.md`: one phrase per entry, at most two or three sentences for complex topics; detail goes in `docs/`.
 
+## Testing
+
+A test exists only if it guards a security invariant, a documented contract, or a fixed regression. Before adding one, name the bug it would catch.
+
+- No tests of getters, defaults, constructors, mocks, or the standard library. No always-skipped tests.
+- Table-driven by default; a near-duplicate test is a new table row.
+- No `time.Sleep`: inject a clock (`config.WithClock`) or use `testing/synctest`.
+- Prove a new test: break the code it guards and confirm it fails, then restore.
+- Untrusted-input parsers and security gates get a `Fuzz*` target with a property (differential oracle or invariant), not just "no panic". Commit fuzz-found inputs under `testdata/fuzz/` as regressions. `make fuzz FUZZTIME=…`.
+- `make test` runs with `-race`.
+
 ## Security
 
 - Never log full tokens/credentials — redact via `internal/utils`.

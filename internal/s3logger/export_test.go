@@ -10,10 +10,6 @@ func (l *S3Logger) SetTimeNow(timeFunc func() time.Time) {
 	l.timeNow = timeFunc
 }
 
-func (l *S3Logger) GetConfig() interface{} {
-	return l.config
-}
-
 func (l *S3Logger) GetS3Config() S3LoggerConfig {
 	return l.s3Config
 }

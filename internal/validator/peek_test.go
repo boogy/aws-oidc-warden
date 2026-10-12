@@ -98,22 +98,28 @@ func TestPeekIssuer(t *testing.T) {
 }
 
 // The peek must classify exactly like the ParseUnverified path it replaced.
-func TestPeekIssuer_ClassifiesLikeParseUnverified(t *testing.T) {
+func FuzzPeekIssuer_AgreesWithParseUnverified(f *testing.F) {
 	hdr := b64(`{"alg":"RS256"}`)
 	for _, tok := range []string{
 		"", "abc", "a.b", "a.b.c.d",
 		hdr + ".!!!!.sig", hdr + "." + b64(`not json`) + ".sig", hdr + "." + b64(`[1]`) + ".sig",
 		hdr + "." + b64(`{"iss":5}`) + ".sig", hdr + "." + b64(`{"sub":"x"}`) + ".sig",
-		hdr + "." + b64(`{"iss":"https://a"}`) + ".sig",
+		hdr + "." + b64(`{"iss":"https://a"}`) + ".sig", benchToken(),
 	} {
-		m := jwt.MapClaims{}
-		_, _, oldErr := jwt.NewParser().ParseUnverified(tok, m)
-		_, newErr := peekIssuer(tok)
-		if oldErr != nil {
-			assert.ErrorIs(t, newErr, jwt.ErrTokenMalformed, "token %q", tok)
-			continue
-		}
-		iss, ierr := m.GetIssuer()
-		assert.Equal(t, ierr != nil || iss == "", errors.Is(newErr, ErrUnknownIssuer), "token %q", tok)
+		f.Add(tok)
 	}
+	f.Fuzz(func(t *testing.T, tok string) {
+		m := jwt.MapClaims{}
+		if _, _, err := jwt.NewParser().ParseUnverified(tok, m); err != nil {
+			return // the verified parse rejects it whatever peekIssuer routes to
+		}
+		gotIss, err := peekIssuer(tok)
+		iss, ierr := m.GetIssuer()
+		if ierr != nil || iss == "" {
+			assert.ErrorIs(t, err, ErrUnknownIssuer, "token %q", tok)
+			return
+		}
+		assert.NoError(t, err, "token %q", tok)
+		assert.Equal(t, iss, gotIss, "token %q", tok)
+	})
 }

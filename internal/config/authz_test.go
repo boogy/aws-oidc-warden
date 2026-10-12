@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"testing"
@@ -65,7 +66,11 @@ func wildcardCfg(subject string) *Config {
 func subjectOracle(m *RoleMapping) *regexp.Regexp {
 	re, ok := oracleCache[m.resolvedSubject]
 	if !ok {
-		re = regexp.MustCompile("^(?:" + m.resolvedSubject + ")$")
+		tree, err := syntax.Parse(m.resolvedSubject, syntax.Perl)
+		if err != nil {
+			panic(err)
+		}
+		re = regexp.MustCompile("^(?:" + tree.String() + ")$")
 		oracleCache[m.resolvedSubject] = re
 	}
 	return re
@@ -96,10 +101,6 @@ func linearAuthorizeRoles(c *Config, issuer, subject string, claims map[string]a
 	}
 	return matched, roles
 }
-
-// linearFindSessionPolicy is the brute-force reference for FindSessionPolicy:
-// same match+conditions+grants-role filter and first-match-wins (lowest
-// m.order) semantics, but via a full scan of c.effective instead of the index.
 
 // linearFindSessionPolicy is the brute-force reference for FindSessionPolicy:
 // same match+conditions+grants-role filter and first-match-wins (lowest

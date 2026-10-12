@@ -45,6 +45,11 @@ func WithFragmentFetcher(fetch FragmentFetchFunc) ProviderOption {
 	return func(p *Provider) { p.fragmentFetch = fetch }
 }
 
+// WithClock replaces the provider's time source.
+func WithClock(now func() time.Time) ProviderOption {
+	return func(p *Provider) { p.now = now }
+}
+
 // Provider serves the active configuration and lazily refreshes it, swapping atomically from a pristine base.
 type Provider struct {
 	current       atomic.Pointer[Config]

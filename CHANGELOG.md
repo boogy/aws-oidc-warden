@@ -69,6 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **A zero-byte config overlay, `mappings_file` or `config_fragments` entry fails the refresh and keeps the last good config** (startup fails at cold start), pinned or not; a comment-only overlay still resets to the base. An unpinned empty read no longer surfaces as S3's `InvalidRange`.
 - **An IdP mint failure's audit `reason` names its cause** (subject invalid, token too large, source identity rejected, keys unavailable, signing failed) instead of a generic "token minting failed".
 - **`HEAD` on an IdP document path never carries a body**, including its 404 and 503 errors.
+- **The wildcard guard no longer rejects patterns that only look universal**, such as `.*^` or `$.*`, which match only the empty string.
 
 ### Removed
 
@@ -97,6 +98,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `GITHUB_ACTIONS.md`: the composite action gains `duration-seconds` and `session-name` inputs.
 - `example-config.yaml` moved to `docs/examples/`; the split-config and cross-account examples are production-shaped.
 - `docs/examples/multi-region/` and `ARCHITECTURE.md` § Multi-region: shared config, per-region resources via `AOW_*` env.
+
+### Tests
+
+- Removed mock-only, getter and always-skipped tests; table-driven the fragment base-only key rejections; merged the provider test files.
+- Stale-config and JWKS warm-up tests use a fake clock (`config.WithClock`) and `testing/synctest` instead of sleeping (~15s faster).
+- `make test` runs with `-race`; new `make fuzz` target.
+- Fuzz targets for `isUniversal` soundness, index vs linear-scan authorization, fragment key allow-listing and issuer peeking.
 
 ## [3.5.2] - 2026-09-26
 

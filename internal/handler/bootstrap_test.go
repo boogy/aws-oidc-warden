@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -216,20 +217,16 @@ func TestWarmJWKSCache_PassesBoundedContext(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(jwksWarmPrefetchTimeout), w.deadline, time.Second)
 }
 
-// TestWarmJWKSCache_HungIssuerDoesNotStallInit is the safety property that makes
-// this change safe to run during INIT: an unreachable issuer must be abandoned
-// at the timeout rather than blocking bootstrap indefinitely.
 func TestWarmJWKSCache_HungIssuerDoesNotStallInit(t *testing.T) {
-	w := &fakeWarmer{block: time.Minute} // issuer that never responds
+	synctest.Test(t, func(t *testing.T) {
+		w := &fakeWarmer{block: time.Minute}
 
-	start := time.Now()
-	warmJWKSCache("self", w)
-	elapsed := time.Since(start)
+		start := time.Now()
+		warmJWKSCache("self", w)
 
-	assert.Less(t, elapsed, jwksWarmPrefetchTimeout+2*time.Second,
-		"a hung issuer must not block INIT past the timeout")
-	assert.ErrorIs(t, w.ctxErr, context.DeadlineExceeded,
-		"prefetch must be cancelled by the deadline, not run to completion")
+		assert.Equal(t, jwksWarmPrefetchTimeout, time.Since(start))
+		assert.ErrorIs(t, w.ctxErr, context.DeadlineExceeded)
+	})
 }
 
 // TestWarmJWKSCache_NilValidatorIsSafe ensures the helper cannot panic during

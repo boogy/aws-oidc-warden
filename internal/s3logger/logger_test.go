@@ -62,26 +62,6 @@ func createTestLogger(t *testing.T, logToS3 bool) (*s3logger.S3Logger, *MockS3Cl
 	return logger, mockClient
 }
 
-func TestNewS3Logger(t *testing.T) {
-	cfg := &gtvcfg.Config{
-		LogToS3:   false,
-		LogBucket: "test-bucket",
-		LogPrefix: "logs/",
-	}
-	logger := s3logger.NewS3Logger(cfg)
-	assert.NotNil(t, logger)
-	assert.Equal(t, cfg, logger.GetConfig())
-	assert.Equal(t, "test-bucket", logger.GetS3Config().Bucket)
-	assert.Equal(t, "logs/", logger.GetS3Config().Prefix)
-	assert.Equal(t, false, cfg.LogToS3)
-
-	cfg.LogToS3 = true
-	logger = s3logger.NewS3Logger(cfg)
-	assert.NotNil(t, logger)
-	assert.Equal(t, cfg, logger.GetConfig())
-	assert.Equal(t, true, cfg.LogToS3)
-}
-
 func TestGenerateS3Key(t *testing.T) {
 	cfg := &gtvcfg.Config{
 		LogToS3:   true,

@@ -29,8 +29,13 @@ func (c *countingExtractor) Extract(ctx context.Context, in validator.Extraction
 	return c.inner.Extract(ctx, in)
 }
 
+type fakeClock struct{ off atomic.Int64 }
+
+func (c *fakeClock) now() time.Time          { return time.Now().Add(time.Duration(c.off.Load())) }
+func (c *fakeClock) advance(d time.Duration) { c.off.Add(int64(d)) }
+
 // staleProvider returns a provider whose mappings came from a fetcher that can be switched to failing.
-func staleProvider(t *testing.T, maxStale *time.Duration) (*config.Provider, *atomic.Bool) {
+func staleProvider(t *testing.T, maxStale *time.Duration) (*config.Provider, *atomic.Bool, *fakeClock) {
 	t.Helper()
 	cfg := idpConfig(t, true, "", func(c *config.Config) {
 		c.RoleMappings = nil
@@ -46,9 +51,10 @@ func staleProvider(t *testing.T, maxStale *time.Duration) (*config.Provider, *at
 		}
 		return []byte(staleMappingsBody), "sha256:fixed", nil
 	}
-	p := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, config.WithFragmentFetcher(fn))
+	clock := &fakeClock{}
+	p := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, config.WithFragmentFetcher(fn), config.WithClock(clock.now))
 	require.NoError(t, p.Refresh(context.Background()))
-	return p, &fail
+	return p, &fail, clock
 }
 
 func staleProcessor(t *testing.T, p *config.Provider, cons *fakeConsumer, ext *countingExtractor) (*handler.RequestProcessor, *fakeAuditSink) {
@@ -62,13 +68,13 @@ func staleProcessor(t *testing.T, p *config.Provider, cons *fakeConsumer, ext *c
 
 func TestConfigStaleDeniesRequest(t *testing.T) {
 	t.Parallel()
-	p, fail := staleProvider(t, new(2*time.Second))
+	p, fail, clock := staleProvider(t, new(2*time.Second))
 	cons := mockConsumer(t)
 	ext := &countingExtractor{inner: idpClaims(nil)}
 	proc, sink := staleProcessor(t, p, cons, ext)
 
 	fail.Store(true)
-	time.Sleep(2100 * time.Millisecond)
+	clock.advance(2100 * time.Millisecond)
 
 	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Token: "t", Role: testRoleARN},
 		validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))
@@ -85,13 +91,13 @@ func TestConfigStaleDeniesRequest(t *testing.T) {
 
 func TestConfigStaleDeniesMint(t *testing.T) {
 	t.Parallel()
-	p, fail := staleProvider(t, new(2*time.Second))
+	p, fail, clock := staleProvider(t, new(2*time.Second))
 	cons := mockConsumer(t)
 	ext := &countingExtractor{inner: idpClaims(nil)}
 	proc, sink := staleProcessor(t, p, cons, ext)
 
 	fail.Store(true)
-	time.Sleep(2100 * time.Millisecond)
+	clock.advance(2100 * time.Millisecond)
 
 	_, err := mint(t, proc, handler.RequestData{}, &bytes.Buffer{})
 
@@ -113,13 +119,13 @@ func (rejectingExtractor) Extract(context.Context, validator.ExtractionInput) (*
 
 func TestConfigStaleNotRevealedToUnauthenticatedCaller(t *testing.T) {
 	t.Parallel()
-	p, fail := staleProvider(t, new(2*time.Second))
+	p, fail, clock := staleProvider(t, new(2*time.Second))
 	cons := mockConsumer(t)
 	ext := &countingExtractor{inner: rejectingExtractor{}}
 	proc, sink := staleProcessor(t, p, cons, ext)
 
 	fail.Store(true)
-	time.Sleep(2100 * time.Millisecond)
+	clock.advance(2100 * time.Millisecond)
 
 	_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Token: "t", Role: testRoleARN},
 		validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))
@@ -140,13 +146,12 @@ func TestConfigStaleNotAppliedToFreshOrDisabled(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p, fail := staleProvider(t, &tt.maxStale)
+			p, fail, _ := staleProvider(t, &tt.maxStale)
 			cons := mockConsumer(t)
 			ext := &countingExtractor{inner: idpClaims(nil)}
 			proc, _ := staleProcessor(t, p, cons, ext)
 
 			fail.Store(tt.failed)
-			time.Sleep(50 * time.Millisecond)
 
 			_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Token: "t", Role: testRoleARN},
 				validator.ExtractionInput{Token: "t"}, "req-1", idpLogger(&bytes.Buffer{}))
@@ -184,14 +189,15 @@ func TestConfigStaleUnchangedRefreshSkipsReExtract(t *testing.T) {
 		}
 		return []byte(staleMappingsBody), "sha256:fixed", nil
 	}
-	p := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, config.WithFragmentFetcher(fn))
+	clock := &fakeClock{}
+	p := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, config.WithFragmentFetcher(fn), config.WithClock(clock.now))
 	require.NoError(t, p.Refresh(context.Background()))
 
 	ext := &failSecondExtractor{countingExtractor{inner: idpClaims(nil)}}
 	proc := handler.NewRequestProcessor(p, mockConsumer(t), ext, &fakeAuditSink{}, "apigatewayv2").
 		WithIdP(idpService(t, p.Get(), &countingSigner{Signer: idptest.NewSigner(t)}, nil))
 
-	time.Sleep(2100 * time.Millisecond)
+	clock.advance(2100 * time.Millisecond)
 	release := make(chan struct{})
 	gate.Store(&release)
 	go p.MaybeRefresh(context.Background())
@@ -225,7 +231,8 @@ func TestConfigStaleReExtractDenyIsPostAuth(t *testing.T) {
 		}
 		return []byte(staleMappingsBody), "sha256:fixed", nil
 	}
-	p := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, config.WithFragmentFetcher(fn))
+	clock := &fakeClock{}
+	p := config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil, config.WithFragmentFetcher(fn), config.WithClock(clock.now))
 	require.NoError(t, p.Refresh(context.Background()))
 
 	cons := mockConsumer(t)
@@ -234,7 +241,7 @@ func TestConfigStaleReExtractDenyIsPostAuth(t *testing.T) {
 	proc := handler.NewRequestProcessor(p, cons, ext, sink, "apigatewayv2").
 		WithIdP(idpService(t, p.Get(), &countingSigner{Signer: idptest.NewSigner(t)}, nil))
 
-	time.Sleep(2100 * time.Millisecond)
+	clock.advance(2100 * time.Millisecond)
 	release := make(chan struct{})
 	gate.Store(&release)
 	go p.MaybeRefresh(context.Background())

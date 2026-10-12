@@ -78,11 +78,6 @@ func TestIDPTokenAllowedFollowsMapping(t *testing.T) {
 	}
 }
 
-func TestIdPBlockRejectedInFragment(t *testing.T) {
-	_, err := parseFragment([]byte("idp:\n  enabled: true\n"), "yaml", "frag")
-	require.ErrorContains(t, err, "not allowed in a config fragment")
-}
-
 func TestMaxSessionDurationValidate(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/R"
 	tests := []struct {

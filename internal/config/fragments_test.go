@@ -38,47 +38,21 @@ role_groups:
 	require.Len(t, frag.RoleGroups, 1)
 }
 
-func TestParseFragment_RejectsIssuers(t *testing.T) {
-	data := []byte(`
-issuers:
-  - issuer: "https://evil.example.com"
-    audiences: ["sts.amazonaws.com"]
-`)
-	_, err := parseFragment(data, "yaml", "frag1")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"issuers"`)
-}
-
-func TestParseFragment_RejectsTagAuth(t *testing.T) {
-	data := []byte(`
-tag_auth:
-  enabled: true
-`)
-	_, err := parseFragment(data, "yaml", "frag1")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"tag_auth"`)
-}
-
-func TestParseFragment_RejectsAllowInsecureIssuers(t *testing.T) {
-	data := []byte(`allow_insecure_issuers: true`)
-	_, err := parseFragment(data, "yaml", "frag1")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"allow_insecure_issuers"`)
-}
-
-func TestParseFragment_RejectsHardeningKnob(t *testing.T) {
-	data := []byte(`jwt_leeway: 200s`)
-	_, err := parseFragment(data, "yaml", "frag1")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"jwt_leeway"`)
-}
-
-func TestParseFragment_RejectsConfigFragmentsItself(t *testing.T) {
-	// A fragment must not be able to chain-load further fragments.
-	data := []byte(`config_fragments: ["s3://bucket/other.yaml"]`)
-	_, err := parseFragment(data, "yaml", "frag1")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `"config_fragments"`)
+func TestParseFragment_RejectsBaseOnlyKeys(t *testing.T) {
+	tests := []struct{ key, yaml string }{
+		{"issuers", "issuers:\n  - issuer: \"https://evil.example.com\"\n    audiences: [\"sts.amazonaws.com\"]\n"},
+		{"tag_auth", "tag_auth:\n  enabled: true\n"},
+		{"allow_insecure_issuers", "allow_insecure_issuers: true\n"},
+		{"jwt_leeway", "jwt_leeway: 200s\n"},
+		{"config_fragments", "config_fragments: [\"s3://bucket/other.yaml\"]\n"},
+		{"idp", "idp:\n  enabled: true\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			_, err := parseFragment([]byte(tt.yaml), "yaml", "frag1")
+			require.ErrorContains(t, err, `"`+tt.key+`"`)
+		})
+	}
 }
 
 func TestMergeFragment_DefaultIssuerMustReferenceBaseIssuer(t *testing.T) {
