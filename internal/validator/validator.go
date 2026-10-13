@@ -224,11 +224,7 @@ func (t *TokenValidator) Validate(ctx context.Context, tokenString string) (*typ
 	return t.validateWith(ctx, t.currentConfig(), tokenString)
 }
 
-// validateWith is Validate against an explicit config generation, so a caller
-// that already captured a *Config for this request has the token decided by
-// that same generation rather than a second, possibly-reloaded provider read.
-// Unexported: an internal seam for SelfExtractor, not a second public entry
-// point, so every existing mock of TokenValidatorInterface stays valid.
+// validateWith is Validate against the config generation the caller pinned.
 func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, tokenString string) (*types.Claims, error) {
 	maxTokenBytes := cfg.MaxTokenBytes
 	if maxTokenBytes <= 0 {
@@ -571,9 +567,7 @@ func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jw
 	}
 }
 
-// GenKeyFunc generates a jwt.Keyfunc using JWKS keys, with no issuer scoping
-// for the key memo. Kept for interface/test call sites that predate
-// multi-issuer key memoization; Validate itself calls genKeyFuncForIssuer.
+// GenKeyFunc returns a jwt.Keyfunc over jwks with an issuer-unscoped key memo.
 func (t *TokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc {
 	return t.genKeyFuncForIssuer("", jwks)
 }

@@ -14,13 +14,8 @@ import (
 	"strings"
 )
 
-// FormatClaimValue renders a verified JWT claim value as the string used in
-// audit records, STS session tags, and condition/tag comparisons. Every finite
-// integral float is rendered in full decimal, at any magnitude: exponent form
-// is a spelling no operator writes a pattern against, and a none_of written in
-// decimal would not match it. Integral floats above 2^53 lose precision at
-// JSON-decode time (float64), so two distinct claim values can render
-// identically; this function can't recover that.
+// FormatClaimValue renders a verified claim value as the string used in audit records,
+// session tags and condition matching; integral floats render in full decimal.
 func FormatClaimValue(raw any) string {
 	if s, ok := raw.(string); ok {
 		return s

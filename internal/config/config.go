@@ -1124,9 +1124,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// effective is rebuilt from scratch every Validate() call so repeated
-	// validation (e.g. a hot-reload clone) is idempotent: role_groups always
-	// re-expand from their source, never from a previously-expanded state.
+	// Rebuilt from scratch so repeated Validate() never re-expands already-expanded role_groups.
 	effectiveHint := 0
 	for i := range c.RoleMappings {
 		effectiveHint += len(c.RoleMappings[i].Subject)
@@ -1217,9 +1215,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
 		}
 
-		// Advisory only, and deliberately after compilation: a claim name the
-		// issuer never mints is a config smell, never an authorization failure.
-		// See condition_warnings.go.
+		// Advisory only: an unknown claim name never fails authorization.
 		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, subject), withSessionTagClaims(knownClaims[m.Issuer], m.SessionTags))
 
 		m.order = len(c.effective)
@@ -1227,12 +1223,7 @@ func (c *Config) Validate() error {
 		return nil
 	}
 
-	// appendEffective fans m.Subject out in declaration order, so first-match-wins
-	// still means first-declared.
-	//
-	// m.Subject must be treated as READ-ONLY: m is by value, so it is a slice
-	// header aliasing the declared config, which a config_fragment shares across
-	// hot-reload snapshots. Never sort or dedup it in place.
+	// m.Subject aliases fragment-shared config: never sort or dedup it in place.
 	appendEffective := func(m RoleMapping, source string, i int) error {
 		if len(m.Subject) == 0 || len(m.Roles) == 0 {
 			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
@@ -1282,11 +1273,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// A mapping with no explicit issuer binds to default_issuer, which is
-	// unambiguous with one issuer but re-homes every such grant if an overlay
-	// later adds a second issuer and default_issuer in the same merge.
-	// Fragments guard against this (mergeFragment); the primary overlay does
-	// not, so just warn.
+	// mergeFragment guards fragments against re-homing implicit grants; the primary overlay only warns.
 	if implicitlyBound > 0 {
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 			"mappings are bound to default_issuer while multiple issuers are configured; "+
