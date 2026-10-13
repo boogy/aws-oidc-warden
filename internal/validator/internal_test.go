@@ -768,6 +768,7 @@ func TestIsBlockedAddr_ReservedRanges(t *testing.T) {
 		{"2001:0:4136:e378::1", true}, {"2001:1::1", false},
 		{"2001:db8::1", true}, {"2001:db8:ffff::1", true}, {"2001:db9::1", false},
 		{"fc00::1", true}, {"fd12:3456::1", true}, {"fe00::1", false},
+		{"fec0::1", true}, {"feff::1", true}, {"::ffff:0:a9fe:a9fe", true}, {"::ffff:0:808:808", true},
 		{"fe80::1", true}, {"ff02::1", true}, {"::", true},
 		{"2606:4700::1111", false},
 		// v4-mapped and v4-compatible carriers of reserved IPv4

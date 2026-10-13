@@ -28,7 +28,9 @@ var blockedPrefixes = mustParsePrefixes(
 	"2001:db8::/32",   // documentation
 	"2002::/16",       // 6to4, carries an IPv4 destination
 	"64:ff9b:1::/48",  // local-use NAT64
+	"::ffff:0:0:0/96", // SIIT IPv4-translated
 	"fc00::/7",        // unique local
+	"fec0::/10",       // deprecated site-local
 )
 
 func mustParsePrefixes(cidrs ...string) []netip.Prefix {
