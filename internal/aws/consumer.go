@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"regexp"
 	"slices"
 	"sync"
 	"time"
@@ -84,39 +83,19 @@ func NewAwsConsumer(cfg *gtvcfg.Config) *AwsConsumer {
 	}
 }
 
-// invalidSessionNameChars matches everything outside the STS RoleSessionName charset.
-var invalidSessionNameChars = regexp.MustCompile(`[^[:word:]+=,.@-]`)
-
-// validSessionName reports whether s is entirely [\w+=,.@-] (ASCII; any UTF-8 byte is invalid).
-func validSessionName(s string) bool {
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; {
-		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
-		case c == '_', c == '+', c == '=', c == ',', c == '.', c == '@', c == '-':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// SessionName substitutes (never deletes) disallowed chars so distinct identities cannot collide.
+// SessionName fits name to the STS RoleSessionName rules the same way the audit record does (utils.FitSTSName).
 func (a *AwsConsumer) SessionName(ctx context.Context, name string) string {
-	if len(name) <= utils.MaxSTSNameLen && validSessionName(name) {
+	if utils.ValidSTSName(name) {
 		return name
 	}
-	original := name
-	name = invalidSessionNameChars.ReplaceAllLiteralString(name, "-")
-
-	if len(name) > utils.MaxSTSNameLen {
-		// Keep the tail: two names sharing a 64-char suffix still collide, so warn.
+	sanitized := utils.SanitizeSTSName(name)
+	if len(sanitized) > utils.MaxSTSNameLen {
 		logevent.Warn(ctx, nil, logevent.STSSessionNameTruncated,
-			"session name exceeds STS's 64-character limit and was truncated; CloudTrail will show the truncated name",
-			slog.String("original", original),
-			slog.Int("originalLength", len(original)))
-		return name[len(name)-utils.MaxSTSNameLen:]
+			"session name exceeds STS's 64-character limit and was truncated with a hash suffix",
+			slog.String("original", name),
+			slog.Int("originalLength", len(name)))
 	}
-	return name
+	return utils.FitSanitizedSTSName(sanitized)
 }
 
 // spokeCredsFor returns cached spoke-role credentials for account; (nil, nil) for the hub or with cross-account off.

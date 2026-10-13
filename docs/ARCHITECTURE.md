@@ -254,7 +254,7 @@ type TokenValidatorInterface interface {
 }
 ```
 
-The interface is deliberately scoped to `Validate` alone. `FetchJWKS` and `GenKeyFunc` remain exported methods on the concrete `*TokenValidator` (used by tests and the cold-start JWKS warm prefetch), but they are an unscoped, audience-less path and neither is a standalone token-validation entry point. `Validate` is the only supported way to authenticate a token.
+The interface is deliberately scoped to `Validate` alone; it is the only exported way to authenticate a token.
 
 **Validation Process (multi-issuer, `self` mode):**
 

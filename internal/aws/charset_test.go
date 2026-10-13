@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
-	refTagCharset   = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]*$`)
-	refSessionChars = regexp.MustCompile(`^[[:word:]+=,.@-]*$`)
+	refTagCharset = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+@-]*$`)
 )
 
 // charsetInputs covers every rune through U+024F plus edge strings, invalid UTF-8 and trailing newlines.
@@ -35,27 +35,18 @@ func TestValidSessionTagString_MatchesRegex(t *testing.T) {
 	}
 }
 
-func TestValidSessionName_MatchesRegex(t *testing.T) {
-	for _, s := range charsetInputs() {
-		assert.Equal(t, refSessionChars.MatchString(s), validSessionName(s), "input %q", s)
-	}
-}
-
-func TestSessionName_FastPathEquivalentToSlowPath(t *testing.T) {
-	slow := func(name string) string {
-		name = invalidSessionNameChars.ReplaceAllLiteralString(name, "-")
-		if len(name) > 64 {
-			return name[len(name)-64:]
-		}
-		return name
-	}
+func TestSessionName_MatchesAuditFit(t *testing.T) {
 	a := &AwsConsumer{}
 	inputs := append(charsetInputs(),
 		strings.Repeat("a", 64), strings.Repeat("a", 65), strings.Repeat("é", 33), "ok-name_1.2@x=y,z+w",
 		strings.Repeat("a", 63)+"/", strings.Repeat("a", 64)+"/",
 	)
 	for _, s := range inputs {
-		assert.Equal(t, slow(s), a.SessionName(context.Background(), s), "input %q", s)
+		want := s
+		if !utils.ValidSTSName(s) {
+			want = utils.FitSTSName(s)
+		}
+		assert.Equal(t, want, a.SessionName(context.Background(), s), "input %q", s)
 	}
 }
 

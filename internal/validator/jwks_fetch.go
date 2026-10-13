@@ -25,11 +25,6 @@ func issuerAttrs(issuer string, extra ...slog.Attr) []slog.Attr {
 	return append(attrs, extra...)
 }
 
-// FetchJWKS fetches the JWKS for issuer via the cache; test-only entry (no jwks_uri override).
-func (t *TokenValidator) FetchJWKS(ctx context.Context, issuer string) (*types.JWKS, error) {
-	return t.fetchJWKS(ctx, &issuerSpec{Issuer: issuer}, false)
-}
-
 // jwksCacheKey keys the cache, singleflight and bookkeeping by issuer plus any jwks_uri override.
 func jwksCacheKey(spec *issuerSpec) string {
 	if spec.cacheKey != "" {

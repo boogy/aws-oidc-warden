@@ -52,7 +52,6 @@ var (
 )
 
 // TokenValidatorInterface validates an OIDC token end to end and normalizes it to a canonical subject + raw claims.
-// Scoped to Validate only: FetchJWKS and GenKeyFunc are audience-less and not a validation entry point.
 type TokenValidatorInterface interface {
 	Validate(ctx context.Context, tokenString string) (*types.Claims, error)
 }
@@ -565,11 +564,6 @@ func (t *TokenValidator) genKeyFuncForIssuer(issuer string, jwks *types.JWKS) jw
 		}
 		return nil, ErrKeyNotFound
 	}
-}
-
-// GenKeyFunc returns a jwt.Keyfunc over jwks with an issuer-unscoped key memo.
-func (t *TokenValidator) GenKeyFunc(jwks *types.JWKS) jwt.Keyfunc {
-	return t.genKeyFuncForIssuer("", jwks)
 }
 
 // ecCurveForAlg maps an ECDSA JWS alg to the only curve RFC 7518 allows for it.

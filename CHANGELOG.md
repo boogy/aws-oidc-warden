@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **AssumeRole session-name fallback cleaning matches the audit record**: disallowed characters become `=` instead of `-`, and names over 64 chars get a hash suffix instead of keeping the last 64. Only reachable for a name that skipped boot/request validation.
 - **Failed config refreshes back off exponentially** (up to 8x the interval), and requests no longer wait on an in-flight refresh unless mappings are past `mappings_max_stale` (max 5s). Stale mappings retry every 10s.
 - **`/verify` accepts `durationSeconds` (900–3600) and `sessionName`**, like `aws-actions/configure-aws-credentials`.
 - **The `s3_config_bucket` overlay uses a conditional GET** when `s3_config_bucket_owner` is set.

@@ -10,7 +10,7 @@ type TokenValidatorInterface interface {
 }
 ```
 
-Deliberately scoped to `Validate` only. `FetchJWKS`/`GenKeyFunc` remain exported on the concrete `*TokenValidator` (used by tests only; `WarmPrefetch` and `Validate` go through the unexported `fetchJWKS` with the issuer's registered spec) but are not part of the interface — they're an unscoped, audience-less path, not a standalone validation entry point.
+Deliberately scoped to `Validate` only. The unscoped, audience-less `FetchJWKS`/`GenKeyFunc` exist only in `export_test.go` for the external test package; production goes through the unexported `fetchJWKS`/`genKeyFuncForIssuer` with the issuer's registered spec.
 
 `NewTokenValidator(provider *config.Provider, jwksCache cache.Cache) *TokenValidator` builds the shared `http.Client` and the initial issuer registry once, at construction — call it once during bootstrap, never per request.
 
@@ -29,7 +29,7 @@ Each configured `config.IssuerConfig` is projected into an immutable `issuerSpec
 6. `required_claims` present and non-empty on the verified raw claims.
 7. `normalizeClaims` — see below.
 
-The hardening steps — key-pinning refinement (`kid` + `alg` + `use=sig` + key-type↔alg-family + EC curve↔alg), `sub`/`nbf` enforcement, the optional lifetime/age caps, and per-`(issuer, kid)` refetch rate limiting — are not entries of their own in the list above. They layer onto the baseline the per-call parser and `GenKeyFunc` already provide, inside steps 3-7.
+The hardening steps — key-pinning refinement (`kid` + `alg` + `use=sig` + key-type↔alg-family + EC curve↔alg), `sub`/`nbf` enforcement, the optional lifetime/age caps, and per-`(issuer, kid)` refetch rate limiting — are not entries of their own in the list above. They layer onto the baseline the per-call parser and `genKeyFuncForIssuer` already provide, inside steps 3-7.
 
 ## `normalizeClaims` and the `providerAdapter` seam
 
