@@ -100,26 +100,26 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
 		default:
-			raw, ok := claims[strings.TrimPrefix(key, "claim:")]
-			if !ok || isEmptyClaim(raw) {
+			cv, ok := claims[strings.TrimPrefix(key, "claim:")]
+			if !ok || isEmptyClaim(cv) {
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
-			if v = utils.FormatClaimValue(raw); v == "" {
+			if v = utils.FormatClaimValue(cv); v == "" {
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
 		}
 		s := utils.SanitizeSTSName(v)
-		altered = altered || s != v
+		altered = altered || s != v || t.blursBoundary(v, i)
 		raw = append(raw, v)
 		b.WriteString(s)
 	}
 	b.WriteString(t.lits[len(t.keys)])
 
 	out := b.String()
-	if len(out) < 2 {
-		return "", false, ErrIdPSourceIdentityInvalid
-	}
 	if !altered && len(out) <= utils.MaxSTSNameLen {
+		if len(out) < 2 {
+			return "", false, ErrIdPSourceIdentityInvalid
+		}
 		return out, false, nil
 	}
 	tail := sourceIdentityTail(raw)
@@ -130,6 +130,15 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 		return "", false, ErrIdPSourceIdentityInvalid
 	}
 	return out[:utils.MaxSTSNameLen-len(tail)] + tail, true, nil
+}
+
+// blursBoundary reports whether a non-final value could hide its end: no next literal, or one containing its first byte.
+func (t *sourceIdentityTemplate) blursBoundary(v string, i int) bool {
+	if i == len(t.keys)-1 {
+		return false
+	}
+	next := t.lits[i+1]
+	return next == "" || strings.IndexByte(v, next[0]) >= 0
 }
 
 // sourceIdentityTail is "+" and 11 base64url chars of SHA-256 over the length-prefixed raw values.

@@ -116,6 +116,7 @@ func TestRenderSourceIdentity(t *testing.T) {
 		{"over 64 truncate", "{claim:repository}", config.IdPOverflowTruncate, gh, "s", map[string]any{"repository": long}, strings.Repeat("r", 52) + tail(long), true, nil},
 		{"over 64 reject", "{claim:repository}", config.IdPOverflowReject, gh, "s", map[string]any{"repository": long}, "", false, ErrIdPSourceIdentityInvalid},
 		{"under 2", "{claim:repository}", "", gh, "s", map[string]any{"repository": "a"}, "", false, ErrIdPSourceIdentityInvalid},
+		{"under 2 altered gets hash", "{subject}", "", gh, "/", nil, "=" + tail("/"), false, nil},
 		{"missing claim", "{claim:repository}", "", gh, "s", map[string]any{}, "", false, ErrIdPSourceIdentityInvalid},
 		{"null claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": nil}, "", false, ErrIdPSourceIdentityInvalid},
 		{"empty claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": ""}, "", false, ErrIdPSourceIdentityInvalid},
@@ -158,6 +159,20 @@ func TestRenderSourceIdentity(t *testing.T) {
 	})
 	t.Run("trailing slash ignored", func(t *testing.T) {
 		require.Equal(t, render("{issuer}", "https://a.example/", "x"), render("{issuer}", "https://a.example", "x"))
+	})
+	claimPair := func(tmpl, a, b string) string {
+		got, _, err := parseSourceIdentity(tmpl, "").render("r", gh, "s", map[string]any{"a": a, "b": b})
+		require.NoError(t, err)
+		return got
+	}
+	t.Run("separator inside value differs", func(t *testing.T) {
+		require.NotEqual(t, claimPair("{claim:a}:{claim:b}", "x=y", "z"), claimPair("{claim:a}:{claim:b}", "x", "y=z"))
+	})
+	t.Run("adjacent placeholders differ", func(t *testing.T) {
+		require.NotEqual(t, claimPair("{claim:a}{claim:b}", "x", "yz"), claimPair("{claim:a}{claim:b}", "xy", "z"))
+	})
+	t.Run("value without separator byte keeps no hash", func(t *testing.T) {
+		require.Equal(t, "xg=yh", claimPair("{claim:a}:{claim:b}", "xg", "yh"))
 	})
 	t.Run("a/b vs a=b differ", func(t *testing.T) {
 		require.NotEqual(t, render("{subject}", gh, "a/b"), render("{subject}", gh, "a=b"))
