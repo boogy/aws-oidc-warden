@@ -34,8 +34,12 @@ type vFake struct {
 	getRoleAsUsed bool
 }
 
-func (f *vFake) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
+func (f *vFake) GetS3Object(context.Context, string, string, int) (io.ReadCloser, error) {
 	return nil, errors.New("nope")
+}
+
+func (f *vFake) GetS3ObjectIfChanged(context.Context, string, string, string, string, int) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
 }
 func (f *vFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
 	f.lastAssume = in
@@ -45,6 +49,9 @@ func (f *vFake) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.Ass
 		SecretAccessKey: aws.String("secret"),
 		SessionToken:    aws.String("token"),
 	}}, nil
+}
+func (f *vFake) AssumeRoleWithWebIdentity(context.Context, *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	return &sts.AssumeRoleWithWebIdentityOutput{}, nil
 }
 func (f *vFake) GetRole(context.Context, *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
 	return &iam.GetRoleOutput{Role: &iamtypes.Role{Tags: f.roleTags}}, nil
@@ -57,7 +64,6 @@ func (f *vFake) GetCallerAccount(context.Context) (string, error) { return hubAc
 func (f *vFake) GetCallerIdentityInfo(context.Context) (string, bool, error) {
 	return hubAcct, f.isRoleSession, nil
 }
-func (f *vFake) RefreshClients() {}
 
 func vconsumer(t *testing.T, cfg *gtvcfg.Config) (*AwsConsumer, *vFake) {
 	t.Helper()
@@ -80,7 +86,7 @@ func TestCrossAccountDisabledFailsClosed(t *testing.T) {
 	if ok, err := c.IsTargetAccountAllowed(context.Background(), memberRole); err != nil || ok {
 		t.Errorf("GUARD BYPASS: member account allowed with cross-account disabled (ok=%v err=%v)", ok, err)
 	}
-	if _, err := c.AssumeRole(context.Background(), memberRole, "aow", nil, nil, nil, nil); err == nil {
+	if _, err := c.AssumeRole(context.Background(), memberRole, "aow", nil, nil, nil); err == nil {
 		t.Error("FAIL-OPEN: assumed a member-account role with cross-account disabled")
 	}
 	if f.assumeCalls != 0 {
@@ -100,7 +106,7 @@ func TestCrossAccountAllowListEnforced(t *testing.T) {
 	if ok, _ := c.IsTargetAccountAllowed(context.Background(), notAllowed); ok {
 		t.Error("ALLOW-LIST BYPASS: account outside allowed_accounts permitted")
 	}
-	if _, err := c.AssumeRole(context.Background(), notAllowed, "aow", nil, nil, nil, nil); err == nil {
+	if _, err := c.AssumeRole(context.Background(), notAllowed, "aow", nil, nil, nil); err == nil {
 		t.Error("FAIL-OPEN: assumed a role outside allowed_accounts")
 	}
 	if f.assumeCalls != 0 {
@@ -110,7 +116,7 @@ func TestCrossAccountAllowListEnforced(t *testing.T) {
 	if ok, _ := c.IsTargetAccountAllowed(context.Background(), allowed); !ok {
 		t.Error("allow-listed account should be permitted")
 	}
-	if _, err := c.AssumeRole(context.Background(), allowed, "aow", nil, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), allowed, "aow", nil, nil, nil); err != nil {
 		t.Errorf("allow-listed assume failed: %v", err)
 	}
 }
@@ -129,7 +135,7 @@ func TestMalformedARNFailsClosed(t *testing.T) {
 		if ok, err := c.IsTargetAccountAllowed(context.Background(), bad); ok && err == nil {
 			t.Errorf("GUARD BYPASS: malformed ARN %q passed the account check", bad)
 		}
-		if _, err := c.AssumeRole(context.Background(), bad, "aow", nil, nil, nil, nil); err == nil {
+		if _, err := c.AssumeRole(context.Background(), bad, "aow", nil, nil, nil); err == nil {
 			t.Errorf("FAIL-OPEN: assumed malformed ARN %q", bad)
 		}
 	}
@@ -156,7 +162,7 @@ func TestSessionPolicyReachesSTSVerbatim(t *testing.T) {
 	policy := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]}`
 	role := "arn:aws:iam::" + hubAcct + ":role/Target"
 
-	if _, err := c.AssumeRole(context.Background(), role, "aow", &policy, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", &policy, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if f.lastAssume.Policy == nil || *f.lastAssume.Policy != policy {
@@ -164,14 +170,14 @@ func TestSessionPolicyReachesSTSVerbatim(t *testing.T) {
 	}
 
 	// A nil policy must not become an empty string (STS would reject empty).
-	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if f.lastAssume.Policy != nil {
 		t.Errorf("nil policy became %q", *f.lastAssume.Policy)
 	}
 	empty := ""
-	if _, err := c.AssumeRole(context.Background(), role, "aow", &empty, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", &empty, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if f.lastAssume.Policy != nil {
@@ -191,7 +197,7 @@ func TestSessionTagsOnlyFromIssuerSpec(t *testing.T) {
 	}}
 	spec := map[string]string{"repo": "repository"}
 
-	if _, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, claims, spec); err != nil {
+	if _, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, BuildSessionTags(context.Background(), claims.Raw, spec)); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.lastAssume.Tags) != 1 {
@@ -200,7 +206,7 @@ func TestSessionTagsOnlyFromIssuerSpec(t *testing.T) {
 	if *f.lastAssume.Tags[0].Key != "repo" || *f.lastAssume.Tags[0].Value != "myorg/repo" {
 		t.Fatalf("wrong tag: %s=%s", *f.lastAssume.Tags[0].Key, *f.lastAssume.Tags[0].Value)
 	}
-	if _, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, claims, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/T", "aow", nil, nil, BuildSessionTags(context.Background(), claims.Raw, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.lastAssume.Tags) != 0 {
@@ -260,7 +266,7 @@ func TestTransitiveTagsOptIn(t *testing.T) {
 	role := "arn:aws:iam::" + hubAcct + ":role/T"
 
 	c, f := vconsumer(t, vbaseCfg())
-	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, nil, claims, spec); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, nil, BuildSessionTags(context.Background(), claims.Raw, spec)); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.lastAssume.TransitiveTagKeys) != 0 {
@@ -270,7 +276,7 @@ func TestTransitiveTagsOptIn(t *testing.T) {
 	cfg := vbaseCfg()
 	cfg.SessionTagsTransitive = true
 	c2, f2 := vconsumer(t, cfg)
-	if _, err := c2.AssumeRole(context.Background(), role, "aow", nil, nil, claims, spec); err != nil {
+	if _, err := c2.AssumeRole(context.Background(), role, "aow", nil, nil, BuildSessionTags(context.Background(), claims.Raw, spec)); err != nil {
 		t.Fatal(err)
 	}
 	if len(f2.lastAssume.TransitiveTagKeys) != 1 || f2.lastAssume.TransitiveTagKeys[0] != "repo" {
@@ -285,7 +291,7 @@ func TestDurationClampedForRoleSession(t *testing.T) {
 	f.isRoleSession = true // always true on Lambda
 	role := "arn:aws:iam::" + hubAcct + ":role/T"
 	twelveH := int32(43200)
-	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, &twelveH, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, &twelveH, nil); err != nil {
 		t.Fatal(err)
 	}
 	if *f.lastAssume.DurationSeconds != 3600 {
@@ -293,7 +299,7 @@ func TestDurationClampedForRoleSession(t *testing.T) {
 	}
 	// Below the STS minimum is raised to 900, never sent as-is.
 	tiny := int32(60)
-	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, &tiny, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "aow", nil, &tiny, nil); err != nil {
 		t.Fatal(err)
 	}
 	if *f.lastAssume.DurationSeconds != 900 {
@@ -304,14 +310,14 @@ func TestDurationClampedForRoleSession(t *testing.T) {
 func TestSessionNameSanitized(t *testing.T) {
 	c, f := vconsumer(t, vbaseCfg())
 	role := "arn:aws:iam::" + hubAcct + ":role/T"
-	if _, err := c.AssumeRole(context.Background(), role, "bad name/with*chars", nil, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, "bad name/with*chars", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := *f.lastAssume.RoleSessionName
 	if strings.ContainsAny(got, " /*") {
 		t.Errorf("session name not sanitized: %q", got)
 	}
-	if _, err := c.AssumeRole(context.Background(), role, strings.Repeat("x", 200), nil, nil, nil, nil); err != nil {
+	if _, err := c.AssumeRole(context.Background(), role, strings.Repeat("x", 200), nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(*f.lastAssume.RoleSessionName) > 64 {

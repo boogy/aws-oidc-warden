@@ -30,6 +30,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,7 +43,6 @@ import (
 	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
-	awsiam "github.com/aws/aws-sdk-go-v2/service/iam"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/cache"
 	"github.com/boogy/aws-oidc-warden/internal/config"
@@ -102,11 +102,10 @@ func driftOIDCServer(t *testing.T, jwks *types.JWKS) *httptest.Server {
 	return srv
 }
 
-// --- fake AWS consumer: records every AssumeRole call's (role, audience) pair. ---
+// --- fake AWS consumer: records every AssumeRole call's role. ---
 
 type driftCall struct {
 	role string
-	aud  string
 }
 
 type driftConsumer struct {
@@ -117,8 +116,9 @@ type driftConsumer struct {
 func (c *driftConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
 	return nil, fmt.Errorf("unused")
 }
-func (c *driftConsumer) GetRole(context.Context, string) (*awsiam.GetRoleOutput, error) {
-	return nil, nil
+
+func (c *driftConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
 }
 func (c *driftConsumer) GetRoleTags(context.Context, string) (map[string]string, error) {
 	return nil, nil
@@ -126,13 +126,13 @@ func (c *driftConsumer) GetRoleTags(context.Context, string) (map[string]string,
 func (c *driftConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
 	return true, nil
 }
-func (c *driftConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, claims *types.Claims, _ map[string]string) (*ststypes.Credentials, error) {
-	aud := ""
-	if len(claims.Audience) > 0 {
-		aud = claims.Audience[0]
-	}
+func (c *driftConsumer) AssumeRoleWithWebIdentity(context.Context, string, string, string, *string, int32) (*ststypes.Credentials, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (c *driftConsumer) AssumeRole(_ context.Context, roleARN, _ string, _ *string, _ *int32, _ []ststypes.Tag) (*ststypes.Credentials, error) {
 	c.mu.Lock()
-	c.calls = append(c.calls, driftCall{role: roleARN, aud: aud})
+	c.calls = append(c.calls, driftCall{role: roleARN})
 	c.mu.Unlock()
 	return &ststypes.Credentials{
 		AccessKeyId: awssdk.String("AKIA"), SecretAccessKey: awssdk.String("s"),
@@ -182,10 +182,10 @@ func driftGenA(issuer string) *config.Config {
 // driftGenBJSON is the reload payload: audience rotated to aud-v2 AND the
 // role mapping retired (empty role_mappings), in the same push.
 func driftGenBJSON(issuer string) []byte {
-	return []byte(fmt.Sprintf(`{
+	return fmt.Appendf(nil, `{
 		"issuers": [{"issuer": %q, "provider": "github", "audiences": ["aud-v2"], "required_claims": ["repository"]}],
 		"role_mappings": []
-	}`, issuer))
+	}`, issuer)
 }
 
 // driftGenAJSON is the same shape as driftGenA, as an overlay payload — used
@@ -195,10 +195,10 @@ func driftGenBJSON(issuer string) []byte {
 // handful of chances to land in the window; continuous oscillation gives it
 // thousands).
 func driftGenAJSON(issuer string) []byte {
-	return []byte(fmt.Sprintf(`{
+	return fmt.Appendf(nil, `{
 		"issuers": [{"issuer": %q, "provider": "github", "audiences": ["aud-v1"], "required_claims": ["repository"]}],
 		"role_mappings": [{"subject": "owner/repo", "roles": [%q]}]
-	}`, issuer, driftAllowedRole))
+	}`, issuer, driftAllowedRole)
 }
 
 // runDrift wires the real pipeline and hammers it concurrently with a hot
@@ -267,17 +267,12 @@ func runDrift(t *testing.T, refreshInterval time.Duration) []driftCall {
 	return append([]driftCall(nil), consumer.calls...)
 }
 
-// TestProcessRequestNeverAuthorizesAcrossGenerations is the full-pipeline
-// drift guard. With the fix in place, every successful AssumeRole call must
-// be self-consistent: a call authorized for driftAllowedRole must never
-// carry aud-v2 (the audience only generation B accepts, which is also the
-// generation with the role retired).
 func TestProcessRequestNeverAuthorizesAcrossGenerations(t *testing.T) {
 	calls := runDrift(t, time.Nanosecond)
 
 	var illegal []driftCall
 	for _, c := range calls {
-		if c.role == driftAllowedRole && c.aud == "aud-v2" {
+		if c.role == driftAllowedRole {
 			illegal = append(illegal, c)
 		}
 	}

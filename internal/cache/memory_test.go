@@ -1,8 +1,11 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -143,4 +146,53 @@ func TestMemoryCacheConcurrentAccess(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func BenchmarkMemoryCacheGet_Hit(b *testing.B) {
+	c := NewMemoryCache()
+	ctx := context.Background()
+	c.Set(ctx, "issuer", &types.JWKS{Keys: []types.JSONWebKey{{KeyID: "k"}}}, time.Hour)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, ok := c.Get(ctx, "issuer"); !ok {
+			b.Fatal("miss")
+		}
+	}
+}
+
+func TestMemoryCacheDebugEventsOnlyWhenDebugEnabled(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	tests := []struct {
+		name  string
+		level slog.Level
+		want  bool
+	}{
+		{"debug enabled", slog.LevelDebug, true},
+		{"debug disabled", slog.LevelInfo, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: tt.level})))
+
+			c := NewMemoryCache()
+			ctx := context.Background()
+			c.Get(ctx, "k")
+			c.Set(ctx, "k", testJWKS("kid"), time.Minute)
+			if _, ok := c.Get(ctx, "k"); !ok {
+				t.Fatal("expected hit")
+			}
+
+			out := buf.String()
+			for _, ev := range []string{"cache.miss", "cache.set", "cache.hit"} {
+				if got := strings.Contains(out, ev); got != tt.want {
+					t.Errorf("event %s logged=%v, want %v\n%s", ev, got, tt.want, out)
+				}
+			}
+		})
+	}
 }

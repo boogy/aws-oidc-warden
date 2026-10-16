@@ -2,13 +2,17 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"time"
+
+	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 const (
 	DefaultTimeout = 10 * time.Second
-	MaxTokenLength = 16384 // 16KB
-	MaxRoleLength  = 2048  // 2KB
+	MaxTokenLength = config.MaxTokenBytesCeiling
+	MaxRoleLength  = 2048 // 2KB
 )
 
 // contextKey avoids string collisions among context values.
@@ -18,7 +22,6 @@ const (
 	RequestIDContextKey         contextKey = "requestId"
 	StartTimeContextKey         contextKey = "startTime"
 	SourceIPContextKey          contextKey = "sourceIp"
-	UserAgentContextKey         contextKey = "userAgent"
 	FrontendRequestIDContextKey contextKey = "frontendRequestId"
 	// SourceIPSourceContextKey carries the provenance of SourceIPContextKey:
 	// "frontend" (attested by AWS) or "x-forwarded-for" (client-supplied).
@@ -39,6 +42,21 @@ var (
 	ErrAssumeRoleFailed      = errors.New("failed to assume the requested role")
 	ErrAssumeRoleDenied      = errors.New("aws denied the assume-role request for the requested role")
 	ErrAuditWriteFailed      = errors.New("audit record could not be durably written")
+	ErrConfigStale           = errors.New("configuration is stale")
+
+	ErrIdPNotPermitted          = errors.New("IdP token not permitted for this role")
+	ErrIdPUnavailable           = errors.New("IdP token signing temporarily unavailable")
+	ErrMethodNotAllowed         = errors.New("method not allowed")
+	ErrIdPPathNotFound          = errors.New("IdP path not found")
+	ErrIdPTokenTooLarge         = errors.New("IdP token exceeds the STS size limit")
+	ErrInvalidDuration          = fmt.Errorf("durationSeconds must be between %d and %d", utils.MinSTSSessionSecs, utils.MaxSTSSessionSecs)
+	ErrDurationExceedsCap       = errors.New("durationSeconds exceeds the configured cap")
+	ErrDurationExceedsRoleMax   = errors.New("durationSeconds exceeds the role's MaxSessionDuration")
+	ErrInvalidSessionName       = errors.New("sessionName must match " + utils.STSNameRule)
+	ErrIdPSourceIdentityInvalid = errors.New("source identity could not be derived for this request")
+	ErrIdPSubjectInvalid        = errors.New("IdP subject could not be derived for this request")
+	ErrIdPExchangeDenied        = errors.New("aws refused the web identity exchange")
+	ErrIdPExchangeUnavailable   = errors.New("aws could not reach the idp")
 )
 
 var (
@@ -59,8 +77,10 @@ var (
 
 // RequestData is the request format expected by the Lambda.
 type RequestData struct {
-	Token string `json:"token"`
-	Role  string `json:"role"`
+	Token           string `json:"token"`
+	Role            string `json:"role"`
+	DurationSeconds int32  `json:"durationSeconds,omitempty"`
+	SessionName     string `json:"sessionName,omitempty"`
 }
 
 // Response represents a standardized API response

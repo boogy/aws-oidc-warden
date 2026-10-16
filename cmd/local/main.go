@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -26,10 +27,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// Settings for the local server
+// ServerSettings holds the local server CLI flags.
 type ServerSettings struct {
+	Host            string
 	Port            int
 	ConfigPath      string
+	MappingsPath    string
 	LogLevel        string
 	SimulateLatency time.Duration
 }
@@ -39,11 +42,11 @@ func main() {
 	settings, cliErr := parseCliFlags()
 	logger := setupLogging(settings.LogLevel)
 	if cliErr != nil {
-		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to set CONFIG_PATH environment variable",
-			slog.String("component", "config"), slog.String("error", cliErr.Error()))
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "invalid command-line flags",
+			slog.String("component", "flags"), slog.String("error", cliErr.Error()))
+		os.Exit(1)
 	}
 
-	// Log version information
 	versionInfo := version.Get()
 	logevent.Info(ctx, logger, logevent.AppStart, "starting AWS OIDC Warden local server",
 		slog.String("version", versionInfo.Version),
@@ -51,7 +54,6 @@ func main() {
 		slog.String("date", versionInfo.Date),
 	)
 
-	// Load configuration
 	cfg, err := config.NewConfig()
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to load config",
@@ -59,7 +61,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize the cache
 	jwksCache, err := cache.NewCache(cfg)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to initialize cache",
@@ -67,123 +68,120 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Config provider shared by the validator and the handler so both read the
-	// same snapshot. Without config_fragments it is static (no reload). With
-	// fragments, a static provider would silently ignore them (fragments only
-	// merge on a provider Refresh), so build a reloadable provider with no
-	// primary fetch: fragments merge once here, and — like the Lambda
-	// bootstrap — are re-resolved per config_reload_interval when it's > 0.
-	var provider *config.Provider
-	if len(cfg.ConfigFragments) > 0 {
-		provider = config.NewProvider(cfg, cfg.ConfigReloadInterval, "", nil)
-		if err := provider.Refresh(ctx); err != nil {
-			logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to merge config fragments",
-				slog.String("component", "remote_config"), slog.String("error", err.Error()))
-			os.Exit(1)
-		}
-	} else {
-		provider = config.NewStaticProvider(cfg)
-	}
+	awsClient := aws.NewAwsConsumer(cfg)
 
-	// Initialize the token validator and wrap it in a SelfExtractor so the local
-	// server always validates JWT signatures itself (no delegated mode).
+	// Shared by the validator and the handler so both read the same snapshot.
+	provider, err := handler.BuildConfigProvider(cfg, awsClient)
+	if err != nil {
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "failed to load configuration",
+			slog.String("component", "remote_config"), slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	awsClient.SetConfigSource(provider.Get)
+
+	// The local server always validates JWT signatures itself (no delegated mode).
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 	extractor := validator.NewSelfExtractor(tokenValidator)
 
-	// Initialize the AWS client
-	awsClient := aws.NewAwsConsumer(cfg)
+	svc := handler.NewIdPService(provider, handler.DefaultIdPKMS, logger)
 
-	// Create the handler function. No audit sink for the local dev server.
-	handlerFunc := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).Handler
+	// No audit sink for the local dev server.
+	h := handler.NewAwsApiGateway(provider, awsClient, extractor, nil).WithIdP(svc)
 
-	// Set up HTTP server
-	http.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
-		requestID := uuid.New().String()
-		sourceIP := remoteIP(r.RemoteAddr)
-		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: requestID, SourceIP: sourceIP})
+	var idpPaths []string
+	if svc != nil {
+		p := svc.Config().Paths
+		idpPaths = []string{p.Discovery, p.JWKS}
+	}
 
-		// Simulate network latency if configured
-		if settings.SimulateLatency > 0 {
-			time.Sleep(settings.SimulateLatency)
-		}
+	addr := net.JoinHostPort(settings.Host, strconv.Itoa(settings.Port))
+	server := newServer(addr, newMux(logger, settings.SimulateLatency, h.Handler, idpPaths...), settings.SimulateLatency)
 
-		// Only accept POST requests
-		if r.Method != http.MethodPost {
-			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
-				slog.String("reason", "method not allowed"), slog.String("method", r.Method))
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server error",
+			slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	logevent.Info(ctx, logger, logevent.HTTPServerStart, "starting local development server",
+		slog.String("host", settings.Host),
+		slog.Int("port", settings.Port),
+		slog.String("verifyEndpoint", "http://"+addr+"/verify"),
+		slog.String("healthEndpoint", "http://"+addr+"/health"))
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	if err := serve(ctx, logger, server, ln, stop, shutdownTimeout); err != nil {
+		logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server error",
+			slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	logevent.Info(ctx, logger, logevent.AppStop, "server stopped")
+}
+
+const (
+	readTimeout     = 30 * time.Second
+	shutdownTimeout = 5 * time.Second
+)
+
+// newServer sizes WriteTimeout to cover the body read, the simulated latency and the handler's own deadline.
+func newServer(addr string, h http.Handler, latency time.Duration) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      readTimeout + latency + handler.DefaultTimeout + 5*time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
+	}
+}
+
+// serve runs server on ln until stop fires, then returns only after Shutdown has finished draining.
+func serve(ctx context.Context, logger *slog.Logger, server *http.Server, ln net.Listener, stop <-chan os.Signal, timeout time.Duration) error {
+	quit := make(chan struct{})
+	defer close(quit)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		select {
+		case <-stop:
+		case <-quit:
 			return
 		}
-
-		// Read the request body
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
-				slog.String("reason", "body read failed"), slog.String("error", err.Error()))
-			http.Error(w, "Error reading request body", http.StatusBadRequest)
-			return
-		}
-		defer func() {
-			if err := r.Body.Close(); err != nil {
-				logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error closing request body",
-					slog.String("error", err.Error()))
-			}
-		}()
-
-		// Create an API Gateway proxy request event
-		apiGatewayEvent := events.APIGatewayProxyRequest{
-			Body:                  string(body),
-			Path:                  "/verify",
-			HTTPMethod:            r.Method,
-			Headers:               make(map[string]string),
-			QueryStringParameters: make(map[string]string),
-			PathParameters:        make(map[string]string),
-			RequestContext: events.APIGatewayProxyRequestContext{
-				RequestID: requestID,
-				Identity:  events.APIGatewayRequestIdentity{SourceIP: sourceIP},
-			},
-		}
-
-		// Copy headers
-		for k, v := range r.Header {
-			if len(v) > 0 {
-				apiGatewayEvent.Headers[k] = v[0]
-			}
-		}
-
-		// Copy query parameters
-		for k, v := range r.URL.Query() {
-			if len(v) > 0 {
-				apiGatewayEvent.QueryStringParameters[k] = v[0]
-			}
-		}
-
-		// Call the Lambda handler function
-		response, err := handlerFunc(reqCtx, apiGatewayEvent)
-		if err != nil {
-			logevent.Error(reqCtx, logger, logevent.HTTPResponseFailure, "handler error",
-				slog.String("error", err.Error()))
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		// Set response headers
-		for k, v := range response.Headers {
-			w.Header().Set(k, v)
-		}
-
-		// Set status code
-		w.WriteHeader(response.StatusCode)
-
-		// Write response body
-		if _, err := w.Write([]byte(response.Body)); err != nil {
-			logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error writing response",
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server shutdown error",
 				slog.String("error", err.Error()))
 		}
+	}()
+
+	if err := server.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	<-drained
+	return nil
+}
+
+// newMux serves /verify, the exact IdP document paths and /health; every other path is 404.
+func newMux(logger *slog.Logger, latency time.Duration, handlerFunc func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error), idpPaths ...string) *http.ServeMux {
+	allowed := map[string]bool{"/verify": true}
+	for _, p := range idpPaths {
+		allowed[p] = true
+	}
+	serve := localHandler(logger, latency, handlerFunc)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !allowed[r.URL.Path] {
+			http.NotFound(w, r)
+			return
+		}
+		serve(w, r)
 	})
-
-	// Add a health check endpoint
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: uuid.New().String(), SourceIP: remoteIP(r.RemoteAddr)})
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -192,41 +190,83 @@ func main() {
 				slog.String("error", err.Error()))
 		}
 	})
+	return mux
+}
 
-	// Start the server
-	addr := fmt.Sprintf(":%d", settings.Port)
-	server := &http.Server{
-		Addr:    addr,
-		Handler: nil, // Use the default mux
-	}
+// maxLocalBodyBytes sits one byte above the handler's cap so an over-cap body still reaches its size check.
+const maxLocalBodyBytes = handler.MaxBodyBytes + 1
 
-	// Handle graceful shutdown
-	go func() {
-		stop := make(chan os.Signal, 1)
-		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-		<-stop
+// localHandler adapts the Lambda handler to net/http.
+func localHandler(logger *slog.Logger, latency time.Duration, handlerFunc func(context.Context, events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		requestID := uuid.New().String()
+		sourceIP := remoteIP(r.RemoteAddr)
+		reqCtx := logevent.WithRequest(r.Context(), logevent.Request{ID: requestID, SourceIP: sourceIP})
 
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		if latency > 0 {
+			time.Sleep(latency)
+		}
 
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server shutdown error",
+		if r.URL.Path == "/verify" && r.Method != http.MethodPost {
+			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
+				slog.String("reason", "method not allowed"), slog.String("method", r.Method))
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLocalBodyBytes))
+		var tooLarge *http.MaxBytesError
+		if err != nil && !errors.As(err, &tooLarge) {
+			logevent.Warn(reqCtx, logger, logevent.RequestRejected, "request rejected",
+				slog.String("reason", "body read failed"), slog.String("error", err.Error()))
+			http.Error(w, "Error reading request body", http.StatusBadRequest)
+			return
+		}
+
+		response, err := handlerFunc(reqCtx, buildEvent(r, body, requestID, sourceIP))
+		if err != nil {
+			logevent.Error(reqCtx, logger, logevent.HTTPResponseFailure, "handler error",
+				slog.String("error", err.Error()))
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		for k, v := range response.Headers {
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(response.StatusCode)
+		if _, err := w.Write([]byte(response.Body)); err != nil {
+			logevent.Warn(reqCtx, logger, logevent.HTTPWriteFailure, "error writing response",
 				slog.String("error", err.Error()))
 		}
-	}()
-
-	logevent.Info(ctx, logger, logevent.HTTPServerStart, "starting local development server",
-		slog.Int("port", settings.Port),
-		slog.String("verifyEndpoint", fmt.Sprintf("http://localhost:%d/verify", settings.Port)),
-		slog.String("healthEndpoint", fmt.Sprintf("http://localhost:%d/health", settings.Port)))
-
-	if err := server.ListenAndServe(); err != http.ErrServerClosed {
-		logevent.Error(ctx, logger, logevent.HTTPServerFailure, "server error",
-			slog.String("error", err.Error()))
-		os.Exit(1)
 	}
+}
 
-	logevent.Info(ctx, logger, logevent.AppStop, "server stopped")
+// buildEvent maps an HTTP request to an API Gateway proxy event.
+func buildEvent(r *http.Request, body []byte, requestID, sourceIP string) events.APIGatewayProxyRequest {
+	ev := events.APIGatewayProxyRequest{
+		Body:                  string(body),
+		Path:                  r.URL.Path,
+		HTTPMethod:            r.Method,
+		Headers:               make(map[string]string),
+		QueryStringParameters: make(map[string]string),
+		PathParameters:        make(map[string]string),
+		RequestContext: events.APIGatewayProxyRequestContext{
+			RequestID: requestID,
+			Identity:  events.APIGatewayRequestIdentity{SourceIP: sourceIP},
+		},
+	}
+	for k, v := range r.Header {
+		if len(v) > 0 {
+			ev.Headers[k] = v[0]
+		}
+	}
+	for k, v := range r.URL.Query() {
+		if len(v) > 0 {
+			ev.QueryStringParameters[k] = v[0]
+		}
+	}
+	return ev
 }
 
 // remoteIP strips the port from RemoteAddr, returning it unchanged if it has none.
@@ -242,15 +282,24 @@ func remoteIP(remoteAddr string) string {
 func parseCliFlags() (ServerSettings, error) {
 	settings := ServerSettings{}
 
+	flag.StringVar(&settings.Host, "host", "127.0.0.1", "Address to listen on (use 0.0.0.0 inside a container)")
 	flag.IntVar(&settings.Port, "port", 8080, "Port to listen on")
-	flag.StringVar(&settings.ConfigPath, "config", "", "Path to config file")
+	flag.StringVar(&settings.ConfigPath, "config", "", "Path to config file or directory")
+	flag.StringVar(&settings.MappingsPath, "mappings", "", "Path or s3:// URI of the role-mappings file")
 	flag.StringVar(&settings.LogLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	flag.DurationVar(&settings.SimulateLatency, "latency", 0, "Simulate network latency (e.g., 100ms)")
 
 	flag.Parse()
 
-	if settings.ConfigPath != "" {
-		if err := os.Setenv("CONFIG_PATH", settings.ConfigPath); err != nil {
+	if _, err := utils.ParseLogLevel(settings.LogLevel); err != nil {
+		return settings, err
+	}
+	if err := config.UseConfigFile(settings.ConfigPath); err != nil {
+		return settings, err
+	}
+
+	if settings.MappingsPath != "" {
+		if err := os.Setenv("AOW_MAPPINGS_FILE", settings.MappingsPath); err != nil {
 			return settings, err
 		}
 	}
@@ -262,7 +311,7 @@ func parseCliFlags() (ServerSettings, error) {
 func setupLogging(level string) *slog.Logger {
 	logLevel, err := utils.ParseLogLevel(level)
 	if err != nil {
-		logLevel = slog.LevelInfo
+		logLevel = slog.LevelInfo // parseCliFlags rejects it; info still logs that error
 	}
 	return logevent.Setup(os.Stdout, logLevel, "local")
 }

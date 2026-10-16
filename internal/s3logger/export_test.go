@@ -4,18 +4,10 @@ import (
 	"time"
 )
 
-// These functions are exported for testing purposes only
-
-func (l *S3Logger) SetS3Client(client s3ClientInterface) {
-	l.s3Client = client
-}
+// Exported for the external s3logger_test package only.
 
 func (l *S3Logger) SetTimeNow(timeFunc func() time.Time) {
 	l.timeNow = timeFunc
-}
-
-func (l *S3Logger) GetConfig() interface{} {
-	return l.config
 }
 
 func (l *S3Logger) GetS3Config() S3LoggerConfig {
@@ -82,6 +74,6 @@ func WithExtraTag(key, value string) func(*S3Logger) *S3Logger {
 	}
 }
 
-func TestCompressGzip(data []byte) ([]byte, error) {
+func CompressGzip(data []byte) ([]byte, error) {
 	return compressGzip(data)
 }

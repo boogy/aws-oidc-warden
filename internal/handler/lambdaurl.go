@@ -6,9 +6,9 @@ import (
 	"net/http"
 
 	"github.com/aws/aws-lambda-go/events"
-	"github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
@@ -42,6 +42,11 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 		slog.String("domainName", event.RequestContext.DomainName),
 	)
 
+	kind := h.processor.route(ctx, event.RequestContext.HTTP.Method, event.RawPath)
+	if resp, ok := serveIdP(ctx, h.processor, kind, event.RequestContext.HTTP.Method, event.RawPath, log, h.newResponseWithHeaders); ok {
+		return resp, nil
+	}
+
 	requestData, err := h.unmarshalRequestData(event)
 	if err != nil {
 		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
@@ -64,7 +69,6 @@ func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.La
 		event.RequestContext.RequestID,
 		event.RequestContext.HTTP.SourceIP,
 		event.Headers,
-		event.RequestContext.HTTP.UserAgent,
 	)
 }
 
@@ -82,12 +86,25 @@ func (h *AwsLambdaUrl) newResponse(statusCode int, body string) events.LambdaFun
 	}
 }
 
+// newResponseWithHeaders is newResponse with extra headers overlaid on ResponseHeaders.
+func (h *AwsLambdaUrl) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.LambdaFunctionURLResponse {
+	resp := h.newResponse(statusCode, body)
+	resp.Headers = mergeHeaders(extra)
+	return resp
+}
+
+// WithIdP enables the IdP routes and returns the handler.
+func (h *AwsLambdaUrl) WithIdP(s *idp.Service) *AwsLambdaUrl {
+	h.processor.WithIdP(s)
+	return h
+}
+
 // respondError formats a response with an error message
 func (h *AwsLambdaUrl) respondError(ctx context.Context, err error, statusCode int) (events.LambdaFunctionURLResponse, error) {
 	return errorResponse(ctx, err, statusCode, h.newResponse), nil
 }
 
 // respondJSON formats a successful response with credentials
-func (h *AwsLambdaUrl) respondJSON(ctx context.Context, credentials *types.Credentials) (events.LambdaFunctionURLResponse, error) {
+func (h *AwsLambdaUrl) respondJSON(ctx context.Context, credentials *IssuedCredentials) (events.LambdaFunctionURLResponse, error) {
 	return successResponse(ctx, credentials, h.newResponse), nil
 }

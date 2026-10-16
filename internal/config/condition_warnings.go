@@ -87,6 +87,9 @@ func withSessionTagClaims(known map[string]bool, tags map[string]string) map[str
 // warnConditionKeys walks a whole condition tree warning once per unknown
 // claim name. where identifies the mapping, path the node within it.
 func warnConditionKeys(cond *Condition, path, where string, known map[string]bool) {
+	if known == nil {
+		return
+	}
 	warnConditionKeysAt(cond, path, where, known, false)
 }
 
@@ -97,10 +100,8 @@ func warnConditionKeysAt(cond *Condition, path, where string, known map[string]b
 		return
 	}
 
-	if known != nil {
-		warnUnknownClaims(cond.Claims, path, where, known, underNoneOf)
-		warnUnknownClaims(cond.ExplicitClaims, path+".claims", where, known, underNoneOf)
-	}
+	warnUnknownClaims(cond.Claims, path, where, known, underNoneOf)
+	warnUnknownClaims(cond.ExplicitClaims, path+".claims", where, known, underNoneOf)
 
 	warnConditionGroup(cond.AllOf, path, "all_of", where, known, underNoneOf)
 	warnConditionGroup(cond.AnyOf, path, "any_of", where, known, underNoneOf)
