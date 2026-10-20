@@ -166,18 +166,15 @@ func isEmptyClaim(raw any) bool {
 	return false
 }
 
-// exchangeErrorCode is the STS error code, or a static label for a non-API failure.
-func exchangeErrorCode(err error) string {
-	if code := aws.STSErrorCode(err); code != "" {
-		return code
-	}
+// exchangeFailureKind labels a non-API failure without its text, which may echo the token.
+func exchangeFailureKind(err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
 	}
-	return "transport"
+	return "other"
 }
 
 // exchangeError maps an AssumeRoleWithWebIdentity failure to its handler sentinel.

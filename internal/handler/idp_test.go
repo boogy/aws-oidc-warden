@@ -464,15 +464,17 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		wiErr error
 		creds *ststypes.Credentials
 		want  error
+		cause string
 	}{
-		{"denied", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDenied, errBoom), nil, handler.ErrIdPExchangeDenied},
-		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, errBoom), nil, handler.ErrIdPExchangeUnavailable},
-		{"role_max", roleMax, nil, handler.ErrDurationExceedsRoleMax},
-		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, errBoom), nil, handler.ErrIdPTokenTooLarge},
-		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed},
-		{"other", &smithy.GenericAPIError{Code: "Throttling", Message: "slow"}, nil, handler.ErrAssumeRoleFailed},
-		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed},
-		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed},
+		{"denied", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDenied, errBoom), nil, handler.ErrIdPExchangeDenied, `"stsErrorCode":"","failureKind":"other"`},
+		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, errBoom), nil, handler.ErrIdPExchangeUnavailable, `"stsErrorCode":"","failureKind":"other"`},
+		{"role_max", roleMax, nil, handler.ErrDurationExceedsRoleMax, `"stsErrorCode":"","failureKind":"other"`},
+		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, errBoom), nil, handler.ErrIdPTokenTooLarge, `"stsErrorCode":"","failureKind":"other"`},
+		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, ""},
+		{"api_code", &smithy.GenericAPIError{Code: "Throttling", Message: "slow"}, nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"Throttling"}`},
+		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"timeout"`},
+		{"canceled", fmt.Errorf("sts: %w", context.Canceled), nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"canceled"`},
+		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -495,8 +497,8 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 				assert.Equal(t, "idp_exchange", rec["stage"])
 				assert.Equal(t, "web identity exchange failed", rec["reason"])
 			}
-			if errors.Is(tt.wiErr, context.DeadlineExceeded) {
-				assert.Contains(t, buf.String(), `"stsErrorCode":"timeout"`)
+			if tt.cause != "" {
+				assert.Contains(t, buf.String(), tt.cause)
 			}
 		})
 	}

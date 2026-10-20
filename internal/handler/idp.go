@@ -150,11 +150,15 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		return refuse("account_check", reasonAccountNotAllowed, "Target account not allowed", ErrAccountNotAllowed)
 	}
 	if err != nil {
-		code := exchangeErrorCode(err)
-		rec.setErrorReason("idp_exchange", errors.New("sts error: "+code))
-		logevent.Warn(ctx, log, logevent.IdPExchangeFailure, "web identity exchange failed",
-			slog.String("roleArn", role), slog.String("stsErrorCode", code))
-		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: sts error %s", exchangeError(err), code), rec.reasonAttr(cfg.LogClaimValues))
+		code := aws.STSErrorCode(err)
+		cause := cmp.Or(code, exchangeFailureKind(err))
+		rec.setErrorReason("idp_exchange", errors.New("sts error: "+cause))
+		attrs := []slog.Attr{slog.String("roleArn", role), slog.String("stsErrorCode", code)}
+		if code == "" {
+			attrs = append(attrs, slog.String("failureKind", cause))
+		}
+		logevent.Warn(ctx, log, logevent.IdPExchangeFailure, "web identity exchange failed", attrs...)
+		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: sts error %s", exchangeError(err), cause), rec.reasonAttr(cfg.LogClaimValues))
 	}
 	if creds == nil || creds.AccessKeyId == nil || *creds.AccessKeyId == "" {
 		rec.Stage, rec.Reason = "idp_exchange", "no credentials returned"
