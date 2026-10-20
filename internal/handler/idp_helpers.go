@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -163,6 +164,20 @@ func isEmptyClaim(raw any) bool {
 		return len(c) == 0
 	}
 	return false
+}
+
+// exchangeErrorCode is the STS error code, or a static label for a non-API failure.
+func exchangeErrorCode(err error) string {
+	if code := aws.STSErrorCode(err); code != "" {
+		return code
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	}
+	return "transport"
 }
 
 // exchangeError maps an AssumeRoleWithWebIdentity failure to its handler sentinel.

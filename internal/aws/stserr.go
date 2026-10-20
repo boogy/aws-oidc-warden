@@ -38,7 +38,7 @@ func classifyAssumeRoleError(err error) error {
 var ErrAccountNotAllowed = errors.New("target account is not allowed by cross_account")
 
 var (
-	// ErrWebIdentityDenied marks an AssumeRoleWithWebIdentity refusal: access denied, invalid token or rejected claim.
+	// ErrWebIdentityDenied marks an AssumeRoleWithWebIdentity refusal: access denied, rejected claim, or an invalid token other than a key-fetch failure.
 	ErrWebIdentityDenied = errors.New("sts:AssumeRoleWithWebIdentity denied by AWS")
 	// ErrWebIdentityUnavailable marks a retryable failure: STS could not fetch the IdP keys or the token expired in flight.
 	ErrWebIdentityUnavailable = errors.New("sts:AssumeRoleWithWebIdentity could not reach the IdP")

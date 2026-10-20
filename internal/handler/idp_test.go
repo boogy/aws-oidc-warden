@@ -471,6 +471,7 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, errBoom), nil, handler.ErrIdPTokenTooLarge},
 		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed},
 		{"other", &smithy.GenericAPIError{Code: "Throttling", Message: "slow"}, nil, handler.ErrAssumeRoleFailed},
+		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed},
 		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed},
 	}
 	for _, tt := range tests {
@@ -493,6 +494,9 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 			case tt.wiErr != nil:
 				assert.Equal(t, "idp_exchange", rec["stage"])
 				assert.Equal(t, "web identity exchange failed", rec["reason"])
+			}
+			if errors.Is(tt.wiErr, context.DeadlineExceeded) {
+				assert.Contains(t, buf.String(), `"stsErrorCode":"timeout"`)
 			}
 		})
 	}

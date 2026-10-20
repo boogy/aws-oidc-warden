@@ -150,7 +150,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		return refuse("account_check", reasonAccountNotAllowed, "Target account not allowed", ErrAccountNotAllowed)
 	}
 	if err != nil {
-		code := aws.STSErrorCode(err)
+		code := exchangeErrorCode(err)
 		rec.setErrorReason("idp_exchange", errors.New("sts error: "+code))
 		logevent.Warn(ctx, log, logevent.IdPExchangeFailure, "web identity exchange failed",
 			slog.String("roleArn", role), slog.String("stsErrorCode", code))
