@@ -659,8 +659,8 @@ func vRunLogged(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.
 	return err
 }
 
-// requestGroups returns the "request" group of every JSON log record in buf.
-func requestGroups(t *testing.T, buf *bytes.Buffer) []map[string]any {
+// logRecords decodes every JSON log record in buf.
+func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var out []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
@@ -669,6 +669,16 @@ func requestGroups(t *testing.T, buf *bytes.Buffer) []map[string]any {
 		}
 		var rec map[string]any
 		require.NoError(t, json.Unmarshal([]byte(line), &rec), "log line is not JSON: %s", line)
+		out = append(out, rec)
+	}
+	return out
+}
+
+// requestGroups returns the "request" group of every JSON log record in buf.
+func requestGroups(t *testing.T, buf *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, rec := range logRecords(t, buf) {
 		if g, ok := rec["request"].(map[string]any); ok {
 			out = append(out, g)
 		}

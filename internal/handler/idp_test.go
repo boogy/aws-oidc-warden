@@ -523,9 +523,7 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 // logEvent returns the first JSON log line in buf with the given eventType.
 func logEvent(t *testing.T, buf *bytes.Buffer, eventType string) map[string]any {
 	t.Helper()
-	for line := range strings.Lines(buf.String()) {
-		var m map[string]any
-		require.NoError(t, json.Unmarshal([]byte(line), &m), line)
+	for _, m := range logRecords(t, buf) {
 		if m["eventType"] == eventType {
 			return m
 		}
