@@ -294,6 +294,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		cfg.ConfigReloadInterval = time.Duration(p.interval.Load())
 	}
 
+	prevIdP := p.current.Load().IdP
 	p.current.Store(cfg)
 	p.fragments = nextFragments
 	p.overlaySum, p.built = sum, true
@@ -307,6 +308,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	logevent.Info(ctx, nil, logevent.ConfigReloadSuccess, "configuration reloaded",
 		slog.Int("roleMappings", len(cfg.effective)),
 		slog.Int("fragments", len(cfg.fragmentSources())))
+	if prevIdP != nil && cfg.IdP != nil && prevIdP.Enabled != cfg.IdP.Enabled {
+		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", cfg.IdP.Enabled))
+	}
 	return nil
 }
 

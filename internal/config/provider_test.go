@@ -1328,3 +1328,34 @@ func TestProviderRefresh_UnchangedRaceSafe(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
+	tests := []struct {
+		name          string
+		base, overlay bool
+		wantLog       bool
+	}{
+		{"disable", true, false, true},
+		{"enable", false, true, true},
+		{"unchanged", true, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := baseConfig(t)
+			base.IdP = validIdP()
+			base.IdP.Enabled = tt.base
+			require.NoError(t, base.Validate())
+			body := fmt.Appendf(nil, "idp:\n  enabled: %t\n", tt.overlay)
+			p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+
+			out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
+			require.Equal(t, tt.overlay, p.Get().IdP.Enabled)
+			if !tt.wantLog {
+				assert.NotContains(t, out, "config.idp.enabled_changed")
+				return
+			}
+			assert.Contains(t, out, "config.idp.enabled_changed")
+			assert.Contains(t, out, fmt.Sprintf(`"enabled":%t`, tt.overlay))
+		})
+	}
+}
