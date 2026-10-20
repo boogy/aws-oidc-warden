@@ -373,6 +373,19 @@ func TestGetRoleTags_CrossAccount_UsesSpokeCreds(t *testing.T) {
 	m.AssertExpectations(t)
 }
 
+func TestGetRoleTags_CrossAccount_IncompleteSpokeCredsFail(t *testing.T) {
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
+	m.On("AssumeRole", mock.Anything, mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
+	}}, nil).Once()
+
+	c := newTagAuthConsumer(m)
+	_, err := c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
+	require.ErrorContains(t, err, "incomplete credentials")
+	m.AssertNotCalled(t, "GetRoleAs", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // ---------- role name length ----------
 
 // IAM's 64-char cap applies to the role NAME (after the last '/'), not the whole path.

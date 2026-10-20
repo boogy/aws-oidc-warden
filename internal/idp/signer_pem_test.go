@@ -77,6 +77,7 @@ func TestPEMSigner(t *testing.T) {
 			s, err := NewPEMSigner(path(t), tt.alg)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
+				require.NotContains(t, err.Error(), "idp key file: idp key file")
 				return
 			}
 			require.NoError(t, err)

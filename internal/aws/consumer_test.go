@@ -155,17 +155,19 @@ func TestAwsConsumer_AssumeRole(t *testing.T) {
 	assert.Nil(t, creds)
 	assert.Contains(t, err.Error(), "access denied")
 
-	// Test case: No credentials returned
-	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
-		return *input.RoleArn == "arn:aws:iam::123456789012:role/empty-creds"
-	})).Return(&sts.AssumeRoleOutput{
-		Credentials: nil,
-	}, nil).Once()
+	for name, cr := range map[string]*ststypes.Credentials{
+		"nil":              nil,
+		"no_session_token": {AccessKeyId: aws.String("ASIA"), SecretAccessKey: aws.String("s")},
+	} {
+		role := "arn:aws:iam::123456789012:role/creds-" + name
+		mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
+			return *input.RoleArn == role
+		})).Return(&sts.AssumeRoleOutput{Credentials: cr}, nil).Once()
 
-	creds, err = consumer.AssumeRole(context.Background(), "arn:aws:iam::123456789012:role/empty-creds", testSessionName, nil, &testDuration, nil)
-	assert.Error(t, err)
-	assert.Nil(t, creds)
-	assert.Contains(t, err.Error(), "no credentials returned")
+		creds, err = consumer.AssumeRole(context.Background(), role, testSessionName, nil, &testDuration, nil)
+		assert.Nil(t, creds, name)
+		assert.ErrorContains(t, err, "incomplete credentials", name)
+	}
 
 	// Verify all expectations were met
 	mockAWS.AssertExpectations(t)

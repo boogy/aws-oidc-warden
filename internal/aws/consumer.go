@@ -172,8 +172,8 @@ func (a *AwsConsumer) assumeSpoke(ctx context.Context, cfg *gtvcfg.Config, accou
 	if err != nil {
 		return nil, fmt.Errorf("assume spoke role %s: %w", spokeArn, err)
 	}
-	if out.Credentials == nil {
-		return nil, fmt.Errorf("spoke role %s returned no credentials", spokeArn)
+	if !CredentialsComplete(out.Credentials) {
+		return nil, fmt.Errorf("spoke role %s returned incomplete credentials", spokeArn)
 	}
 	cr := out.Credentials
 	static := credentials.NewStaticCredentialsProvider(*cr.AccessKeyId, *cr.SecretAccessKey, *cr.SessionToken)
@@ -230,7 +230,7 @@ func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, se
 		return nil, classifyWebIdentityError(err)
 	}
 	if !CredentialsComplete(out.Credentials) {
-		return nil, ErrWebIdentityIncompleteCredentials
+		return nil, fmt.Errorf("%w: %s", ErrWebIdentityIncompleteCredentials, roleARN)
 	}
 	return out.Credentials, nil
 }
@@ -318,8 +318,8 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 		return nil, fmt.Errorf("unable to perform sts.AssumeRole: %w", classifyAssumeRoleError(err))
 	}
 
-	if result.Credentials == nil {
-		return nil, errors.New("no credentials returned from assumed role")
+	if !CredentialsComplete(result.Credentials) {
+		return nil, errors.New("sts.AssumeRole returned incomplete credentials")
 	}
 
 	return result.Credentials, nil
