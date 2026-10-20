@@ -230,7 +230,7 @@ func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, se
 		return nil, classifyWebIdentityError(err)
 	}
 	if out.Credentials == nil {
-		return nil, errors.New("sts.AssumeRoleWithWebIdentity returned no credentials")
+		return nil, ErrWebIdentityNoCredentials
 	}
 	return out.Credentials, nil
 }

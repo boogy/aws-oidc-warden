@@ -37,7 +37,7 @@ func NewPEMSigner(path, alg string) (Signer, error) {
 	if err := checkKeyFileMode(path, st.Mode()); err != nil {
 		return nil, err
 	}
-	raw, err := utils.ReadAllCapped(f, maxKeyFileBytes, "idp key file")
+	raw, err := utils.ReadAllCapped(f, maxKeyFileBytes, path)
 	if err != nil {
 		return nil, fmt.Errorf("idp key file: %w", err)
 	}

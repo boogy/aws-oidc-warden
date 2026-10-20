@@ -220,7 +220,7 @@ func TestAssumeRoleWithWebIdentityNilCredentials(t *testing.T) {
 	w := webIdentityWrapper(t, xmlHandler(webIdentityNoCreds))
 	c := &AwsConsumer{AWS: w}
 	_, err := c.AssumeRoleWithWebIdentity(context.Background(), testRoleARN, "s", "t", nil, 3600)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrWebIdentityNoCredentials)
 }
 
 func TestProductionSTSClientIsUnsigned(t *testing.T) {
