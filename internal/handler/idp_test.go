@@ -487,6 +487,7 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		{"canceled", fmt.Errorf("sts: %w", context.Canceled), nil, handler.ErrAssumeRoleFailed, "", "canceled"},
 		{"transport_timeout", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
 		{"wrapped_transport_timeout", sendErr(fmt.Errorf("read: %w", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded})), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"wrapped_dns_timeout", sendErr(fmt.Errorf("lookup: %w", &net.DNSError{Err: "i/o timeout", Name: "sts.amazonaws.com", IsTimeout: true})), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
 		{"network", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "sts.amazonaws.com"}}), nil, handler.ErrAssumeRoleFailed, "", "network"},
 		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, "", ""},
 		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, "", ""},

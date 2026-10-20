@@ -7,8 +7,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
-	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -171,16 +171,29 @@ func isEmptyClaim(raw any) bool {
 // exchangeFailureKind labels a non-API failure without its text, which may echo the token.
 func exchangeFailureKind(err error) string {
 	var ne net.Error
-	isNet := errors.As(err, &ne)
 	switch {
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded), isNet && ne.Timeout():
+	case isTimeout(err):
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
-	case isNet:
+	case errors.As(err, &ne):
 		return "network"
 	}
 	return "other"
+}
+
+// isTimeout reports whether any error in err's tree reports Timeout.
+func isTimeout(err error) bool {
+	if t, ok := err.(interface{ Timeout() bool }); ok && t.Timeout() {
+		return true
+	}
+	switch u := err.(type) {
+	case interface{ Unwrap() error }:
+		return isTimeout(u.Unwrap())
+	case interface{ Unwrap() []error }:
+		return slices.ContainsFunc(u.Unwrap(), isTimeout)
+	}
+	return false
 }
 
 // exchangeError maps an AssumeRoleWithWebIdentity failure to its handler sentinel.
