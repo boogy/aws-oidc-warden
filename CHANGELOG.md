@@ -48,6 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **STS responses missing the access key, secret or session token are rejected** on every AssumeRole path; a partial spoke response previously crashed the request.
 - **SSRF guard blocks Teredo (`2001::/32`), 6to4 (`2002::/16`) and local-use NAT64 (`64:ff9b:1::/48`)**, IPv6 forms that can carry an internal IPv4 destination.
 - **SSRF guard blocks SIIT-translated (`::ffff:0:0:0/96`) and deprecated site-local (`fec0::/10`) IPv6.**
 - **`idp.paths` rejects a JWKS/discovery path that shadows `/verify`** in any case or under an API Gateway v1 stage prefix (`/prod/verify`), which previously passed validation but broke credential issuance.
