@@ -38,10 +38,14 @@ func classifyAssumeRoleError(err error) error {
 var ErrAccountNotAllowed = errors.New("target account is not allowed by cross_account")
 
 var (
-	ErrWebIdentityDenied                 = errors.New("sts:AssumeRoleWithWebIdentity denied by AWS")
-	ErrWebIdentityUnavailable            = errors.New("sts:AssumeRoleWithWebIdentity could not reach the IdP")
+	// ErrWebIdentityDenied marks an AssumeRoleWithWebIdentity refusal: access denied, invalid token or rejected claim.
+	ErrWebIdentityDenied = errors.New("sts:AssumeRoleWithWebIdentity denied by AWS")
+	// ErrWebIdentityUnavailable marks a retryable failure: STS could not fetch the IdP keys or the token expired in flight.
+	ErrWebIdentityUnavailable = errors.New("sts:AssumeRoleWithWebIdentity could not reach the IdP")
+	// ErrWebIdentityDurationExceedsRoleMax marks a DurationSeconds above the target role's MaxSessionDuration.
 	ErrWebIdentityDurationExceedsRoleMax = errors.New("sts:AssumeRoleWithWebIdentity duration exceeds role MaxSessionDuration")
-	ErrWebIdentityPackedPolicyTooLarge   = errors.New("sts:AssumeRoleWithWebIdentity packed policy too large")
+	// ErrWebIdentityPackedPolicyTooLarge marks a session policy plus tags over the STS packed size limit.
+	ErrWebIdentityPackedPolicyTooLarge = errors.New("sts:AssumeRoleWithWebIdentity packed policy too large")
 )
 
 const (
