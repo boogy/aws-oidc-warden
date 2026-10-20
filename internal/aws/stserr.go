@@ -41,7 +41,7 @@ var (
 	// ErrWebIdentityDenied marks an AssumeRoleWithWebIdentity refusal that a retry will not fix.
 	ErrWebIdentityDenied = errors.New("sts:AssumeRoleWithWebIdentity denied by AWS")
 	// ErrWebIdentityUnavailable marks a retryable AssumeRoleWithWebIdentity failure.
-	ErrWebIdentityUnavailable = errors.New("sts:AssumeRoleWithWebIdentity could not reach the IdP or the token expired")
+	ErrWebIdentityUnavailable = errors.New("sts:AssumeRoleWithWebIdentity could not reach the IdP or the minted token expired")
 	// ErrWebIdentityDurationExceedsRoleMax marks a DurationSeconds above the target role's MaxSessionDuration.
 	ErrWebIdentityDurationExceedsRoleMax = errors.New("sts:AssumeRoleWithWebIdentity duration exceeds role MaxSessionDuration")
 	// ErrWebIdentityPackedPolicyTooLarge marks a session policy plus tags over the STS packed size limit.

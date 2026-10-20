@@ -98,7 +98,7 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		*statusCode = http.StatusForbidden
 	case errors.Is(err, ErrIdPExchangeUnavailable):
 		errCode = "idp_exchange_unavailable"
-		errMsg = "AWS could not reach the IdP or the token expired; retry"
+		errMsg = "AWS could not reach the IdP or the minted token expired; retry"
 		*statusCode = http.StatusServiceUnavailable
 	}
 	return

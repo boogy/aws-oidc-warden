@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -478,6 +479,7 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
 		{"canceled", fmt.Errorf("sts: %w", context.Canceled), nil, handler.ErrAssumeRoleFailed, "", "canceled"},
 		{"transport_timeout", fmt.Errorf("dial: %w", os.ErrDeadlineExceeded), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"network", &net.DNSError{Err: "no such host", Name: "sts.amazonaws.com"}, nil, handler.ErrAssumeRoleFailed, "", "network"},
 		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, "", ""},
 		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, "", ""},
 	}

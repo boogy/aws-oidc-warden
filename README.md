@@ -242,7 +242,7 @@ The failure modes that actually bite, in rough order of likelihood:
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                                |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                                                                    |
 | `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                                                                |
-| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the token expired                                                                    |
+| `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the minted token expired                                                             |
 | Cache misses / throttling         | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                  |
 | Cross-account failures            | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts`   |
 

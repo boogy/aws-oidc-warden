@@ -175,6 +175,8 @@ func exchangeFailureKind(err error) string {
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "canceled"
+	case ne != nil:
+		return "network"
 	}
 	return "other"
 }

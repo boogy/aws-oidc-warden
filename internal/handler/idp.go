@@ -160,7 +160,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		}
 		rec.Stage, rec.Reason = "idp_exchange", reason
 		logevent.Warn(ctx, log, logevent.IdPExchangeFailure, "web identity exchange failed", attrs...)
-		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: %s", exchangeError(err), reason), rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: %s", exchangeError(err), reason), slog.String("error", reason))
 	}
 	if creds == nil || creds.AccessKeyId == nil || *creds.AccessKeyId == "" {
 		rec.Stage, rec.Reason = "idp_exchange", "no credentials returned"
