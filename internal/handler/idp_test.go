@@ -466,46 +466,68 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		wiErr error
 		creds *ststypes.Credentials
 		want  error
-		cause string
+		code  string
+		kind  string
 	}{
-		{"denied", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDenied, stsAPIErr("AccessDenied")), nil, handler.ErrIdPExchangeDenied, `"stsErrorCode":"AccessDenied"}`},
-		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, stsAPIErr("IDPCommunicationError")), nil, handler.ErrIdPExchangeUnavailable, `"stsErrorCode":"IDPCommunicationError"}`},
-		{"role_max", roleMax, nil, handler.ErrDurationExceedsRoleMax, `"stsErrorCode":"ValidationError"}`},
-		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, stsAPIErr("PackedPolicyTooLarge")), nil, handler.ErrIdPTokenTooLarge, `"stsErrorCode":"PackedPolicyTooLarge"}`},
-		{"no_api_code", errBoom, nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"other"}`},
-		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, ""},
-		{"api_code", &smithy.GenericAPIError{Code: "Throttling", Message: "slow"}, nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"Throttling"}`},
-		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"timeout"`},
-		{"canceled", fmt.Errorf("sts: %w", context.Canceled), nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"canceled"`},
-		{"transport_timeout", fmt.Errorf("dial: %w", os.ErrDeadlineExceeded), nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"timeout"`},
-		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, ""},
+		{"denied", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDenied, stsAPIErr("AccessDenied")), nil, handler.ErrIdPExchangeDenied, "AccessDenied", ""},
+		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, stsAPIErr("IDPCommunicationError")), nil, handler.ErrIdPExchangeUnavailable, "IDPCommunicationError", ""},
+		{"role_max", roleMax, nil, handler.ErrDurationExceedsRoleMax, "ValidationError", ""},
+		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, stsAPIErr("PackedPolicyTooLarge")), nil, handler.ErrIdPTokenTooLarge, "PackedPolicyTooLarge", ""},
+		{"api_code", stsAPIErr("Throttling"), nil, handler.ErrAssumeRoleFailed, "Throttling", ""},
+		{"no_api_code", errBoom, nil, handler.ErrAssumeRoleFailed, "", "other"},
+		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"canceled", fmt.Errorf("sts: %w", context.Canceled), nil, handler.ErrAssumeRoleFailed, "", "canceled"},
+		{"transport_timeout", fmt.Errorf("dial: %w", os.ErrDeadlineExceeded), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, "", ""},
+		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, "", ""},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpConfig(t, true, "")
-			cons := mockWI(t)
-			cons.wiErr, cons.wiCreds = tt.wiErr, tt.creds
-			proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
-			var buf bytes.Buffer
-			res, err := mint(t, proc, handler.RequestData{}, &buf)
-			require.ErrorIs(t, err, tt.want)
-			assert.Nil(t, res)
-			rec := sink.last(t)
-			assert.Equal(t, "deny", rec["decision"])
-			switch {
-			case errors.Is(tt.wiErr, gtvaws.ErrAccountNotAllowed):
-				assert.Equal(t, "account_check", rec["stage"])
-				assert.Equal(t, "target account not allowed", rec["reason"])
-				assert.NotEmpty(t, rec["tokenId"])
-			case tt.wiErr != nil:
-				assert.Equal(t, "idp_exchange", rec["stage"])
-				assert.Equal(t, "web identity exchange failed", rec["reason"])
-			}
-			if tt.cause != "" {
-				assert.Contains(t, buf.String(), tt.cause)
-			}
-		})
+		for _, lcv := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/lcv=%t", tt.name, lcv), func(t *testing.T) {
+				cfg := idpConfig(t, true, "", func(c *config.Config) { c.LogClaimValues = lcv })
+				cons := mockWI(t)
+				cons.wiErr, cons.wiCreds = tt.wiErr, tt.creds
+				proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+				var buf bytes.Buffer
+				res, err := mint(t, proc, handler.RequestData{}, &buf)
+				require.ErrorIs(t, err, tt.want)
+				assert.Nil(t, res)
+				rec := sink.last(t)
+				assert.Equal(t, "deny", rec["decision"])
+				switch {
+				case errors.Is(tt.wiErr, gtvaws.ErrAccountNotAllowed):
+					assert.Equal(t, "account_check", rec["stage"])
+					assert.Equal(t, "target account not allowed", rec["reason"])
+					assert.NotEmpty(t, rec["tokenId"])
+				case tt.wiErr != nil:
+					cause := cmp.Or(tt.code, tt.kind)
+					assert.Equal(t, "idp_exchange", rec["stage"])
+					assert.Equal(t, map[bool]string{false: "web identity exchange failed", true: "sts error: " + cause}[lcv], rec["reason"])
+					assert.ErrorContains(t, err, "sts error "+cause)
+					ev := logEvent(t, &buf, "idp.exchange.failure")
+					assert.Equal(t, tt.code, ev["stsErrorCode"])
+					kind, hasKind := ev["failureKind"]
+					assert.Equal(t, tt.kind != "", hasKind)
+					if hasKind {
+						assert.Equal(t, tt.kind, kind)
+					}
+				}
+			})
+		}
 	}
+}
+
+// logEvent returns the first JSON log line in buf with the given eventType.
+func logEvent(t *testing.T, buf *bytes.Buffer, eventType string) map[string]any {
+	t.Helper()
+	for line := range strings.Lines(buf.String()) {
+		var m map[string]any
+		if json.Unmarshal([]byte(line), &m) == nil && m["eventType"] == eventType {
+			return m
+		}
+	}
+	t.Fatalf("no %s log event", eventType)
+	return nil
 }
 
 func TestProcessMintSignErrors(t *testing.T) {

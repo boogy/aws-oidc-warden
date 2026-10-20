@@ -36,7 +36,7 @@ var IdPPathNotFound = newEvent("idp.path.not_found")
 // IdPPathDisabled is emitted when a discovery/JWKS path is requested while idp.enabled is false (Debug).
 var IdPPathDisabled = newEvent("idp.path.disabled")
 
-// IdPExchangeFailure is emitted when the unsigned AssumeRoleWithWebIdentity call is refused (Warn).
+// IdPExchangeFailure is emitted when the unsigned AssumeRoleWithWebIdentity call fails (Warn).
 var IdPExchangeFailure = newEvent("idp.exchange.failure")
 
 // IdPCredentialsSuccess is emitted when credentials are returned; never carries them (Info).
