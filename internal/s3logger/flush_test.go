@@ -150,8 +150,8 @@ func TestClose_WaitsForInFlightFlush(t *testing.T) {
 	closed := make(chan error, 1)
 	go func() { closed <- l.Close() }()
 	select {
-	case <-closed:
-		t.Fatal("Close returned while an upload was still in flight")
+	case err := <-closed:
+		t.Fatalf("Close returned (%v) while an upload was still in flight", err)
 	case <-time.After(20 * time.Millisecond):
 	}
 
