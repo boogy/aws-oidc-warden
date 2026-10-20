@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -168,8 +169,9 @@ func isEmptyClaim(raw any) bool {
 
 // exchangeFailureKind labels a non-API failure without its text, which may echo the token.
 func exchangeFailureKind(err error) string {
+	var ne net.Error
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
 		return "timeout"
 	case errors.Is(err, context.Canceled):
 		return "canceled"

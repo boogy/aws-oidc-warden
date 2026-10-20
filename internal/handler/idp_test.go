@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -458,7 +459,8 @@ func TestProcessMintPassesSessionPolicy(t *testing.T) {
 }
 
 func TestProcessMintExchangeErrors(t *testing.T) {
-	roleMax := fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDurationExceedsRoleMax, errBoom)
+	stsAPIErr := func(code string) error { return &smithy.GenericAPIError{Code: code, Message: "m"} }
+	roleMax := fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDurationExceedsRoleMax, stsAPIErr("ValidationError"))
 	tests := []struct {
 		name  string
 		wiErr error
@@ -466,14 +468,16 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		want  error
 		cause string
 	}{
-		{"denied", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDenied, errBoom), nil, handler.ErrIdPExchangeDenied, `"stsErrorCode":"","failureKind":"other"`},
-		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, errBoom), nil, handler.ErrIdPExchangeUnavailable, `"stsErrorCode":"","failureKind":"other"`},
-		{"role_max", roleMax, nil, handler.ErrDurationExceedsRoleMax, `"stsErrorCode":"","failureKind":"other"`},
-		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, errBoom), nil, handler.ErrIdPTokenTooLarge, `"stsErrorCode":"","failureKind":"other"`},
+		{"denied", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDenied, stsAPIErr("AccessDenied")), nil, handler.ErrIdPExchangeDenied, `"stsErrorCode":"AccessDenied"}`},
+		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, stsAPIErr("IDPCommunicationError")), nil, handler.ErrIdPExchangeUnavailable, `"stsErrorCode":"IDPCommunicationError"}`},
+		{"role_max", roleMax, nil, handler.ErrDurationExceedsRoleMax, `"stsErrorCode":"ValidationError"}`},
+		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, stsAPIErr("PackedPolicyTooLarge")), nil, handler.ErrIdPTokenTooLarge, `"stsErrorCode":"PackedPolicyTooLarge"}`},
+		{"no_api_code", errBoom, nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"other"}`},
 		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, ""},
 		{"api_code", &smithy.GenericAPIError{Code: "Throttling", Message: "slow"}, nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"Throttling"}`},
 		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"timeout"`},
 		{"canceled", fmt.Errorf("sts: %w", context.Canceled), nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"canceled"`},
+		{"transport_timeout", fmt.Errorf("dial: %w", os.ErrDeadlineExceeded), nil, handler.ErrAssumeRoleFailed, `"stsErrorCode":"","failureKind":"timeout"`},
 		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, ""},
 	}
 	for _, tt := range tests {
