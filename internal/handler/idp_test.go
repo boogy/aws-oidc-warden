@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	gtvaws "github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
@@ -462,6 +464,11 @@ func TestProcessMintPassesSessionPolicy(t *testing.T) {
 func TestProcessMintExchangeErrors(t *testing.T) {
 	stsAPIErr := func(code string) error { return &smithy.GenericAPIError{Code: code, Message: "m"} }
 	roleMax := fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDurationExceedsRoleMax, stsAPIErr("ValidationError"))
+	sendErr := func(err error) error {
+		return &smithy.OperationError{ServiceID: "STS", OperationName: "AssumeRoleWithWebIdentity", Err: &smithyhttp.RequestSendError{
+			Err: &url.Error{Op: "Post", URL: "https://sts.amazonaws.com/", Err: err},
+		}}
+	}
 	tests := []struct {
 		name  string
 		wiErr error
@@ -478,8 +485,9 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		{"no_api_code", errBoom, nil, handler.ErrAssumeRoleFailed, "", "other"},
 		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
 		{"canceled", fmt.Errorf("sts: %w", context.Canceled), nil, handler.ErrAssumeRoleFailed, "", "canceled"},
-		{"transport_timeout", fmt.Errorf("dial: %w", os.ErrDeadlineExceeded), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
-		{"network", &net.DNSError{Err: "no such host", Name: "sts.amazonaws.com"}, nil, handler.ErrAssumeRoleFailed, "", "network"},
+		{"transport_timeout", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"wrapped_transport_timeout", sendErr(fmt.Errorf("read: %w", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded})), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"network", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "sts.amazonaws.com"}}), nil, handler.ErrAssumeRoleFailed, "", "network"},
 		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, "", ""},
 		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, "", ""},
 	}
