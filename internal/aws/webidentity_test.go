@@ -229,7 +229,7 @@ func TestAssumeRoleWithWebIdentityIncompleteCredentials(t *testing.T) {
 			require.NotEqual(t, webIdentityOK, tc.body)
 			c := &AwsConsumer{AWS: webIdentityWrapper(t, xmlHandler(tc.body))}
 			creds, err := c.AssumeRoleWithWebIdentity(context.Background(), testRoleARN, "s", "t", nil, 3600)
-			require.ErrorIs(t, err, ErrWebIdentityNoCredentials)
+			require.ErrorIs(t, err, ErrWebIdentityIncompleteCredentials)
 			assert.Nil(t, creds)
 		})
 	}

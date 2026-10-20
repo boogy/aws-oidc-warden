@@ -172,8 +172,8 @@ func isEmptyClaim(raw any) bool {
 func exchangeFailureKind(err error) string {
 	var ne net.Error
 	switch {
-	case errors.Is(err, aws.ErrWebIdentityNoCredentials):
-		return "no_credentials"
+	case errors.Is(err, aws.ErrWebIdentityIncompleteCredentials):
+		return "incomplete_credentials"
 	case isTimeout(err):
 		return "timeout"
 	case errors.Is(err, context.Canceled):

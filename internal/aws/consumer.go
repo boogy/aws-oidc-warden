@@ -229,11 +229,15 @@ func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, se
 	if err != nil {
 		return nil, classifyWebIdentityError(err)
 	}
-	cr := out.Credentials
-	if cr == nil || aws.ToString(cr.AccessKeyId) == "" || aws.ToString(cr.SecretAccessKey) == "" || aws.ToString(cr.SessionToken) == "" {
-		return nil, ErrWebIdentityNoCredentials
+	if !CredentialsComplete(out.Credentials) {
+		return nil, ErrWebIdentityIncompleteCredentials
 	}
-	return cr, nil
+	return out.Credentials, nil
+}
+
+// CredentialsComplete reports whether cr carries an access key, secret key and session token.
+func CredentialsComplete(cr *types.Credentials) bool {
+	return cr != nil && aws.ToString(cr.AccessKeyId) != "" && aws.ToString(cr.SecretAccessKey) != "" && aws.ToString(cr.SessionToken) != ""
 }
 
 // AssumeRole assumes roleArn with the caller-built session tags attached as given.

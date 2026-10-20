@@ -46,8 +46,8 @@ var (
 	ErrWebIdentityDurationExceedsRoleMax = errors.New("sts:AssumeRoleWithWebIdentity duration exceeds role MaxSessionDuration")
 	// ErrWebIdentityPackedPolicyTooLarge marks a session policy plus tags over the STS packed size limit.
 	ErrWebIdentityPackedPolicyTooLarge = errors.New("sts:AssumeRoleWithWebIdentity packed policy too large")
-	// ErrWebIdentityNoCredentials marks a successful AssumeRoleWithWebIdentity response with missing or partial credentials.
-	ErrWebIdentityNoCredentials = errors.New("sts:AssumeRoleWithWebIdentity returned no credentials")
+	// ErrWebIdentityIncompleteCredentials marks a successful AssumeRoleWithWebIdentity response with missing or partial credentials.
+	ErrWebIdentityIncompleteCredentials = errors.New("sts:AssumeRoleWithWebIdentity returned missing or incomplete credentials")
 )
 
 const (
