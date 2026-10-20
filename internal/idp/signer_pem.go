@@ -7,9 +7,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 const maxKeyFileBytes = 64 << 10
@@ -36,7 +37,7 @@ func NewPEMSigner(path, alg string) (Signer, error) {
 	if err := checkKeyFileMode(path, st.Mode()); err != nil {
 		return nil, err
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxKeyFileBytes))
+	raw, err := utils.ReadAllCapped(f, maxKeyFileBytes, "idp key file")
 	if err != nil {
 		return nil, fmt.Errorf("idp key file: %w", err)
 	}

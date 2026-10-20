@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -42,33 +43,35 @@ func (g *gatedSTS) AssumeRole(_ context.Context, in *sts.AssumeRoleInput) (*sts.
 }
 
 func TestSpokeCredsFor_ConcurrentCallersShareOneAssume(t *testing.T) {
-	g := &gatedSTS{MockAwsServiceWrapper: new(MockAwsServiceWrapper), entered: make(chan string, 64), release: make(chan struct{}), gated: "222222222222"}
-	c := newTagAuthConsumer(g.MockAwsServiceWrapper)
-	c.AWS = g
+	synctest.Test(t, func(t *testing.T) {
+		g := &gatedSTS{MockAwsServiceWrapper: new(MockAwsServiceWrapper), entered: make(chan string, 64), release: make(chan struct{}), gated: "222222222222"}
+		c := newTagAuthConsumer(g.MockAwsServiceWrapper)
+		c.AWS = g
 
-	const n = 20
-	var wg sync.WaitGroup
-	errs := make(chan error, n)
-	for range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			p, err := c.spokeCredsFor(context.Background(), "222222222222")
-			if err == nil && p == nil {
-				err = assert.AnError
-			}
-			errs <- err
-		}()
-	}
-	<-g.entered
-	time.Sleep(20 * time.Millisecond)
-	close(g.release)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-	assert.Equal(t, int32(1), g.calls.Load(), "callers stampeded STS instead of sharing one AssumeRole")
+		const n = 20
+		var wg sync.WaitGroup
+		errs := make(chan error, n)
+		for range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				p, err := c.spokeCredsFor(context.Background(), "222222222222")
+				if err == nil && p == nil {
+					err = assert.AnError
+				}
+				errs <- err
+			}()
+		}
+		<-g.entered
+		synctest.Wait()
+		close(g.release)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			require.NoError(t, err)
+		}
+		assert.Equal(t, int32(1), g.calls.Load(), "callers stampeded STS instead of sharing one AssumeRole")
+	})
 }
 
 func TestSpokeCredsFor_CacheHitsNotBlockedByInFlightAssume(t *testing.T) {
@@ -103,30 +106,32 @@ func TestSpokeCredsFor_CacheHitsNotBlockedByInFlightAssume(t *testing.T) {
 }
 
 func TestSpokeCredsFor_CancelledCallerDoesNotFailOthers(t *testing.T) {
-	g := &gatedSTS{MockAwsServiceWrapper: new(MockAwsServiceWrapper), entered: make(chan string, 4), release: make(chan struct{}), gated: "222222222222"}
-	c := newTagAuthConsumer(g.MockAwsServiceWrapper)
-	c.AWS = g
+	synctest.Test(t, func(t *testing.T) {
+		g := &gatedSTS{MockAwsServiceWrapper: new(MockAwsServiceWrapper), entered: make(chan string, 4), release: make(chan struct{}), gated: "222222222222"}
+		c := newTagAuthConsumer(g.MockAwsServiceWrapper)
+		c.AWS = g
 
-	cctx, cancel := context.WithCancel(context.Background())
-	first := make(chan error, 1)
-	go func() {
-		_, err := c.spokeCredsFor(cctx, "222222222222")
-		first <- err
-	}()
-	<-g.entered
+		cctx, cancel := context.WithCancel(context.Background())
+		first := make(chan error, 1)
+		go func() {
+			_, err := c.spokeCredsFor(cctx, "222222222222")
+			first <- err
+		}()
+		<-g.entered
 
-	second := make(chan error, 1)
-	go func() {
-		_, err := c.spokeCredsFor(context.Background(), "222222222222")
-		second <- err
-	}()
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-	require.ErrorIs(t, <-first, context.Canceled)
+		second := make(chan error, 1)
+		go func() {
+			_, err := c.spokeCredsFor(context.Background(), "222222222222")
+			second <- err
+		}()
+		synctest.Wait()
+		cancel()
+		require.ErrorIs(t, <-first, context.Canceled)
 
-	close(g.release)
-	require.NoError(t, <-second)
-	assert.Equal(t, int32(1), g.calls.Load())
+		close(g.release)
+		require.NoError(t, <-second)
+		assert.Equal(t, int32(1), g.calls.Load())
+	})
 }
 
 type sliceCreds struct{ parts []string }

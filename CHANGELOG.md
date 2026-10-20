@@ -39,7 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Stale requests fail fast once a refresh has failed** instead of waiting up to 5s each.
 - **`-config` loads exactly the named file, or the single `config.{yaml,yml,json,toml}` in a named directory** (new `CONFIG_FILE`), and fails if it is missing, ambiguous or unsupported, instead of searching `/etc/aws-oidc-warden/` and other extensions.
 - **Audit S3 keys are partitioned by UTC date**, not the host's local time.
-- **Request bodies are capped at ~36 KiB**, derived from the token and role limits, instead of 1 MiB.
+- **Request bodies are capped at ~40 KiB**, derived from the token and role limits, instead of 1 MiB.
 - **JWKS cache entries carry a hash of the issuer's `jwks_uri` override**, so deployments sharing a cache table with different overrides no longer share keys; failed fetches are remembered for 5s and the discovered `jwks_uri` expires with the cache TTL.
 - **Outbound JWKS/discovery fetches check every address actually dialed** and also block CGNAT, benchmarking, documentation and reserved ranges.
 - **Tag-auth caches IAM `NoSuchEntity` for 30s** per role, so unknown role names cannot burn the IAM quota.

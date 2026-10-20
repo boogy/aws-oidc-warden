@@ -233,6 +233,14 @@ func TestIdPFingerprintIgnoresReloadableFields(t *testing.T) {
 	require.NotEqual(t, a.Fingerprint(), b.Fingerprint())
 }
 
+func TestIdPFingerprintNormalizesSourceIdentity(t *testing.T) {
+	yes, no := true, false
+	a, b, c := validIdP(), validIdP(), validIdP()
+	a.IncludeSourceIdentity, b.IncludeSourceIdentity, c.IncludeSourceIdentity = nil, &yes, &no
+	require.Equal(t, a.Fingerprint(), b.Fingerprint())
+	require.NotEqual(t, a.Fingerprint(), c.Fingerprint())
+}
+
 const idpTestIssuerYAML = `
 issuers:
   - issuer: "https://token.actions.githubusercontent.com"

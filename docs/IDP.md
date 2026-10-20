@@ -29,11 +29,11 @@ Optional. The warden validates the inbound OIDC token as usual, then mints its *
 
 Every caller uses `/verify`. The mapping that authorizes the role picks the path, never the request:
 
-| Authorizing mapping sets               | Path (while `idp.enabled`) | Session length                            |
-| -------------------------------------- | -------------------------- | ----------------------------------------- |
-| `max_session_duration` over 1h         | IdP                        | up to that ceiling                        |
-| `idp_token: true`                      | IdP                        | up to `max_session_duration` (default 1h) |
-| neither                                | `AssumeRole`               | up to 1h, or the mapping's lower ceiling  |
+| Authorizing mapping sets       | Path (while `idp.enabled`) | Session length                            |
+| ------------------------------ | -------------------------- | ----------------------------------------- |
+| `max_session_duration` over 1h | IdP                        | up to that ceiling                        |
+| `idp_token: true`              | IdP                        | up to `max_session_duration` (default 1h) |
+| neither                        | `AssumeRole`               | up to 1h, or the mapping's lower ceiling  |
 
 - No role list to maintain: the mappings are the list.
 - An IdP mapping uses the IdP for every request, short ones included, so its roles must trust the warden's IAM OIDC provider ([Trust policy](#trust-policy)).
@@ -42,11 +42,11 @@ Every caller uses `/verify`. The mapping that authorizes the role picks the path
 
 A request for more than 1h that cannot use the IdP is refused, never shortened:
 
-| Over 1h requested, and…                | Answer                        |
-| -------------------------------------- | ----------------------------- |
-| no `idp` block configured              | 400 `duration_exceeds_cap`    |
-| the mapping is not an IdP mapping      | 403 `idp_not_permitted`       |
-| `idp.enabled: false` (kill switch)     | 503 `idp_signing_unavailable` |
+| Over 1h requested, and…            | Answer                        |
+| ---------------------------------- | ----------------------------- |
+| no `idp` block configured          | 400 `duration_exceeds_cap`    |
+| the mapping is not an IdP mapping  | 403 `idp_not_permitted`       |
+| `idp.enabled: false` (kill switch) | 503 `idp_signing_unavailable` |
 
 ## Flow
 
@@ -88,10 +88,10 @@ STS fetches `idp.issuer` + `/.well-known/openid-configuration` (here `https://id
 
 `idp-export` writes the discovery and JWKS documents the warden would serve, as files. Build it with `make build-idp-export` or take the `idp-export` archive from a release.
 
-| Flag           | Meaning                                                                                                   |
-| -------------- | --------------------------------------------------------------------------------------------------------- |
-| `-config PATH` | Service config file, the same one the warden deploys with                                                  |
-| `-out DIR`     | Output directory (required). Files land at `DIR` + `idp.paths.discovery` and `DIR` + `idp.paths.jwks`     |
+| Flag           | Meaning                                                                                               |
+| -------------- | ----------------------------------------------------------------------------------------------------- |
+| `-config PATH` | Service config file, the same one the warden deploys with                                             |
+| `-out DIR`     | Output directory (required). Files land at `DIR` + `idp.paths.discovery` and `DIR` + `idp.paths.jwks` |
 
 It builds the config like the warden at cold start (S3 overlay, `mappings_file`, `config_fragments`), so the effective `idp` block is the one exported. It exports whether or not `idp.enabled` is set, so the documents can be published before the warden starts minting. It never signs anything.
 
@@ -127,12 +127,12 @@ One issuer URL per deployment, never shared between stages. A deployment may spa
 
 ## KMS signing key
 
-| Requirement  | Value                                                                   |
-| ------------ | ----------------------------------------------------------------------- |
-| Key spec     | `ECC_NIST_P256` (`ES256`) or `RSA_2048`/`RSA_3072`/`RSA_4096` (`RS256`) |
-| Key usage    | `SIGN_VERIFY`                                                           |
+| Requirement  | Value                                                                              |
+| ------------ | ---------------------------------------------------------------------------------- |
+| Key spec     | `ECC_NIST_P256` (`ES256`) or `RSA_2048`/`RSA_3072`/`RSA_4096` (`RS256`)            |
+| Key usage    | `SIGN_VERIFY`                                                                      |
 | Multi-region | `false`, or an MRK whose primary and replicas are all in `idp.kms_allowed_regions` |
-| State        | `Enabled`                                                               |
+| State        | `Enabled`                                                                          |
 
 `NewKMSSigner` calls `DescribeKey` and `GetPublicKey` and refuses a key that is disabled, multi-region with a primary or replica outside `idp.kms_allowed_regions`, not `SIGN_VERIFY`, of another spec, or whose `SigningAlgorithms` lacks the configured algorithm.
 
@@ -326,14 +326,14 @@ The same rule applies to every request, IdP or `AssumeRole`:
 
 `idp.source_identity` is a template rendered per request and set as the STS `SourceIdentity` (carried in the minted token, immutable for the session). Placeholders:
 
-| Placeholder      | Value                                                                                                  |
-| ---------------- | ------------------------------------------------------------------------------------------------------ |
-| `{request_id}`   | the warden request ID                                                                                  |
-| `{subject}`      | the canonical subject                                                                                  |
+| Placeholder      | Value                                                                                                                            |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `{request_id}`   | the warden request ID                                                                                                            |
+| `{subject}`      | the canonical subject                                                                                                            |
 | `{issuer}`       | the inbound issuer's host and path (not `idp.issuer`), so with the default template two issuers sharing a subject cannot collide |
-| `{claim:<name>}` | a verified inbound claim; a missing, null or empty claim fails with 403 `idp_source_identity_invalid` |
+| `{claim:<name>}` | a verified inbound claim; a missing, null or empty claim fails with 403 `idp_source_identity_invalid`                            |
 
-The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. If any substituted value needed sanitizing, or a value other than the last could blur its boundary (it contains the first character of the literal after it, or no literal follows), the result ends in `+` and 11 base64url characters of a SHA-256 over the raw values, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<11 chars>` (60 characters). With this issuer, a subject of up to 16 characters fits.
+The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. If any substituted value needed sanitizing, or a value other than the last could blur its boundary (it contains the first character of the sanitized literal after it, or no literal follows), the result ends in `+` and 11 base64url characters of a SHA-256 over the raw values, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<11 chars>` (60 characters). With this issuer, a subject of up to 16 characters fits.
 
 Over 64 characters, counting any hash tail, `idp.source_identity_overflow` decides: `truncate` (default; the first 52 characters, then the same `+` and 11-character hash) or `reject` (403 `idp_source_identity_invalid`). The audit field `sourceIdentityTruncated` flags truncation. Truncation is attribution, not an access boundary.
 
@@ -388,9 +388,9 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 
 ## Hot reload and the kill switch
 
-| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                          |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, plus per-mapping `idp_token`, `max_session_duration`                 |
+| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, plus per-mapping `idp_token`, `max_session_duration` |
 
 A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` once and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected. While `include_source_identity` is true, so is one that adds a second issuer when the frozen `source_identity` lacks `{issuer}`, or two issuers rendering the same `{issuer}`. The rejection logs `config.reload.failure`, or `config.idp.issuer_collision` when the reload itself changes frozen `idp` keys.
 
@@ -411,14 +411,14 @@ While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its d
 - The IdP reaches only roles whose trust policy trusts the warden's IAM OIDC provider with the `sub` pin: a role opts in on the AWS side.
 - PEM key files are dev-only; they are refused on Lambda unless `allow_insecure_issuers` is set.
 
-| Risk                                                          | Control                                                                                  |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Risk                                                          | Control                                                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | Key policy tampering, alias re-pointing, multi-region replica | Full-ARN pinning, tamper Deny and SCP (preventive), replica-region allowlist (detective), alarms |
-| A mapping writer widening sessions                            | The role's trust policy (`sub` pin) and IAM `MaxSessionDuration`                         |
-| Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                              |
-| Half-rotated keys                                             | All-or-nothing loader; rotation order above                                              |
-| Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`                         |
-| Session-name spoofing                                         | Caller names need `allow_session_name`; validated charset; `SourceIdentity` is immutable |
+| A mapping writer widening sessions                            | The role's trust policy (`sub` pin) and IAM `MaxSessionDuration`                                 |
+| Self-DoS through JWKS fetches                                 | Static hosting from `idp-export` by default                                                      |
+| Half-rotated keys                                             | All-or-nothing loader; rotation order above                                                      |
+| Cross-role token reuse                                        | `sub` ends with the role ARN; optional `audience_mode: role_arn`                                 |
+| Session-name spoofing                                         | Caller names need `allow_session_name`; validated charset; `SourceIdentity` is immutable         |
 
 ## Incident response
 

@@ -96,6 +96,8 @@ func (c IdPConfig) IncludeSourceIdentityClaim() bool {
 // Fingerprint identifies the cold-start-frozen settings (everything but the live fields).
 func (c IdPConfig) Fingerprint() string {
 	c.Enabled = false
+	v := c.IncludeSourceIdentityClaim()
+	c.IncludeSourceIdentity = &v
 	b, _ := json.Marshal(c)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])

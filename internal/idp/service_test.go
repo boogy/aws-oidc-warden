@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -78,33 +79,35 @@ func TestServiceLoadIgnoresCallerCancellation(t *testing.T) {
 
 func TestServiceLoadsOnce(t *testing.T) {
 	t.Run("concurrent", func(t *testing.T) {
-		sg := newTestSigner(t)
-		var calls atomic.Int32
-		release := make(chan struct{})
-		s := NewService(testCfg(), func(context.Context) ([]LoadedKey, error) {
-			calls.Add(1)
-			<-release
-			return []LoadedKey{{Signer: sg, Status: config.IdPKeyActive}}, nil
+		synctest.Test(t, func(t *testing.T) {
+			sg := newTestSigner(t)
+			var calls atomic.Int32
+			release := make(chan struct{})
+			s := NewService(testCfg(), func(context.Context) ([]LoadedKey, error) {
+				calls.Add(1)
+				<-release
+				return []LoadedKey{{Signer: sg, Status: config.IdPKeyActive}}, nil
+			})
+			var started, done sync.WaitGroup
+			errs := make([]error, 16)
+			for i := range errs {
+				started.Add(1)
+				done.Add(1)
+				go func() {
+					defer done.Done()
+					started.Done()
+					_, errs[i] = s.KeySet(context.Background())
+				}()
+			}
+			started.Wait()
+			synctest.Wait()
+			close(release)
+			done.Wait()
+			for _, err := range errs {
+				require.NoError(t, err)
+			}
+			require.Equal(t, int32(1), calls.Load())
 		})
-		var started, done sync.WaitGroup
-		errs := make([]error, 16)
-		for i := range errs {
-			started.Add(1)
-			done.Add(1)
-			go func() {
-				defer done.Done()
-				started.Done()
-				_, errs[i] = s.KeySet(context.Background())
-			}()
-		}
-		started.Wait()
-		time.Sleep(20 * time.Millisecond)
-		close(release)
-		done.Wait()
-		for _, err := range errs {
-			require.NoError(t, err)
-		}
-		require.Equal(t, int32(1), calls.Load())
 	})
 
 	t.Run("sequential", func(t *testing.T) {

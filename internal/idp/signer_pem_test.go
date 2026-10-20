@@ -62,6 +62,7 @@ func TestPEMSigner(t *testing.T) {
 		{name: "not pem", alg: "ES256", path: writeRaw([]byte("not pem")), wantErr: "no PEM block"},
 		{name: "ed25519 pkcs8", alg: "ES256", path: writeRaw(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: edDER})), wantErr: "unsupported public key type"},
 		{name: "missing file", alg: "ES256", path: func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.pem") }, wantErr: "idp key file"},
+		{name: "oversized", alg: "ES256", path: writeRaw(make([]byte, maxKeyFileBytes+1)), wantErr: "exceeds"},
 		{name: "directory", alg: "ES256", path: func(t *testing.T) string { return t.TempDir() }, wantErr: "regular file"},
 	}
 	for _, tt := range tests {
