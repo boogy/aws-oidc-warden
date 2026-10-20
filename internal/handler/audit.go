@@ -146,8 +146,6 @@ func stageSummary(stage string) string {
 		return "role assumption failed"
 	case "idp_mint":
 		return "token minting failed"
-	case "idp_exchange":
-		return "web identity exchange failed"
 	default:
 		return "request denied"
 	}

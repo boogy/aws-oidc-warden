@@ -151,15 +151,16 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	}
 	if err != nil {
 		code := aws.STSErrorCode(err)
-		cause := code
+		reason := "sts error: " + code
 		attrs := []slog.Attr{slog.String("roleArn", role), slog.String("stsErrorCode", code)}
 		if code == "" {
-			cause = exchangeFailureKind(err)
-			attrs = append(attrs, slog.String("failureKind", cause))
+			kind := exchangeFailureKind(err)
+			reason = "exchange failed: " + kind
+			attrs = append(attrs, slog.String("failureKind", kind))
 		}
-		rec.setErrorReason("idp_exchange", errors.New("sts error: "+cause))
+		rec.Stage, rec.Reason = "idp_exchange", reason
 		logevent.Warn(ctx, log, logevent.IdPExchangeFailure, "web identity exchange failed", attrs...)
-		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: sts error %s", exchangeError(err), cause), rec.reasonAttr(cfg.LogClaimValues))
+		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: %s", exchangeError(err), reason), rec.reasonAttr(cfg.LogClaimValues))
 	}
 	if creds == nil || creds.AccessKeyId == nil || *creds.AccessKeyId == "" {
 		rec.Stage, rec.Reason = "idp_exchange", "no credentials returned"

@@ -500,10 +500,13 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 					assert.Equal(t, "target account not allowed", rec["reason"])
 					assert.NotEmpty(t, rec["tokenId"])
 				case tt.wiErr != nil:
-					cause := cmp.Or(tt.code, tt.kind)
+					reason := "sts error: " + tt.code
+					if tt.kind != "" {
+						reason = "exchange failed: " + tt.kind
+					}
 					assert.Equal(t, "idp_exchange", rec["stage"])
-					assert.Equal(t, map[bool]string{false: "web identity exchange failed", true: "sts error: " + cause}[lcv], rec["reason"])
-					assert.ErrorContains(t, err, "sts error "+cause)
+					assert.Equal(t, reason, rec["reason"])
+					assert.ErrorContains(t, err, reason)
 					ev := logEvent(t, &buf, "idp.exchange.failure")
 					assert.Equal(t, tt.code, ev["stsErrorCode"])
 					kind, hasKind := ev["failureKind"]
@@ -522,7 +525,8 @@ func logEvent(t *testing.T, buf *bytes.Buffer, eventType string) map[string]any 
 	t.Helper()
 	for line := range strings.Lines(buf.String()) {
 		var m map[string]any
-		if json.Unmarshal([]byte(line), &m) == nil && m["eventType"] == eventType {
+		require.NoError(t, json.Unmarshal([]byte(line), &m), line)
+		if m["eventType"] == eventType {
 			return m
 		}
 	}
