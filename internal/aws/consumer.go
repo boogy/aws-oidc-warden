@@ -229,10 +229,11 @@ func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, se
 	if err != nil {
 		return nil, classifyWebIdentityError(err)
 	}
-	if out.Credentials == nil {
+	cr := out.Credentials
+	if cr == nil || aws.ToString(cr.AccessKeyId) == "" || aws.ToString(cr.SecretAccessKey) == "" || aws.ToString(cr.SessionToken) == "" {
 		return nil, ErrWebIdentityNoCredentials
 	}
-	return out.Credentials, nil
+	return cr, nil
 }
 
 // AssumeRole assumes roleArn with the caller-built session tags attached as given.

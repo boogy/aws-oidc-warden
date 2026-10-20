@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -216,11 +217,22 @@ func TestAssumeRoleWithWebIdentityAccountCheck(t *testing.T) {
 	}
 }
 
-func TestAssumeRoleWithWebIdentityNilCredentials(t *testing.T) {
-	w := webIdentityWrapper(t, xmlHandler(webIdentityNoCreds))
-	c := &AwsConsumer{AWS: w}
-	_, err := c.AssumeRoleWithWebIdentity(context.Background(), testRoleARN, "s", "t", nil, 3600)
-	require.ErrorIs(t, err, ErrWebIdentityNoCredentials)
+func TestAssumeRoleWithWebIdentityIncompleteCredentials(t *testing.T) {
+	tests := []struct{ name, body string }{
+		{"none", webIdentityNoCreds},
+		{"no_access_key", strings.Replace(webIdentityOK, "<AccessKeyId>AKIAEXAMPLE</AccessKeyId>", "", 1)},
+		{"no_secret", strings.Replace(webIdentityOK, "<SecretAccessKey>SECRETEXAMPLEwJalr</SecretAccessKey>", "", 1)},
+		{"no_session_token", strings.Replace(webIdentityOK, "<SessionToken>SESSIONTOKENEXAMPLEFwoG</SessionToken>", "", 1)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NotEqual(t, webIdentityOK, tc.body)
+			c := &AwsConsumer{AWS: webIdentityWrapper(t, xmlHandler(tc.body))}
+			creds, err := c.AssumeRoleWithWebIdentity(context.Background(), testRoleARN, "s", "t", nil, 3600)
+			require.ErrorIs(t, err, ErrWebIdentityNoCredentials)
+			assert.Nil(t, creds)
+		})
+	}
 }
 
 func TestProductionSTSClientIsUnsigned(t *testing.T) {

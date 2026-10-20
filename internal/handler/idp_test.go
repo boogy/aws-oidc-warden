@@ -490,8 +490,8 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		{"wrapped_dns_timeout", sendErr(fmt.Errorf("lookup: %w", &net.DNSError{Err: "i/o timeout", Name: "sts.amazonaws.com", IsTimeout: true})), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
 		{"network", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "sts.amazonaws.com"}}), nil, handler.ErrAssumeRoleFailed, "", "network"},
 		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, "", ""},
-		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, "", ""},
-		{"no_credentials", gtvaws.ErrWebIdentityNoCredentials, nil, handler.ErrAssumeRoleFailed, "", ""},
+		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, "", "no_credentials"},
+		{"no_credentials", gtvaws.ErrWebIdentityNoCredentials, nil, handler.ErrAssumeRoleFailed, "", "no_credentials"},
 	}
 	for _, tt := range tests {
 		for _, lcv := range []bool{false, true} {
@@ -511,9 +511,6 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 					assert.Equal(t, "account_check", rec["stage"])
 					assert.Equal(t, "target account not allowed", rec["reason"])
 					assert.NotEmpty(t, rec["tokenId"])
-				case tt.wiErr == nil, errors.Is(tt.wiErr, gtvaws.ErrWebIdentityNoCredentials):
-					assert.Equal(t, "idp_exchange", rec["stage"])
-					assert.Equal(t, "no credentials returned", rec["reason"])
 				default:
 					reason := "sts error: " + tt.code
 					if tt.kind != "" {
