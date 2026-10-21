@@ -2,7 +2,6 @@ package idp
 
 import (
 	"strings"
-	"sync"
 
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
@@ -32,13 +31,7 @@ type subjectPart struct {
 	lit  string
 }
 
-// subjectTemplates caches compiled templates; the key set is bounded by the frozen config.
-var subjectTemplates sync.Map // string -> []subjectPart
-
 func compileSubjectTemplate(tmpl string) []subjectPart {
-	if v, ok := subjectTemplates.Load(tmpl); ok {
-		return v.([]subjectPart)
-	}
 	var parts []subjectPart
 	lit := 0
 	for i := 0; i < len(tmpl); {
@@ -65,16 +58,14 @@ func compileSubjectTemplate(tmpl string) []subjectPart {
 	if lit < len(tmpl) {
 		parts = append(parts, subjectPart{kind: subjLiteral, lit: tmpl[lit:]})
 	}
-	v, _ := subjectTemplates.LoadOrStore(tmpl, parts)
-	return v.([]subjectPart)
+	return parts
 }
 
-func renderSubject(tmpl, roleARN, srcIss, srcSub string) (string, error) {
+func renderSubject(parts []subjectPart, roleARN, srcIss, srcSub string) (string, error) {
 	account, name, err := utils.ParseRoleARN(roleARN)
 	if err != nil || strings.Count(roleARN, ":") != 5 {
 		return "", ErrInvalidSubject
 	}
-	parts := compileSubjectTemplate(tmpl)
 	vals := [...]string{subjRoleARN: roleARN, subjAccountID: account, subjRoleName: name, subjSourceIssuer: srcIss, subjSourceSubject: srcSub}
 	size := 0
 	for _, p := range parts {

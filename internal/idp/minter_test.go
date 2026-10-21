@@ -39,7 +39,7 @@ func decodeClaims(t *testing.T, value string) jwt.MapClaims {
 func TestMintVerifiesWithPublicKey(t *testing.T) {
 	cfg, ks := mintSetup(t)
 	now := time.Unix(1_800_000_000, 0)
-	tok, err := mint(context.Background(), cfg, ks, MintRequest{
+	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{
 		RoleARN: testRole, SourceIssuer: "https://token.actions.githubusercontent.com",
 		SourceSubject: "org/repo", RequestID: "req-1", SourceIdentity: "req-1",
 		Tags:           []ststypes.Tag{{Key: aws.String("repo"), Value: aws.String("org/repo")}},
@@ -69,7 +69,7 @@ func TestMintVerifiesWithPublicKey(t *testing.T) {
 func TestMintAudienceRoleARN(t *testing.T) {
 	cfg, ks := mintSetup(t)
 	cfg.AudienceMode = config.IdPAudienceRoleARN
-	tok, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole}, time.Now())
+	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole}, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, testRole, decodeClaims(t, tok.Value)["aud"])
 }
@@ -78,16 +78,16 @@ func TestMintSourceIdentity(t *testing.T) {
 	cfg, ks := mintSetup(t)
 	const key = "https://aws.amazon.com/source_identity"
 
-	_, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole, SourceIdentity: "bad id!"}, time.Now())
+	_, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole, SourceIdentity: "bad id!"}, time.Now())
 	require.ErrorIs(t, err, ErrInvalidSourceIdentity)
 
-	tok, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole, SourceIdentity: "ab"}, time.Now())
+	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole, SourceIdentity: "ab"}, time.Now())
 	require.NoError(t, err)
 	require.Contains(t, decodeClaims(t, tok.Value), key)
 
 	f := false
 	cfg.IncludeSourceIdentity = &f
-	tok, err = mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole, SourceIdentity: "ab"}, time.Now())
+	tok, err = mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole, SourceIdentity: "ab"}, time.Now())
 	require.NoError(t, err)
 	require.NotContains(t, decodeClaims(t, tok.Value), key)
 }
@@ -107,7 +107,7 @@ func TestMintSourceIdentityPatternRows(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole, SourceIdentity: tt.id}, time.Now())
+			_, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole, SourceIdentity: tt.id}, time.Now())
 			if tt.wantErr {
 				require.ErrorIs(t, err, ErrInvalidSourceIdentity)
 				return
@@ -119,7 +119,7 @@ func TestMintSourceIdentityPatternRows(t *testing.T) {
 
 func TestMintEmitsOnlyAllowedAWSNamespaceClaims(t *testing.T) {
 	cfg, ks := mintSetup(t)
-	tok, err := mint(context.Background(), cfg, ks, MintRequest{
+	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{
 		RoleARN: testRole, SourceIssuer: "https://token.actions.githubusercontent.com",
 		SourceSubject: "https://aws.amazon.com/tags/principal_tags/admin", RequestID: "req-1", SourceIdentity: "req-1",
 		Tags: []ststypes.Tag{{Key: aws.String("repo"), Value: aws.String("org/repo")}},
@@ -153,7 +153,7 @@ func TestMintRejectsOversizedToken(t *testing.T) {
 	for i := range 50 {
 		tags = append(tags, ststypes.Tag{Key: aws.String(fmt.Sprintf("%03d", i) + strings.Repeat("k", 125)), Value: aws.String(strings.Repeat("v", 256))})
 	}
-	_, err = mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole, Tags: tags}, time.Now())
+	_, err = mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole, Tags: tags}, time.Now())
 	require.ErrorIs(t, err, ErrTokenTooLarge)
 	require.Zero(t, cs.calls)
 }
@@ -171,7 +171,7 @@ func TestMintSizeEstimateIsUpperBound(t *testing.T) {
 				for i := range n {
 					tags = append(tags, ststypes.Tag{Key: aws.String(fmt.Sprintf("k%d", i)), Value: aws.String(strings.Repeat("v", 100))})
 				}
-				tok, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole, Tags: tags}, time.Now())
+				tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole, Tags: tags}, time.Now())
 				require.NoError(t, err)
 				parts := strings.Split(tok.Value, ".")
 				h, err := b64.DecodeString(parts[0])
@@ -186,7 +186,7 @@ func TestMintSizeEstimateIsUpperBound(t *testing.T) {
 
 func TestMintClaimsMatchDiscovery(t *testing.T) {
 	cfg, ks := mintSetup(t)
-	tok, err := mint(context.Background(), cfg, ks, MintRequest{
+	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{
 		RoleARN: testRole, SourceIssuer: "https://token.actions.githubusercontent.com", SourceSubject: "org/repo",
 		RequestID: "req-1", SourceIdentity: "req-1",
 		Tags: []ststypes.Tag{{Key: aws.String("repo"), Value: aws.String("org/repo")}},
@@ -202,7 +202,7 @@ func TestMintClaimsMatchDiscovery(t *testing.T) {
 func TestMintTimes(t *testing.T) {
 	cfg, ks := mintSetup(t)
 	now := time.Unix(1_800_000_000, 999)
-	tok, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole}, now)
+	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole}, now)
 	require.NoError(t, err)
 	require.True(t, tok.IssuedAt.Equal(now.Truncate(time.Second)))
 	c := decodeClaims(t, tok.Value)
@@ -213,9 +213,9 @@ func TestMintTimes(t *testing.T) {
 
 func TestMintUniqueJTI(t *testing.T) {
 	cfg, ks := mintSetup(t)
-	a, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole}, time.Now())
+	a, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole}, time.Now())
 	require.NoError(t, err)
-	b, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole}, time.Now())
+	b, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole}, time.Now())
 	require.NoError(t, err)
 	require.NotEqual(t, a.ID, b.ID)
 }
@@ -227,7 +227,7 @@ func TestMintSubjectIsExactRoleARN(t *testing.T) {
 		"arn:aws:iam::123456789012:role/team/deploy/R",
 		"arn:aws-us-gov:iam::123456789012:role/R",
 	} {
-		tok, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: role, SourceSubject: "org/repo"}, time.Now())
+		tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: role, SourceSubject: "org/repo"}, time.Now())
 		require.NoError(t, err)
 		require.Equal(t, role, tok.Subject)
 	}
@@ -242,7 +242,7 @@ func TestMintRejectsBadRoleARN(t *testing.T) {
 		"colon in path": "arn:aws:iam::2:role/x/arn:aws:iam::1:role/R",
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: role}, time.Now())
+			_, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: role}, time.Now())
 			require.ErrorIs(t, err, ErrInvalidSubject)
 		})
 	}
@@ -251,11 +251,11 @@ func TestMintRejectsBadRoleARN(t *testing.T) {
 func TestMintOmitsTagsClaimWhenNoTags(t *testing.T) {
 	cfg, ks := mintSetup(t)
 	const key = "https://aws.amazon.com/tags"
-	tok, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: "arn:aws:iam::1:role/R"}, time.Now())
+	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: "arn:aws:iam::1:role/R"}, time.Now())
 	require.NoError(t, err)
 	require.NotContains(t, decodeClaims(t, tok.Value), key)
 
-	tok, err = mint(context.Background(), cfg, ks, MintRequest{RoleARN: "arn:aws:iam::1:role/R",
+	tok, err = mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: "arn:aws:iam::1:role/R",
 		Tags: []ststypes.Tag{{Key: aws.String("a"), Value: aws.String("b")}}}, time.Now())
 	require.NoError(t, err)
 	require.Contains(t, decodeClaims(t, tok.Value), key)
@@ -273,7 +273,7 @@ func TestMintTagsOnlyPrincipalTags(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tok, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: testRole, Tags: tags, TransitiveKeys: tt.transitiv}, time.Now())
+			tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: testRole, Tags: tags, TransitiveKeys: tt.transitiv}, time.Now())
 			require.NoError(t, err)
 			at := decodeClaims(t, tok.Value)["https://aws.amazon.com/tags"].(map[string]any)
 			pt := at["principal_tags"].(map[string]any)
@@ -296,7 +296,7 @@ func (badSigner) Sign(context.Context, []byte) ([]byte, error) { return make([]b
 func TestMintFailsClosedOnBadSignature(t *testing.T) {
 	cfg, ks := mintSetup(t)
 	ks.active = badSigner{ks.active}
-	_, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: "arn:aws:iam::1:role/R"}, time.Now())
+	_, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: "arn:aws:iam::1:role/R"}, time.Now())
 	require.ErrorContains(t, err, "self-verification")
 }
 
@@ -305,7 +305,7 @@ func BenchmarkMintPEM(b *testing.B) {
 	req := MintRequest{RoleARN: testRole, SourceSubject: "org/repo"}
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := mint(context.Background(), cfg, ks, req, time.Now()); err != nil {
+		if _, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, req, time.Now()); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -29,6 +29,7 @@ type Loader func(ctx context.Context) ([]LoadedKey, error)
 // Service owns the frozen IdP config and the lazily loaded KeySet.
 type Service struct {
 	cfg      config.IdPConfig
+	subj     []subjectPart
 	load     Loader
 	ks       atomic.Pointer[KeySet]
 	sf       singleflight.Group
@@ -47,7 +48,7 @@ func NewService(cfg config.IdPConfig, load Loader) *Service {
 		v := *c.IncludeSourceIdentity
 		c.IncludeSourceIdentity = &v
 	}
-	return &Service{cfg: c, load: load, now: time.Now}
+	return &Service{cfg: c, subj: compileSubjectTemplate(c.SubjectTemplate), load: load, now: time.Now}
 }
 
 // Config returns the config frozen at construction.
@@ -80,7 +81,7 @@ func (s *Service) Mint(ctx context.Context, req MintRequest) (*Token, error) {
 	if err != nil {
 		return nil, err
 	}
-	return mint(ctx, s.cfg, ks, req, s.now())
+	return mint(ctx, s.cfg, s.subj, ks, req, s.now())
 }
 
 func (s *Service) coolingDown() bool {

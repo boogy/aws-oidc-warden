@@ -18,21 +18,15 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/version"
 )
 
-// jwksWarmPrefetchTimeout bounds the cold-start JWKS warm prefetch. A slow or
-// unreachable issuer must not eat into the Lambda INIT budget — on timeout the
-// prefetch is abandoned and the first request pays the fetch as it did before.
+// jwksWarmPrefetchTimeout bounds the cold-start JWKS prefetch so a slow issuer cannot eat the Lambda INIT budget.
 const jwksWarmPrefetchTimeout = 3 * time.Second
 
-// jwksWarmer is the subset of the token validator warmJWKSCache needs, so the
-// cold-start gating can be tested without standing up a full validator.
+// jwksWarmer is the subset of the token validator warmJWKSCache needs.
 type jwksWarmer interface {
 	WarmPrefetch(ctx context.Context)
 }
 
-// warmJWKSCache prefetches every configured issuer's JWKS during cold start
-// (self mode only; delegated modes never consult JWKS). Best-effort: errors
-// are logged and swallowed, bounded by jwksWarmPrefetchTimeout. Reports
-// whether a prefetch was attempted.
+// warmJWKSCache best-effort prefetches every issuer's JWKS in self mode and reports whether it ran.
 func warmJWKSCache(mode string, v jwksWarmer) bool {
 	if mode != "self" || v == nil {
 		return false
@@ -322,9 +316,7 @@ func initializeLogger(adapter string) *slog.Logger {
 	return logger
 }
 
-// validateAdapterMode panics at startup when the configured jwt_validation.mode
-// is incompatible with the deployed adapter binary. Prevents silent per-request
-// failures caused by a mismatched extractor (e.g. mode=apigw deployed as apigateway).
+// validateAdapterMode panics at startup when jwt_validation.mode is incompatible with the adapter binary.
 func validateAdapterMode(bootstrap *Bootstrap, allowed ...string) {
 	mode := bootstrap.Config.JWTValidation.Mode
 	if mode == "" {

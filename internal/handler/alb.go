@@ -69,12 +69,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	return h.respondJSON(ctx, credentials)
 }
 
-// albRequestHeaders flattens the two header maps an ALB event can carry:
-// with lambda.multi_value_headers.enabled=true only MultiValueHeaders is
-// populated (Headers is empty), so reading Headers alone silently drops
-// x-amzn-oidc-data/x-forwarded-for/user-agent on such a target group.
-// Repeated values are folded with ", " per RFC 9110 §5.3, matching the form
-// X-Forwarded-For already uses, so clientIP's rightmost-hop rule still works.
+// albRequestHeaders merges Headers and MultiValueHeaders, folding repeats with ", " (RFC 9110 §5.3).
 func albRequestHeaders(event events.ALBTargetGroupRequest) map[string]string {
 	headers := make(map[string]string, len(event.Headers)+len(event.MultiValueHeaders))
 	maps.Copy(headers, event.Headers)

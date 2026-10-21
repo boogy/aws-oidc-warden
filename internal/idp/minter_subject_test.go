@@ -36,7 +36,7 @@ func TestMintSubjectTemplate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg, ks := mintSetup(t)
 			cfg.SubjectTemplate = tt.tmpl
-			tok, err := mint(context.Background(), cfg, ks, MintRequest{RoleARN: tt.role, SourceIssuer: gh, SourceSubject: tt.srcSub}, time.Now())
+			tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: tt.role, SourceIssuer: gh, SourceSubject: tt.srcSub}, time.Now())
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -50,7 +50,7 @@ func TestMintSubjectTemplate(t *testing.T) {
 func TestMintSubjectTemplateEmitsOnlyAllowedAWSNamespaceClaims(t *testing.T) {
 	cfg, ks := mintSetup(t)
 	cfg.SubjectTemplate = "{source_issuer}#{source_subject}#{role_arn}"
-	tok, err := mint(context.Background(), cfg, ks, MintRequest{
+	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{
 		RoleARN: testRole, SourceIssuer: "https://token.actions.githubusercontent.com",
 		SourceSubject: "https://aws.amazon.com/tags/principal_tags/admin",
 	}, time.Now())
@@ -73,7 +73,7 @@ func TestRenderSubjectMatchesReplacer(t *testing.T) {
 		t.Run(tmpl, func(t *testing.T) {
 			want := strings.NewReplacer("{role_arn}", role, "{account_id}", "123456789012", "{role_name}", "Deploy",
 				"{source_issuer}", "https://iss", "{source_subject}", "org/repo").Replace(tmpl)
-			got, err := renderSubject(tmpl, role, "https://iss", "org/repo")
+			got, err := renderSubject(compileSubjectTemplate(tmpl), role, "https://iss", "org/repo")
 			if strings.HasSuffix(want, role) {
 				require.NoError(t, err)
 				require.Equal(t, want, got)
@@ -86,7 +86,7 @@ func TestRenderSubjectMatchesReplacer(t *testing.T) {
 
 func TestRenderSubjectDoesNotReExpandClaimValues(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/Deploy"
-	got, err := renderSubject("{source_issuer}#{source_subject}#{role_arn}", role, "{role_arn}", "{role_name}{account_id}{source_issuer}")
+	got, err := renderSubject(compileSubjectTemplate("{source_issuer}#{source_subject}#{role_arn}"), role, "{role_arn}", "{role_name}{account_id}{source_issuer}")
 	require.NoError(t, err)
 	require.Equal(t, "{role_arn}#{role_name}{account_id}{source_issuer}#"+role, got)
 }

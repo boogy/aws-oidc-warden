@@ -84,8 +84,8 @@ type mintClaims struct {
 	Tags      *awsTags `json:"https://aws.amazon.com/tags,omitempty"`
 }
 
-func mint(ctx context.Context, cfg config.IdPConfig, ks *KeySet, req MintRequest, now time.Time) (*Token, error) {
-	sub, err := renderSubject(cfg.SubjectTemplate, req.RoleARN, req.SourceIssuer, req.SourceSubject)
+func mint(ctx context.Context, cfg config.IdPConfig, subj []subjectPart, ks *KeySet, req MintRequest, now time.Time) (*Token, error) {
+	sub, err := renderSubject(subj, req.RoleARN, req.SourceIssuer, req.SourceSubject)
 	if err != nil {
 		return nil, err
 	}
