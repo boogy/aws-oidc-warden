@@ -156,7 +156,7 @@ func TestServiceMintUsesFrozenConfig(t *testing.T) {
 	cfg.SigningKeys = []config.IdPSigningKey{{File: "/k.pem", Algorithm: "ES256", Status: config.IdPKeyActive}}
 	on := true
 	cfg.IncludeSourceIdentity = &on
-	cfg.SubjectTemplate = "{source_subject}#{role_arn}"
+	cfg.SubjectTemplate = "{source_issuer}#{source_subject}#{role_arn}"
 
 	s := NewService(cfg, func(context.Context) ([]LoadedKey, error) {
 		return []LoadedKey{{Signer: sg, Status: config.IdPKeyActive}}, nil
@@ -173,6 +173,6 @@ func TestServiceMintUsesFrozenConfig(t *testing.T) {
 		SourceSubject: "org/repo", RequestID: "req-1",
 	})
 	require.NoError(t, err)
-	require.Equal(t, "org/repo#"+testRole, tok.Subject)
+	require.Equal(t, "https://token.actions.githubusercontent.com#org/repo#"+testRole, tok.Subject)
 	require.Equal(t, sg.KeyID(), tok.KeyID)
 }
