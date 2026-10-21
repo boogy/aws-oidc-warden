@@ -30,7 +30,7 @@ var ConfigWarning = newEvent("config.warning")
 // token verification upstream (Warn).
 var ConfigJWTValidationDelegated = newEvent("config.jwt_validation.delegated")
 
-// ConfigIdPReloadIgnored is emitted by each accepted reload whose idp settings differ from the frozen cold-start ones, including an added block (Warn).
+// ConfigIdPReloadIgnored is emitted by each reload that rebuilds the config while its idp settings differ from the frozen cold-start ones, including an added block (Warn).
 var ConfigIdPReloadIgnored = newEvent("config.idp.reload_ignored")
 
 // ConfigIdPEnabledChanged is emitted when a reload flips the live idp.enabled kill switch of a built IdP, counting a missing idp block as disabled (Warn).
