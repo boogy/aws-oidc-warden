@@ -227,7 +227,10 @@ func (c *IdPConfig) validatePaths() error {
 	if !strings.HasSuffix(c.Paths.Discovery, idpDiscoverySufx) {
 		return fmt.Errorf("idp.paths.discovery must end with %s", idpDiscoverySufx)
 	}
-	u, _ := url.Parse(c.Issuer) // validate() already rejected an unparseable issuer
+	u, err := url.Parse(c.Issuer)
+	if err != nil {
+		return fmt.Errorf("idp.issuer %q must be an absolute URL", c.Issuer)
+	}
 	issuerPath := strings.TrimSuffix(u.Path, "/")
 	if c.Paths.Discovery != issuerPath+idpDiscoverySufx || !strings.HasPrefix(c.Paths.JWKS, issuerPath+"/") {
 		return fmt.Errorf("idp.paths must be under the issuer path %q", issuerPath)
