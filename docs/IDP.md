@@ -400,7 +400,7 @@ A reload that changes a frozen field, or adds an `idp` block absent at startup, 
 2. Confirm a request for more than 1h answers 503 `idp_signing_unavailable`. Requests of 1h or less fall back to `AssumeRole`, which only works where the role also trusts the warden's own role.
 3. Then revoke (remove the client ID from the warden's IAM OIDC provider; add a Deny on `aws:TokenIssueTime`).
 
-While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its discovery and JWKS paths (other methods stay 405) (logged at Debug as `idp.path.disabled`, not as a near miss), so STS stops trusting the key once its JWKS cache expires. Statically hosted documents (`idp-export`) keep serving: remove them yourself. A reload that flips `idp.enabled`, or removes the `idp` block, logs `config.idp.enabled_changed` (Warn) with the new value; an env override (`AOW_IDP_ENABLED`) beats the S3 config, so a flip there never lands.
+While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its discovery and JWKS paths (other methods stay 405) (logged at Debug as `idp.path.disabled`, not as a near miss), so STS stops trusting the key once its JWKS cache expires. Statically hosted documents (`idp-export`) keep serving: remove them yourself. A reload that flips `idp.enabled`, or removes or restores the `idp` block, logs `config.idp.enabled_changed` (Warn) with the new value; an env override (`AOW_IDP_ENABLED`) beats the S3 config's `idp.enabled`, so a flip there never lands. The env knob applies only to an existing block: an overlay that removes the block turns the IdP off regardless, and over-1h requests then answer 400 `duration_exceeds_cap`, not 503.
 
 ## Security notes
 

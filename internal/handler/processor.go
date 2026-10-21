@@ -48,16 +48,12 @@ func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
 	return r
 }
 
-// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added or removed idp block.
+// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added idp block.
 func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
 	if r.lastChecked.Load() == cfg || r.lastChecked.Swap(cfg) == cfg {
 		return
 	}
-	fp := ""
-	if cfg.IdP != nil {
-		fp = cfg.IdP.Fingerprint()
-	}
-	if fp != r.frozenFP {
+	if cfg.IdP != nil && cfg.IdP.Fingerprint() != r.frozenFP {
 		logevent.Warn(ctx, log, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")
 	}
 }

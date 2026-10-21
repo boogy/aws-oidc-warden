@@ -394,17 +394,13 @@ func TestBootstrapAdaptersAttachIdP(t *testing.T) {
 	}
 }
 
-func TestWarnFrozenDriftOnRemovedIdPBlock(t *testing.T) {
+func TestWarnFrozenDriftIgnoresRemovedIdPBlock(t *testing.T) {
 	svc := idp.NewService(*bootstrapIdPConfig("https://idp.example.com", false), nil)
 	var buf bytes.Buffer
 	logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil)))
 
 	r := NewRequestProcessor(nil, nil, nil, nil, "test").WithIdP(svc)
 	r.warnFrozenDrift(context.Background(), logger, bootstrapBaseConfig(t, nil))
-	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
-
-	buf.Reset()
-	NewRequestProcessor(nil, nil, nil, nil, "test").warnFrozenDrift(context.Background(), logger, bootstrapBaseConfig(t, nil))
 	assert.Zero(t, strings.Count(buf.String(), "config.idp.reload_ignored"))
 }
 

@@ -1329,11 +1329,28 @@ func TestProviderRefresh_UnchangedRaceSafe(t *testing.T) {
 	wg.Wait()
 }
 
+func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
+	body := []byte(idpTestBlockYAML)
+	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+	require.NoError(t, p.Refresh(context.Background()))
+	p.FreezeIdP(p.Get().IdP)
+
+	for _, step := range []struct {
+		body    string
+		enabled bool
+	}{{"log_level: info\n", false}, {idpTestBlockYAML, true}} {
+		body = []byte(step.body)
+		out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
+		assert.Equal(t, step.enabled, p.Get().IdP != nil && p.Get().IdP.Enabled)
+		assert.Contains(t, out, fmt.Sprintf(`"enabled":%t`, step.enabled))
+	}
+}
+
 func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 	tests := []struct {
 		name          string
 		base, overlay bool
-		dropBlock     bool
+		coldStart     bool
 		env           string
 		want, wantLog bool
 	}{
@@ -1341,7 +1358,7 @@ func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 		{"enable", false, true, false, "", true, true},
 		{"unchanged", true, true, false, "", true, false},
 		{"env beats overlay", true, false, false, "true", true, false},
-		{"block removed", true, false, true, "", false, true},
+		{"cold start", false, true, true, "", true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1354,10 +1371,8 @@ func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 			require.NoError(t, base.Validate())
 			body := fmt.Appendf(nil, "idp:\n  enabled: %t\n", tt.overlay)
 			p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
-			if tt.dropBlock {
-				body = []byte("log_level: info\n")
-				p.base = baseConfig(t)
-				require.NoError(t, p.base.Validate())
+			if !tt.coldStart {
+				p.FreezeIdP(base.IdP)
 			}
 
 			out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
