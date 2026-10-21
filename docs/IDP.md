@@ -392,7 +392,7 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
 | `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, plus per-mapping `idp_token`, `max_session_duration` |
 
-A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` on each such accepted reload and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected. While `include_source_identity` is true, so is one that adds a second issuer when the frozen `source_identity` lacks `{issuer}`, or two issuers rendering the same `{issuer}`. The rejection logs `config.reload.failure`, or `config.idp.issuer_collision` when the reload itself changes frozen `idp` keys.
+A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` on every accepted reload while the effective `idp` settings differ from the running ones, and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected. While `include_source_identity` is true, so is one that adds a second issuer when the frozen `source_identity` lacks `{issuer}`, or two issuers rendering the same `{issuer}`. The rejection logs `config.reload.failure`, or `config.idp.issuer_collision` when the reload itself changes frozen `idp` keys.
 
 **Kill switch:** set `idp.enabled: false` in the layer that set it. Environment beats S3: `AOW_IDP_ENABLED` is re-applied after every S3 merge, so never set `AOW_IDP_ENABLED` on Lambda if the S3 overlay is your switch. Order of operations:
 
@@ -428,7 +428,7 @@ In order:
 2. Stop STS accepting: remove the client ID from the warden's IAM OIDC provider, or disable the KMS key.
 3. Revoke live sessions: add a Deny on `aws:TokenIssueTime` to the affected roles.
 4. Scope the damage in CloudTrail by `accessKeyId` and `sourceIdentity` (both are in the audit record).
-5. Rotate the signing key.
+5. Rotate the signing key, then restart (cold start) to load it; a reload keeps the old one.
 6. Restrict `iam:UpdateRole` and trust-policy edits to a break-glass role.
 
 ## Error codes and audit fields

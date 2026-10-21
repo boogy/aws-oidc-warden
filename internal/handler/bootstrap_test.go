@@ -425,11 +425,7 @@ func TestOverlayFetchUsesConditionalGet(t *testing.T) {
 }
 
 func TestNewIdPServiceWithoutIdPWarnsWhenReloadAddsBlock(t *testing.T) {
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil))))
-	defer slog.SetDefault(prev)
-
+	buf := captureLogs(t)
 	overlay := []byte("log_level: info\n")
 	p := config.NewProvider(bootstrapBaseConfig(t, nil), time.Minute, "yaml", func(context.Context) ([]byte, error) { return overlay, nil })
 	require.NoError(t, p.Refresh(context.Background()))
@@ -437,5 +433,5 @@ func TestNewIdPServiceWithoutIdPWarnsWhenReloadAddsBlock(t *testing.T) {
 
 	overlay = fmt.Appendf(nil, "idp:\n  issuer: https://b.example.com\n  audience: sts.amazonaws.com\n  signing_keys:\n    - kms_key_id: %q\n      algorithm: RS256\n      status: active\n", bootstrapKMSARN)
 	require.NoError(t, p.Refresh(context.Background()))
-	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
+	assert.Equal(t, 1, strings.Count(buf.String(), `"eventType":"config.idp.reload_ignored"`))
 }
