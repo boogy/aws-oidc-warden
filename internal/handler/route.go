@@ -95,7 +95,6 @@ func serveIdP[T any](ctx context.Context, r *RequestProcessor, kind routeKind, m
 	var headers map[string]string
 	switch kind {
 	case routeDiscovery, routeJWKS:
-		r.warnFrozenDrift(ctx, log, r.provider.Get())
 		status, body, headers = r.idpDocument(ctx, kind, log)
 	case routeMethodNotAllowed:
 		status, body = errorBody(ctx, ErrMethodNotAllowed, http.StatusMethodNotAllowed)

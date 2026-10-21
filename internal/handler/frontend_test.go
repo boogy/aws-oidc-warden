@@ -542,23 +542,6 @@ func TestAPIGatewayRoutesIdPOnStageQualifiedPath(t *testing.T) {
 	assert.Contains(t, r.Body, `"keys"`)
 }
 
-func TestIdPDocumentRouteWarnsOnFrozenDrift(t *testing.T) {
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil))))
-	defer slog.SetDefault(prev)
-
-	cfg := idpConfig(t, true, "")
-	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
-	cfg.IdP.Audience = "drifted.example.com"
-	h := handler.NewAwsApiGateway(config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), nil).WithIdP(svc)
-
-	r, err := h.Handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: "GET", Path: idpJWKSPath})
-	require.NoError(t, err)
-	require.Equal(t, 200, r.StatusCode, r.Body)
-	assert.Equal(t, 1, countEventLines(buf.String(), "config.idp.reload_ignored"))
-}
-
 // The body/header parse path follows the configured jwt_validation.mode, not header presence.
 func TestALBHandler_PathFollowsConfiguredMode(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/MyRole"

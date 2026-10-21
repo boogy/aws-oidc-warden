@@ -329,8 +329,10 @@ func TestBootstrapIdPUsesOverlay(t *testing.T) {
 	require.Equal(t, "https://b.example.com", b.IdP.Config().Issuer)
 	require.Equal(t, "https://b.example.com/.well-known/jwks.json", b.IdP.Config().JWKSURI)
 
-	r := NewRequestProcessor(b.Provider, nil, nil, nil, "test").WithIdP(b.IdP)
-	r.warnFrozenDrift(context.Background(), logger, b.Provider.Get())
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(prev)
+	require.NoError(t, b.Provider.Refresh(context.Background()))
 	require.Equal(t, 0, strings.Count(buf.String(), "config.idp.reload_ignored"))
 	require.Equal(t, 1, consumer.warmCalls, "STS caller identity is warmed once at cold start")
 }
@@ -394,16 +396,6 @@ func TestBootstrapAdaptersAttachIdP(t *testing.T) {
 	}
 }
 
-func TestWarnFrozenDriftIgnoresRemovedIdPBlock(t *testing.T) {
-	svc := idp.NewService(*bootstrapIdPConfig("https://idp.example.com", false), nil)
-	var buf bytes.Buffer
-	logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil)))
-
-	r := NewRequestProcessor(nil, nil, nil, nil, "test").WithIdP(svc)
-	r.warnFrozenDrift(context.Background(), logger, bootstrapBaseConfig(t, nil))
-	assert.Zero(t, strings.Count(buf.String(), "config.idp.reload_ignored"))
-}
-
 type etagOverlayConsumer struct {
 	aws.AwsConsumerInterface
 	prevETags []string
@@ -428,4 +420,20 @@ func TestOverlayFetchUsesConditionalGet(t *testing.T) {
 
 	assert.Equal(t, []string{"", `"e1"`}, consumer.prevETags)
 	assert.True(t, p.Get().LogClaimValues, "an unchanged overlay must still be applied")
+}
+
+func TestNewIdPServiceWithoutIdPWarnsWhenReloadAddsBlock(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil))))
+	defer slog.SetDefault(prev)
+
+	overlay := []byte("log_level: info\n")
+	p := config.NewProvider(bootstrapBaseConfig(t, nil), time.Minute, "yaml", func(context.Context) ([]byte, error) { return overlay, nil })
+	require.NoError(t, p.Refresh(context.Background()))
+	require.Nil(t, NewIdPService(p, func() idp.KMSAPI { return nil }, slog.Default()))
+
+	overlay = fmt.Appendf(nil, "idp:\n  issuer: https://b.example.com\n  audience: sts.amazonaws.com\n  signing_keys:\n    - kms_key_id: %q\n      algorithm: RS256\n      status: active\n", bootstrapKMSARN)
+	require.NoError(t, p.Refresh(context.Background()))
+	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
 }

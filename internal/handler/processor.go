@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"sync/atomic"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/aws"
@@ -30,8 +29,6 @@ type RequestProcessor struct {
 	routes         *idpRoutes
 	idpIssuer      string
 	sourceIdentity *sourceIdentityTemplate // nil when the source_identity claim is off
-	frozenFP       string
-	lastChecked    atomic.Pointer[config.Config]
 }
 
 // WithIdP enables the IdP mint path; a nil service leaves it disabled.
@@ -39,23 +36,12 @@ func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor {
 	r.idp, r.routes, r.sourceIdentity = s, nil, nil
 	if s != nil {
 		frozen := s.Config()
-		r.frozenFP = frozen.Fingerprint()
 		r.routes, r.idpIssuer = newIdPRoutes(frozen.Paths), frozen.Issuer
 		if frozen.IncludeSourceIdentityClaim() {
 			r.sourceIdentity = parseSourceIdentity(frozen.SourceIdentity, frozen.SourceIdentityOverflow)
 		}
 	}
 	return r
-}
-
-// warnFrozenDrift warns once per config generation whose frozen idp settings differ from cold start, including an added idp block.
-func (r *RequestProcessor) warnFrozenDrift(ctx context.Context, log *slog.Logger, cfg *config.Config) {
-	if r.lastChecked.Load() == cfg || r.lastChecked.Swap(cfg) == cfg {
-		return
-	}
-	if cfg.IdP != nil && cfg.IdP.Fingerprint() != r.frozenFP {
-		logevent.Warn(ctx, log, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")
-	}
 }
 
 // NewRequestProcessor creates a request processor; a nil audit sink disables the audit trail.
@@ -239,7 +225,6 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if err != nil {
 		return nil, err
 	}
-	r.warnFrozenDrift(ctx, o.log, r.provider.Get())
 	o.rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
 	if err := checkDuration(requestData.DurationSeconds); err != nil {
 		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"

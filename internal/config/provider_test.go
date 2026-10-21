@@ -1329,6 +1329,35 @@ func TestProviderRefresh_UnchangedRaceSafe(t *testing.T) {
 	wg.Wait()
 }
 
+func TestProviderRefreshWarnsOnFrozenIdPDrift(t *testing.T) {
+	drifted := strings.Replace(idpTestBlockYAML, `audience: "sts.amazonaws.com"`, `audience: "drifted.example.com"`, 1)
+	tests := []struct {
+		name       string
+		boot, next string
+		freeze     bool
+		want       int
+	}{
+		{"unchanged", idpTestBlockYAML, idpTestBlockYAML + "log_level: debug\n", true, 0},
+		{"frozen field changed", idpTestBlockYAML, drifted, true, 1},
+		{"block removed", idpTestBlockYAML, "log_level: info\n", true, 0},
+		{"block added to a warden built without one", "log_level: info\n", idpTestBlockYAML, true, 1},
+		{"cold start before freeze", "log_level: info\n", idpTestBlockYAML, false, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(tt.boot)
+			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+			require.NoError(t, p.Refresh(context.Background()))
+			if tt.freeze {
+				p.FreezeIdP(p.Get().IdP)
+			}
+			body = []byte(tt.next)
+			out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
+			assert.Equal(t, tt.want, strings.Count(out, `config.idp.reload_ignored`))
+		})
+	}
+}
+
 func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 	body := []byte(idpTestBlockYAML)
 	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })

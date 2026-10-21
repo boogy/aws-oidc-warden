@@ -65,6 +65,7 @@ type Provider struct {
 	fragmentFetch FragmentFetchFunc          // nil if no remote ("scheme://") fragments are configured
 	fragments     map[string]*cachedFragment // last-applied fragment cache; only touched under sem (in refreshLocked)
 	frozenIdP     *IdPConfig                 // idp config the running service was built from; guarded by sem
+	idpFrozen     bool                       // FreezeIdP has run, even with no IdP; guarded by sem
 	built         bool                       // a refresh has fully applied overlaySum and fragments; guarded by sem
 	overlaySum    [sha256.Size]byte          // digest of base + overlay bytes behind current; guarded by sem
 }
@@ -90,11 +91,11 @@ func NewProvider(base *Config, interval time.Duration, format string, fetch Fetc
 	return p
 }
 
-// FreezeIdP records the IdP config the running service was built from.
+// FreezeIdP records the IdP config the running service was built from; nil means none was built.
 func (p *Provider) FreezeIdP(c *IdPConfig) {
 	p.lock()
 	defer p.unlock()
-	p.frozenIdP = c
+	p.frozenIdP, p.idpFrozen = c, true
 	p.built = false
 }
 
@@ -311,6 +312,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	prevEnabled, enabled := prevIdP != nil && prevIdP.Enabled, cfg.IdP != nil && cfg.IdP.Enabled
 	if p.frozenIdP != nil && prevEnabled != enabled {
 		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", enabled), slog.Bool("blockPresent", cfg.IdP != nil))
+	}
+	if p.idpFrozen && cfg.IdP != nil && (p.frozenIdP == nil || cfg.IdP.Fingerprint() != p.frozenIdP.Fingerprint()) {
+		logevent.Warn(ctx, nil, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")
 	}
 	return nil
 }

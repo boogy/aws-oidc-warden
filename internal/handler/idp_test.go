@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +28,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/idp/idptest"
-	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -610,67 +608,6 @@ func TestProcessMintSignErrors(t *testing.T) {
 	}
 }
 
-func TestProcessMintWarnsOnceOnFrozenIdPDrift(t *testing.T) {
-	cfg := idpConfig(t, true, "")
-	signer := &countingSigner{Signer: idptest.NewSigner(t)}
-	svc := idpService(t, cfg, signer, nil)
-	cfg.IdP.Audience = "drifted.example.com"
-	var fetches atomic.Int32
-	provider := config.NewProvider(cfg, time.Hour, "yaml", func(context.Context) ([]byte, error) {
-		// A changed overlay is what makes each refresh a new config generation.
-		if fetches.Add(1)%2 == 0 {
-			return []byte("log_level: debug\n"), nil
-		}
-		return []byte("log_level: info\n"), nil
-	})
-	proc := handler.NewRequestProcessor(provider, mockWI(t), idpClaims(nil), &fakeAuditSink{}, "apigatewayv2").WithIdP(svc)
-
-	var buf bytes.Buffer
-	count := func() int { return strings.Count(buf.String(), "config.idp.reload_ignored") }
-	for range 2 {
-		_, err := mint(t, proc, handler.RequestData{}, &buf)
-		require.NoError(t, err)
-	}
-	assert.Equal(t, 1, count())
-
-	require.NoError(t, provider.Refresh(context.Background()))
-	_, err := mint(t, proc, handler.RequestData{}, &buf)
-	require.NoError(t, err)
-	assert.Equal(t, 2, count())
-}
-
-type reloadingExtractor struct {
-	*fixedExtractor
-	reload func()
-}
-
-func (e *reloadingExtractor) Extract(ctx context.Context, in validator.ExtractionInput) (*types.Claims, error) {
-	if e.reload != nil {
-		e.reload()
-		e.reload = nil
-	}
-	return e.fixedExtractor.Extract(ctx, in)
-}
-
-func TestProcessMintDriftWarnSurvivesRequestStraddlingReload(t *testing.T) {
-	cfg := idpConfig(t, true, "")
-	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
-	cfg.IdP.Audience = "drifted.example.com"
-	var fetches atomic.Int32
-	provider := config.NewProvider(cfg, time.Hour, "yaml", func(context.Context) ([]byte, error) {
-		return fmt.Appendf(nil, "log_level: %s\n", []string{"info", "debug"}[fetches.Add(1)%2]), nil
-	})
-	ex := &reloadingExtractor{fixedExtractor: idpClaims(nil), reload: func() { require.NoError(t, provider.Refresh(context.Background())) }}
-	proc := handler.NewRequestProcessor(provider, mockWI(t), ex, &fakeAuditSink{}, "apigatewayv2").WithIdP(svc)
-
-	var buf bytes.Buffer
-	for range 2 {
-		_, err := mint(t, proc, handler.RequestData{}, &buf)
-		require.NoError(t, err)
-	}
-	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
-}
-
 func TestProcessMintNeverReturnsToken(t *testing.T) {
 	cfg := idpConfig(t, true, "")
 	cons := mockWI(t)
@@ -990,22 +927,6 @@ func asStrings(v any) []string {
 		out = append(out, i.(string))
 	}
 	return out
-}
-
-func TestProcessWarnsWhenReloadAddsIdPBlock(t *testing.T) {
-	cfg := idpConfig(t, false, "")
-	cfg.IdP = nil
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), mockWI(t), idpClaims(nil), &fakeAuditSink{}, "apigatewayv2")
-	var buf bytes.Buffer
-	_, err := mint(t, proc, handler.RequestData{}, &buf)
-	require.NoError(t, err)
-	assert.Zero(t, strings.Count(buf.String(), "config.idp.reload_ignored"))
-
-	added := idpConfig(t, false, "")
-	proc = handler.NewRequestProcessor(config.NewStaticProvider(added), mockWI(t), idpClaims(nil), &fakeAuditSink{}, "apigatewayv2")
-	_, err = mint(t, proc, handler.RequestData{}, &buf)
-	require.NoError(t, err)
-	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
 }
 
 func TestSessionTagsBuiltOncePerRequest(t *testing.T) {

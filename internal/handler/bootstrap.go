@@ -163,6 +163,7 @@ func DefaultIdPKMS() idp.KMSAPI { return aws.NewAwsServiceWrapper().KMS() }
 func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.Logger) *idp.Service {
 	cfg := provider.Get().IdP
 	if cfg == nil {
+		provider.FreezeIdP(nil)
 		return nil
 	}
 	svc := idp.NewService(*cfg, idp.NewLoader(*cfg, kms, log))
