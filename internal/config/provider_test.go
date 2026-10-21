@@ -1333,14 +1333,19 @@ func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 	tests := []struct {
 		name          string
 		base, overlay bool
-		wantLog       bool
+		env           string
+		want, wantLog bool
 	}{
-		{"disable", true, false, true},
-		{"enable", false, true, true},
-		{"unchanged", true, true, false},
+		{"disable", true, false, "", false, true},
+		{"enable", false, true, "", true, true},
+		{"unchanged", true, true, "", true, false},
+		{"env beats overlay", true, false, "true", true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.env != "" {
+				t.Setenv("AOW_IDP_ENABLED", tt.env)
+			}
 			base := baseConfig(t)
 			base.IdP = validIdP()
 			base.IdP.Enabled = tt.base
@@ -1349,13 +1354,13 @@ func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 			p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
 
 			out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
-			require.Equal(t, tt.overlay, p.Get().IdP.Enabled)
+			require.Equal(t, tt.want, p.Get().IdP.Enabled)
 			if !tt.wantLog {
 				assert.NotContains(t, out, "config.idp.enabled_changed")
 				return
 			}
 			assert.Contains(t, out, "config.idp.enabled_changed")
-			assert.Contains(t, out, fmt.Sprintf(`"enabled":%t`, tt.overlay))
+			assert.Contains(t, out, fmt.Sprintf(`"enabled":%t`, tt.want))
 		})
 	}
 }
