@@ -332,7 +332,9 @@ func TestBootstrapIdPUsesOverlay(t *testing.T) {
 	prev := slog.Default()
 	slog.SetDefault(logger)
 	defer slog.SetDefault(prev)
+	reloads := strings.Count(buf.String(), "config.reload.success")
 	require.NoError(t, b.Provider.Refresh(context.Background()))
+	require.Equal(t, reloads+1, strings.Count(buf.String(), "config.reload.success"), "FreezeIdP forces a rebuild")
 	require.Equal(t, 0, strings.Count(buf.String(), "config.idp.reload_ignored"))
 	require.Equal(t, 1, consumer.warmCalls, "STS caller identity is warmed once at cold start")
 }
