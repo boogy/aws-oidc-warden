@@ -1,7 +1,6 @@
 package idp
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -36,7 +35,7 @@ func TestMintSubjectTemplate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg, ks := mintSetup(t)
 			cfg.SubjectTemplate = tt.tmpl
-			tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{RoleARN: tt.role, SourceIssuer: gh, SourceSubject: tt.srcSub}, time.Now())
+			tok, err := mintT(cfg, ks, MintRequest{RoleARN: tt.role, SourceIssuer: gh, SourceSubject: tt.srcSub}, time.Now())
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
@@ -50,7 +49,7 @@ func TestMintSubjectTemplate(t *testing.T) {
 func TestMintSubjectTemplateEmitsOnlyAllowedAWSNamespaceClaims(t *testing.T) {
 	cfg, ks := mintSetup(t)
 	cfg.SubjectTemplate = "{source_issuer}#{source_subject}#{role_arn}"
-	tok, err := mint(context.Background(), cfg, compileSubjectTemplate(cfg.SubjectTemplate), ks, MintRequest{
+	tok, err := mintT(cfg, ks, MintRequest{
 		RoleARN: testRole, SourceIssuer: "https://token.actions.githubusercontent.com",
 		SourceSubject: "https://aws.amazon.com/tags/principal_tags/admin",
 	}, time.Now())
