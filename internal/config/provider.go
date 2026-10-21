@@ -308,8 +308,8 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	logevent.Info(ctx, nil, logevent.ConfigReloadSuccess, "configuration reloaded",
 		slog.Int("roleMappings", len(cfg.effective)),
 		slog.Int("fragments", len(cfg.fragmentSources())))
-	if prevIdP != nil && cfg.IdP != nil && prevIdP.Enabled != cfg.IdP.Enabled {
-		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", cfg.IdP.Enabled))
+	if enabled := cfg.IdP != nil && cfg.IdP.Enabled; prevIdP != nil && prevIdP.Enabled != enabled {
+		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", enabled))
 	}
 	return nil
 }

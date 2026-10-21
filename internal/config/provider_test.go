@@ -1333,13 +1333,15 @@ func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 	tests := []struct {
 		name          string
 		base, overlay bool
+		dropBlock     bool
 		env           string
 		want, wantLog bool
 	}{
-		{"disable", true, false, "", false, true},
-		{"enable", false, true, "", true, true},
-		{"unchanged", true, true, "", true, false},
-		{"env beats overlay", true, false, "true", true, false},
+		{"disable", true, false, false, "", false, true},
+		{"enable", false, true, false, "", true, true},
+		{"unchanged", true, true, false, "", true, false},
+		{"env beats overlay", true, false, false, "true", true, false},
+		{"block removed", true, false, true, "", false, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1352,9 +1354,15 @@ func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 			require.NoError(t, base.Validate())
 			body := fmt.Appendf(nil, "idp:\n  enabled: %t\n", tt.overlay)
 			p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+			if tt.dropBlock {
+				body = []byte("log_level: info\n")
+				p.base = baseConfig(t)
+				require.NoError(t, p.base.Validate())
+			}
 
 			out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
-			require.Equal(t, tt.want, p.Get().IdP.Enabled)
+			got := p.Get().IdP
+			require.Equal(t, tt.want, got != nil && got.Enabled)
 			if !tt.wantLog {
 				assert.NotContains(t, out, "config.idp.enabled_changed")
 				return

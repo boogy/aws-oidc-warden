@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **IdP mode (`idp`, optional)**: the warden mints a KMS-signed OIDC token and exchanges it via unsigned `AssumeRoleWithWebIdentity`, lifting the 1h role-chaining cap. `/verify` routes a mapping through it when its `max_session_duration` is over 1h or it sets `idp_token`; no role list; over-1h requests it cannot serve get 503 `idp_signing_unavailable`, 403 `idp_not_permitted` or 400 `duration_exceeds_cap`. See `docs/IDP.md`.
 - **Multi-region KMS keys** for `idp.signing_keys`: one issuer across regions, each signing with its local replica; replicas are confined to `idp.kms_allowed_regions`.
 - **`idp.source_identity`** (default `{issuer}:{subject}`) sets the minted `aws:SourceIdentity`; inbound issuers rendering the same `{issuer}` (scheme or trailing-`/` twins) fail to load; a hash tail keeps distinct inputs distinct.
-- **`config.idp.enabled_changed`** (Warn) logs each reload that flips the live `idp.enabled` kill switch.
+- **`config.idp.enabled_changed`** (Warn) logs each reload that flips the live `idp.enabled` kill switch, including one that removes the `idp` block.
 - **IdP discovery and JWKS paths** answer 404 while `idp.enabled` is false, refresh config without waiting, and match `requestContext.path` on REST API (v1).
 - **`validate` command** checks the merged config (overlay, mappings file, fragments) without starting a server; `-override URI=PATH` tests a local file in place of the `s3://` object the URI names, and `-offline` fails instead of fetching one.
 - **`idp-export` command** writes the discovery and JWKS documents for S3/CloudFront hosting, with overlay and fragments applied.
