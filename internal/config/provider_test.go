@@ -1418,6 +1418,7 @@ func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 			}
 			assert.Contains(t, out, "config.idp.enabled_changed")
 			assert.Contains(t, out, fmt.Sprintf(`"enabled":%t`, tt.want))
+			assert.Contains(t, out, `"blockPresent":true`)
 		})
 	}
 }
