@@ -84,8 +84,7 @@ func albRequestHeaders(event events.ALBTargetGroupRequest) map[string]string {
 
 // createRequestContext creates an enhanced context with request tracking information
 func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, headers map[string]string) (context.Context, context.CancelFunc) {
-	// ALB has neither a request ID nor a source-IP field, so both fall back
-	// to their non-frontend paths (fresh UUID, rightmost XFF hop).
+	// ALB supplies no request ID or source IP; empty args select the fallbacks.
 	return newRequestContext(ctx, "", "", headers)
 }
 
