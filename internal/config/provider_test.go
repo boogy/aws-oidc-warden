@@ -1364,16 +1364,19 @@ func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 	require.NoError(t, p.Refresh(context.Background()))
 	p.FreezeIdP(p.Get().IdP)
 
+	drifted := strings.Replace(idpTestBlockYAML, `audience: "sts.amazonaws.com"`, `audience: "drifted.example.com"`, 1)
 	for _, step := range []struct {
 		body    string
 		enabled bool
-	}{{"log_level: info\n", false}, {idpTestBlockYAML, true}} {
+		ignored int
+	}{{"log_level: info\n", false, 0}, {idpTestBlockYAML, true, 0}, {"log_level: info\n", false, 0}, {drifted, true, 1}} {
 		body = []byte(step.body)
 		out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
 		assert.Equal(t, step.enabled, p.Get().IdP != nil && p.Get().IdP.Enabled)
 		assert.Contains(t, out, fmt.Sprintf(`"enabled":%t`, step.enabled))
 		assert.Equal(t, 1, strings.Count(out, `config.idp.enabled_changed`))
 		assert.Contains(t, out, fmt.Sprintf(`"blockPresent":%t`, step.enabled))
+		assert.Equal(t, step.ignored, strings.Count(out, `config.idp.reload_ignored`))
 	}
 }
 

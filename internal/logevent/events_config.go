@@ -33,7 +33,7 @@ var ConfigJWTValidationDelegated = newEvent("config.jwt_validation.delegated")
 // ConfigIdPReloadIgnored is emitted by each accepted reload whose idp settings differ from the frozen cold-start ones, including an added block (Warn).
 var ConfigIdPReloadIgnored = newEvent("config.idp.reload_ignored")
 
-// ConfigIdPEnabledChanged is emitted when a reload flips the live idp.enabled kill switch, counting a missing idp block as disabled (Warn).
+// ConfigIdPEnabledChanged is emitted when a reload flips the live idp.enabled kill switch of a built IdP, counting a missing idp block as disabled (Warn).
 var ConfigIdPEnabledChanged = newEvent("config.idp.enabled_changed")
 
 // ConfigIdPIssuerCollision is emitted when a reload's inbound issuers conflict with the frozen IdP config (Error).
