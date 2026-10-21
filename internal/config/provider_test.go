@@ -1344,6 +1344,7 @@ func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 		assert.Equal(t, step.enabled, p.Get().IdP != nil && p.Get().IdP.Enabled)
 		assert.Contains(t, out, fmt.Sprintf(`"enabled":%t`, step.enabled))
 		assert.Equal(t, 1, strings.Count(out, `config.idp.enabled_changed`))
+		assert.Contains(t, out, fmt.Sprintf(`"blockPresent":%t`, step.enabled))
 	}
 }
 

@@ -310,7 +310,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		slog.Int("fragments", len(cfg.fragmentSources())))
 	prevEnabled, enabled := prevIdP != nil && prevIdP.Enabled, cfg.IdP != nil && cfg.IdP.Enabled
 	if p.frozenIdP != nil && prevEnabled != enabled {
-		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", enabled))
+		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", enabled), slog.Bool("blockPresent", cfg.IdP != nil))
 	}
 	return nil
 }

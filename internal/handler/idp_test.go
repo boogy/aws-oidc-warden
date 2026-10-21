@@ -29,6 +29,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
 	"github.com/boogy/aws-oidc-warden/internal/idp/idptest"
+	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -636,6 +637,38 @@ func TestProcessMintWarnsOnceOnFrozenIdPDrift(t *testing.T) {
 	_, err := mint(t, proc, handler.RequestData{}, &buf)
 	require.NoError(t, err)
 	assert.Equal(t, 2, count())
+}
+
+type reloadingExtractor struct {
+	*fixedExtractor
+	reload func()
+}
+
+func (e *reloadingExtractor) Extract(ctx context.Context, in validator.ExtractionInput) (*types.Claims, error) {
+	if e.reload != nil {
+		e.reload()
+		e.reload = nil
+	}
+	return e.fixedExtractor.Extract(ctx, in)
+}
+
+func TestProcessMintDriftWarnSurvivesRequestStraddlingReload(t *testing.T) {
+	cfg := idpConfig(t, true, "")
+	svc := idpService(t, cfg, &countingSigner{Signer: idptest.NewSigner(t)}, nil)
+	cfg.IdP.Audience = "drifted.example.com"
+	var fetches atomic.Int32
+	provider := config.NewProvider(cfg, time.Hour, "yaml", func(context.Context) ([]byte, error) {
+		return fmt.Appendf(nil, "log_level: %s\n", []string{"info", "debug"}[fetches.Add(1)%2]), nil
+	})
+	ex := &reloadingExtractor{fixedExtractor: idpClaims(nil), reload: func() { require.NoError(t, provider.Refresh(context.Background())) }}
+	proc := handler.NewRequestProcessor(provider, mockWI(t), ex, &fakeAuditSink{}, "apigatewayv2").WithIdP(svc)
+
+	var buf bytes.Buffer
+	for range 2 {
+		_, err := mint(t, proc, handler.RequestData{}, &buf)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 1, strings.Count(buf.String(), "config.idp.reload_ignored"))
 }
 
 func TestProcessMintNeverReturnsToken(t *testing.T) {

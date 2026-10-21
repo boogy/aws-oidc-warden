@@ -239,7 +239,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if err != nil {
 		return nil, err
 	}
-	r.warnFrozenDrift(ctx, o.log, o.cfg)
+	r.warnFrozenDrift(ctx, o.log, r.provider.Get())
 	o.rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
 	if err := checkDuration(requestData.DurationSeconds); err != nil {
 		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
