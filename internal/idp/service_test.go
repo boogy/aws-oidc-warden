@@ -163,7 +163,6 @@ func TestServiceMintUsesFrozenConfig(t *testing.T) {
 	})
 	cfg.SigningKeys[0].File = "/mutated.pem"
 	*cfg.IncludeSourceIdentity = false
-	cfg.SubjectTemplate = "{role_arn}"
 
 	got := s.Config()
 	require.Equal(t, "/k.pem", got.SigningKeys[0].File)
