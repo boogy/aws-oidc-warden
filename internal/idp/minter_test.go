@@ -20,7 +20,6 @@ func mintSetup(tb testing.TB) (config.IdPConfig, *KeySet) {
 	tb.Helper()
 	cfg := testCfg()
 	cfg.TokenTTL = 5 * time.Minute
-	cfg.SubjectTemplate = config.IdPDefaultSubjectTemplate
 	ks, err := NewKeySet(cfg, []LoadedKey{{Signer: newTestSigner(tb), Status: config.IdPKeyActive}})
 	if err != nil {
 		tb.Fatal(err)
