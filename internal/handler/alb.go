@@ -83,7 +83,7 @@ func albRequestHeaders(event events.ALBTargetGroupRequest) map[string]string {
 }
 
 func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, headers map[string]string) (context.Context, context.CancelFunc) {
-	// ALB supplies no request ID or source IP; empty args select the fallbacks.
+	// The ALB event has no request ID or source IP field; empty args select the fallbacks.
 	return newRequestContext(ctx, "", "", headers)
 }
 
