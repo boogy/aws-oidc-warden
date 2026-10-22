@@ -84,7 +84,9 @@ func FuzzRenderSubjectMatchesReplacer(f *testing.F) {
 		f.Add(tmpl, role, "https://iss", "org/repo")
 	}
 	f.Add("{source_issuer}#{source_subject}#{role_arn}", role, "{role_arn}", "{role_name}{account_id}{source_issuer}")
-	f.Add("{source_subject}#{role_arn}", role, "i", "a b\x7f")
+	for _, sub := range []string{"a b", "a\x7f", "a\x1f", "a\x80"} {
+		f.Add("{source_subject}#{role_arn}", role, "i", sub)
+	}
 	f.Add("{role_arn}", "arn:aws:iam::1:role/a:b", "i", "s")
 	f.Fuzz(func(t *testing.T, tmpl, roleARN, iss, sub string) {
 		got, err := renderSubject(compileSubjectTemplate(tmpl), roleARN, iss, sub)
