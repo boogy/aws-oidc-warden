@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 func TestSubjectPlaceholdersMatchConfigValidator(t *testing.T) {
@@ -73,26 +74,38 @@ func TestMintSubjectTemplateEmitsOnlyAllowedAWSNamespaceClaims(t *testing.T) {
 	}
 }
 
-func TestRenderSubjectMatchesReplacer(t *testing.T) {
+func FuzzRenderSubjectMatchesReplacer(f *testing.F) {
 	const role = "arn:aws:iam::123456789012:role/team/Deploy"
-	tmpls := []string{
+	for _, tmpl := range []string{
 		"{role_arn}", "{source_issuer}#{source_subject}#{role_arn}", "w:{account_id}:{role_name}:{role_arn}",
 		"{unknown}|{role_arn}", "{{role_arn}", "{role_arn}{role_arn}", "{role_ar{role_arn}", "x{", "{",
 		"{source_subject}{source_subject}/{role_arn}", "a{role_name}{account_id}b{role_arn}",
+	} {
+		f.Add(tmpl, role, "https://iss", "org/repo")
 	}
-	for _, tmpl := range tmpls {
-		t.Run(tmpl, func(t *testing.T) {
-			want := strings.NewReplacer("{role_arn}", role, "{account_id}", "123456789012", "{role_name}", "Deploy",
-				"{source_issuer}", "https://iss", "{source_subject}", "org/repo").Replace(tmpl)
-			got, err := renderSubject(compileSubjectTemplate(tmpl), role, "https://iss", "org/repo")
-			if strings.HasSuffix(want, role) {
-				require.NoError(t, err)
-				require.Equal(t, want, got)
-			} else {
-				require.ErrorIs(t, err, ErrInvalidSubject)
-			}
-		})
-	}
+	f.Add("{source_issuer}#{source_subject}#{role_arn}", role, "{role_arn}", "{role_name}{account_id}{source_issuer}")
+	f.Add("{source_subject}#{role_arn}", role, "i", "a b\x7f")
+	f.Add("{role_arn}", "arn:aws:iam::1:role/a:b", "i", "s")
+	f.Fuzz(func(t *testing.T, tmpl, roleARN, iss, sub string) {
+		got, err := renderSubject(compileSubjectTemplate(tmpl), roleARN, iss, sub)
+		account, name, perr := utils.ParseRoleARN(roleARN)
+		if perr != nil || strings.Count(roleARN, ":") != 5 {
+			require.ErrorIs(t, err, ErrInvalidSubject)
+			return
+		}
+		want := strings.NewReplacer("{role_arn}", roleARN, "{account_id}", account, "{role_name}", name,
+			"{source_issuer}", iss, "{source_subject}", sub).Replace(tmpl)
+		valid := len(want) <= maxSubjectBytes && strings.HasSuffix(want, roleARN)
+		for i := 0; valid && i < len(want); i++ {
+			valid = want[i] >= 0x21 && want[i] <= 0x7e
+		}
+		if !valid {
+			require.ErrorIs(t, err, ErrInvalidSubject)
+			return
+		}
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	})
 }
 
 func TestRenderSubjectDoesNotReExpandClaimValues(t *testing.T) {
