@@ -63,7 +63,6 @@ func (h *AwsLambdaUrl) Handler(ctx context.Context, event events.LambdaFunctionU
 	return h.respondJSON(ctx, credentials)
 }
 
-// createRequestContext creates an enhanced context with request tracking information
 func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.LambdaFunctionURLRequest) (context.Context, context.CancelFunc) {
 	return newRequestContext(ctx,
 		event.RequestContext.RequestID,

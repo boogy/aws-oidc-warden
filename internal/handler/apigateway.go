@@ -72,7 +72,6 @@ func idpRoutePath(event events.APIGatewayProxyRequest) string {
 	return event.Path
 }
 
-// createRequestContext creates an enhanced context with request tracking information
 func (h *AwsApiGateway) createRequestContext(ctx context.Context, event events.APIGatewayProxyRequest) (context.Context, context.CancelFunc) {
 	return newRequestContext(ctx,
 		event.RequestContext.RequestID,
