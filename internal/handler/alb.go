@@ -69,7 +69,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 	return h.respondJSON(ctx, credentials)
 }
 
-// albRequestHeaders reads both maps: with multi_value_headers enabled only MultiValueHeaders is set, and it wins on collision.
+// albRequestHeaders folds repeated values with ", " so clientIP's rightmost-hop X-Forwarded-For rule still holds.
 func albRequestHeaders(event events.ALBTargetGroupRequest) map[string]string {
 	headers := make(map[string]string, len(event.Headers)+len(event.MultiValueHeaders))
 	maps.Copy(headers, event.Headers)

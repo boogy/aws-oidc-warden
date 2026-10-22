@@ -3,8 +3,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -17,6 +19,11 @@ var (
 	idpSourceIdentityLit   = regexp.MustCompile(`^[\w=,.@:-]*$`)
 	idpClaimPlaceholder    = regexp.MustCompile(`^\{claim:([^{}]*)\}$`)
 )
+
+// IdPSubjectPlaceholders returns the placeholders idp.subject_template accepts, sorted.
+func IdPSubjectPlaceholders() []string {
+	return slices.Sorted(maps.Keys(idpAllowedPlaceholders))
+}
 
 // validateSourceIdentityTemplate checks placeholders, the literal charset, and issuer binding.
 func validateSourceIdentityTemplate(t string, issuerCount int) error {

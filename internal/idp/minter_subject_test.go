@@ -1,12 +1,24 @@
 package idp
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/boogy/aws-oidc-warden/internal/config"
 )
+
+func TestSubjectPlaceholdersMatchConfigValidator(t *testing.T) {
+	var got []string
+	for _, p := range subjectPlaceholders {
+		got = append(got, p.token)
+	}
+	slices.Sort(got)
+	require.Equal(t, config.IdPSubjectPlaceholders(), got)
+}
 
 func TestMintSubjectTemplate(t *testing.T) {
 	const (
