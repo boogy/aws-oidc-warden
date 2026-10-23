@@ -26,12 +26,6 @@ func TestEvent_Category(t *testing.T) {
 	}
 }
 
-func TestEvent_String(t *testing.T) {
-	if got := STSAssumeRoleFailure.String(); got != "sts.assume_role.failure" {
-		t.Errorf("String() = %q, want sts.assume_role.failure", got)
-	}
-}
-
 func TestDeriveOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		eventType string

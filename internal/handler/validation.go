@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/boogy/aws-oidc-warden/internal/aws"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
-const maxBodyBytes = 1024 * 1024
+// MaxBodyBytes is twice the largest token and role plus slack for the other fields and JSON escaping.
+const MaxBodyBytes = 2*(MaxTokenLength+MaxRoleLength) + 4096
 
 // validateRole checks that role is a bounded IAM role ARN in a recognized partition.
 func validateRole(role string) error {
@@ -20,7 +21,7 @@ func validateRole(role string) error {
 	}
 	for _, prefix := range ValidPrefixes {
 		if strings.HasPrefix(role, prefix) {
-			if _, _, err := aws.ParseRoleARN(role); err != nil {
+			if _, _, err := utils.ParseRoleARN(role); err != nil {
 				return fmt.Errorf("%w: %w", ErrInvalidRoleFormat, err)
 			}
 			return nil
@@ -45,7 +46,7 @@ func decodeRequestBody(body string) (*RequestData, error) {
 	if strings.TrimSpace(body) == "" {
 		return nil, fmt.Errorf("request body is empty: %w", ErrInvalidJSON)
 	}
-	if len(body) > maxBodyBytes {
+	if len(body) > MaxBodyBytes {
 		return nil, fmt.Errorf("request body too large: %w", ErrInvalidJSON)
 	}
 
@@ -56,9 +57,7 @@ func decodeRequestBody(body string) (*RequestData, error) {
 	return &data, nil
 }
 
-// ParseRoleOnlyRequestBody parses and validates a delegated-mode request body.
-// In delegated mode the JWT is validated by an upstream service; only the role
-// ARN must be present in the request body.
+// ParseRoleOnlyRequestBody parses a delegated-mode request body, which needs only the role ARN.
 func ParseRoleOnlyRequestBody(body string) (*RequestData, error) {
 	data, err := decodeRequestBody(body)
 	if err != nil {

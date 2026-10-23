@@ -47,14 +47,24 @@ const albKeyCacheTTL = 5 * time.Minute
 const maxALBKeyCacheEntries = 128
 
 func (c *albKeyCache) get(kid string) (*ecdsa.PublicKey, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	now := time.Now()
+	c.mu.RLock()
 	e, ok := c.entries[kid]
-	if !ok || time.Now().After(e.expiresAt) {
-		delete(c.entries, kid)
+	c.mu.RUnlock()
+	if !ok {
 		return nil, false
 	}
-	return e.key, true
+	if !now.After(e.expiresAt) {
+		return e.key, true
+	}
+
+	// Drop the expired entry unless a concurrent set already replaced it.
+	c.mu.Lock()
+	if cur, ok := c.entries[kid]; ok && now.After(cur.expiresAt) {
+		delete(c.entries, kid)
+	}
+	c.mu.Unlock()
+	return nil, false
 }
 
 func (c *albKeyCache) set(kid string, key *ecdsa.PublicKey) {
@@ -173,6 +183,7 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 		jwt.WithValidMethods([]string{"ES256"}),
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuedAt(),
+		jwt.WithLeeway(bounds.leeway),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("ALB OIDC JWT verification failed: %w", err)

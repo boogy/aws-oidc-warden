@@ -33,6 +33,16 @@ build-local:
 	@mkdir -p $(BUILD_DIR)
 	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/$(APP_NAME)-local ./cmd/local
 
+.PHONY: build-idp-export
+build-idp-export:
+	@mkdir -p $(BUILD_DIR)
+	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/idp-export ./cmd/idp-export
+
+.PHONY: build-validate
+build-validate:
+	@mkdir -p $(BUILD_DIR)
+	@go build $(GO_BUILD_FLAGS) -o $(BUILD_DIR)/validate ./cmd/validate
+
 .PHONY: build-lambda
 build-lambda: build-apigateway build-apigatewayv2 build-alb build-lambdaurl
 
@@ -66,7 +76,7 @@ build-lambdaurl:
 .PHONY: run
 run: build-local
 	@echo "Running local development server..."
-	@$(BUILD_DIR)/$(APP_NAME)-local --port=8080 --log-level=debug --config=./example-config.yaml
+	@$(BUILD_DIR)/$(APP_NAME)-local --port=8080 --log-level=debug --config=./docs/examples/example-config.yaml
 
 .PHONY: clean
 clean:
@@ -135,12 +145,12 @@ check: fmt lint vuln test
 .PHONY: test
 test:
 	@echo "Running tests..."
-	@go test ./...
+	@go test -race ./...
 
 .PHONY: test-verbose
 test-verbose:
 	@echo "Running tests with verbose output..."
-	@go test -v ./...
+	@go test -race -v ./...
 
 .PHONY: test-coverage
 test-coverage:
@@ -148,6 +158,17 @@ test-coverage:
 	@go test -coverprofile=coverage.out ./...
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
+
+FUZZTIME ?= 30s
+
+.PHONY: fuzz
+fuzz:
+	@for pkg in $$(go list ./...); do \
+		for t in $$(go test -list '^Fuzz' $$pkg | grep '^Fuzz'); do \
+			echo "Fuzzing $$pkg $$t for $(FUZZTIME)..."; \
+			go test $$pkg -run '^$$' -fuzz "^$$t$$" -fuzztime $(FUZZTIME) || exit 1; \
+		done; \
+	done
 
 # -----------------------------------------------------------------------------
 # Container build targets

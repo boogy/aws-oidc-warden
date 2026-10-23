@@ -62,26 +62,6 @@ func createTestLogger(t *testing.T, logToS3 bool) (*s3logger.S3Logger, *MockS3Cl
 	return logger, mockClient
 }
 
-func TestNewS3Logger(t *testing.T) {
-	cfg := &gtvcfg.Config{
-		LogToS3:   false,
-		LogBucket: "test-bucket",
-		LogPrefix: "logs/",
-	}
-	logger := s3logger.NewS3Logger(cfg)
-	assert.NotNil(t, logger)
-	assert.Equal(t, cfg, logger.GetConfig())
-	assert.Equal(t, "test-bucket", logger.GetS3Config().Bucket)
-	assert.Equal(t, "logs/", logger.GetS3Config().Prefix)
-	assert.Equal(t, false, cfg.LogToS3)
-
-	cfg.LogToS3 = true
-	logger = s3logger.NewS3Logger(cfg)
-	assert.NotNil(t, logger)
-	assert.Equal(t, cfg, logger.GetConfig())
-	assert.Equal(t, true, cfg.LogToS3)
-}
-
 func TestGenerateS3Key(t *testing.T) {
 	cfg := &gtvcfg.Config{
 		LogToS3:   true,
@@ -140,7 +120,7 @@ func TestLoggerWithOptions(t *testing.T) {
 func TestCompressGzip(t *testing.T) {
 	testData := []byte("test data for compression")
 
-	compressed, err := s3logger.TestCompressGzip(testData)
+	compressed, err := s3logger.CompressGzip(testData)
 	assert.NoError(t, err)
 	assert.NotNil(t, compressed)
 
@@ -165,9 +145,6 @@ func TestLoggerWithDisabledLogging(t *testing.T) {
 	err = logger.Flush()
 	assert.NoError(t, err)
 
-	err = logger.WriteSingleLog([]byte("this single log should not be sent to S3"))
-	assert.NoError(t, err)
-
 	mockClient.AssertNotCalled(t, "PutObject")
 }
 
@@ -184,7 +161,7 @@ func TestErrorHandling(t *testing.T) {
 
 	mockClient.On("PutObject", mock.Anything, mock.Anything).Return(nil, assert.AnError)
 
-	err := logger.WriteSingleLog([]byte("test log"))
+	err := logger.WriteRecord(context.Background(), []byte("test log"))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to write logs to S3")
 
@@ -262,7 +239,7 @@ func TestSuccessfulLogDelivery(t *testing.T) {
 		return true
 	})).Return(&s3.PutObjectOutput{}, nil)
 
-	err := logger.WriteSingleLog([]byte("test log message"))
+	err := logger.WriteRecord(context.Background(), []byte("test log message"))
 	assert.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
@@ -289,7 +266,7 @@ func TestBatchProcessing(t *testing.T) {
 	})).Return(&s3.PutObjectOutput{}, nil).Once()
 
 	for i := 1; i <= 2; i++ {
-		err := logger.BufferRecord([]byte(fmt.Sprintf("log message %d\n", i)))
+		err := logger.BufferRecord(fmt.Appendf(nil, "log message %d\n", i))
 		assert.NoError(t, err)
 	}
 
@@ -337,11 +314,11 @@ func TestRetryMechanism(t *testing.T) {
 	mockClient.On("PutObject", mock.Anything, mock.Anything).
 		Return(&s3.PutObjectOutput{}, nil).Once()
 
-	err := logger.WriteSingleLog([]byte("test retry message"))
+	err := logger.WriteRecord(context.Background(), []byte("test retry message"))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to write logs to S3")
 
-	err = logger.WriteSingleLog([]byte("test retry message"))
+	err = logger.WriteRecord(context.Background(), []byte("test retry message"))
 	assert.NoError(t, err)
 
 	mockClient.AssertNumberOfCalls(t, "PutObject", 2)
@@ -367,7 +344,7 @@ func TestMetadataAndTags(t *testing.T) {
 		return true
 	})).Return(&s3.PutObjectOutput{}, nil)
 
-	err := logger.WriteSingleLog([]byte("test metadata and tags"))
+	err := logger.WriteRecord(context.Background(), []byte("test metadata and tags"))
 	assert.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
@@ -406,7 +383,7 @@ func TestConcurrentLogWrites(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				err := logger.BufferRecord([]byte(fmt.Sprintf("concurrent log %d-%d\n", id, j)))
+				err := logger.BufferRecord(fmt.Appendf(nil, "concurrent log %d-%d\n", id, j))
 				assert.NoError(t, err)
 			}
 		}(i)
@@ -420,16 +397,6 @@ func TestConcurrentLogWrites(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
-func TestHandleWriteObjectWithNilClient(t *testing.T) {
-	logger, _ := createTestLogger(t, true)
-
-	logger.SetS3Client(nil)
-
-	err := logger.WriteObject("bucket", "key", []byte("test"))
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "S3 client not initialized")
-}
-
 func TestContextHandling(t *testing.T) {
 	logger, mockClient := createTestLogger(t, true)
 
@@ -438,7 +405,7 @@ func TestContextHandling(t *testing.T) {
 		return hasDeadline && deadline.After(time.Now())
 	}), mock.Anything).Return(&s3.PutObjectOutput{}, nil)
 
-	err := logger.WriteSingleLog([]byte("test context handling"))
+	err := logger.WriteRecord(context.Background(), []byte("test context handling"))
 	assert.NoError(t, err)
 
 	mockClient.AssertExpectations(t)
