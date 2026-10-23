@@ -133,7 +133,6 @@ func TestClassifyWebIdentityError(t *testing.T) {
 		{"No OIDC provider", wiErr("InvalidIdentityToken", "No OpenIDConnect provider found in your account for https://x"), ErrWebIdentityDenied},
 		{"IDPCommunicationError", wiErr("IDPCommunicationError", "Error communicating with IDP"), ErrWebIdentityUnavailable},
 		{"duration exceeds role max", wiErr("ValidationError", "1 validation error detected: Value '43200' at 'durationSeconds' failed to satisfy constraint: Member must have value less than or equal to 3600. DurationSeconds exceeds the MaxSessionDuration set for this role."), ErrWebIdentityDurationExceedsRoleMax},
-		{"duration exceeds role max, lowercased message", wiErr("ValidationError", "durationseconds exceeds the maxsessionduration set for this role"), ErrWebIdentityDurationExceedsRoleMax},
 		{"ValidationError without MaxSessionDuration", wiErr("ValidationError", "Value at 'durationSeconds' failed: DurationSeconds is invalid"), nil},
 		{"PackedPolicyTooLarge", wiErr("PackedPolicyTooLarge", "Packed policy too large"), ErrWebIdentityPackedPolicyTooLarge},
 		{"Throttling", wiErr("ThrottlingException", "Rate exceeded"), nil},

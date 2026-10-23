@@ -54,8 +54,7 @@ const (
 	idpFetchRetrieveHint = "retrieve"
 	idpFetchFetchHint    = "fetch"
 	idpFetchKeyHint      = "verification key"
-	roleMaxDurationHint  = "maxsessionduration"
-	durationSecondsHint  = "durationseconds"
+	roleMaxDurationHint  = "durationseconds exceeds the maxsessionduration"
 )
 
 // classifyWebIdentityError wraps known STS failures in a marker error; others pass through unchanged.
@@ -76,7 +75,7 @@ func classifyWebIdentityError(err error) error {
 	case "idprejectedclaim":
 		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
 	case "validationerror":
-		if strings.Contains(lower, durationSecondsHint) && strings.Contains(lower, roleMaxDurationHint) {
+		if strings.Contains(lower, roleMaxDurationHint) {
 			return fmt.Errorf("%w: %w", ErrWebIdentityDurationExceedsRoleMax, err)
 		}
 	case "packedpolicytoolarge":
