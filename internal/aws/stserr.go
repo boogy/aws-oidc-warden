@@ -60,8 +60,7 @@ const (
 
 // classifyWebIdentityError wraps known STS failures in a marker error; others pass through unchanged.
 func classifyWebIdentityError(err error) error {
-	msg := err.Error()
-	lower := strings.ToLower(msg)
+	lower := strings.ToLower(err.Error())
 	code := strings.ToLower(STSErrorCode(err))
 	if _, denied := deniedCodes[code]; denied {
 		return fmt.Errorf("%w: %w", ErrWebIdentityDenied, err)
