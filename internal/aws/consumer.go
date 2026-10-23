@@ -284,7 +284,7 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 
 	// Transitive so ABAC survives further role chaining by the target role.
 	if cfg := a.cfg(); cfg != nil && cfg.TransitiveSessionTags() {
-		if keys := selectTransitiveKeys(assumeRoleInput.Tags); len(keys) > 0 {
+		if keys := TransitiveKeys(assumeRoleInput.Tags); len(keys) > 0 {
 			assumeRoleInput.TransitiveTagKeys = keys
 		}
 	}
@@ -325,8 +325,8 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 	return result.Credentials, nil
 }
 
-// selectTransitiveKeys returns every attached tag key; tag names are operator-configured.
-func selectTransitiveKeys(tags []types.Tag) []string {
+// TransitiveKeys returns every attached tag key; tag names are operator-configured.
+func TransitiveKeys(tags []types.Tag) []string {
 	keys := make([]string, 0, len(tags))
 	for _, t := range tags {
 		if t.Key != nil {

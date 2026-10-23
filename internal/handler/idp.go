@@ -102,11 +102,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		Tags:           tags,
 	}
 	if cfg.TransitiveSessionTags() {
-		for _, t := range req.Tags {
-			if t.Key != nil {
-				req.TransitiveKeys = append(req.TransitiveKeys, *t.Key)
-			}
-		}
+		req.TransitiveKeys = aws.TransitiveKeys(req.Tags)
 	}
 
 	tok, err := r.idp.Mint(ctx, req)

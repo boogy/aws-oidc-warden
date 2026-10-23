@@ -376,7 +376,7 @@ func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
 	}
 }
 
-func TestSelectTransitiveKeys(t *testing.T) {
+func TestTransitiveKeys(t *testing.T) {
 	tests := []struct {
 		name string
 		tags []ststypes.Tag
@@ -409,7 +409,7 @@ func TestSelectTransitiveKeys(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := selectTransitiveKeys(tt.tags)
+			got := TransitiveKeys(tt.tags)
 			assert.ElementsMatch(t, tt.want, got)
 		})
 	}
