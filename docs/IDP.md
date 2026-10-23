@@ -82,7 +82,7 @@ STS fetches `idp.issuer` + `/.well-known/openid-configuration` (here `https://id
 - The routes must carry **no authorizer** (required in `apigw` delegated mode; STS cannot present a token).
 - `idp.paths.*` must match the path the caller requests. An HTTP API v2 with a named stage includes it (`/prod/.well-known/jwks.json`) and returns 404 unless configured that way. A REST API (v1) routes on `requestContext.path`, which keeps the stage on the `execute-api` domain and the base-path mapping on a custom domain.
 - Only the two `idp.paths.*` are exposed. Any other near miss of them (other case, trailing slash, one extra leading segment) returns 404 `idp_path_not_found`. A method other than `GET`/`HEAD` returns 405 `method_not_allowed` with an `Allow` header.
-- Every other path is a credential request. `Validate()` rejects `idp.paths.*` that shadow `/verify` (any case, or under one stage segment such as `/prod/verify`), but it cannot see your front-end routes: if you serve credentials elsewhere, keep `idp.paths.*` off that path yourself.
+- Every other path is a credential request. `Validate()` rejects `idp.paths.*` that shadow `/verify` (any case, at any depth such as `/prod/verify`), but it cannot see your front-end routes: if you serve credentials elsewhere, keep `idp.paths.*` off that path yourself.
 
 ### Exporting the documents (`idp-export`)
 
