@@ -149,6 +149,12 @@ func TestIdPValidate(t *testing.T) {
 			c.Paths.Discovery = "/prod/.well-known/openid-configuration"
 			c.Paths.JWKS = "/prod/verify"
 		}, wantErr: "conflicts with /verify"},
+		{name: "jwks path is base-path-mapped /verify", mutate: func(c *IdPConfig) {
+			c.Issuer = "https://idp.example.com/prod/base"
+			c.JWKSURI = ""
+			c.Paths.Discovery = "/prod/base/.well-known/openid-configuration"
+			c.Paths.JWKS = "/prod/base/verify"
+		}, wantErr: "conflicts with /verify"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

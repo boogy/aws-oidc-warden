@@ -216,7 +216,7 @@ func (c *IdPConfig) validatePaths() error {
 		if !strings.HasPrefix(e.p, "/") || path.Clean(e.p) != e.p {
 			return fmt.Errorf("idp.paths.%s %q must start with / and be clean", e.name, e.p)
 		}
-		if lower := strings.ToLower(e.p); lower == "/verify" || path.Base(lower) == "verify" && strings.Count(lower, "/") == 2 {
+		if lower := strings.ToLower(e.p); path.Base(lower) == "verify" {
 			return fmt.Errorf("idp.paths.%s conflicts with /verify", e.name)
 		}
 		if seen[e.p] {
