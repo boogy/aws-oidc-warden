@@ -172,7 +172,7 @@ func (a *AwsConsumer) assumeSpoke(ctx context.Context, cfg *gtvcfg.Config, accou
 	if err != nil {
 		return nil, fmt.Errorf("assume spoke role %s: %w", spokeArn, err)
 	}
-	if !CredentialsComplete(out.Credentials) {
+	if !credentialsComplete(out.Credentials) {
 		return nil, fmt.Errorf("spoke role %s returned incomplete credentials", spokeArn)
 	}
 	cr := out.Credentials
@@ -229,14 +229,14 @@ func (a *AwsConsumer) AssumeRoleWithWebIdentity(ctx context.Context, roleARN, se
 	if err != nil {
 		return nil, classifyWebIdentityError(err)
 	}
-	if !CredentialsComplete(out.Credentials) {
+	if !credentialsComplete(out.Credentials) {
 		return nil, fmt.Errorf("%w: %s", ErrWebIdentityIncompleteCredentials, roleARN)
 	}
 	return out.Credentials, nil
 }
 
-// CredentialsComplete reports whether cr carries an access key, secret key and session token.
-func CredentialsComplete(cr *types.Credentials) bool {
+// credentialsComplete reports whether cr carries an access key, secret key and session token.
+func credentialsComplete(cr *types.Credentials) bool {
 	return cr != nil && aws.ToString(cr.AccessKeyId) != "" && aws.ToString(cr.SecretAccessKey) != "" && aws.ToString(cr.SessionToken) != ""
 }
 
@@ -318,7 +318,7 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 		return nil, fmt.Errorf("unable to perform sts.AssumeRole: %w", classifyAssumeRoleError(err))
 	}
 
-	if !CredentialsComplete(result.Credentials) {
+	if !credentialsComplete(result.Credentials) {
 		return nil, errors.New("sts.AssumeRole returned incomplete credentials")
 	}
 
