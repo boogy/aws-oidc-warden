@@ -2,6 +2,9 @@ package idp
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,7 +21,7 @@ import (
 const (
 	maxSubjectBytes = 255
 	maxTokenBytes   = 20000 // STS WebIdentityToken max length
-	maxSigBytes     = 512   // RS256 up to 4096 bits; ES256 uses 64
+	maxSigBytes     = 512   // RS256 up to 4096 bits
 	nbfSkew         = 30 * time.Second
 )
 
@@ -31,15 +34,18 @@ var (
 	ErrInvalidSourceIdentity = errors.New("idp source identity must match " + utils.STSNameRule)
 )
 
-func maxSigLen(alg string) int {
-	if alg == "ES256" {
-		return 64
+func sigLen(pub crypto.PublicKey) int {
+	switch k := pub.(type) {
+	case *rsa.PublicKey:
+		return k.Size()
+	case *ecdsa.PublicKey:
+		return 2 * ((k.Curve.Params().BitSize + 7) / 8)
 	}
 	return maxSigBytes
 }
 
-func estimateTokenLen(header, payload []byte, alg string) int {
-	return b64.EncodedLen(len(header)) + 1 + b64.EncodedLen(len(payload)) + 1 + b64.EncodedLen(maxSigLen(alg))
+func estimateTokenLen(header, payload []byte, pub crypto.PublicKey) int {
+	return b64.EncodedLen(len(header)) + 1 + b64.EncodedLen(len(payload)) + 1 + b64.EncodedLen(sigLen(pub))
 }
 
 // MintRequest is the authorized input for one token.
@@ -120,7 +126,7 @@ func mint(ctx context.Context, cfg config.IdPConfig, subj []subjectPart, ks *Key
 	if err != nil {
 		return nil, err
 	}
-	est := estimateTokenLen(header, payload, signer.Algorithm())
+	est := estimateTokenLen(header, payload, signer.Public())
 	if est > maxTokenBytes {
 		return nil, fmt.Errorf("%w: estimated %d bytes", ErrTokenTooLarge, est)
 	}

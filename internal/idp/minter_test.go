@@ -161,7 +161,7 @@ func TestMintRejectsOversizedToken(t *testing.T) {
 	require.Zero(t, cs.calls)
 }
 
-func TestMintSizeEstimateIsUpperBound(t *testing.T) {
+func TestMintSizeEstimateIsExact(t *testing.T) {
 	signers := map[string]Signer{"ES256": newTestSigner(t), "RS256": newTestRSASigner(t)}
 	for alg, s := range signers {
 		cfg := testCfg()
@@ -181,7 +181,7 @@ func TestMintSizeEstimateIsUpperBound(t *testing.T) {
 				require.NoError(t, err)
 				p, err := b64.DecodeString(parts[1])
 				require.NoError(t, err)
-				require.GreaterOrEqual(t, estimateTokenLen(h, p, alg), len(tok.Value))
+				require.Equal(t, len(tok.Value), estimateTokenLen(h, p, s.Public()))
 			})
 		}
 	}
