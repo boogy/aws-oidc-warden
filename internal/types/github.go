@@ -31,10 +31,6 @@ type Claims struct {
 	WorkflowRef          string `json:"workflow_ref"`
 	WorkflowSha          string `json:"workflow_sha"`
 
-	// Raw holds every verified claim from the token, keyed by raw claim name.
-	// Used by generic (non-github) subject/condition/session-tag mapping and
-	// by required_claims checks, since those reference provider-native claim
-	// names that have no corresponding struct field. Excluded from JSON so it
-	// never round-trips through the config-clone / audit-log JSON paths.
+	// Raw holds every verified claim keyed by raw claim name; never serialized.
 	Raw map[string]any `json:"-"`
 }
