@@ -471,32 +471,31 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 	tests := []struct {
 		name  string
 		wiErr error
-		creds *ststypes.Credentials
 		want  error
 		code  string
 		kind  string
 	}{
-		{"denied", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDenied, stsAPIErr("AccessDenied")), nil, handler.ErrIdPExchangeDenied, "AccessDenied", ""},
-		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, stsAPIErr("IDPCommunicationError")), nil, handler.ErrIdPExchangeUnavailable, "IDPCommunicationError", ""},
-		{"role_max", roleMax, nil, handler.ErrDurationExceedsRoleMax, "ValidationError", ""},
-		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, stsAPIErr("PackedPolicyTooLarge")), nil, handler.ErrIdPTokenTooLarge, "PackedPolicyTooLarge", ""},
-		{"api_code", stsAPIErr("Throttling"), nil, handler.ErrAssumeRoleFailed, "Throttling", ""},
-		{"no_api_code", errBoom, nil, handler.ErrAssumeRoleFailed, "", "other"},
-		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
-		{"canceled", fmt.Errorf("sts: %w", context.Canceled), nil, handler.ErrAssumeRoleFailed, "", "canceled"},
-		{"transport_timeout", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
-		{"wrapped_transport_timeout", sendErr(fmt.Errorf("read: %w", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded})), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
-		{"wrapped_dns_timeout", sendErr(fmt.Errorf("lookup: %w", &net.DNSError{Err: "i/o timeout", Name: "sts.amazonaws.com", IsTimeout: true})), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
-		{"network", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "sts.amazonaws.com"}}), nil, handler.ErrAssumeRoleFailed, "", "network"},
-		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, "", ""},
-		{"incomplete_credentials", gtvaws.ErrWebIdentityIncompleteCredentials, nil, handler.ErrAssumeRoleFailed, "", "incomplete_credentials"},
+		{"denied", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityDenied, stsAPIErr("AccessDenied")), handler.ErrIdPExchangeDenied, "AccessDenied", ""},
+		{"unavailable", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityUnavailable, stsAPIErr("IDPCommunicationError")), handler.ErrIdPExchangeUnavailable, "IDPCommunicationError", ""},
+		{"role_max", roleMax, handler.ErrDurationExceedsRoleMax, "ValidationError", ""},
+		{"packed", fmt.Errorf("%w: %w", gtvaws.ErrWebIdentityPackedPolicyTooLarge, stsAPIErr("PackedPolicyTooLarge")), handler.ErrIdPTokenTooLarge, "PackedPolicyTooLarge", ""},
+		{"api_code", stsAPIErr("Throttling"), handler.ErrAssumeRoleFailed, "Throttling", ""},
+		{"no_api_code", errBoom, handler.ErrAssumeRoleFailed, "", "other"},
+		{"timeout", fmt.Errorf("sts: %w", context.DeadlineExceeded), handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"canceled", fmt.Errorf("sts: %w", context.Canceled), handler.ErrAssumeRoleFailed, "", "canceled"},
+		{"transport_timeout", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: os.ErrDeadlineExceeded}), handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"wrapped_transport_timeout", sendErr(fmt.Errorf("read: %w", &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded})), handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"wrapped_dns_timeout", sendErr(fmt.Errorf("lookup: %w", &net.DNSError{Err: "i/o timeout", Name: "sts.amazonaws.com", IsTimeout: true})), handler.ErrAssumeRoleFailed, "", "timeout"},
+		{"network", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "sts.amazonaws.com"}}), handler.ErrAssumeRoleFailed, "", "network"},
+		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), handler.ErrAccountNotAllowed, "", ""},
+		{"incomplete_credentials", gtvaws.ErrWebIdentityIncompleteCredentials, handler.ErrAssumeRoleFailed, "", "incomplete_credentials"},
 	}
 	for _, tt := range tests {
 		for _, lcv := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/lcv=%t", tt.name, lcv), func(t *testing.T) {
 				cfg := idpConfig(t, true, "", func(c *config.Config) { c.LogClaimValues = lcv })
 				cons := mockWI(t)
-				cons.wiErr, cons.wiCreds = tt.wiErr, tt.creds
+				cons.wiErr = tt.wiErr
 				proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
 				var buf bytes.Buffer
 				res, err := mint(t, proc, handler.RequestData{}, &buf)

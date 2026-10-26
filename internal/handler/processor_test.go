@@ -166,7 +166,6 @@ type fakeConsumer struct {
 		duration          int32
 	}
 	wiErr          error
-	wiCreds        *ststypes.Credentials
 	wiErrEchoToken bool // AssumeRoleWithWebIdentity fails with an error that quotes the token
 }
 
@@ -192,9 +191,6 @@ func (f *fakeConsumer) AssumeRoleWithWebIdentity(_ context.Context, role, name, 
 	}
 	if f.wiErr != nil {
 		return nil, f.wiErr
-	}
-	if f.wiCreds != nil {
-		return f.wiCreds, nil
 	}
 	exp := time.Now().Add(time.Hour)
 	return &ststypes.Credentials{
