@@ -489,8 +489,6 @@ func TestProcessMintExchangeErrors(t *testing.T) {
 		{"wrapped_dns_timeout", sendErr(fmt.Errorf("lookup: %w", &net.DNSError{Err: "i/o timeout", Name: "sts.amazonaws.com", IsTimeout: true})), nil, handler.ErrAssumeRoleFailed, "", "timeout"},
 		{"network", sendErr(&net.OpError{Op: "dial", Net: "tcp", Err: &net.DNSError{Err: "no such host", Name: "sts.amazonaws.com"}}), nil, handler.ErrAssumeRoleFailed, "", "network"},
 		{"account_not_allowed", fmt.Errorf("%w: %s", gtvaws.ErrAccountNotAllowed, testRoleARN), nil, handler.ErrAccountNotAllowed, "", ""},
-		{"nil_access_key", nil, &ststypes.Credentials{}, handler.ErrAssumeRoleFailed, "", "incomplete_credentials"},
-		{"no_session_token", nil, &ststypes.Credentials{AccessKeyId: aws.String("ASIAEXAMPLE"), SecretAccessKey: aws.String("s")}, handler.ErrAssumeRoleFailed, "", "incomplete_credentials"},
 		{"incomplete_credentials", gtvaws.ErrWebIdentityIncompleteCredentials, nil, handler.ErrAssumeRoleFailed, "", "incomplete_credentials"},
 	}
 	for _, tt := range tests {

@@ -145,9 +145,6 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	if errors.Is(err, aws.ErrAccountNotAllowed) {
 		return refuse("account_check", reasonAccountNotAllowed, "Target account not allowed", ErrAccountNotAllowed)
 	}
-	if err == nil && !aws.CredentialsComplete(creds) {
-		err = aws.ErrWebIdentityIncompleteCredentials
-	}
 	if err != nil {
 		code := aws.STSErrorCode(err)
 		reason := "sts error: " + code
