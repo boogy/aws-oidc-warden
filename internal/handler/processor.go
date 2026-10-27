@@ -291,20 +291,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 		return nil, r.deny(ctx, o, "Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	rec.GrantedRole = requestedRole
-	rec.SessionName = sessionName
-	rec.DurationSeconds = int(duration)
-	rec.SessionTagKeys = sessionTagKeyNames(tags)
-	if cfg.LogClaimValues {
-		rec.SessionTags = sessionTagValues(tags)
-	}
-	rec.SessionPolicyRef = policyRef
-	if account, _, aerr := utils.ParseRoleARN(requestedRole); aerr == nil {
-		rec.AccountID = account
-	}
-	if credentials.Expiration != nil {
-		rec.Expiry = credentials.Expiration
-	}
+	rec.setGrant(cfg, requestedRole, sessionName, int(duration), policyRef, tags, credentials.Expiration)
 	rec.ProcessingMS = o.elapsed()
 
 	if err := r.finalizeAllow(ctx, log, cfg, rec); err != nil {

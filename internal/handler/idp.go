@@ -159,21 +159,10 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: %s", exchangeError(err), reason), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	rec.GrantedRole = role
+	rec.setGrant(cfg, role, sessionName, int(duration), policyRef, tags, creds.Expiration)
 	rec.AccessKeyID = *creds.AccessKeyId
-	rec.SessionName = sessionName
 	rec.SourceIdentity = sourceIdentity
 	rec.SourceIdentityTruncated = truncated
-	rec.DurationSeconds = int(duration)
-	rec.SessionPolicyRef = policyRef
-	rec.SessionTagKeys = sessionTagKeyNames(tags)
-	if cfg.LogClaimValues {
-		rec.SessionTags = sessionTagValues(tags)
-	}
-	if account, _, aerr := utils.ParseRoleARN(role); aerr == nil {
-		rec.AccountID = account
-	}
-	rec.Expiry = creds.Expiration
 	rec.ProcessingMS = o.elapsed()
 
 	if err := r.finalizeAllow(ctx, log, cfg, rec); err != nil {

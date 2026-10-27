@@ -303,6 +303,22 @@ func (rec *auditRecord) setIdentity(cfg *config.Config, claims *gtypes.Claims) {
 	}
 }
 
+// setGrant records the issued session shared by the AssumeRole and IdP paths.
+func (rec *auditRecord) setGrant(cfg *config.Config, role, sessionName string, durationSeconds int, policyRef string, tags []ststypes.Tag, expiry *time.Time) {
+	rec.GrantedRole = role
+	rec.SessionName = sessionName
+	rec.DurationSeconds = durationSeconds
+	rec.SessionPolicyRef = policyRef
+	rec.SessionTagKeys = sessionTagKeyNames(tags)
+	if cfg.LogClaimValues {
+		rec.SessionTags = sessionTagValues(tags)
+	}
+	if account, _, err := utils.ParseRoleARN(role); err == nil {
+		rec.AccountID = account
+	}
+	rec.Expiry = expiry
+}
+
 // issuerProvider looks up the configured provider name ("github"/"generic") for a verified issuer.
 func issuerProvider(cfg *config.Config, issuer string) string {
 	for i := range cfg.Issuers {
