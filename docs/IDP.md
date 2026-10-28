@@ -42,11 +42,11 @@ Every caller uses `/verify`. The mapping that authorizes the role picks the path
 
 A request for more than 1h that cannot use the IdP is refused, never shortened:
 
-| Over 1h requested, and…            | Answer                        |
-| ---------------------------------- | ----------------------------- |
-| no `idp` block configured          | 400 `duration_exceeds_cap`    |
-| the mapping is not an IdP mapping  | 403 `idp_not_permitted`       |
-| `idp.enabled: false` (kill switch) | 503 `idp_signing_unavailable` |
+| Over 1h requested, and…                                  | Answer                        |
+| -------------------------------------------------------- | ----------------------------- |
+| no `idp` block configured                                | 400 `duration_exceeds_cap`    |
+| the mapping is not an IdP mapping (nor is any tag grant) | 403 `idp_not_permitted`       |
+| `idp.enabled: false` (kill switch)                       | 503 `idp_signing_unavailable` |
 
 ## Flow
 
@@ -437,7 +437,7 @@ Every response uses the standard error envelope. "Retry" means the same request 
 
 | Code                          | Status | Retry | Cause                                                                           |
 | ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------- |
-| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping                                |
+| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant       |
 | `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                |
 | `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`     |
 | `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider             |
