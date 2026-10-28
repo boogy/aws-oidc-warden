@@ -47,6 +47,7 @@ A request for more than 1h that cannot use the IdP is refused, never shortened:
 | no `idp` block configured                                | 400 `duration_exceeds_cap`    |
 | the mapping is not an IdP mapping (nor is any tag grant) | 403 `idp_not_permitted`       |
 | `idp.enabled: false` (kill switch)                       | 503 `idp_signing_unavailable` |
+| the `idp` block was added after startup (restart)        | 503 `idp_signing_unavailable` |
 
 ## Flow
 
@@ -448,7 +449,7 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false |
 | `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                       |
 | `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags or policy |
-| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; also the kill-switch answer over 1h               |
+| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; or over 1h under the kill switch or before restart |
 | `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS, or reported the minted token expired     |
 
 The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `durationSeconds`, `requestedDurationSeconds` when the caller sent one, `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).

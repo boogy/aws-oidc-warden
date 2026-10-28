@@ -780,6 +780,28 @@ func TestProcessRequestOverOneHourWithoutIdP(t *testing.T) {
 	assert.EqualValues(t, 7200, sink.last(t)["requestedDurationSeconds"])
 }
 
+func TestProcessRequestOverOneHourIdPBlockAddedAfterStartup(t *testing.T) {
+	tests := []struct {
+		name    string
+		optedIn bool
+		wantErr error
+	}{
+		{"opted_in_unavailable", true, handler.ErrIdPUnavailable},
+		{"not_opted_in_not_permitted", false, handler.ErrIdPNotPermitted},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cons := mockWI(t)
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(idpConfig(t, tt.optedIn, "")), cons, idpClaims(nil), &fakeAuditSink{}, "test")
+			_, err := proc.ProcessRequest(context.Background(), &handler.RequestData{Role: testRoleARN, DurationSeconds: 7200},
+				validator.ExtractionInput{Token: "t"}, "req-1", slog.Default())
+			require.ErrorIs(t, err, tt.wantErr)
+			assert.Zero(t, cons.wiCalls)
+			assert.Zero(t, cons.assumeCalls)
+		})
+	}
+}
+
 func TestProcessRequestOverOneHourAfterIdPBlockRemoved(t *testing.T) {
 	built := idpConfig(t, true, "")
 	live := idpConfig(t, false, "", func(c *config.Config) { c.IdP = nil })
