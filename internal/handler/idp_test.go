@@ -541,6 +541,24 @@ func logEvent(t *testing.T, buf *bytes.Buffer, eventType string) map[string]any 
 	return nil
 }
 
+func TestProcessMintSessionPolicyReadFailureDeniesBeforeMint(t *testing.T) {
+	cfg := idpConfig(t, true, "", func(c *config.Config) {
+		c.S3SessionPolicyBucket = "policies"
+		c.RoleMappings[0].SessionPolicyFile = "scoped.json"
+	})
+	cons := mockWI(t)
+	proc, sink, signer := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+	var buf bytes.Buffer
+	res, err := mint(t, proc, handler.RequestData{}, &buf)
+	require.ErrorIs(t, err, handler.ErrSessionPolicyAccess)
+	assert.Nil(t, res)
+	assert.Zero(t, signer.calls)
+	assert.Zero(t, cons.wiCalls)
+	rec := sink.last(t)
+	assert.Equal(t, "deny", rec["decision"])
+	assert.Equal(t, "session_policy", rec["stage"])
+}
+
 func TestProcessMintSignErrors(t *testing.T) {
 	bigRaw := map[string]any{"repository": "org/repo"}
 	bigSpec := map[string]string{}
