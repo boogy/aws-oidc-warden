@@ -84,6 +84,12 @@ func (r *RequestProcessor) deny(ctx context.Context, o *authzOutcome, msg string
 	return r.finalizeDeny(ctx, o.log, o.cfg, o.rec, ret)
 }
 
+// refuse records the deny stage and reason, then denies.
+func (r *RequestProcessor) refuse(ctx context.Context, o *authzOutcome, stage, reason, msg string, ret error) error {
+	o.rec.Stage, o.rec.Reason = stage, reason
+	return r.deny(ctx, o, msg, ret)
+}
+
 // authorizeRequest runs refresh, extraction, account check and authorization; it records the deny itself on failure.
 func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*authzOutcome, error) {
 	startTime, _ := ctx.Value(StartTimeContextKey).(time.Time)
@@ -168,8 +174,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		return nil, r.deny(ctx, o, "Account allow-list check failed", ErrAssumeRoleFailed, rec.reasonAttr(cfg.LogClaimValues))
 	}
 	if !ok {
-		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
-		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
+		return nil, r.refuse(ctx, o, "account_check", reasonAccountNotAllowed, "Target account not allowed", ErrAccountNotAllowed)
 	}
 
 	// claims.Raw: generic issuers' claims have no typed struct field.
@@ -228,13 +233,11 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 	o.rec.RequestedDurationSeconds = int(requestData.DurationSeconds)
 	if err := checkDuration(requestData.DurationSeconds); err != nil {
-		o.rec.Stage, o.rec.Reason = "duration", "invalid or excessive duration"
-		return nil, r.deny(ctx, o, "Duration refused", err)
+		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
 	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requestData.DurationSeconds)
 	if err != nil {
-		o.rec.Stage, o.rec.Reason = "duration", reason
-		return nil, r.deny(ctx, o, "Duration refused", err)
+		return nil, r.refuse(ctx, o, "duration", reason, "Duration refused", err)
 	}
 	o.rec.Action = actionAssumeRole
 	if useIdP {
@@ -242,8 +245,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 	sessionName, nameSource, err := resolveSessionName(o.decision.RoleSessionName(), requestData.SessionName, o.cfg.RoleSessionName, o.decision.SessionNameAllowed())
 	if err != nil {
-		o.rec.Stage, o.rec.Reason = "session_name", "session name refused"
-		return nil, r.deny(ctx, o, "Session name refused", err)
+		return nil, r.refuse(ctx, o, "session_name", "session name refused", "Session name refused", err)
 	}
 	o.rec.SessionNameSource, o.rec.RequestedSessionName = nameSource, auditSessionName(requestData.SessionName)
 	if requestData.SessionName != "" && nameSource != "request" {
@@ -266,8 +268,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	}
 	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
 	if err != nil {
-		rec.Stage, rec.Reason = "duration", "invalid or excessive duration"
-		return nil, r.deny(ctx, o, "Duration refused", err)
+		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
 
 	sessionPolicy, policyRef, tags, err := r.grantScope(ctx, o)
@@ -276,8 +277,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	}
 	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, tags)
 	if errors.Is(err, aws.ErrAccountNotAllowed) {
-		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
-		return nil, r.deny(ctx, o, "Target account not allowed", ErrAccountNotAllowed)
+		return nil, r.refuse(ctx, o, "account_check", reasonAccountNotAllowed, "Target account not allowed", ErrAccountNotAllowed)
 	}
 	if err != nil {
 		rec.setErrorReason("assume_role", err)
@@ -298,7 +298,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	return &IssuedCredentials{Credentials: *credentials}, nil
 }
 
-// grantScope resolves the session policy and ABAC tags shared by the AssumeRole and IdP grants.
+// grantScope resolves the session policy and ABAC tags shared by the AssumeRole and IdP grants; on error the deny is already recorded.
 func (r *RequestProcessor) grantScope(ctx context.Context, o *authzOutcome) (policy *string, policyRef string, tags []ststypes.Tag, err error) {
 	policy, policyRef, err = r.getSessionPolicy(ctx, o.cfg, o.log, o.claims.Subject, o.decision)
 	if err != nil {

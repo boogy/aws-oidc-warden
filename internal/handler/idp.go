@@ -64,17 +64,12 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	role := requestData.Role
 
-	refuse := func(stage, reason, msg string, ret error) (*IssuedCredentials, error) {
-		rec.Stage, rec.Reason = stage, reason
-		return nil, r.deny(ctx, o, msg, ret)
-	}
-
 	ceiling := o.decision.MaxSessionDuration()
 	capSecs := int(ceiling / time.Second)
 	rec.IdPSessionCapSeconds = &capSecs
 	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
 	if err != nil {
-		return refuse("duration", "invalid or excessive duration", "Duration refused", err)
+		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
 
 	var sourceIdentity string
@@ -82,7 +77,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	if r.sourceIdentity != nil {
 		sourceIdentity, truncated, err = r.sourceIdentity.render(requestID, claims.Issuer, claims.Subject, claims.Raw)
 		if err != nil {
-			return refuse("idp_mint", "source identity could not be derived", "Source identity could not be derived", err)
+			return nil, r.refuse(ctx, o, "idp_mint", "source identity could not be derived", "Source identity could not be derived", err)
 		}
 	}
 
@@ -140,7 +135,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	creds, err := r.consumer.AssumeRoleWithWebIdentity(ctx, role, sessionName, tok.Value, sessionPolicy, duration)
 	rec.TokenID = tok.ID
 	if errors.Is(err, aws.ErrAccountNotAllowed) {
-		return refuse("account_check", reasonAccountNotAllowed, "Target account not allowed", ErrAccountNotAllowed)
+		return nil, r.refuse(ctx, o, "account_check", reasonAccountNotAllowed, "Target account not allowed", ErrAccountNotAllowed)
 	}
 	if err != nil {
 		code := aws.STSErrorCode(err)
