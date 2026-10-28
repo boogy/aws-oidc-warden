@@ -294,7 +294,7 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 
 `Config.AuthorizeRoles(issuer, subject, claims)` unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping.
 
-Everything else a mapping can specify — session policy, `role_session_name`, extra `session_tags` — then resolves through the **same** `(issuer, subject, role, conditions)` match. That is the point: a role's scoping always travels with the grant that authorized it, and can never be supplied by an unrelated mapping that merely shares the subject. Where several mappings qualify, the first-declared (config order) wins.
+Everything else a mapping can specify — session policy, `role_session_name`, extra `session_tags` — then resolves through the **same** `(issuer, subject, role, conditions)` match. That is the point: a role's scoping always travels with the grant that authorized it, and can never be supplied by an unrelated mapping that merely shares the subject. Where several mappings qualify, the first-declared (config order) wins. The same rule picks `max_session_duration` and `idp_token`, so an earlier broad mapping can cap a later narrow one.
 
 <!-- prettier-ignore -->
 > [!WARNING]
