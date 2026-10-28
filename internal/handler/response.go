@@ -11,9 +11,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 )
 
-// fallbackErrorBody is returned if marshaling the Response itself fails.
-// A constant, never fmt.Sprintf with err.Error(), so an internal error
-// string can't leak to the caller or break the JSON via unescaped chars.
+// fallbackErrorBody is returned when marshaling the Response fails; it must never embed err.Error().
 const fallbackErrorBody = `{"success":false,"statusCode":500,"errorCode":"internal_error","message":"An internal error occurred"}`
 
 // msgAssumed is the success message for a role assumption.
@@ -29,9 +27,7 @@ func requestMeta(ctx context.Context) (requestID string, processingMS int64) {
 	return requestID, processingMS
 }
 
-// buildErrorResponse classifies err into the shared Response shape via
-// classifyError (which may override statusCode), logs it, and returns the
-// response and final status. Shared by every adapter's respondError.
+// buildErrorResponse classifies err (classifyError may override statusCode), logs it, and returns the response and final status.
 func buildErrorResponse(ctx context.Context, err error, statusCode int) (Response, int) {
 	requestID, processingMS := requestMeta(ctx)
 	errCode, errMsg := classifyError(err, &statusCode)

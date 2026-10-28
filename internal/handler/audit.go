@@ -15,21 +15,14 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
 
-// AuditSink is the durability boundary for the structured audit trail: one
-// JSON record per allow/deny decision. Duck-typed (satisfied by
-// *s3logger.S3Logger) to avoid an import cycle. A nil sink is safe:
-// recordDecision no-ops the write and still emits the log line.
-// WriteRecord is synchronous (used when cfg.AuditEnforced(), so a failure can
-// fail the request closed); BufferRecord is best-effort, batched.
+// AuditSink persists one JSON record per decision; a nil sink is safe.
+// WriteRecord is synchronous and can fail the request closed; BufferRecord is best-effort and batched.
 type AuditSink interface {
 	WriteRecord(ctx context.Context, record []byte) error
 	BufferRecord(record []byte) error
 }
 
-// auditRecord is the structured record for one authorization decision, fed to
-// both the standardized slog line (auditLogAttrs) and the durable audit sink
-// (json.Marshal). Built once and redacted in place before either consumer
-// sees it, so the two can never disagree about what was suppressed.
+// auditRecord is one authorization decision, redacted in place before it is logged or written to the sink.
 type auditRecord struct {
 	RequestID string `json:"requestId"`
 	// FrontendRequestID is the join key back to API Gateway/ALB access logs.
@@ -44,9 +37,7 @@ type auditRecord struct {
 	SourceIP     string `json:"sourceIp,omitempty"`
 	SourceIPFrom string `json:"sourceIpFrom,omitempty"`
 	Reason       string `json:"reason,omitempty"` // deny only
-	// reasonFromError: Reason came from err.Error(), which may quote claim
-	// values, so it must follow the log_claim_values gate. Unexported so the
-	// JSON shape is stable regardless of the gate. Set via setErrorReason.
+	// reasonFromError marks Reason as err.Error(), which may quote claim values; set via setErrorReason.
 	reasonFromError bool
 	// preAuth marks a deny that precedes authentication; it is always batched, never a synchronous S3 write.
 	preAuth bool
@@ -89,9 +80,7 @@ type auditRecord struct {
 	ProcessingMS int64 `json:"processingMs"` // per-request wall-clock time
 }
 
-// redact zeroes claim VALUES (never names/decision/reason/IDs) when
-// logClaimValues is false. Must run before the record is logged or marshaled
-// for the audit sink.
+// redact zeroes claim values when logClaimValues is false; must run before the record is logged or marshaled.
 func (rec *auditRecord) redact(logClaimValues bool) {
 	if logClaimValues {
 		return
@@ -107,18 +96,14 @@ func (rec *auditRecord) redact(logClaimValues bool) {
 	rec.reasonFromError = false
 }
 
-// setErrorReason records a deny reason from an error. Every stage reporting
-// err.Error() as the reason must use this, not assign rec.Reason directly,
-// or the error text escapes the log_claim_values gate.
+// setErrorReason records an error-derived deny reason; assigning rec.Reason directly escapes the log_claim_values gate.
 func (rec *auditRecord) setErrorReason(stage string, err error) {
 	rec.Stage = stage
 	rec.Reason = err.Error()
 	rec.reasonFromError = true
 }
 
-// effectiveReason is the reason as it may be emitted: raw text unless it was
-// error-derived and claim values are suppressed, in which case the stage
-// summary. Shared by the log line and the durable record.
+// effectiveReason is the reason as emitted: the stage summary when an error-derived reason is suppressed.
 func (rec *auditRecord) effectiveReason(logClaimValues bool) string {
 	if logClaimValues || !rec.reasonFromError {
 		return rec.Reason
@@ -151,9 +136,7 @@ func stageSummary(stage string) string {
 	}
 }
 
-// matchedRole is the role the decision pertains to, for the standardized
-// "matchedRole" log field: the granted role once one was assumed, otherwise
-// the requested role (deny paths never grant one).
+// matchedRole is the granted role, else the requested role.
 func (rec *auditRecord) matchedRole() string {
 	if rec.GrantedRole != "" {
 		return rec.GrantedRole
@@ -203,10 +186,7 @@ func auditLogAttrs(rec *auditRecord, logClaimValues bool) []slog.Attr {
 	return attrs
 }
 
-// subjectAttr returns the canonical subject as a log attribute, omitted when
-// cfg.LogClaimValues is false or subject is empty. Log sites outside the
-// audit record must use this rather than logging subject directly, so the
-// gate holds across the whole log stream.
+// subjectAttr is the subject log attribute, omitted when cfg.LogClaimValues is false; every subject log site must use it.
 func subjectAttr(cfg *config.Config, subject string) slog.Attr {
 	if !cfg.LogClaimValues || subject == "" {
 		return slog.Attr{}
@@ -351,23 +331,14 @@ func sessionTagKeyNames(tags []ststypes.Tag) []string {
 	return names
 }
 
-// claimAliases renames claims on their way into the audit record for a
-// stable vocabulary (GitHub's repository/repository_id -> repo/repo_id).
-// Skipped when the token already carries a claim under the alias target
-// (see auditClaims), to avoid one overwriting the other unpredictably.
+// claimAliases renames audit claims; skipped when the token already carries the alias target.
 var claimAliases = map[string]string{
 	"repository":    "repo",
 	"repository_id": "repo_id",
 }
 
-// auditClaims resolves the claims recorded for a decision: the full verified
-// claim set for provider "github" (non-secret workflow metadata), but for
-// every other provider only claims the issuer's own config references
-// (cfg.AuditableClaims) — an arbitrary OIDC issuer's tokens may carry emails
-// or group memberships this service must not copy into an audit object.
-// Conditions are included so the record can explain what decided it. Values
-// are formatted identically to BuildSessionTags. Callers must gate on
-// cfg.LogClaimValues before populating.
+// auditClaims is every verified claim for provider "github", else only cfg.AuditableClaims so PII is never copied.
+// Callers must gate on cfg.LogClaimValues.
 func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) map[string]string {
 	if len(rawClaims) == 0 {
 		return nil
