@@ -13,7 +13,7 @@ import (
 func (r *RequestProcessor) idpDocument(ctx context.Context, kind routeKind, log *slog.Logger) (status int, body string, headers map[string]string) {
 	ks, err := r.idp.KeySet(ctx)
 	if err != nil {
-		logevent.Warn(ctx, log, logevent.IdPUnavailable, "idp signing keys unavailable", slog.String("error", err.Error()))
+		logevent.Warn(ctx, log, logevent.IdPUnavailable, "IdP signing keys unavailable", slog.String("error", err.Error()))
 		status, body = errorBody(ctx, ErrIdPUnavailable, http.StatusServiceUnavailable)
 		return status, body, nil
 	}
