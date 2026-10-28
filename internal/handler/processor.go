@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/idp"
@@ -256,7 +257,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 
 // issueAssumeRole assumes the role from the warden's own credentials.
 func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestData *RequestData, sessionName string) (*IssuedCredentials, error) {
-	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
+	cfg, rec, log := o.cfg, o.rec, o.log
 	requestedRole := requestData.Role
 
 	ceiling := time.Duration(utils.RoleChainingMaxSecs) * time.Second
@@ -269,13 +270,10 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 		return nil, r.deny(ctx, o, "Duration refused", err)
 	}
 
-	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, o.decision)
+	sessionPolicy, policyRef, tags, err := r.grantScope(ctx, o)
 	if err != nil {
-		rec.setErrorReason("session_policy", err)
-		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
+		return nil, err
 	}
-
-	tags := aws.BuildSessionTags(ctx, claims.Raw, cfg.EffectiveSessionTags(claims.Issuer, o.decision))
 	credentials, err := r.consumer.AssumeRole(ctx, requestedRole, sessionName, sessionPolicy, &duration, tags)
 	if errors.Is(err, aws.ErrAccountNotAllowed) {
 		rec.Stage, rec.Reason = "account_check", reasonAccountNotAllowed
@@ -298,6 +296,16 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 		return nil, err
 	}
 	return &IssuedCredentials{Credentials: *credentials}, nil
+}
+
+// grantScope resolves the session policy and ABAC tags shared by the AssumeRole and IdP grants.
+func (r *RequestProcessor) grantScope(ctx context.Context, o *authzOutcome) (policy *string, policyRef string, tags []ststypes.Tag, err error) {
+	policy, policyRef, err = r.getSessionPolicy(ctx, o.cfg, o.log, o.claims.Subject, o.decision)
+	if err != nil {
+		o.rec.setErrorReason("session_policy", err)
+		return nil, "", nil, r.deny(ctx, o, "Failed to read session policy", err, o.rec.reasonAttr(o.cfg.LogClaimValues))
+	}
+	return policy, policyRef, aws.BuildSessionTags(ctx, o.claims.Raw, o.cfg.EffectiveSessionTags(o.claims.Issuer, o.decision)), nil
 }
 
 // getSessionPolicy returns the session policy and its audit label ("inline", the S3 key, or "").

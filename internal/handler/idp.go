@@ -86,13 +86,10 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		}
 	}
 
-	sessionPolicy, policyRef, err := r.getSessionPolicy(ctx, cfg, log, claims.Subject, o.decision)
+	sessionPolicy, policyRef, tags, err := r.grantScope(ctx, o)
 	if err != nil {
-		rec.setErrorReason("session_policy", err)
-		return nil, r.deny(ctx, o, "Failed to read session policy", err, rec.reasonAttr(cfg.LogClaimValues))
+		return nil, err
 	}
-
-	tags := aws.BuildSessionTags(ctx, claims.Raw, cfg.EffectiveSessionTags(claims.Issuer, o.decision))
 	req := idp.MintRequest{
 		RoleARN:        role,
 		SourceIssuer:   claims.Issuer,
