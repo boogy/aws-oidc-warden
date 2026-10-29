@@ -337,8 +337,7 @@ var claimAliases = map[string]string{
 	"repository_id": "repo_id",
 }
 
-// auditClaims is every verified claim for provider "github", else only cfg.AuditableClaims so PII is never copied.
-// Callers must gate on cfg.LogClaimValues.
+// auditClaims is every verified claim for provider "github", else only cfg.AuditableClaims; callers must gate on cfg.LogClaimValues.
 func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) map[string]string {
 	if len(rawClaims) == 0 {
 		return nil
