@@ -65,7 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **EC JWKS keys must match the token's curve.**
 - **Issuer routing reads only the exact `iss` key**; `ISS`, `Iss` or `iſs` no longer route a token to a trusted issuer's JWKS fetch.
 - **A GitHub claim sent as a number or bool (e.g. `run_id`) no longer rejects the token**; the log-only typed fields are copied as text instead of JSON-decoded into strings.
-- **JWKS warm-up and fetches honor the caller's deadline**; issuers warm concurrently, so a hung IdP no longer stalls cold start.
+- **JWKS warm-up and fetches honor the caller's deadline**; issuers warm concurrently, and the JWKS, STS caller-identity and IdP key warm-ups run in parallel, so a hung dependency no longer stalls cold start.
 - **Session policies read from S3 are fully read before their request context is cancelled**; large objects could truncate.
 - **The audit batch no longer grows without bound or blocks requests during an S3 outage**; past 5000 records the oldest are dropped (`audit.batch.dropped`).
 - **The local dev server drains in-flight requests on shutdown** and bounds write time and header size.

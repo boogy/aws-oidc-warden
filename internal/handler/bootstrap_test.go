@@ -17,6 +17,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
@@ -365,6 +366,47 @@ func TestBootstrapWarmCallerIdentityNeverFailsBootstrap(t *testing.T) {
 			assert.Equal(t, tt.wantWarn, strings.Count(buf.String(), `"eventType":"app.warm.failure"`))
 		})
 	}
+}
+
+type stalledConsumer struct{ overlayConsumer }
+
+func (c *stalledConsumer) IsTargetAccountAllowed(ctx context.Context, _ string) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+type stalledKMS struct{}
+
+func (stalledKMS) Sign(ctx context.Context, _ *kms.SignInput, _ ...func(*kms.Options)) (*kms.SignOutput, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (stalledKMS) GetPublicKey(ctx context.Context, _ *kms.GetPublicKeyInput, _ ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (stalledKMS) DescribeKey(ctx context.Context, _ *kms.DescribeKeyInput, _ ...func(*kms.Options)) (*kms.DescribeKeyOutput, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestBootstrapWarmUpsRunConcurrently(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := bootstrapBaseConfig(t, bootstrapIdPConfig("https://a.example.com", true))
+		base.JWTValidation.Mode = "apigw"
+		base.Cache = &config.Cache{Type: "memory", TTL: time.Hour}
+		base.S3ConfigBucket, base.S3ConfigPath = "bucket", "config.yaml"
+		consumer := &stalledConsumer{overlayConsumer{overlay: []byte("{}")}}
+		logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(io.Discard, nil)))
+
+		start := time.Now()
+		b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return stalledKMS{} })
+		require.NoError(t, err)
+		require.NotNil(t, b.IdP)
+		assert.Less(t, time.Since(start), 2*callerWarmTimeout)
+	})
 }
 
 func TestBootstrapAdaptersAttachIdP(t *testing.T) {

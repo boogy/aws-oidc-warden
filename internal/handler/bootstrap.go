@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/aws"
@@ -133,10 +134,12 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 		logevent.Warn(ctx, logger, logevent.ConfigJWTValidationDelegated, "jwt validation delegated to upstream",
 			slog.String("mode", cfg.JWTValidation.Mode))
 	}
-	warmJWKSCache(cfg.JWTValidation.Mode, tokenValidator)
-
+	// Warm-ups run concurrently so their timeouts don't add up against the INIT budget.
+	var wg sync.WaitGroup
+	wg.Go(func() { warmJWKSCache(cfg.JWTValidation.Mode, tokenValidator) })
+	wg.Go(func() { warmCallerIdentity(logger, consumer) })
 	idpSvc := NewIdPService(provider, kms, logger)
-	warmCallerIdentity(logger, consumer)
+	wg.Wait()
 
 	return &Bootstrap{
 		Config:    cfg,
