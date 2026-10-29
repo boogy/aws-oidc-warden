@@ -328,6 +328,7 @@ CloudWatch Logs Insights queries, filtered on `eventType` (and `outcome` where r
 | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `filter eventType = "authz.decision" and outcome = "deny" and stage = "authorize"` | Misconfigured mappings, or an attack                                                                                                 |
 | `filter eventType = "audit.write.failure" or eventType = "audit.buffer.failure"`   | Audit sink unavailable under `audit_required`                                                                                        |
+| `filter eventType = "audit.batch.dropped"`                                         | Best-effort S3 records lost to a long sink outage (decision lines still in CloudWatch)                                               |
 | `filter eventType = "sts.assume_role.failure"`                                     | A target role's trust policy is refusing, or the execution role is missing `sts:AssumeRole`/`sts:TagSession`. Carries `stsErrorCode` |
 | `filter eventType = "jwks.refetch.forced"` (rate of occurrence, rising)            | Possible bogus-`kid` flooding                                                                                                        |
 
