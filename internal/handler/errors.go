@@ -5,15 +5,12 @@ import (
 	"net/http"
 )
 
-// classifyError maps sentinel errors to an error code, human-readable message,
-// and (optionally) overrides statusCode. Shared by all frontend adapters to
-// avoid duplicating the switch in each respondError implementation.
+// classifyError maps a sentinel error to its error code and message, overriding statusCode where needed.
 func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 	errCode = "internal_error"
 	errMsg = "An internal error occurred"
 	switch {
-	// Checked first: finalizeDeny folds this into the original deny error, so
-	// it must win over the original sentinel or a broken audit pipeline never alerts.
+	// Must precede the deny sentinels finalizeDeny wraps it with.
 	case errors.Is(err, ErrAuditWriteFailed):
 		errCode = "audit_write_failed"
 		errMsg = "Request denied: durable audit logging is required and unavailable"
