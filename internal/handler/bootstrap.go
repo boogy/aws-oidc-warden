@@ -27,6 +27,9 @@ type jwksWarmer interface {
 	WarmPrefetch(ctx context.Context)
 }
 
+// warmJWKS is the JWKS warm-up newBootstrap runs; a var so tests can stall it.
+var warmJWKS = warmJWKSCache
+
 // warmJWKSCache best-effort prefetches every issuer's JWKS in self mode and reports whether it ran.
 func warmJWKSCache(mode string, v jwksWarmer) bool {
 	if mode != "self" || v == nil {
@@ -136,7 +139,7 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 	}
 	// Warm-ups run concurrently so their timeouts don't add up against the INIT budget.
 	var wg sync.WaitGroup
-	wg.Go(func() { warmJWKSCache(cfg.JWTValidation.Mode, tokenValidator) })
+	wg.Go(func() { warmJWKS(cfg.JWTValidation.Mode, tokenValidator) })
 	wg.Go(func() { warmCallerIdentity(logger, consumer) })
 	idpSvc := NewIdPService(provider, kms, logger)
 	wg.Wait()

@@ -401,11 +401,15 @@ func TestBootstrapWarmUpsRunConcurrently(t *testing.T) {
 		consumer := &stalledConsumer{overlayConsumer{overlay: []byte("{}")}}
 		logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(io.Discard, nil)))
 
+		orig := warmJWKS
+		t.Cleanup(func() { warmJWKS = orig })
+		warmJWKS = func(string, jwksWarmer) bool { return warmJWKSCache("self", &fakeWarmer{block: time.Minute}) }
+
 		start := time.Now()
 		b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return stalledKMS{} })
 		require.NoError(t, err)
 		require.NotNil(t, b.IdP)
-		assert.Less(t, time.Since(start), 2*callerWarmTimeout)
+		assert.LessOrEqual(t, time.Since(start), max(callerWarmTimeout, jwksWarmPrefetchTimeout))
 	})
 }
 
