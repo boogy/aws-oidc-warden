@@ -207,7 +207,7 @@ Three modes controlled by `jwt_validation.mode`:
 
 **ALB mode** verifies the ALB-signed ES256 JWT but does not re-verify the original OIDC signature. `alb_expected_signer` (the trusted ALB's ARN) is **required** in this mode — config validation fails without it — to prevent cross-ALB token injection.
 
-**Hot-reload note:** The extractor implementation is fixed at Lambda cold start. Changing `jwt_validation.mode` requires a redeployment.
+**Hot-reload note:** The extractor implementation is fixed at Lambda cold start. A reload changing `jwt_validation.mode` is ignored with a warning (`jwt_validation_mode_reload_ignored`) and re-validated against the frozen mode, so it cannot drop `alb_expected_signer`; changing the mode requires a redeployment.
 
 ## Core Components Deep Dive
 

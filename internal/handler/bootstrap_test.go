@@ -340,6 +340,22 @@ func TestBootstrapIdPUsesOverlay(t *testing.T) {
 	require.Equal(t, 1, consumer.warmCalls, "STS caller identity is warmed once at cold start")
 }
 
+func TestBootstrapFreezesJWTMode(t *testing.T) {
+	base := bootstrapBaseConfig(t, bootstrapIdPConfig("https://a.example.com", false))
+	base.JWTValidation.Mode = "apigw"
+	base.Cache = &config.Cache{Type: "memory", TTL: time.Hour}
+	base.S3ConfigBucket, base.S3ConfigPath = "bucket", "config.yaml"
+	consumer := &overlayConsumer{overlay: []byte("{}")}
+
+	logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(io.Discard, nil)))
+	b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return nil })
+	require.NoError(t, err)
+
+	consumer.overlay = []byte("jwt_validation:\n  mode: self\n")
+	require.NoError(t, b.Provider.Refresh(context.Background()))
+	require.Equal(t, "apigw", b.Provider.Get().JWTValidation.Mode)
+}
+
 func TestBootstrapWarmCallerIdentityNeverFailsBootstrap(t *testing.T) {
 	tests := []struct {
 		name     string

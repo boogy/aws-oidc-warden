@@ -839,6 +839,41 @@ func TestProvider_OverlayBaseOnlyKeysWarn(t *testing.T) {
 	}
 }
 
+func TestProvider_ReloadKeepsFrozenJWTMode(t *testing.T) {
+	const signerA, signerB = "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/a/1", "arn:aws:elasticloadbalancing:us-east-1:111122223333:loadbalancer/app/b/2"
+	tests := []struct {
+		name       string
+		overlay    string
+		wantErr    bool
+		wantSigner string
+	}{
+		{name: "mode switch dropping the signer is rejected", overlay: "jwt_validation:\n  mode: self\n  alb_expected_signer: \"\"\n", wantErr: true, wantSigner: signerA},
+		{name: "mode switch keeping the signer is ignored", overlay: "jwt_validation:\n  mode: apigw\n", wantSigner: signerA},
+		{name: "signer rotation still applies", overlay: "jwt_validation:\n  alb_expected_signer: " + signerB + "\n", wantSigner: signerB},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := baseConfig(t)
+			base.JWTValidation = JWTValidation{Mode: "alb", ALBExpectedSigner: signerA}
+			require.NoError(t, base.Validate())
+			overlay := "log_level: info\n"
+			p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) { return []byte(overlay), nil })
+			require.NoError(t, p.Refresh(context.Background()))
+			p.FreezeJWTMode(p.Get().JWTValidation.Mode)
+
+			overlay = tt.overlay
+			err := p.Refresh(context.Background())
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, "alb", p.Get().JWTValidation.Mode)
+			assert.Equal(t, tt.wantSigner, p.Get().JWTValidation.ALBExpectedSigner)
+		})
+	}
+}
+
 func TestProvider_OverlayCannotMoveItself(t *testing.T) {
 	buf := captureUnknownKeyWarnings(t)
 	base := baseConfig(t)

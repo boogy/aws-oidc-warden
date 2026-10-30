@@ -134,6 +134,7 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 		return nil, fmt.Errorf("failed to create claims extractor: %w", err)
 	}
 	mode := provider.Get().JWTValidation.Mode
+	provider.FreezeJWTMode(mode)
 	if mode != "self" {
 		logevent.Warn(ctx, logger, logevent.ConfigJWTValidationDelegated, "jwt validation delegated to upstream",
 			slog.String("mode", mode))

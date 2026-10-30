@@ -66,6 +66,7 @@ type Provider struct {
 	fragments     map[string]*cachedFragment // last-applied fragment cache; only touched under sem (in refreshLocked)
 	frozenIdP     *IdPConfig                 // idp config the running service was built from; guarded by sem
 	idpFrozen     bool                       // FreezeIdP has run, even with no IdP; guarded by sem
+	frozenMode    string                     // jwt_validation.mode the extractor was built from; "" = not frozen; guarded by sem
 	built         bool                       // a refresh has fully applied overlaySum and fragments; guarded by sem
 	overlaySum    [sha256.Size]byte          // digest of base + overlay bytes behind current; guarded by sem
 }
@@ -97,6 +98,13 @@ func (p *Provider) FreezeIdP(c *IdPConfig) {
 	defer p.unlock()
 	p.frozenIdP, p.idpFrozen = c, true
 	p.built = false
+}
+
+// FreezeJWTMode records the jwt_validation.mode the running extractor was built from.
+func (p *Provider) FreezeJWTMode(mode string) {
+	p.lock()
+	defer p.unlock()
+	p.frozenMode = mode
 }
 
 // Get returns the currently active configuration.
@@ -281,6 +289,16 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("invalid configuration after fragment merge: %w", err)
 		}
+	}
+
+	if p.frozenMode != "" && cfg.JWTValidation.Mode != p.frozenMode {
+		reloaded := cfg.JWTValidation.Mode
+		cfg.JWTValidation.Mode = p.frozenMode
+		if err := cfg.Validate(); err != nil {
+			return fmt.Errorf("invalid configuration with frozen jwt_validation.mode: %w", err)
+		}
+		logevent.Warn(ctx, nil, logevent.ConfigWarning, "jwt_validation.mode changed on reload; frozen value kept",
+			slog.String("warning", "jwt_validation_mode_reload_ignored"), slog.String("mode", reloaded))
 	}
 
 	if p.frozenIdP != nil {

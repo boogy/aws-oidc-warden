@@ -49,6 +49,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **A config reload can no longer switch `jwt_validation.mode`**: the cold-start mode is kept and the reload re-validated against it, so an overlay setting `mode: self` with an empty `alb_expected_signer` no longer disables the ALB signer check. Predates this release.
 - **The adapter startup check, delegated-mode warning and JWKS warm-up read `jwt_validation.mode` with the overlay applied**, matching the claims extractor; an overlay switching the mode no longer passes the check on the wrong binary.
 - **STS responses missing the access key, secret or session token are rejected** on every AssumeRole path; a partial spoke response previously crashed the request.
 - **SSRF guard blocks Teredo (`2001::/32`), 6to4 (`2002::/16`) and local-use NAT64 (`64:ff9b:1::/48`)**, IPv6 forms that can carry an internal IPv4 destination.
