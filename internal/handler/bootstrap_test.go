@@ -481,3 +481,30 @@ func TestNewIdPServiceWithoutIdPWarnsWhenReloadAddsBlock(t *testing.T) {
 	require.NoError(t, p.Refresh(context.Background()))
 	assert.Equal(t, 1, strings.Count(buf.String(), `"eventType":"config.idp.reload_ignored"`))
 }
+
+func TestValidateAdapterModeUsesLiveConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		base      string
+		live      string
+		wantPanic bool
+	}{
+		{"overlay apigw on self binary", "self", "apigw", true},
+		{"overlay self over base apigw", "apigw", "self", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &Bootstrap{
+				Config:   &config.Config{JWTValidation: config.JWTValidation{Mode: tt.base}},
+				Provider: config.NewStaticProvider(&config.Config{JWTValidation: config.JWTValidation{Mode: tt.live}}),
+				Adapter:  "lambdaurl",
+			}
+			check := func() { validateAdapterMode(b, "self") }
+			if tt.wantPanic {
+				require.Panics(t, check)
+			} else {
+				require.NotPanics(t, check)
+			}
+		})
+	}
+}

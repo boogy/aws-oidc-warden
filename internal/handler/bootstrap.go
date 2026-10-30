@@ -133,13 +133,14 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 			slog.String("component", "claims_extractor"), slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to create claims extractor: %w", err)
 	}
-	if cfg.JWTValidation.Mode != "self" {
+	mode := provider.Get().JWTValidation.Mode
+	if mode != "self" {
 		logevent.Warn(ctx, logger, logevent.ConfigJWTValidationDelegated, "jwt validation delegated to upstream",
-			slog.String("mode", cfg.JWTValidation.Mode))
+			slog.String("mode", mode))
 	}
 	// Warm-ups run concurrently so their timeouts don't add up against the INIT budget.
 	var wg sync.WaitGroup
-	wg.Go(func() { warmJWKS(cfg.JWTValidation.Mode, tokenValidator) })
+	wg.Go(func() { warmJWKS(mode, tokenValidator) })
 	wg.Go(func() { warmCallerIdentity(logger, consumer) })
 	idpSvc := NewIdPService(provider, kms, logger)
 	wg.Wait()
@@ -324,7 +325,7 @@ func initializeLogger(adapter string) *slog.Logger {
 
 // validateAdapterMode panics at startup when jwt_validation.mode is incompatible with the adapter binary.
 func validateAdapterMode(bootstrap *Bootstrap, allowed ...string) {
-	mode := bootstrap.Config.JWTValidation.Mode
+	mode := bootstrap.Provider.Get().JWTValidation.Mode
 	if mode == "" {
 		mode = "self"
 	}
