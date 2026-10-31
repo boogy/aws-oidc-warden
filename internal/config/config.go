@@ -1366,6 +1366,9 @@ func (c *Config) Validate() error {
 	if c.JWTValidation.Mode == "alb" && c.JWTValidation.ALBExpectedSigner == "" {
 		return fmt.Errorf("jwt_validation.alb_expected_signer is required in alb mode to prevent cross-ALB token injection")
 	}
+	if c.JWTValidation.Mode == "alb" && len(c.Issuers) != 1 {
+		return fmt.Errorf("jwt_validation.mode alb requires exactly one configured issuer, got %d", len(c.Issuers))
+	}
 
 	return nil
 }

@@ -278,7 +278,7 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 		},
 		TagAuth:                 &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "acme", TransitiveSessionTags: true},
 		CrossAccount:            &CrossAccount{Enabled: true, SpokeRoleName: "aow-spoke", ExternalID: "eid", AllowedAccounts: []string{"222222222222"}},
-		JWTValidation:           JWTValidation{Mode: "alb", ALBExpectedSigner: "arn:aws:elasticloadbalancing:eu-west-1:111111111111:loadbalancer/app/x/y"},
+		JWTValidation:           JWTValidation{Mode: "apigw", ALBExpectedSigner: "arn:aws:elasticloadbalancing:eu-west-1:111111111111:loadbalancer/app/x/y"},
 		JWTLeeway:               &leeway,
 		MaxTokenLifetime:        10 * time.Minute,
 		MaxTokenAge:             5 * time.Minute,

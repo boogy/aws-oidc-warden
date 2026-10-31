@@ -849,6 +849,7 @@ func TestProvider_ReloadKeepsFrozenJWTMode(t *testing.T) {
 	}{
 		{name: "mode switch dropping the signer is rejected", overlay: "jwt_validation:\n  mode: self\n  alb_expected_signer: \"\"\n", wantErr: true, wantSigner: signerA},
 		{name: "mode switch keeping the signer is ignored", overlay: "jwt_validation:\n  mode: apigw\n", wantSigner: signerA},
+		{name: "second issuer under alb is rejected", overlay: "issuers:\n  - issuer: https://token.actions.githubusercontent.com\n    provider: github\n    audiences: [sts.amazonaws.com]\n  - issuer: https://gitlab.com\n    provider: generic\n    audiences: [sts.amazonaws.com]\n    claim_mappings: {subject: sub}\n", wantErr: true, wantSigner: signerA},
 		{name: "signer rotation still applies", overlay: "jwt_validation:\n  alb_expected_signer: " + signerB + "\n", wantSigner: signerB},
 	}
 	for _, tt := range tests {

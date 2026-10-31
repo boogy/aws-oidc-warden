@@ -291,14 +291,12 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		}
 	}
 
-	if p.frozenMode != "" && cfg.JWTValidation.Mode != p.frozenMode {
-		reloaded := cfg.JWTValidation.Mode
+	reloadedMode := cfg.JWTValidation.Mode
+	if p.frozenMode != "" && reloadedMode != p.frozenMode {
 		cfg.JWTValidation.Mode = p.frozenMode
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("invalid configuration with frozen jwt_validation.mode: %w", err)
 		}
-		logevent.Warn(ctx, nil, logevent.ConfigWarning, "jwt_validation.mode changed on reload; frozen value kept",
-			slog.String("warning", "jwt_validation_mode_reload_ignored"), slog.String("mode", reloaded))
 	}
 
 	if p.frozenIdP != nil {
@@ -327,6 +325,10 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	logevent.Info(ctx, nil, logevent.ConfigReloadSuccess, "configuration reloaded",
 		slog.Int("roleMappings", len(cfg.effective)),
 		slog.Int("fragments", len(cfg.fragmentSources())))
+	if reloadedMode != cfg.JWTValidation.Mode {
+		logevent.Warn(ctx, nil, logevent.ConfigWarning, "jwt_validation.mode changed on reload; frozen value kept",
+			slog.String("warning", "jwt_validation_mode_reload_ignored"), slog.String("mode", reloadedMode), slog.String("frozenMode", p.frozenMode))
+	}
 	prevEnabled, enabled := prevIdP != nil && prevIdP.Enabled, cfg.IdP != nil && cfg.IdP.Enabled
 	if p.frozenIdP != nil && prevEnabled != enabled {
 		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", enabled), slog.Bool("blockPresent", cfg.IdP != nil))

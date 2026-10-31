@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -59,7 +60,6 @@ func warmCallerIdentity(logger *slog.Logger, c aws.AwsConsumerInterface) {
 
 // Bootstrap contains all the initialized components needed by handlers
 type Bootstrap struct {
-	Config    *config.Config
 	Provider  *config.Provider
 	Consumer  aws.AwsConsumerInterface
 	Extractor validator.ClaimsExtractorInterface // used by processor
@@ -147,7 +147,6 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 	wg.Wait()
 
 	return &Bootstrap{
-		Config:    cfg,
 		Provider:  provider,
 		Consumer:  consumer,
 		Extractor: extractor,
@@ -330,10 +329,8 @@ func validateAdapterMode(bootstrap *Bootstrap, allowed ...string) {
 	if mode == "" {
 		mode = "self"
 	}
-	for _, m := range allowed {
-		if mode == m {
-			return
-		}
+	if slices.Contains(allowed, mode) {
+		return
 	}
 	panic(fmt.Sprintf(
 		"adapter %q requires jwt_validation.mode in %v, got %q; deploy the correct binary or update the config",
