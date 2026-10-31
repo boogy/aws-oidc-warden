@@ -56,18 +56,6 @@ func TestNewClaimsExtractor_APIGWAllowsMultipleIssuers(t *testing.T) {
 	assert.NotNil(t, ex)
 }
 
-// alb mode still trusts a single OIDC IdP, so a multi-issuer config stays
-// ambiguous and must be rejected.
-func TestNewClaimsExtractor_ALBStillRequiresSingleIssuer(t *testing.T) {
-	cfg := multiIssuerConfig("alb")
-	cfg.JWTValidation.ALBExpectedSigner = "arn:aws:elasticloadbalancing:eu-west-1:111122223333:loadbalancer/app/x/y"
-
-	ex, err := newClaimsExtractor(config.NewStaticProvider(cfg), nil)
-	require.Error(t, err)
-	assert.Nil(t, ex)
-	assert.Contains(t, err.Error(), "exactly one configured issuer")
-}
-
 // A single-issuer apigw config keeps working unchanged.
 func TestNewClaimsExtractor_APIGWSingleIssuerStillWorks(t *testing.T) {
 	cfg := multiIssuerConfig("apigw")

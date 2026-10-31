@@ -180,31 +180,19 @@ func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.L
 	return svc
 }
 
-// newClaimsExtractor creates the extractor for jwt_validation.mode; alb mode requires exactly one issuer.
+// newClaimsExtractor creates the extractor for jwt_validation.mode.
 func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
-	cfg := provider.Get()
-	mode := cfg.JWTValidation.Mode
+	mode := provider.Get().JWTValidation.Mode
 	switch mode {
-	case "self", "":
+	case "self":
 		return validator.NewSelfExtractor(v), nil
 	case "apigw":
 		return validator.NewAPIGWExtractor(provider), nil
 	case "alb":
-		if err := requireSingleIssuer(cfg, mode); err != nil {
-			return nil, err
-		}
 		return validator.NewALBExtractor(provider), nil
 	default:
 		return nil, fmt.Errorf("unknown jwt_validation.mode: %q", mode)
 	}
-}
-
-// requireSingleIssuer enforces alb mode's exactly-one-issuer rule.
-func requireSingleIssuer(cfg *config.Config, mode string) error {
-	if len(cfg.Issuers) != 1 {
-		return fmt.Errorf("jwt_validation.mode %q supports exactly one configured issuer, got %d", mode, len(cfg.Issuers))
-	}
-	return nil
 }
 
 // BuildConfigProvider builds the config provider; any reload source triggers a fail-fast initial refresh.
@@ -326,9 +314,6 @@ func initializeLogger(adapter string) *slog.Logger {
 // validateAdapterMode panics at startup when jwt_validation.mode is incompatible with the adapter binary.
 func validateAdapterMode(bootstrap *Bootstrap, allowed ...string) {
 	mode := bootstrap.Provider.Get().JWTValidation.Mode
-	if mode == "" {
-		mode = "self"
-	}
 	if slices.Contains(allowed, mode) {
 		return
 	}

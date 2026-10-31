@@ -777,6 +777,17 @@ func TestValidate_TagAuthDefaultOrg(t *testing.T) {
 	}).Validate())
 }
 
+func TestValidate_ALBRequiresSingleIssuer(t *testing.T) {
+	issuers := append(singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
+		IssuerConfig{Issuer: "https://gitlab.com", Provider: "generic", Audiences: []string{"sts.amazonaws.com"}, ClaimMappings: map[string]string{"subject": "sub"}})
+	cfg := &Config{
+		Issuers:         issuers,
+		RoleSessionName: "aow",
+		JWTValidation:   JWTValidation{Mode: "alb", ALBExpectedSigner: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y"},
+	}
+	require.ErrorContains(t, cfg.Validate(), "exactly one configured issuer")
+}
+
 func TestTagAuthDefaults(t *testing.T) {
 	viper.Reset()
 	once = sync.Once{}
