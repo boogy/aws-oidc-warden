@@ -79,9 +79,14 @@ func main() {
 	}
 	awsClient.SetConfigSource(provider.Get)
 
-	// The local server always validates JWT signatures itself (no delegated mode).
+	if mode := provider.Get().JWTValidation.Mode; mode != "self" {
+		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
+			slog.String("component", "claims_extractor"), slog.String("error", "local server supports only jwt_validation.mode self, got "+mode))
+		os.Exit(1)
+	}
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 	extractor := validator.NewSelfExtractor(tokenValidator)
+	provider.FreezeJWTMode("self")
 
 	svc := handler.NewIdPService(provider, handler.DefaultIdPKMS, logger)
 

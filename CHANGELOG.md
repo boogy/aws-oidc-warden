@@ -39,6 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Unauthenticated (extract-stage) denies are always batched to the audit bucket**, so junk tokens cannot throttle the synchronous audit writes allows depend on.
 - **Stale requests fail fast once a refresh has failed** instead of waiting up to 5s each.
 - **`-config` loads exactly the named file, or the single `config.{yaml,yml,json,toml}` in a named directory** (new `CONFIG_FILE`), and fails if it is missing, ambiguous or unsupported, instead of searching `/etc/aws-oidc-warden/` and other extensions.
+- **The local server refuses to start unless `jwt_validation.mode` is `self`** instead of ignoring the mode.
 - **Audit S3 keys are partitioned by UTC date**, not the host's local time.
 - **Request bodies are capped at ~40 KiB**, derived from the token and role limits, instead of 1 MiB.
 - **JWKS cache entries carry a hash of the issuer's `jwks_uri` override**, so deployments sharing a cache table with different overrides no longer share keys; failed fetches are remembered for 5s and the discovered `jwks_uri` expires with the cache TTL.
@@ -49,7 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- **A config reload can no longer switch `jwt_validation.mode`**: the cold-start mode is kept and the reload re-validated against it, so an overlay setting `mode: self` with an empty `alb_expected_signer` no longer disables the ALB signer check. Predates this release.
+- **A config reload can no longer switch `jwt_validation.mode`**: the cold-start mode is kept (warns `config.jwt_validation.reload_ignored`) and the reload re-validated against it, so an overlay setting `mode: self` with an empty `alb_expected_signer` no longer disables the ALB signer check. Predates this release.
 - **alb mode with other than one issuer is rejected by config validation** (cold start and reload) instead of a reload being applied and denying every ALB request.
 - **The adapter startup check, delegated-mode warning and JWKS warm-up read `jwt_validation.mode` with the overlay applied**, matching the claims extractor; an overlay switching the mode no longer passes the check on the wrong binary.
 - **STS responses missing the access key, secret or session token are rejected** on every AssumeRole path; a partial spoke response previously crashed the request.
