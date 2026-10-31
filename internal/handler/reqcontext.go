@@ -78,7 +78,7 @@ func headerValue(headers map[string]string, name string) string {
 // newRequestContext binds the per-request tracking values every frontend
 // adapter carries and bounds the request with DefaultTimeout. The caller must
 // invoke the returned cancel (via defer).
-func newRequestContext(ctx context.Context, frontendID, directIP string, headers map[string]string, userAgent string) (context.Context, context.CancelFunc) {
+func newRequestContext(ctx context.Context, frontendID, directIP string, headers map[string]string) (context.Context, context.CancelFunc) {
 	requestID, frontendRequestID := resolveRequestID(ctx, frontendID)
 	sourceIP, sourceIPFrom := clientIP(directIP, headers)
 
@@ -87,7 +87,6 @@ func newRequestContext(ctx context.Context, frontendID, directIP string, headers
 	ctx = context.WithValue(ctx, StartTimeContextKey, time.Now())
 	ctx = context.WithValue(ctx, SourceIPContextKey, sourceIP)
 	ctx = context.WithValue(ctx, SourceIPSourceContextKey, sourceIPFrom)
-	ctx = context.WithValue(ctx, UserAgentContextKey, userAgent)
 
 	// Carries request identity for logevent's ctx handler to inject.
 	ctx = logevent.WithRequest(ctx, logevent.Request{

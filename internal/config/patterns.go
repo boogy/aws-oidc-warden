@@ -1,10 +1,15 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
+	"slices"
+	"strings"
 
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
@@ -73,10 +78,9 @@ func nilConditionHookFunc() mapstructure.DecodeHookFuncType {
 	}
 }
 
-// decoderOptions returns the mapstructure options EVERY config unmarshal must
-// pass (LoadConfig, MergeBytes, parseFragment). viper.DecodeHook REPLACES
-// viper's default chain, so its defaults are re-composed here after ours.
-func decoderOptions() []viper.DecoderConfigOption {
+// decoderOptions returns the mapstructure options every config unmarshal must pass; md, if non-nil, receives decode metadata.
+// viper.DecodeHook replaces viper's default chain, so the defaults are re-composed here.
+func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 	return []viper.DecoderConfigOption{
 		viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
 			stringToPatternsHookFunc(),
@@ -85,6 +89,23 @@ func decoderOptions() []viper.DecoderConfigOption {
 			mapstructure.StringToSliceHookFunc(","),
 		)),
 		// DecodeNil: affects only the two keys the hooks above claim.
-		func(c *mapstructure.DecoderConfig) { c.DecodeNil = true },
+		func(c *mapstructure.DecoderConfig) { c.DecodeNil = true; c.Metadata = md },
 	}
+}
+
+// rejectUnusedKeys fails on an unclaimed nested key; an unused top-level key (e.g. YAML anchors) only warns.
+func rejectUnusedKeys(unused []string, source string) error {
+	unused = slices.Sorted(slices.Values(unused))
+	for _, key := range unused {
+		if strings.ContainsAny(key, ".[") {
+			return fmt.Errorf("%s: unknown key %q is not a config field (check the spelling)", source, key)
+		}
+	}
+	for _, key := range unused {
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning, "unknown top-level config key is ignored",
+			slog.String("warning", "unknown_config_key"),
+			slog.String("key", key),
+			slog.String("source", source))
+	}
+	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -402,7 +403,7 @@ func TestNestedConditionsDecodeFromYAML(t *testing.T) {
 	require.NoError(t, v.ReadConfig(strings.NewReader(nestedConditionYAML)))
 
 	var c Config
-	require.NoError(t, v.Unmarshal(&c, decoderOptions()...))
+	require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
 	require.Len(t, c.RoleMappings, 1)
 
 	cond := c.RoleMappings[0].Conditions
@@ -618,7 +619,7 @@ role_mappings:
 	require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
 
 	var c Config
-	require.NoError(t, v.Unmarshal(&c, decoderOptions()...))
+	require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
 	require.Len(t, c.RoleMappings, 1)
 	return c.RoleMappings[0].Conditions
 }
@@ -1724,4 +1725,43 @@ func TestNoneOfReadsNonStringClaimValues(t *testing.T) {
 			t.Fatal("triple negation is negative polarity and must deny")
 		}
 	})
+}
+
+func TestNoneOfNewlineValueFailsClosed(t *testing.T) {
+	veto := &Condition{
+		Ref:    Patterns{"main"},
+		NoneOf: []*Condition{{Claims: map[string]Patterns{"email": {`.*@contractor\.com`}}}},
+	}
+	cfg := condCfg(t, veto)
+	tests := []struct {
+		name   string
+		claims map[string]any
+		want   bool
+	}{
+		{"plain value that is not vetoed", map[string]any{"ref": "main", "email": "bob@corp.com"}, true},
+		{"plain value that is vetoed", map[string]any{"ref": "main", "email": "bob@contractor.com"}, false},
+		{"absent claim", map[string]any{"ref": "main"}, true},
+		{"newline hides the veto match", map[string]any{"ref": "main", "email": "x\nbob@contractor.com"}, false},
+		{"newline in an unrelated value", map[string]any{"ref": "main", "email": "x\nbob@corp.com"}, false},
+		{"newline in a list element", map[string]any{"ref": "main", "email": []any{"ok@corp.com", "x\ny@contractor.com"}}, false},
+		{"list without newline", map[string]any{"ref": "main", "email": []any{"ok@corp.com"}}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, authorizes(cfg, tc.claims))
+		})
+	}
+}
+
+// Positive matching is unchanged by the newline rule.
+func TestPositiveMatchWithNewlineUnchanged(t *testing.T) {
+	literal := condCfg(t, &Condition{Claims: map[string]Patterns{"note": {`a\nb`}}})
+	dot := condCfg(t, &Condition{Claims: map[string]Patterns{"note": {`a.b`}}})
+	double := condCfg(t, &Condition{NoneOf: []*Condition{{NoneOf: []*Condition{{Claims: map[string]Patterns{"note": {`a\nb`}}}}}}})
+
+	assert.True(t, authorizes(literal, map[string]any{"note": "a\nb"}))
+	assert.False(t, authorizes(literal, map[string]any{"note": "a\nbc"}))
+	assert.False(t, authorizes(dot, map[string]any{"note": "a\nb"}), "`.` still does not match a newline")
+	assert.True(t, authorizes(dot, map[string]any{"note": "axb"}))
+	assert.True(t, authorizes(double, map[string]any{"note": "a\nb"}), "double negation is positive polarity")
 }

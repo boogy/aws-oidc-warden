@@ -719,3 +719,44 @@ func TestAPIGWExtractor_MultiIssuer_MissingIssuerDenied(t *testing.T) {
 	})
 	require.ErrorIs(t, err, validator.ErrUnknownIssuer)
 }
+
+// The parser must apply the configured jwt_leeway, matching self mode.
+func TestALBExtractor_HonorsConfiguredLeeway(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	pubDER, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(pubPEM) }))
+	defer srv.Close()
+
+	const iss = "https://token.actions.githubusercontent.com"
+	tests := []struct {
+		name    string
+		leeway  time.Duration
+		expOff  time.Duration
+		iatOff  time.Duration
+		wantErr bool
+	}{
+		{"expired within leeway accepted", 30 * time.Second, -10 * time.Second, -time.Minute, false},
+		{"expired beyond leeway rejected", 5 * time.Second, -10 * time.Second, -time.Minute, true},
+		{"iat in future within leeway accepted", 30 * time.Second, time.Hour, 10 * time.Second, false},
+		{"iat in future beyond leeway rejected", 5 * time.Second, time.Hour, 10 * time.Second, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			token := makeALBJWT(t, priv, "leeway-kid", "", map[string]any{
+				"iss": iss, "sub": "repo:org/repo", "aud": "sts.amazonaws.com", "repository": "org/repo",
+				"exp": now.Add(tt.expOff).Unix(),
+				"iat": now.Add(tt.iatOff).Unix(),
+			})
+			ex := newTestALBExtractor("", githubIssuerConfig(iss, "sts.amazonaws.com"), tt.leeway, 0, 0,
+				validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+			_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}

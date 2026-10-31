@@ -3,17 +3,26 @@ package handler
 // NewBootstrap wiring: the claim extractor it selects, config_fragments, and
 // the JWKS warm-up.
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/idp"
+	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	s3logger "github.com/boogy/aws-oidc-warden/internal/s3logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,10 +103,6 @@ func fragmentTestBaseConfig(t *testing.T, fragmentPath string) *config.Config {
 	return cfg
 }
 
-// TestBuildConfigProvider_LocalFragmentsWithoutS3Source is the regression test
-// for fragments being silently dropped when no S3 config source is set: the
-// provider buildConfigProvider returns must serve a config with the fragment's
-// role_mappings merged in, not the bare base config.
 func TestBuildConfigProvider_LocalFragmentsWithoutS3Source(t *testing.T) {
 	fragPath := filepath.Join(t.TempDir(), "team-fragment.yaml")
 	require.NoError(t, os.WriteFile(fragPath, []byte(`
@@ -110,7 +115,7 @@ role_mappings:
 	cfg := fragmentTestBaseConfig(t, fragPath)
 	require.Empty(t, cfg.S3ConfigBucket, "test premise: no S3 config source")
 
-	provider, err := buildConfigProvider(cfg, nil)
+	provider, err := BuildConfigProvider(cfg, nil)
 	require.NoError(t, err)
 
 	served := provider.Get()
@@ -132,7 +137,7 @@ role_mappings:
 func TestBuildConfigProvider_NoFragmentsNoS3IsStatic(t *testing.T) {
 	cfg := fragmentTestBaseConfig(t, "")
 
-	provider, err := buildConfigProvider(cfg, nil)
+	provider, err := BuildConfigProvider(cfg, nil)
 	require.NoError(t, err)
 	assert.Same(t, cfg, provider.Get(), "no-fragment path must serve the base config unchanged")
 }
@@ -147,7 +152,7 @@ tag_auth:
 `), 0o600))
 
 	cfg := fragmentTestBaseConfig(t, fragPath)
-	_, err := buildConfigProvider(cfg, nil)
+	_, err := BuildConfigProvider(cfg, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not allowed in a config fragment")
 }
@@ -213,20 +218,16 @@ func TestWarmJWKSCache_PassesBoundedContext(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(jwksWarmPrefetchTimeout), w.deadline, time.Second)
 }
 
-// TestWarmJWKSCache_HungIssuerDoesNotStallInit is the safety property that makes
-// this change safe to run during INIT: an unreachable issuer must be abandoned
-// at the timeout rather than blocking bootstrap indefinitely.
 func TestWarmJWKSCache_HungIssuerDoesNotStallInit(t *testing.T) {
-	w := &fakeWarmer{block: time.Minute} // issuer that never responds
+	synctest.Test(t, func(t *testing.T) {
+		w := &fakeWarmer{block: time.Minute}
 
-	start := time.Now()
-	warmJWKSCache("self", w)
-	elapsed := time.Since(start)
+		start := time.Now()
+		warmJWKSCache("self", w)
 
-	assert.Less(t, elapsed, jwksWarmPrefetchTimeout+2*time.Second,
-		"a hung issuer must not block INIT past the timeout")
-	assert.ErrorIs(t, w.ctxErr, context.DeadlineExceeded,
-		"prefetch must be cancelled by the deadline, not run to completion")
+		assert.Equal(t, jwksWarmPrefetchTimeout, time.Since(start))
+		assert.ErrorIs(t, w.ctxErr, context.DeadlineExceeded)
+	})
 }
 
 // TestWarmJWKSCache_NilValidatorIsSafe ensures the helper cannot panic during
@@ -255,4 +256,269 @@ func TestCleanup_FlushesBufferedAuditRecords(t *testing.T) {
 	b.Cleanup()
 
 	assert.Equal(t, int32(1), spy.puts.Load())
+}
+
+const bootstrapKMSARN = "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+
+func bootstrapIdPConfig(issuer string, enabled bool) *config.IdPConfig {
+	return &config.IdPConfig{
+		Enabled:  enabled,
+		Issuer:   issuer,
+		Audience: "sts.amazonaws.com",
+		SigningKeys: []config.IdPSigningKey{
+			{KMSKeyID: bootstrapKMSARN, Algorithm: "RS256", Status: config.IdPKeyActive},
+		},
+	}
+}
+
+func bootstrapBaseConfig(t *testing.T, idpCfg *config.IdPConfig) *config.Config {
+	t.Helper()
+	cfg := fragmentTestBaseConfig(t, "")
+	cfg.IdP = idpCfg
+	require.NoError(t, cfg.Validate())
+	return cfg
+}
+
+func TestBootstrapIdPAbsent(t *testing.T) {
+	provider := config.NewStaticProvider(bootstrapBaseConfig(t, nil))
+	svc := NewIdPService(provider, func() idp.KMSAPI { t.Fatal("kms must not be used"); return nil }, nil)
+	require.Nil(t, svc)
+}
+
+func TestBootstrapIdPDisabledNoKeyLoad(t *testing.T) {
+	provider := config.NewStaticProvider(bootstrapBaseConfig(t, bootstrapIdPConfig("https://idp.example.com", false)))
+	calls := 0
+	svc := NewIdPService(provider, func() idp.KMSAPI { calls++; return nil }, nil)
+	require.NotNil(t, svc)
+	require.Equal(t, 0, calls)
+}
+
+type overlayConsumer struct {
+	aws.AwsConsumerInterface
+	overlay   []byte
+	warmCalls int
+	warmErr   error
+}
+
+func (c *overlayConsumer) IsTargetAccountAllowed(context.Context, string) (bool, error) {
+	c.warmCalls++
+	return false, c.warmErr
+}
+
+func (c *overlayConsumer) SetConfigSource(func() *config.Config) {}
+
+func (c *overlayConsumer) GetS3Object(context.Context, string, string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(c.overlay)), nil
+}
+
+func (c *overlayConsumer) GetS3ObjectIfChanged(context.Context, string, string, string, string) ([]byte, string, error) {
+	return nil, "", errors.New("not implemented")
+}
+
+func TestBootstrapIdPUsesOverlay(t *testing.T) {
+	base := bootstrapBaseConfig(t, bootstrapIdPConfig("https://a.example.com", false))
+	base.JWTValidation.Mode = "apigw"
+	base.Cache = &config.Cache{Type: "memory", TTL: time.Hour}
+	base.S3ConfigBucket, base.S3ConfigPath = "bucket", "config.yaml"
+	consumer := &overlayConsumer{overlay: []byte("idp:\n  issuer: https://b.example.com\n")}
+
+	var buf bytes.Buffer
+	logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil)))
+	b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return nil })
+	require.NoError(t, err)
+	require.NotNil(t, b.IdP)
+	require.Equal(t, "https://b.example.com", b.IdP.Config().Issuer)
+	require.Equal(t, "https://b.example.com/.well-known/jwks.json", b.IdP.Config().JWKSURI)
+
+	prev := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(prev)
+	reloads := strings.Count(buf.String(), "config.reload.success")
+	require.NoError(t, b.Provider.Refresh(context.Background()))
+	require.Equal(t, reloads+1, strings.Count(buf.String(), "config.reload.success"), "FreezeIdP forces a rebuild")
+	require.Equal(t, 0, strings.Count(buf.String(), "config.idp.reload_ignored"))
+	require.Equal(t, 1, consumer.warmCalls, "STS caller identity is warmed once at cold start")
+}
+
+func TestBootstrapFreezesJWTMode(t *testing.T) {
+	base := bootstrapBaseConfig(t, bootstrapIdPConfig("https://a.example.com", false))
+	base.JWTValidation.Mode = "apigw"
+	base.Cache = &config.Cache{Type: "memory", TTL: time.Hour}
+	base.S3ConfigBucket, base.S3ConfigPath = "bucket", "config.yaml"
+	consumer := &overlayConsumer{overlay: []byte("{}")}
+
+	logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(io.Discard, nil)))
+	b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return nil })
+	require.NoError(t, err)
+
+	consumer.overlay = []byte("jwt_validation:\n  mode: self\n")
+	require.NoError(t, b.Provider.Refresh(context.Background()))
+	require.Equal(t, "apigw", b.Provider.Get().JWTValidation.Mode)
+}
+
+func TestBootstrapWarmCallerIdentityNeverFailsBootstrap(t *testing.T) {
+	tests := []struct {
+		name     string
+		warmErr  error
+		wantWarn int
+	}{
+		{"warm succeeds", nil, 0},
+		{"warm fails", errors.New("sts unreachable"), 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := bootstrapBaseConfig(t, bootstrapIdPConfig("https://a.example.com", false))
+			base.JWTValidation.Mode = "apigw"
+			base.Cache = &config.Cache{Type: "memory", TTL: time.Hour}
+			base.S3ConfigBucket, base.S3ConfigPath = "bucket", "config.yaml"
+			consumer := &overlayConsumer{overlay: []byte("{}"), warmErr: tt.warmErr}
+
+			var buf bytes.Buffer
+			logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(&buf, nil)))
+			b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return nil })
+			require.NoError(t, err)
+			require.NotNil(t, b)
+			assert.Equal(t, 1, consumer.warmCalls)
+			assert.Equal(t, tt.wantWarn, strings.Count(buf.String(), `"eventType":"app.warm.failure"`))
+		})
+	}
+}
+
+type stalledConsumer struct{ overlayConsumer }
+
+func (c *stalledConsumer) IsTargetAccountAllowed(ctx context.Context, _ string) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+type stalledKMS struct{}
+
+func (stalledKMS) Sign(ctx context.Context, _ *kms.SignInput, _ ...func(*kms.Options)) (*kms.SignOutput, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (stalledKMS) GetPublicKey(ctx context.Context, _ *kms.GetPublicKeyInput, _ ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (stalledKMS) DescribeKey(ctx context.Context, _ *kms.DescribeKeyInput, _ ...func(*kms.Options)) (*kms.DescribeKeyOutput, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestBootstrapWarmUpsRunConcurrently(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		base := bootstrapBaseConfig(t, bootstrapIdPConfig("https://a.example.com", true))
+		base.JWTValidation.Mode = "apigw"
+		base.Cache = &config.Cache{Type: "memory", TTL: time.Hour}
+		base.S3ConfigBucket, base.S3ConfigPath = "bucket", "config.yaml"
+		consumer := &stalledConsumer{overlayConsumer{overlay: []byte("{}")}}
+		logger := slog.New(logevent.NewHandler(slog.NewJSONHandler(io.Discard, nil)))
+
+		orig := warmJWKS
+		t.Cleanup(func() { warmJWKS = orig })
+		warmJWKS = func(string, jwksWarmer) bool { return warmJWKSCache("self", &fakeWarmer{block: time.Minute}) }
+
+		start := time.Now()
+		b, err := newBootstrap("test", logger, base, consumer, func() idp.KMSAPI { return stalledKMS{} })
+		require.NoError(t, err)
+		require.NotNil(t, b.IdP)
+		assert.LessOrEqual(t, time.Since(start), max(callerWarmTimeout, jwksWarmPrefetchTimeout))
+	})
+}
+
+func TestBootstrapAdaptersAttachIdP(t *testing.T) {
+	svc := idp.NewService(*bootstrapIdPConfig("https://idp.example.com", false), nil)
+	tests := []struct {
+		name  string
+		mode  string
+		build func(*Bootstrap) *RequestProcessor
+	}{
+		{"apigateway", "self", func(b *Bootstrap) *RequestProcessor { return NewAwsApiGatewayFromBootstrap(b).processor }},
+		{"lambdaurl", "self", func(b *Bootstrap) *RequestProcessor { return NewAwsLambdaUrlFromBootstrap(b).processor }},
+		{"alb", "self", func(b *Bootstrap) *RequestProcessor { return NewAwsApplicationLoadBalancerFromBootstrap(b).processor }},
+		{"apigatewayv2", "apigw", func(b *Bootstrap) *RequestProcessor { return NewAwsApiGatewayV2FromBootstrap(b).processor }},
+	}
+	for _, tt := range tests {
+		for _, withIdP := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/idp=%t", tt.name, withIdP), func(t *testing.T) {
+				cfg := &config.Config{JWTValidation: config.JWTValidation{Mode: tt.mode}}
+				b := &Bootstrap{Provider: config.NewStaticProvider(cfg), Adapter: tt.name}
+				if withIdP {
+					b.IdP = svc
+				}
+				got := tt.build(b).idp
+				if withIdP {
+					require.Same(t, svc, got)
+				} else {
+					require.Nil(t, got)
+				}
+			})
+		}
+	}
+}
+
+type etagOverlayConsumer struct {
+	aws.AwsConsumerInterface
+	prevETags []string
+}
+
+func (c *etagOverlayConsumer) GetS3ObjectIfChanged(_ context.Context, _, _, prevETag, _ string) ([]byte, string, error) {
+	c.prevETags = append(c.prevETags, prevETag)
+	if prevETag == `"e1"` {
+		return nil, prevETag, nil
+	}
+	return []byte("log_claim_values: true\n"), `"e1"`, nil
+}
+
+func TestOverlayFetchUsesConditionalGet(t *testing.T) {
+	base := bootstrapBaseConfig(t, nil)
+	base.S3ConfigBucket, base.S3ConfigPath, base.S3ConfigBucketOwner = "bucket", "config.yaml", "123456789012"
+	consumer := &etagOverlayConsumer{}
+
+	p, err := BuildConfigProvider(base, consumer)
+	require.NoError(t, err)
+	require.NoError(t, p.Refresh(context.Background()))
+
+	assert.Equal(t, []string{"", `"e1"`}, consumer.prevETags)
+	assert.True(t, p.Get().LogClaimValues, "an unchanged overlay must still be applied")
+}
+
+func TestNewIdPServiceWithoutIdPWarnsWhenReloadAddsBlock(t *testing.T) {
+	buf := captureLogs(t)
+	overlay := []byte("log_level: info\n")
+	p := config.NewProvider(bootstrapBaseConfig(t, nil), time.Minute, "yaml", func(context.Context) ([]byte, error) { return overlay, nil })
+	require.NoError(t, p.Refresh(context.Background()))
+	require.Nil(t, NewIdPService(p, func() idp.KMSAPI { return nil }, slog.Default()))
+
+	overlay = fmt.Appendf(nil, "idp:\n  issuer: https://b.example.com\n  audience: sts.amazonaws.com\n  signing_keys:\n    - kms_key_id: %q\n      algorithm: RS256\n      status: active\n", bootstrapKMSARN)
+	require.NoError(t, p.Refresh(context.Background()))
+	assert.Equal(t, 1, strings.Count(buf.String(), `"eventType":"config.idp.reload_ignored"`))
+}
+
+func TestValidateAdapterModePanicsOnMismatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		live      string
+		wantPanic bool
+	}{
+		{"apigw on self binary", "apigw", true},
+		{"self on self binary", "self", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &Bootstrap{
+				Provider: config.NewStaticProvider(&config.Config{JWTValidation: config.JWTValidation{Mode: tt.live}}),
+				Adapter:  "lambdaurl",
+			}
+			check := func() { validateAdapterMode(b, "self") }
+			if tt.wantPanic {
+				require.Panics(t, check)
+			} else {
+				require.NotPanics(t, check)
+			}
+		})
+	}
 }

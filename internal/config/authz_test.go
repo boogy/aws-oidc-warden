@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"testing"
@@ -38,8 +39,6 @@ func vcfg(t *testing.T, mappings []RoleMapping) *Config {
 	return c
 }
 
-// ---------- reference implementations (no index) ----------
-
 // wildcardCfg builds a minimal single-issuer config whose sole role_mapping
 // uses the given subject pattern.
 func wildcardCfg(subject string) *Config {
@@ -56,9 +55,24 @@ func wildcardCfg(subject string) *Config {
 	}
 }
 
-// TestValidate_RejectsBareWildcardSubject pins the identity gate: a subject
-// pattern that matches everything would grant its roles to every repository
-// able to obtain a token from the bound issuer.
+// ---------- reference implementations (no index) ----------
+
+// subjectOracle recompiles the mapping's pattern from scratch, independent of
+// the index and of the literal fast path (compiledPattern is nil for literals).
+func subjectOracle(m *RoleMapping) *regexp.Regexp {
+	re, ok := oracleCache[m.resolvedSubject]
+	if !ok {
+		tree, err := syntax.Parse(m.resolvedSubject, syntax.Perl)
+		if err != nil {
+			panic(err)
+		}
+		re = regexp.MustCompile("^(?:" + tree.String() + ")$")
+		oracleCache[m.resolvedSubject] = re
+	}
+	return re
+}
+
+var oracleCache = map[string]*regexp.Regexp{}
 
 // linearAuthorizeRoles is a brute-force reference implementation of
 // AuthorizeRoles: it scans every effective mapping directly, bypassing the
@@ -72,7 +86,7 @@ func linearAuthorizeRoles(c *Config, issuer, subject string, claims map[string]a
 		if m.Issuer != issuer {
 			continue
 		}
-		if m.compiledPattern == nil || !m.compiledPattern.MatchString(subject) {
+		if !subjectOracle(m).MatchString(subject) {
 			continue
 		}
 		if !satisfiesConditions(m.Conditions, claims) {
@@ -87,17 +101,13 @@ func linearAuthorizeRoles(c *Config, issuer, subject string, claims map[string]a
 // linearFindSessionPolicy is the brute-force reference for FindSessionPolicy:
 // same match+conditions+grants-role filter and first-match-wins (lowest
 // m.order) semantics, but via a full scan of c.effective instead of the index.
-
-// linearFindSessionPolicy is the brute-force reference for FindSessionPolicy:
-// same match+conditions+grants-role filter and first-match-wins (lowest
-// m.order) semantics, but via a full scan of c.effective instead of the index.
 func linearFindSessionPolicy(c *Config, issuer, subject, role string, claims map[string]any) (*string, *string) {
 	var best *RoleMapping
 	for _, m := range c.effective {
 		if m.Issuer != issuer {
 			continue
 		}
-		if m.compiledPattern == nil || !m.compiledPattern.MatchString(subject) {
+		if !subjectOracle(m).MatchString(subject) {
 			continue
 		}
 		if !satisfiesConditions(m.Conditions, claims) {
@@ -122,30 +132,12 @@ func linearFindSessionPolicy(c *Config, issuer, subject, role string, claims map
 	return nil, nil
 }
 
-// TestIndexParity is a differential/property test: it builds a large config
-// with thousands of mappings across many owners, spanning every subject
-// class the index buckets (exact literals, owner/.* patterns, fully-generic
-// patterns, and alternation/multi-owner patterns such as "a/b|c/d"), then
-// asserts that AuthorizeRoles/FindSessionPolicy (index path) return
-// byte-identical results to a brute-force linear scan for a large sample of
-// query subjects. This must fail if classifySubject ever misclassifies an
-// alternation pattern as owner-scoped (the D-1 bug: "a/b|c/d" bucketed under
-// owner "a" would be missed for a query subject of "c/d").
-
 func deref(p *string) string {
 	if p == nil {
 		return ""
 	}
 	return *p
 }
-
-// ---------- P1: index/linear differential fuzz ----------
-
-// TestIndexDifferentialFuzz proves the owner-bucketed index is
-// observationally identical to a full linear scan for both AuthorizeRoles and
-// FindSessionPolicy. A false negative here is fail-OPEN: a policy-bearing
-// mapping dropped from the scan while a broader policy-less mapping still
-// authorizes the role yields an UNSCOPED role assumption.
 
 func patternsOf(ms []RoleMapping) []string {
 	out := make([]string, len(ms))
@@ -154,10 +146,6 @@ func patternsOf(ms []RoleMapping) []string {
 	}
 	return out
 }
-
-// TestLiteralPrefixSoundness is the direct property classifySubject
-// depends on: whatever bucket a pattern lands in, every subject it can match
-// must hash to that same bucket.
 
 // ---------- index / linear-scan equivalence ----------
 
@@ -296,11 +284,6 @@ func TestIndexParity(t *testing.T) {
 			if i%7 == 0 && i+1 < numOwners {
 				addMapping(iss, fmt.Sprintf("%s/special|%s/special", o, owners[i+1]))
 			}
-			// Quantified first slash: the '/' is optional/repeatable, so these
-			// also match slash-less subjects (e.g. "owner0opt-x") whose owner
-			// segment differs from the literal prefix. classifySubject must NOT
-			// bucket them as owner-scoped or candidatesFor would miss those
-			// matches. Only every 5th owner, to bound the count.
 			if i%5 == 0 {
 				addMapping(iss, fmt.Sprintf("%s/?opt-.*", o))
 				addMapping(iss, fmt.Sprintf("%s/*star-.*", o))
@@ -374,44 +357,96 @@ func TestLiteralPrefixSoundness(t *testing.T) {
 		"(?i)MyOrg/repo", "(?i)myorg/repo", "myorg/?repo", "myorg/*repo",
 		"a/b|c/d", "myorg/.*", "[a-z]+/x", "(?s)myorg/.*", "my.rg/repo",
 		"myorg\\/repo", "^myorg/repo", "(?U)myorg/.*", "(?m)myorg/repo",
+		"myorg/repo", `myorg/my\.repo`, `\Qmy.org\E/x`, "repo:acme/.*-prod",
+		"repo:acme/.*:ref:refs/heads/main", "a/b|a/c", "(acme)/x", "(?:acme/)x",
+		"acme/x{2}", "acme/x+", "acme/(?i:x)", "ac(?i)me/x", "myorg", "myorg/",
 	}
 	corpus := []string{
 		"myorg/repo", "MyOrg/repo", "MYORG/REPO", "myorgrepo", "myorg/x",
 		"a/b", "c/d", "myrg/repo", "abc/x", "myorg/repo\n", "\nmyorg/repo",
+		"myorg/my.repo", "myorg/myxrepo", "my.org/x", "repo:acme/web-prod",
+		"repo:acme/a:ref:refs/heads/main", "acme/xx", "acme/xxx", "acme/X", "ACme/x",
+		"acme/x", "a/c", "myorg", "myorg/", "\xff/x",
 	}
 	for _, p := range pats {
 		re := regexp.MustCompile("^(?:" + p + ")$")
-		owner, class := classifySubject(p, re)
-		if class != subjectOwner {
-			continue
-		}
+		key, class := classifySubject(p)
 		for _, s := range corpus {
-			if re.MatchString(s) && ownerOf(s) != owner {
-				t.Errorf("UNSOUND bucket: pattern %q filed under owner %q but matches subject %q (owner %q)",
-					p, owner, s, ownerOf(s))
+			if !re.MatchString(s) {
+				continue
+			}
+			switch class {
+			case subjectExact:
+				if s != key {
+					t.Errorf("UNSOUND exact: pattern %q keyed %q but matches %q", p, key, s)
+				}
+			case subjectOwner:
+				if ownerOf(s) != key {
+					t.Errorf("UNSOUND bucket: pattern %q filed under owner %q but matches subject %q (owner %q)", p, key, s, ownerOf(s))
+				}
 			}
 		}
 	}
 }
 
-// ---------- P2: anchoring ----------
-
-// TestClassifySubject_QuantifiedFirstSlash is the regression test for the index
-// mis-bucketing bug: a subject pattern whose first '/' is quantified (optional
-// or repeatable) also matches slash-less subjects, so it must not be bucketed
-// under a literal owner — candidatesFor keys on ownerOf(subject) and would miss
-// those matches, diverging from a linear scan (and mis-scoping session policy).
-func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
-	compile := func(p string) *RoleMapping {
-		m := &RoleMapping{Subject: Patterns{p}, resolvedSubject: p}
-		re, err := regexp.Compile("^(?:" + p + ")$") // same anchoring Validate() applies
-		if err != nil {
-			t.Fatalf("compile %q: %v", p, err)
-		}
-		m.compiledPattern = re
-		return m
+// Non-one-pass and escaped patterns that LiteralPrefix() missed.
+func TestClassifySubject_ParseTree(t *testing.T) {
+	tests := []struct {
+		pattern string
+		key     string
+		class   subjectClass
+	}{
+		{"acme/repo", "acme/repo", subjectExact},
+		{`acme/my\.repo`, "acme/my.repo", subjectExact},
+		{`\Qacme/x.y\E`, "acme/x.y", subjectExact},
+		{"(?:acme/repo)", "acme/repo", subjectExact},
+		{"(?i)acme/repo", "", subjectAny},
+		{"repo:acme/.*-prod", "repo:acme", subjectOwner},
+		{"repo:acme/.*:ref:refs/heads/main", "repo:acme", subjectOwner},
+		{"acme/.*", "acme", subjectOwner},
+		{"a/b|a/c", "a", subjectOwner},
+		{"a/b|c/d", "", subjectAny},
+		{"myorg/?prod-.*", "", subjectAny},
+		{"y/*a", "", subjectAny},
+		{"/?x", "", subjectAny},
+		{"(acme)/x", "", subjectAny},
+		{"acme.*", "", subjectAny},
+		{"[a-z]+/x", "", subjectAny},
+		{"(unclosed", "", subjectAny},
 	}
+	for _, tc := range tests {
+		t.Run(tc.pattern, func(t *testing.T) {
+			key, class := classifySubject(tc.pattern)
+			assert.Equal(t, tc.class, class)
+			assert.Equal(t, tc.key, key)
+		})
+	}
+}
 
+// An escaped literal is matched through the exact bucket without a regexp.
+func TestLiteralSubjectsSkipRegexp(t *testing.T) {
+	c := vcfg(t, []RoleMapping{
+		{Subject: Patterns{"acme/repo"}, Roles: []string{"arn:aws:iam::111111111111:role/a"}},
+		{Subject: Patterns{`acme/my\.repo`}, Roles: []string{"arn:aws:iam::111111111111:role/b"}},
+		{Subject: Patterns{"(?i)acme/ci"}, Roles: []string{"arn:aws:iam::111111111111:role/c"}},
+	})
+	require.Len(t, c.effective, 3)
+	assert.Nil(t, c.effective[0].compiledPattern)
+	assert.Nil(t, c.effective[1].compiledPattern)
+	assert.NotNil(t, c.effective[2].compiledPattern)
+
+	for subject, want := range map[string]bool{
+		"acme/repo": true, "acme/my.repo": true, "acme/myxrepo": false,
+		"ACME/CI": true, "acme/repo\n": false, "acme/repo2": false,
+	} {
+		ok, _ := c.AuthorizeRoles(vIss, subject, map[string]any{})
+		assert.Equal(t, want, ok, subject)
+	}
+}
+
+// ---------- classifySubject ----------
+
+func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 	// (pattern, must-not-be-owner-bucketed)
 	anyShapes := []string{
 		"myorg/?prod-.*", // optional slash: matches "myorgprod-x"
@@ -420,10 +455,9 @@ func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 		"a/b|c/d",        // alternation: matches "c/d" (owner c)
 	}
 	for _, p := range anyShapes {
-		m := compile(p)
-		owner, class := classifySubject(m.resolvedSubject, m.compiledPattern)
-		if class == subjectOwner {
-			t.Errorf("pattern %q bucketed as owner=%q (subjectOwner); must be subjectAny", p, owner)
+		owner, class := classifySubject(p)
+		if class != subjectAny {
+			t.Errorf("pattern %q bucketed as owner=%q (class %d); must be subjectAny", p, owner, class)
 		}
 	}
 
@@ -433,17 +467,12 @@ func TestClassifySubject_QuantifiedFirstSlash(t *testing.T) {
 		{"myorg/repo-.*", "myorg"},
 		{"a/b|a/c", "a"}, // common-prefix alternation is legitimately owner-scoped
 	} {
-		m := compile(tc.pattern)
-		owner, class := classifySubject(m.resolvedSubject, m.compiledPattern)
+		owner, class := classifySubject(tc.pattern)
 		if class != subjectOwner || owner != tc.owner {
 			t.Errorf("pattern %q: got (owner=%q, class=%d), want (owner=%q, subjectOwner)", tc.pattern, owner, class, tc.owner)
 		}
 	}
 }
-
-// TestClassifySubject_EndToEndAuthzParity proves the fix at the API level: a
-// quantified-first-slash mapping is found by AuthorizeRoles/FindSessionPolicy
-// for a slash-less subject, matching what a compiled-pattern match asserts.
 
 // TestClassifySubject_EndToEndAuthzParity proves the fix at the API level: a
 // quantified-first-slash mapping is found by AuthorizeRoles/FindSessionPolicy
@@ -502,7 +531,7 @@ func TestSubjectAnchoringNoNewlineBypass(t *testing.T) {
 	}
 }
 
-// ---------- P3: issuer binding ----------
+// ---------- bare-wildcard gate ----------
 
 // TestValidate_RejectsBareWildcardSubject pins the identity gate: a subject
 // pattern that matches everything would grant its roles to every repository
@@ -518,10 +547,6 @@ func TestValidate_RejectsBareWildcardSubject(t *testing.T) {
 		}
 	}
 }
-
-// TestValidate_RejectsBareWildcardSubjectInRoleGroup covers the other path
-// into appendEffective — role_groups expand to role_mappings, and must not
-// dodge the check.
 
 // TestValidate_RejectsBareWildcardSubjectInRoleGroup covers the other path
 // into appendEffective — role_groups expand to role_mappings, and must not
@@ -546,10 +571,6 @@ func TestValidate_RejectsBareWildcardSubjectInRoleGroup(t *testing.T) {
 // TestValidate_AcceptsSpecificSubjectPatterns guards against over-rejection:
 // legitimate wildcard-bearing patterns must keep working. `example-config.yaml`
 // ships `org/service-.*`, so this is a real compatibility constraint.
-
-// TestValidate_AcceptsSpecificSubjectPatterns guards against over-rejection:
-// legitimate wildcard-bearing patterns must keep working. `example-config.yaml`
-// ships `org/service-.*`, so this is a real compatibility constraint.
 func TestValidate_AcceptsSpecificSubjectPatterns(t *testing.T) {
 	for _, subject := range []string{
 		"myorg/repo",
@@ -562,28 +583,6 @@ func TestValidate_AcceptsSpecificSubjectPatterns(t *testing.T) {
 		if err := wildcardCfg(subject).Validate(); err != nil {
 			t.Errorf("subject %q should be valid: %v", subject, err)
 		}
-	}
-}
-
-// TestValidate_WildcardRejectionIsLiteralOnly documents the limit of the check
-// honestly: it catches the shapes operators actually type, not every regex
-// that happens to match everything. If this ever starts failing, the check got
-// smarter and the doc comment on bareWildcards needs updating.
-
-// TestValidate_WildcardRejectionIsLiteralOnly documents the limit of the check
-// honestly: it catches the shapes operators actually type, not every regex
-// that happens to match everything. If this ever starts failing, the check got
-// smarter and the doc comment on bareWildcards needs updating.
-func TestValidate_WildcardRejectionIsLiteralOnly(t *testing.T) {
-	if err := wildcardCfg("(.*)").Validate(); err != nil {
-		t.Skipf("equivalent-wildcard detection has improved: %v", err)
-	}
-	c := wildcardCfg("(.*)")
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if ok, _ := c.AuthorizeRoles("https://token.actions.githubusercontent.com", "anyone/anything", map[string]any{}); !ok {
-		t.Fatal("expected `(.*)` to still match everything")
 	}
 }
 
@@ -606,8 +605,6 @@ func TestIssuerBinding(t *testing.T) {
 		t.Errorf("CROSS-ISSUER POLICY LEAK: got %q", *p)
 	}
 }
-
-// ---------- P4: session policy scoping ----------
 
 // ---------- session-policy scoping ----------
 
@@ -668,10 +665,6 @@ func TestFindSessionPolicy_ScopedToGrantingRole(t *testing.T) {
 		t.Fatalf("ungranted role should have no policy, got policy=%v file=%v", p, f)
 	}
 }
-
-// TestFindSessionPolicy_ConditionsGateThePolicy proves the policy of a mapping
-// whose conditions are NOT satisfied does not apply, even if it grants the role
-// and matches the subject — the request was not authorized by that mapping.
 
 // TestFindSessionPolicy_ConditionsGateThePolicy proves the policy of a mapping
 // whose conditions are NOT satisfied does not apply, even if it grants the role
@@ -765,8 +758,6 @@ func TestOrderWinsAmongMappingsGrantingTheSameRole(t *testing.T) {
 	}
 }
 
-// ---------- P5: conditions ----------
-
 // ---------- conditions ----------
 
 func TestConditionSemantics(t *testing.T) {
@@ -826,10 +817,6 @@ func TestConditionSemantics(t *testing.T) {
 // TestTypoedConditionKeyFailsClosed proves an unrecognized condition
 // key is NOT silently ignored: it is read as a claim name and checked against
 // a claim that does not exist, denying the request.
-
-// TestTypoedConditionKeyFailsClosed proves an unrecognized condition
-// key is NOT silently ignored: it is read as a claim name and checked against
-// a claim that does not exist, denying the request.
 func TestTypoedConditionKeyFailsClosed(t *testing.T) {
 	c := vcfg(t, []RoleMapping{{
 		Subject:    Patterns{"myorg/repo"},
@@ -885,8 +872,6 @@ func TestPermissiveConditionPatternsRejected(t *testing.T) {
 	}
 }
 
-// ---------- P6: role set / role gate ----------
-
 // ---------- role gate ----------
 
 func TestRequestedRoleMustMatchExactly(t *testing.T) {
@@ -938,7 +923,7 @@ func TestRoleSetResolvedFromConfigNotToken(t *testing.T) {
 	}
 }
 
-// ---------- P7: tag-auth ----------
+// ---------- benchmark ----------
 
 // BenchmarkAuthorizeRoles measures one whole authorization decision — owner
 // bucket lookup, subject regex, and a nested condition tree — against a config
@@ -994,5 +979,35 @@ role_mappings:
 		if !ok || len(roles) != 1 {
 			b.Fatalf("expected exactly one role, got ok=%v roles=%v", ok, roles)
 		}
+	}
+}
+
+func TestAllowSessionNameAndRoleSessionNameAreMutuallyExclusive(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/R"
+
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, AllowSessionName: true, RoleSessionName: "forced"})
+	require.ErrorContains(t, cfg.Validate(), "set allow_session_name or role_session_name, not both")
+
+	cfg = idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{role}})
+	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{role}, AllowSessionName: true, RoleSessionName: "forced"}}}
+	require.ErrorContains(t, cfg.Validate(), "set allow_session_name or role_session_name, not both")
+}
+
+func TestSessionPolicyAndFileAreMutuallyExclusive(t *testing.T) {
+	const role = "arn:aws:iam::123456789012:role/R"
+	const inline = `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"iam:*","Resource":"*"}]}`
+
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, SessionPolicy: inline, SessionPolicyFile: "p.json"})
+	require.ErrorContains(t, cfg.Validate(), "set session_policy or session_policy_file, not both")
+
+	cfg = idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{role}})
+	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{role}, SessionPolicy: inline, SessionPolicyFile: "p.json"}}}
+	require.ErrorContains(t, cfg.Validate(), "set session_policy or session_policy_file, not both")
+
+	for _, m := range []RoleMapping{
+		{Subject: Patterns{"org/repo"}, Roles: []string{role}, SessionPolicy: inline},
+		{Subject: Patterns{"org/repo"}, Roles: []string{role}, SessionPolicyFile: "p.json"},
+	} {
+		require.NoError(t, idpMappingCfg(m).Validate())
 	}
 }

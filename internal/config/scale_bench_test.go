@@ -97,6 +97,39 @@ func BenchmarkDecideMixed(b *testing.B) {
 	}
 }
 
+// Non-one-pass patterns (regexp.LiteralPrefix() is empty for them) used to land
+// in the always-scanned "any" bucket; the parse tree files them by owner.
+func BenchmarkDecideNonOnePass(b *testing.B) {
+	for _, n := range []int{100, 1000} {
+		b.Run(fmt.Sprintf("patterns=%d", n), func(b *testing.B) {
+			var sb strings.Builder
+			sb.WriteString(`
+role_session_name: "aow"
+issuers:
+  - issuer: "` + bIss + `"
+    provider: "github"
+    audiences: ["sts.amazonaws.com"]
+    claim_mappings: {subject: "sub"}
+default_issuer: "` + bIss + `"
+role_mappings:
+`)
+			for i := 0; i < n; i++ {
+				fmt.Fprintf(&sb, "  - subject: \"repo:acme%d/.*-prod\"\n    roles: [\"arn:aws:iam::123456789012:role/r%d\"]\n", i, i)
+			}
+			cfg := &Config{}
+			require.NoError(b, cfg.MergeBytes([]byte(sb.String()), "yaml"))
+			subject := fmt.Sprintf("repo:acme%d/web-prod", n/2)
+			role := fmt.Sprintf("arn:aws:iam::123456789012:role/r%d", n/2)
+			claims := claimsFor(subject)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				decide(b, cfg, subject, role, claims)
+			}
+		})
+	}
+}
+
 // Cold start / remote-refresh cost: parse + Validate a large config.
 func BenchmarkValidateLarge(b *testing.B) {
 	for _, n := range []int{1000, 5000, 10000} {

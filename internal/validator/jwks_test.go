@@ -564,3 +564,107 @@ func TestFetchJWKS_InitiatorCancellationDoesNotAbortSharedFetch(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&jwksHits),
 		"exactly one upstream JWKS fetch must occur despite N+1 concurrent callers")
 }
+
+// hangingServer accepts requests and never answers until the test ends.
+func hangingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		<-done
+	}))
+	t.Cleanup(func() {
+		close(done)
+		srv.Close()
+	})
+	return srv
+}
+
+func TestWarmPrefetch_HungIssuersReturnNearContextDeadline(t *testing.T) {
+	const deadline = 300 * time.Millisecond
+	tests := []struct {
+		name    string
+		issuers int
+	}{
+		{"one hung issuer", 1},
+		{"three hung issuers fetched concurrently", 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := githubIssuer(hangingServer(t).URL, "aud")
+			for i := 1; i < tt.issuers; i++ {
+				cfg.Issuers = append(cfg.Issuers, githubIssuer(hangingServer(t).URL, "aud").Issuers[0])
+			}
+			require.NoError(t, cfg.Validate())
+			v := staticValidator(cfg, cache.NewMemoryCache())
+
+			ctx, cancel := context.WithTimeout(context.Background(), deadline)
+			defer cancel()
+			start := time.Now()
+			v.WarmPrefetch(ctx)
+			assert.Less(t, time.Since(start), deadline+time.Second, "WarmPrefetch must honor ctx, not the 5s client timeout")
+		})
+	}
+}
+
+func TestValidate_HungJWKSHonorsCallerContext(t *testing.T) {
+	srv := hangingServer(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	cfg := githubIssuer(srv.URL, "aud")
+	require.NoError(t, cfg.Validate())
+	v := staticValidator(cfg, cache.NewMemoryCache())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = v.Validate(ctx, signToken(t, key, "k1", srv.URL, "aud"))
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), time.Second)
+}
+
+func TestFetchJWKS_AlreadyCancelledContextStartsNoFetch(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	t.Cleanup(srv.Close)
+	cfg := githubIssuer(srv.URL, "aud")
+	require.NoError(t, cfg.Validate())
+	v := staticValidator(cfg, cache.NewMemoryCache())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := v.FetchJWKS(ctx, srv.URL)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, hits.Load())
+}
+
+func TestValidate_FailedJWKSFetchIsNotRetriedWithinWindow(t *testing.T) {
+	var jwksHits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{"issuer": "http://" + r.Host, "jwks_uri": "http://" + r.Host + "/jwks"})
+		case "/jwks":
+			jwksHits.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	cfg := githubIssuer(srv.URL, "aud")
+	require.NoError(t, cfg.Validate())
+	v, advance := clockedValidator(cfg, cache.NewMemoryCache())
+	token := signToken(t, key, "k1", srv.URL, "aud")
+
+	for i := 0; i < 2; i++ {
+		_, err = v.Validate(context.Background(), token)
+		require.Error(t, err)
+	}
+	assert.EqualValues(t, 1, jwksHits.Load())
+
+	advance(6 * time.Second)
+	_, err = v.Validate(context.Background(), token)
+	require.Error(t, err)
+	assert.EqualValues(t, 2, jwksHits.Load(), "retries after the 5s window")
+}

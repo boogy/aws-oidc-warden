@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -182,6 +183,8 @@ func TestRedactToken_NegativeCountsDoNotPanic(t *testing.T) {
 	}
 }
 
+type namedString string
+
 func TestFormatClaimValue(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -214,6 +217,10 @@ func TestFormatClaimValue(t *testing.T) {
 		{"int64", int64(42), "42"},
 		{"nil", nil, "<nil>"},
 		{"slice", []string{"a", "b"}, "[a b]"},
+		{"any slice", []any{"a", float64(2), true}, "[a 2 true]"},
+		{"string with percent and braces", "100% {x} %v", "100% {x} %v"},
+		{"unicode string", "é世界", "é世界"},
+		{"named string type", namedString("n"), "n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, utils.FormatClaimValue(tc.raw))
@@ -252,4 +259,105 @@ func TestFormatClaimValue_RoundTripsRealClaimDecode(t *testing.T) {
 	assert.Equal(t, "1755590400", utils.FormatClaimValue(claims["exp"]))
 	assert.Equal(t, "42", utils.FormatClaimValue(claims["repository_id"]))
 	assert.Equal(t, "org/repo", utils.FormatClaimValue(claims["repository"]))
+}
+
+func TestSanitizeSTSName(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"slash", "org/repo", "org=repo"},
+		{"subject", "repo:myorg/api:ref:refs/heads/main", "repo=myorg=api=ref=refs=heads=main"},
+		{"space and star", "a b*c", "a=b=c"},
+		{"plus replaced", "ok+=,.@-_1", "ok==,.@-_1"},
+		{"empty", "", ""},
+		{"long input keeps length", strings.Repeat("a/", 100), strings.Repeat("a=", 100)},
+		{"forged hash tail", strings.Repeat("a", 47) + "+" + strings.Repeat("0", 16), strings.Repeat("a", 47) + "=" + strings.Repeat("0", 16)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, utils.SanitizeSTSName(tt.in))
+		})
+	}
+}
+
+func TestFitSTSName(t *testing.T) {
+	validName := regexp.MustCompile(`^[\w+=,.@-]{2,64}$`)
+
+	t.Run("exactly 64 unchanged", func(t *testing.T) {
+		in := strings.Repeat("a", 64)
+		assert.Equal(t, in, utils.FitSTSName(in))
+	})
+	t.Run("65 is capped with hash tail", func(t *testing.T) {
+		in := strings.Repeat("a", 65)
+		got := utils.FitSTSName(in)
+		assert.Len(t, got, utils.MaxSTSNameLen)
+		assert.Equal(t, in[:47]+"+", got[:48])
+	})
+	t.Run("deterministic", func(t *testing.T) {
+		in := strings.Repeat("b", 80)
+		assert.Equal(t, utils.FitSTSName(in), utils.FitSTSName(in))
+	})
+	t.Run("same prefix different tail NotEqual", func(t *testing.T) {
+		prefix := strings.Repeat("a", 47) + strings.Repeat("c", 20)
+		assert.NotEqual(t, utils.FitSTSName(prefix+"x"), utils.FitSTSName(prefix+"y"))
+	})
+	t.Run("multibyte input yields a valid name", func(t *testing.T) {
+		assert.Regexp(t, validName, utils.FitSTSName(strings.Repeat("é/", 60)))
+	})
+}
+
+func TestFitSanitizedSTSName(t *testing.T) {
+	t.Run("plus in short input survives", func(t *testing.T) {
+		in := strings.Repeat("a", 13) + "+" + strings.Repeat("0", 16)
+		assert.Equal(t, in, utils.FitSanitizedSTSName(in))
+	})
+	t.Run("over 64 is capped", func(t *testing.T) {
+		assert.Len(t, utils.FitSanitizedSTSName(strings.Repeat("a", 100)), utils.MaxSTSNameLen)
+	})
+}
+
+func TestReadAllCapped(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"under cap", 9, false},
+		{"at cap", 10, false},
+		{"over cap", 11, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := utils.ReadAllCapped(strings.NewReader(strings.Repeat("a", tt.size)), 10, "doc")
+			if tt.wantErr {
+				require.ErrorContains(t, err, "doc exceeds 10 bytes")
+				assert.Nil(t, data)
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, data, tt.size)
+		})
+	}
+}
+
+func TestValidSTSName(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"ab", true},
+		{"a", false},
+		{strings.Repeat("a", 64), true},
+		{strings.Repeat("a", 65), false},
+		{"user+tag=v,x.y@z-w_1", true},
+		{"owner/repo", false},
+		{"has space", false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, utils.ValidSTSName(tt.in), tt.in)
+	}
+}
+
+func TestValidSTSSessionSecs(t *testing.T) {
+	for secs, want := range map[int32]bool{899: false, 900: true, 43200: true, 43201: false, 0: false} {
+		assert.Equal(t, want, utils.ValidSTSSessionSecs(secs), secs)
+	}
 }
