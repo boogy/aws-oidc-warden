@@ -319,8 +319,8 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		slog.Int("roleMappings", len(cfg.effective)),
 		slog.Int("fragments", len(cfg.fragmentSources())))
 	if reloadedMode != cfg.JWTValidation.Mode {
-		logevent.Warn(ctx, nil, logevent.ConfigWarning, "jwt_validation.mode changed on reload; frozen value kept",
-			slog.String("warning", "jwt_validation_mode_reload_ignored"), slog.String("mode", reloadedMode), slog.String("frozenMode", p.frozenMode))
+		logevent.Warn(ctx, nil, logevent.ConfigJWTValidationReloadIgnored, "jwt_validation.mode changed on reload; frozen value kept",
+			slog.String("mode", reloadedMode), slog.String("frozenMode", p.frozenMode))
 	}
 	prevEnabled, enabled := prevIdP != nil && prevIdP.Enabled, cfg.IdP != nil && cfg.IdP.Enabled
 	if p.frozenIdP != nil && prevEnabled != enabled {

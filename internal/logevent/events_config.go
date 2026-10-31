@@ -30,6 +30,9 @@ var ConfigWarning = newEvent("config.warning")
 // token verification upstream (Warn).
 var ConfigJWTValidationDelegated = newEvent("config.jwt_validation.delegated")
 
+// ConfigJWTValidationReloadIgnored is emitted when a reload sets a jwt_validation.mode other than the frozen cold-start one (Warn).
+var ConfigJWTValidationReloadIgnored = newEvent("config.jwt_validation.reload_ignored")
+
 // ConfigIdPReloadIgnored is emitted by each reload that rebuilds the config while its idp settings differ from the frozen cold-start ones, including an added block (Warn).
 var ConfigIdPReloadIgnored = newEvent("config.idp.reload_ignored")
 

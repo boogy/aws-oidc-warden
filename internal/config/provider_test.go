@@ -849,13 +849,14 @@ func TestProvider_ReloadKeepsFrozenJWTMode(t *testing.T) {
 		wantErr     string
 		wantSigner  string
 		wantIssuers int
+		wantWarn    int
 	}{
 		{name: "mode switch dropping the signer is rejected", frozen: "alb", overlay: "jwt_validation:\n  mode: self\n  alb_expected_signer: \"\"\n", wantErr: `under frozen jwt_validation.mode "alb": jwt_validation.alb_expected_signer is required`, wantSigner: signerA, wantIssuers: 1},
-		{name: "mode switch keeping the signer is ignored", frozen: "alb", overlay: "jwt_validation:\n  mode: apigw\n", wantSigner: signerA, wantIssuers: 1},
+		{name: "mode switch keeping the signer is ignored", frozen: "alb", overlay: "jwt_validation:\n  mode: apigw\n", wantSigner: signerA, wantIssuers: 1, wantWarn: 1},
 		{name: "second issuer under alb is rejected", frozen: "alb", overlay: twoIssuers, wantErr: "exactly one configured issuer", wantSigner: signerA, wantIssuers: 1},
 		{name: "unknown overlay mode is rejected", frozen: "alb", overlay: "jwt_validation:\n  mode: abl\n", wantErr: "jwt_validation.mode must be one of", wantSigner: signerA, wantIssuers: 1},
 		{name: "signer rotation still applies", frozen: "alb", overlay: "jwt_validation:\n  alb_expected_signer: " + signerB + "\n", wantSigner: signerB, wantIssuers: 1},
-		{name: "ignored alb mode does not reject a multi-issuer reload", frozen: "apigw", overlay: twoIssuers + "jwt_validation:\n  mode: alb\n  alb_expected_signer: " + signerB + "\n", wantSigner: signerB, wantIssuers: 2},
+		{name: "ignored alb mode does not reject a multi-issuer reload", frozen: "apigw", overlay: twoIssuers + "jwt_validation:\n  mode: alb\n  alb_expected_signer: " + signerB + "\n", wantSigner: signerB, wantIssuers: 2, wantWarn: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -868,7 +869,8 @@ func TestProvider_ReloadKeepsFrozenJWTMode(t *testing.T) {
 			p.FreezeJWTMode(p.Get().JWTValidation.Mode)
 
 			overlay = tt.overlay
-			err := p.Refresh(context.Background())
+			var err error
+			out := captureWarnings(t, func() { err = p.Refresh(context.Background()) })
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 			} else {
@@ -877,6 +879,7 @@ func TestProvider_ReloadKeepsFrozenJWTMode(t *testing.T) {
 			assert.Equal(t, tt.frozen, p.Get().JWTValidation.Mode)
 			assert.Equal(t, tt.wantSigner, p.Get().JWTValidation.ALBExpectedSigner)
 			assert.Len(t, p.Get().Issuers, tt.wantIssuers)
+			assert.Equal(t, tt.wantWarn, strings.Count(out, "config.jwt_validation.reload_ignored"))
 		})
 	}
 }
