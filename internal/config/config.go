@@ -736,10 +736,12 @@ func (c *Config) LoadConfig() error {
 
 // MergeBytes overlays the keys present in data (snake_case config schema, viper format; empty means json) onto c and re-validates.
 func (c *Config) MergeBytes(data []byte, format string) error {
-	return c.mergeBytes(data, format, false)
+	_, err := c.mergeBytes(data, format, false, "")
+	return err
 }
 
-func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error {
+// mergeBytes returns the overlay's own jwt_validation.mode; a non-empty frozenMode replaces it before Validate.
+func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, frozenMode string) (string, error) {
 	if format == "" {
 		format = "json"
 	}
@@ -747,14 +749,14 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error
 	v := viper.New()
 	v.SetConfigType(format)
 	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
-		return fmt.Errorf("failed to parse %s configuration: %w", format, err)
+		return "", fmt.Errorf("failed to parse %s configuration: %w", format, err)
 	}
 
 	// Merge into a copy: a decode or Validate failure must leave c — and the
 	// authz index still serving traffic — exactly as it was.
 	next, err := cloneConfig(c)
 	if err != nil {
-		return fmt.Errorf("failed to copy configuration: %w", err)
+		return "", fmt.Errorf("failed to copy configuration: %w", err)
 	}
 
 	// AllKeys(), not InConfig: an explicit null must count as declared.
@@ -767,10 +769,10 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error
 
 	var md mapstructure.Metadata
 	if err := v.Unmarshal(next, decoderOptions(&md)...); err != nil {
-		return fmt.Errorf("failed to unmarshal configuration: %w", err)
+		return "", fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}
 	if err := rejectUnusedKeys(md.Unused, "overlay"); err != nil {
-		return err
+		return "", err
 	}
 
 	reapplyEnvOverrides(next)
@@ -788,9 +790,19 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error
 			*k.field(next) = *k.field(c)
 		}
 	}
+	reloadedMode := cmp.Or(next.JWTValidation.Mode, "self")
+	if frozenMode != "" {
+		if err := checkJWTMode(reloadedMode); err != nil {
+			return "", err
+		}
+		next.JWTValidation.Mode = frozenMode
+	}
 
 	if err := next.Validate(); err != nil {
-		return err
+		if frozenMode != "" && frozenMode != reloadedMode {
+			err = fmt.Errorf("under frozen jwt_validation.mode %q: %w", frozenMode, err)
+		}
+		return "", err
 	}
 
 	if len(ignored) > 0 {
@@ -807,7 +819,7 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool) error
 	}
 
 	*c = *next
-	return nil
+	return reloadedMode, nil
 }
 
 // baseOnlyStrings locate or owner-pin config and policy reads, so an overlay must not change them.
@@ -1357,9 +1369,8 @@ func (c *Config) Validate() error {
 	if c.JWTValidation.Mode == "" {
 		c.JWTValidation.Mode = "self"
 	}
-	validModes := map[string]bool{"self": true, "apigw": true, "alb": true}
-	if !validModes[c.JWTValidation.Mode] {
-		return fmt.Errorf("jwt_validation.mode must be one of 'self', 'apigw', 'alb'; got %q", c.JWTValidation.Mode)
+	if err := checkJWTMode(c.JWTValidation.Mode); err != nil {
+		return err
 	}
 	// alb_expected_signer is required in alb mode — without it any ALB can inject
 	// a signed OIDC header and impersonate any GitHub repository (cross-ALB spoofing).
@@ -1878,4 +1889,11 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 	}
 
 	return d
+}
+
+func checkJWTMode(mode string) error {
+	if !slices.Contains([]string{"self", "apigw", "alb"}, mode) {
+		return fmt.Errorf("jwt_validation.mode must be one of 'self', 'apigw', 'alb'; got %q", mode)
+	}
+	return nil
 }

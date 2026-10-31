@@ -268,8 +268,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 		return fmt.Errorf("failed to clone base configuration: %w", err)
 	}
 
+	reloadedMode := cfg.JWTValidation.Mode
 	if p.fetch != nil {
-		if err := cfg.mergeBytes(data, p.format, true); err != nil {
+		if reloadedMode, err = cfg.mergeBytes(data, p.format, true, p.frozenMode); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
 	} else if err := cfg.Validate(); err != nil {
@@ -288,14 +289,6 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	if len(cfg.fragmentSources()) > 0 {
 		if err := cfg.Validate(); err != nil {
 			return fmt.Errorf("invalid configuration after fragment merge: %w", err)
-		}
-	}
-
-	reloadedMode := cfg.JWTValidation.Mode
-	if p.frozenMode != "" && reloadedMode != p.frozenMode {
-		cfg.JWTValidation.Mode = p.frozenMode
-		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("invalid configuration with frozen jwt_validation.mode: %w", err)
 		}
 	}
 
