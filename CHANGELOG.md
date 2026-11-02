@@ -89,17 +89,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Go toolchain** 1.27.1 → 1.27.3 (`go` directive in `go.mod`), fixing 10 standard-library vulnerabilities (GO-2026-6603 to GO-2026-6617, GO-2026-6809).
 - **AWS SDK for Go v2 bumps.**
-  - `github.com/aws/aws-sdk-go-v2` 1.47.1 → 1.47.3
-  - `github.com/aws/aws-sdk-go-v2/config` 1.33.6 → 1.33.9
-  - `github.com/aws/aws-sdk-go-v2/credentials` 1.20.6 → 1.20.9
-  - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.69.1 → 1.72.0
-  - `github.com/aws/aws-sdk-go-v2/service/iam` 1.64.1 → 1.64.4
-  - `github.com/aws/aws-sdk-go-v2/service/kms` 1.61.5 (new)
-  - `github.com/aws/aws-sdk-go-v2/service/s3` 1.113.4 → 1.114.3
-  - `github.com/aws/aws-sdk-go-v2/service/sts` 1.51.1 → 1.51.4
-  - `github.com/aws/smithy-go` 1.28.2 → 1.28.5
-  - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` patch bumps
-- `golang.org/x/sync` 0.23.0 → 0.24.0; transitive `golang.org/x/sys` 0.48.0 → 0.49.0, `golang.org/x/text` 0.42.0 → 0.43.0.
+  - `github.com/aws/aws-sdk-go-v2` 1.47.1 → 1.47.5
+  - `github.com/aws/aws-sdk-go-v2/config` 1.33.6 → 1.33.13
+  - `github.com/aws/aws-sdk-go-v2/credentials` 1.20.6 → 1.20.13
+  - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.69.1 → 1.72.3
+  - `github.com/aws/aws-sdk-go-v2/service/iam` 1.64.1 → 1.64.6
+  - `github.com/aws/aws-sdk-go-v2/service/kms` 1.62.2 (new)
+  - `github.com/aws/aws-sdk-go-v2/service/s3` 1.113.4 → 1.114.6
+  - `github.com/aws/aws-sdk-go-v2/service/sts` 1.51.1 → 1.51.6
+  - `github.com/aws/smithy-go` 1.28.2 → 1.28.7
+  - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` bumps
+- `golang.org/x/sync` 0.23.0 → 0.24.0; transitive `golang.org/x/sys` 0.48.0 → 0.49.0, `golang.org/x/text` 0.42.0 → 0.43.0, `go.yaml.in/yaml/v3` 3.0.5 → 3.0.6.
 
 ### Documentation
 
