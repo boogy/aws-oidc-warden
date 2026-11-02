@@ -28,40 +28,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func multiIssuerConfig(mode string) *config.Config {
-	return &config.Config{
+func TestNewClaimsExtractor_APIGWAllowsMultipleIssuers(t *testing.T) {
+	cfg := &config.Config{
 		RoleSessionName: "test",
-		JWTValidation:   config.JWTValidation{Mode: mode},
+		JWTValidation:   config.JWTValidation{Mode: "apigw"},
 		Issuers: []config.IssuerConfig{
-			{
-				Issuer:    "https://token.actions.githubusercontent.com",
-				Provider:  "github",
-				Audiences: []string{"sts.amazonaws.com"},
-			},
-			{
-				Issuer:        "https://gitlab.com",
-				Provider:      "generic",
-				Audiences:     []string{"aws-oidc-warden"},
-				ClaimMappings: map[string]string{"subject": "project_path"},
-			},
+			{Issuer: "https://token.actions.githubusercontent.com", Provider: "github", Audiences: []string{"sts.amazonaws.com"}},
+			{Issuer: "https://gitlab.com", Provider: "generic", Audiences: []string{"aws-oidc-warden"}, ClaimMappings: map[string]string{"subject": "project_path"}},
 		},
 	}
-}
-
-// apigw mode gives each route its own JWT authorizer, so several configured
-// issuers is a valid deployment and must not fail closed at cold start.
-func TestNewClaimsExtractor_APIGWAllowsMultipleIssuers(t *testing.T) {
-	ex, err := newClaimsExtractor(config.NewStaticProvider(multiIssuerConfig("apigw")), nil)
-	require.NoError(t, err)
-	assert.NotNil(t, ex)
-}
-
-// A single-issuer apigw config keeps working unchanged.
-func TestNewClaimsExtractor_APIGWSingleIssuerStillWorks(t *testing.T) {
-	cfg := multiIssuerConfig("apigw")
-	cfg.Issuers = cfg.Issuers[:1]
-
-	ex, err := newClaimsExtractor(config.NewStaticProvider(cfg), nil)
+	ex, err := newClaimsExtractor("apigw", config.NewStaticProvider(cfg), nil)
 	require.NoError(t, err)
 	assert.NotNil(t, ex)
 }

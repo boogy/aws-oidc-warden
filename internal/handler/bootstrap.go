@@ -127,13 +127,13 @@ func newBootstrap(adapter string, logger *slog.Logger, cfg *config.Config, consu
 	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
 
 	// jwt_validation.mode is fixed at cold start.
-	extractor, err := newClaimsExtractor(provider, tokenValidator)
+	mode := provider.Get().JWTValidation.Mode
+	extractor, err := newClaimsExtractor(mode, provider, tokenValidator)
 	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
 			slog.String("component", "claims_extractor"), slog.String("error", err.Error()))
 		return nil, fmt.Errorf("failed to create claims extractor: %w", err)
 	}
-	mode := provider.Get().JWTValidation.Mode
 	provider.FreezeJWTMode(mode)
 	if mode != "self" {
 		logevent.Warn(ctx, logger, logevent.ConfigJWTValidationDelegated, "jwt validation delegated to upstream",
@@ -181,8 +181,7 @@ func NewIdPService(provider *config.Provider, kms func() idp.KMSAPI, log *slog.L
 }
 
 // newClaimsExtractor creates the extractor for jwt_validation.mode.
-func newClaimsExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
-	mode := provider.Get().JWTValidation.Mode
+func newClaimsExtractor(mode string, provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
 	switch mode {
 	case "self":
 		return validator.NewSelfExtractor(v), nil

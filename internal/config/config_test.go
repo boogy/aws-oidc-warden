@@ -777,15 +777,28 @@ func TestValidate_TagAuthDefaultOrg(t *testing.T) {
 	}).Validate())
 }
 
-func TestValidate_ALBRequiresSingleIssuer(t *testing.T) {
-	issuers := append(singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
-		IssuerConfig{Issuer: "https://gitlab.com", Provider: "generic", Audiences: []string{"sts.amazonaws.com"}, ClaimMappings: map[string]string{"subject": "sub"}})
-	cfg := &Config{
-		Issuers:         issuers,
-		RoleSessionName: "aow",
-		JWTValidation:   JWTValidation{Mode: "alb", ALBExpectedSigner: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y"},
+func TestValidate_DelegatedModeIssuerCount(t *testing.T) {
+	tests := []struct {
+		name    string
+		jwt     JWTValidation
+		wantErr string
+	}{
+		{"alb requires one issuer", JWTValidation{Mode: "alb", ALBExpectedSigner: "arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/x/y"}, "exactly one configured issuer"},
+		{"apigw allows several issuers", JWTValidation{Mode: "apigw"}, ""},
 	}
-	require.ErrorContains(t, cfg.Validate(), "exactly one configured issuer")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issuers := append(singleIssuer("https://token.actions.githubusercontent.com", "sts.amazonaws.com"),
+				IssuerConfig{Issuer: "https://gitlab.com", Provider: "generic", Audiences: []string{"sts.amazonaws.com"}, ClaimMappings: map[string]string{"subject": "sub"}})
+			cfg := &Config{Issuers: issuers, RoleSessionName: "aow", JWTValidation: tt.jwt}
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
 }
 
 func TestTagAuthDefaults(t *testing.T) {
