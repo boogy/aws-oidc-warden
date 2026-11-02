@@ -28,7 +28,7 @@ Three sources, in **increasing** precedence:
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]
-> The loader **ignores unknown top-level keys silently**. A typo'd or renamed key does not error — it configures nothing while appearing to work. Check a new config against the real loader with `make run` (or `go run cmd/local/main.go -config yours.yaml`) before deploying it.
+> The service config file and S3 overlay **ignore unknown top-level keys** with only a `config.warning` (`warning=unknown_config_key`); unknown nested keys are rejected, except the user-chosen keys of map-valued fields (`role_sets` names, claim names under `conditions:`, `session_tags`, `claim_mappings`); `config_fragments`/`mappings_file` reject any top-level key other than `default_issuer`, `role_sets`, `role_mappings`, `role_groups`. A typo'd or renamed top-level key configures nothing while appearing to work, and [`cmd/validate`](#validating-a-config) still exits 0 on it — check its output for that warning before deploying.
 
 ## The issuer model
 
