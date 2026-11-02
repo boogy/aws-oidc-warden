@@ -79,6 +79,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **An IdP mint failure's audit `reason` names its cause** (subject invalid, token too large, source identity rejected, keys unavailable, signing failed) instead of a generic "token minting failed".
 - **`HEAD` on an IdP document path never carries a body**, including its 404 and 503 errors.
 - **The wildcard guard no longer rejects patterns that only look universal**, such as `.*^` or `$.*`, which match only the empty string.
+- **A key-rotation refetch skipped by the 5s JWKS failure cooldown no longer spends that `kid`'s 60s refetch slot**, so its tokens validate once the issuer recovers.
 
 ### Removed
 

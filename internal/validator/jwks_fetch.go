@@ -37,6 +37,17 @@ func jwksCacheKey(spec *issuerSpec) string {
 	return spec.Issuer + "|jwks_uri=" + hex.EncodeToString(sum[:8])
 }
 
+// fetchSuppressed returns the memoized error while spec's JWKS fetch is in its failure cooldown, else nil.
+func (t *TokenValidator) fetchSuppressed(ctx context.Context, spec *issuerSpec) error {
+	prev := t.jwksState.recentFailure(jwksCacheKey(spec), t.timeNow())
+	if prev == nil {
+		return nil
+	}
+	logevent.Debug(ctx, nil, logevent.JWKSFetchSuppressed, "JWKS fetch skipped after a recent failure",
+		issuerAttrs(spec.Issuer)...)
+	return fmt.Errorf("jwks fetch skipped after recent failure: %w", prev)
+}
+
 // fetchJWKS returns the JWKS for spec.Issuer from cache or network; force bypasses the cache (key rotation).
 func (t *TokenValidator) fetchJWKS(ctx context.Context, spec *issuerSpec, force bool) (*types.JWKS, error) {
 	key := jwksCacheKey(spec)
@@ -49,10 +60,8 @@ func (t *TokenValidator) fetchJWKS(ctx context.Context, spec *issuerSpec, force 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if prev := t.jwksState.recentFailure(key, t.timeNow()); prev != nil {
-		logevent.Debug(ctx, nil, logevent.JWKSFetchSuppressed, "JWKS fetch skipped after a recent failure",
-			issuerAttrs(spec.Issuer)...)
-		return nil, fmt.Errorf("jwks fetch skipped after recent failure: %w", prev)
+	if err := t.fetchSuppressed(ctx, spec); err != nil {
+		return nil, err
 	}
 
 	// The shared fetch ignores its initiator's cancellation.

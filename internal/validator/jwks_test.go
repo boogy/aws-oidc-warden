@@ -124,6 +124,40 @@ func TestRefetch_LimiterDenialAfterRotationIsTransientNotPinned(t *testing.T) {
 	assert.Equal(t, "owner/repo", claims.Subject)
 }
 
+func TestRefetch_SuppressedFetchDoesNotSpendKidSlot(t *testing.T) {
+	oldKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	newKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	served := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k-old", &oldKey.PublicKey)}}
+	srv := oidcServer(t, func() *types.JWKS { mu.Lock(); defer mu.Unlock(); return served })
+	serve := func(j *types.JWKS) { mu.Lock(); defer mu.Unlock(); served = j }
+
+	cfg := githubIssuer(srv.URL, "aud")
+	require.NoError(t, cfg.Validate())
+	v, advance := clockedValidator(cfg, cache.NewMemoryCache())
+
+	_, err = v.Validate(context.Background(), signToken(t, oldKey, "k-old", srv.URL, "aud"))
+	require.NoError(t, err)
+
+	serve(nil)
+	_, err = v.Validate(context.Background(), signToken(t, newKey, "k-a", srv.URL, "aud"))
+	require.Error(t, err, "the forced refetch fails during the outage")
+
+	advance(3 * time.Second)
+	serve(&types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k-new", &newKey.PublicKey)}})
+	rotated := signToken(t, newKey, "k-new", srv.URL, "aud")
+	_, err = v.Validate(context.Background(), rotated)
+	require.ErrorContains(t, err, "skipped after recent failure")
+
+	advance(3 * time.Second)
+	claims, err := v.Validate(context.Background(), rotated)
+	require.NoError(t, err, "a fetch suppressed by the failure memo must not spend the kid's refetch slot")
+	assert.Equal(t, "owner/repo", claims.Subject)
+}
+
 // TestRefetch_DeniedRefetchNeverAcceptsAgainstStaleKeySet pins the fail-closed
 // direction explicitly: when the limiter denies a refetch, the token must be
 // REJECTED, never accepted against the stale cached key set. A revoked key

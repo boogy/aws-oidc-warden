@@ -279,6 +279,10 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 	// refetch limiter.
 	if err != nil && errors.Is(err, ErrKeyNotFound) {
 		kid, _ := token.Header["kid"].(string)
+		// Must precede refetch.allow: a suppressed fetch would spend the kid's slot.
+		if serr := t.fetchSuppressed(ctx, spec); serr != nil {
+			return nil, serr
+		}
 		if t.refetch.allow(spec.Issuer, kid) {
 			logevent.Info(ctx, nil, logevent.JWKSRefetchForced, "signing key not found in cached JWKS; refetching",
 				issuerAttrs(spec.Issuer, slog.String("kid", kid))...)
