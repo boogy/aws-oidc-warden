@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -79,14 +80,12 @@ func main() {
 	}
 	awsClient.SetConfigSource(provider.Get)
 
-	if mode := provider.Get().JWTValidation.Mode; mode != "self" {
+	extractor, err := newLocalExtractor(provider, validator.NewTokenValidator(provider, jwksCache))
+	if err != nil {
 		logevent.Error(ctx, logger, logevent.AppInitFailure, "startup failed",
-			slog.String("component", "claims_extractor"), slog.String("error", "local server supports only jwt_validation.mode self, got "+mode))
+			slog.String("component", "claims_extractor"), slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	tokenValidator := validator.NewTokenValidator(provider, jwksCache)
-	extractor := validator.NewSelfExtractor(tokenValidator)
-	provider.FreezeJWTMode("self")
 
 	svc := handler.NewIdPService(provider, handler.DefaultIdPKMS, logger)
 
@@ -130,6 +129,15 @@ const (
 	readTimeout     = 30 * time.Second
 	shutdownTimeout = 5 * time.Second
 )
+
+// newLocalExtractor builds the self-mode extractor and freezes the mode; other modes are refused.
+func newLocalExtractor(provider *config.Provider, v validator.TokenValidatorInterface) (validator.ClaimsExtractorInterface, error) {
+	if mode := provider.Get().JWTValidation.Mode; mode != "self" {
+		return nil, fmt.Errorf("local server supports only jwt_validation.mode self, got %q", mode)
+	}
+	provider.FreezeJWTMode("self")
+	return validator.NewSelfExtractor(v), nil
+}
 
 // newServer sizes WriteTimeout to cover the body read, the simulated latency and the handler's own deadline.
 func newServer(addr string, h http.Handler, latency time.Duration) *http.Server {
