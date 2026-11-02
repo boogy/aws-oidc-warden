@@ -7,6 +7,10 @@ var JWKSDiscoveryFailure = newEvent("jwks.discovery.failure")
 // JWKSFetchFailure is emitted when fetching a JWKS document fails (Error).
 var JWKSFetchFailure = newEvent("jwks.fetch.failure")
 
+// JWKSFetchSuppressed is emitted when a JWKS fetch is skipped because the
+// previous one failed moments ago (Debug).
+var JWKSFetchSuppressed = newEvent("jwks.fetch.suppressed")
+
 // JWKSRefetchForced is emitted when a JWKS refetch is forced (Info).
 var JWKSRefetchForced = newEvent("jwks.refetch.forced")
 

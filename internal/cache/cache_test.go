@@ -11,26 +11,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 )
 
-func TestGetConfiguredTTL(t *testing.T) {
-	if got := GetConfiguredTTL(nil); got != Defaults.TTL {
-		t.Fatalf("nil config: got %v, want default %v", got, Defaults.TTL)
-	}
-	cfg := &config.Config{Cache: &config.Cache{TTL: time.Hour}}
-	if got := GetConfiguredTTL(cfg); got != time.Hour {
-		t.Fatalf("got %v, want 1h", got)
-	}
-}
-
-func TestGetConfiguredMaxLocalSize(t *testing.T) {
-	if got := GetConfiguredMaxLocalSize(nil); got != Defaults.MaxLocalSize {
-		t.Fatalf("nil config: got %d, want default %d", got, Defaults.MaxLocalSize)
-	}
-	cfg := &config.Config{Cache: &config.Cache{MaxLocalSize: 42}}
-	if got := GetConfiguredMaxLocalSize(cfg); got != 42 {
-		t.Fatalf("got %d, want 42", got)
-	}
-}
-
 func TestNewCacheBackendSelection(t *testing.T) {
 	tests := []struct {
 		name    string

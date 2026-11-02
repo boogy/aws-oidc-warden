@@ -32,7 +32,6 @@ type dynamoDBCache struct {
 type dynamoDBCacheOptions struct {
 	maxLocalSize int           // Maximum number of items in local memory cache
 	defaultTTL   time.Duration // Default TTL when not specified
-	awsConfig    aws.Config    // Optional AWS configuration
 }
 
 // DynamoDBCacheOption is a function that configures the DynamoDB cache
@@ -52,13 +51,6 @@ func WithDynamoDBDefaultTTL(ttl time.Duration) DynamoDBCacheOption {
 	}
 }
 
-// WithDynamoDBAWSConfig sets a custom AWS configuration
-func WithDynamoDBAWSConfig(cfg aws.Config) DynamoDBCacheOption {
-	return func(o *dynamoDBCacheOptions) {
-		o.awsConfig = cfg
-	}
-}
-
 // NewDynamoDBCache creates a new DynamoDB cache with the given table name
 func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, error) {
 	// Default options
@@ -71,7 +63,7 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 		opt(options)
 	}
 
-	cfg, err := resolveAWSConfig(context.Background(), options.awsConfig, backendDynamoDB)
+	cfg, err := loadAWSConfig(context.Background(), backendDynamoDB)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +79,9 @@ func NewDynamoDBCache(tableName string, opts ...DynamoDBCacheOption) (Cache, err
 func (c *dynamoDBCache) Get(ctx context.Context, key string) (*gTypes.JWKS, bool) {
 	// Try to get from local memory cache first
 	if jwks, found := c.getFromLocalCache(key); found {
-		logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
+		if debugEnabled(ctx) {
+			logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
+		}
 		return jwks, true
 	}
 

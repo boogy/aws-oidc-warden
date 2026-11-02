@@ -39,7 +39,6 @@ type s3CacheItem struct {
 	Value      *types.JWKS `json:"value"`
 	Expiration time.Time   `json:"expiration"`
 	CreatedAt  time.Time   `json:"created_at"`
-	Size       int         `json:"size,omitempty"` // Size in bytes for monitoring
 }
 
 // s3CacheOptions configures the S3 cache behavior
@@ -47,7 +46,6 @@ type s3CacheOptions struct {
 	maxLocalSize int           // Maximum number of items in local memory cache
 	defaultTTL   time.Duration // Default TTL when not specified
 	cleanup      bool          // Delete expired objects discovered on read
-	awsConfig    aws.Config    // Optional AWS configuration
 }
 
 // S3CacheOption is a function that configures the S3 cache
@@ -74,13 +72,6 @@ func WithS3Cleanup(cleanup bool) S3CacheOption {
 	}
 }
 
-// WithAWSConfig sets a custom AWS configuration
-func WithAWSConfig(cfg aws.Config) S3CacheOption {
-	return func(o *s3CacheOptions) {
-		o.awsConfig = cfg
-	}
-}
-
 // NewS3Cache creates a new S3 cache with the given client and bucket
 func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error) {
 	// Default options
@@ -94,7 +85,7 @@ func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error)
 		opt(options)
 	}
 
-	cfg, err := resolveAWSConfig(context.Background(), options.awsConfig, backendS3)
+	cfg, err := loadAWSConfig(context.Background(), backendS3)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +103,9 @@ func NewS3Cache(bucketName, prefix string, opts ...S3CacheOption) (Cache, error)
 func (c *s3Cache) Get(ctx context.Context, key string) (*types.JWKS, bool) {
 	// Try to get from local memory cache first
 	if jwks, found := c.getFromLocalCache(key); found {
-		logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
+		if debugEnabled(ctx) {
+			logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendLocal, key)...)
+		}
 		return jwks, true
 	}
 

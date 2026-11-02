@@ -45,17 +45,21 @@ func NewMemoryCache(opts ...MemoryCacheOption) Cache {
 
 func (c *memoryCache) Get(ctx context.Context, key string) (*types.JWKS, bool) {
 	value, lookup := c.local.get(key)
-	switch lookup {
-	case localMiss:
-		logevent.Debug(ctx, nil, logevent.CacheMiss, "cache miss", cacheAttrs(backendMemory, key)...)
-		return nil, false
-	case localExpired:
-		logevent.Debug(ctx, nil, logevent.CacheExpired, "cache entry expired", cacheAttrs(backendMemory, key)...)
-		return nil, false
+	if lookup == localHit {
+		if debugEnabled(ctx) {
+			logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendMemory, key)...)
+		}
+		return value, true
 	}
 
-	logevent.Debug(ctx, nil, logevent.CacheHit, "cache hit", cacheAttrs(backendMemory, key)...)
-	return value, true
+	if debugEnabled(ctx) {
+		if lookup == localExpired {
+			logevent.Debug(ctx, nil, logevent.CacheExpired, "cache entry expired", cacheAttrs(backendMemory, key)...)
+		} else {
+			logevent.Debug(ctx, nil, logevent.CacheMiss, "cache miss", cacheAttrs(backendMemory, key)...)
+		}
+	}
+	return nil, false
 }
 
 func (c *memoryCache) Set(ctx context.Context, key string, value *types.JWKS, ttl time.Duration) {
@@ -64,6 +68,8 @@ func (c *memoryCache) Set(ctx context.Context, key string, value *types.JWKS, tt
 	}
 	c.local.put(ctx, key, value, time.Now().Add(ttl))
 
-	logevent.Debug(ctx, nil, logevent.CacheSet, "cache entry set",
-		cacheAttrs(backendMemory, key, slog.Int64("ttlMs", ttl.Milliseconds()))...)
+	if debugEnabled(ctx) {
+		logevent.Debug(ctx, nil, logevent.CacheSet, "cache entry set",
+			cacheAttrs(backendMemory, key, slog.Int64("ttlMs", ttl.Milliseconds()))...)
+	}
 }

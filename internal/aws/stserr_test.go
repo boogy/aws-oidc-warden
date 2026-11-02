@@ -46,9 +46,9 @@ func TestClassifyAssumeRoleError(t *testing.T) {
 }
 
 func TestSTSErrorCode(t *testing.T) {
-	assert.Equal(t, "AccessDenied", stsErrorCode(fmt.Errorf("wrapped: %w", apiErr("AccessDenied"))))
-	assert.Equal(t, "MalformedPolicyDocument", stsErrorCode(&ststypes.MalformedPolicyDocumentException{}))
-	assert.Empty(t, stsErrorCode(errors.New("plain")))
+	assert.Equal(t, "AccessDenied", STSErrorCode(fmt.Errorf("wrapped: %w", apiErr("AccessDenied"))))
+	assert.Equal(t, "MalformedPolicyDocument", STSErrorCode(&ststypes.MalformedPolicyDocumentException{}))
+	assert.Empty(t, STSErrorCode(errors.New("plain")))
 }
 
 // failingFake overrides vFake.AssumeRole with an injected STS failure.
@@ -66,7 +66,7 @@ func assumeWithSTSError(t *testing.T, stsErr error) error {
 	t.Helper()
 	c := NewAwsConsumer(vbaseCfg())
 	c.AWS = &failingFake{vFake: &vFake{}, err: stsErr}
-	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/Target", "aow", nil, nil, nil, nil)
+	_, err := c.AssumeRole(context.Background(), "arn:aws:iam::"+hubAcct+":role/Target", "aow", nil, nil, nil)
 	require.Error(t, err)
 	return err
 }

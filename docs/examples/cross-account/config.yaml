@@ -15,6 +15,9 @@
 # Account layout used throughout this example:
 #   Hub (runs the warden):  111111111111
 #   Member accounts:        222222222222 (staging), 333333333333 (production)
+#
+# Docs: docs/CONFIGURATION.md#cross-account-settings. Every other key, with
+# its options and defaults: ../example-config.yaml.
 ####################################################################################
 
 issuers:
@@ -111,11 +114,20 @@ tag_auth:
 session_tags_transitive: true
 
 ####################################################################################
-# Everything below is standard single-account configuration — unchanged by
-# cross-account usage. See ../../CONFIGURATION.md and /example-config.yaml.
+# Everything below is standard hub configuration — unchanged by cross-account
+# usage. Buckets and the table live in the hub account, in the warden's region.
+# See ../../CONFIGURATION.md and ../example-config.yaml.
 ####################################################################################
-log_level: "info"
+jwt_validation:
+  mode: "self"
 cache:
-  type: "memory"
+  type: "dynamodb"
+  dynamodb_table: "aow-jwks-cache"
   ttl: 4h
-session_policy_bucket: "aws-oidc-warden-session-policies"
+log_level: "info"
+log_to_s3: true
+log_bucket: "acme-aow-audit-111111111111-eu-west-1"
+log_prefix: "audit/"
+audit_required: true # no credentials unless the audit record is written
+session_policy_bucket: "acme-aow-session-policies-111111111111"
+session_policy_bucket_owner: "111111111111" # sent as ExpectedBucketOwner on policy reads

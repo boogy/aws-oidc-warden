@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,15 +29,12 @@ const (
 	DefaultRetries      = 3
 	DefaultBatchSize    = 10
 	DefaultMaxBatchWait = 30 * time.Second
-)
 
-// LoggerInterface defines the methods that must be implemented by any logger.
-type LoggerInterface interface {
-	WriteObject(s3Bucket, key string, body []byte) error
-	Flush() error
-	Close() error
-	WriteSingleLog(logData []byte) error
-}
+	// maxPendingRecords caps the records held across failed flushes; the oldest are dropped past it.
+	maxPendingRecords = 5000
+	// flushBackoff is how long threshold-triggered flushes stand down after a failed upload.
+	flushBackoff = 5 * time.Second
+)
 
 // s3ClientInterface is the subset of the S3 API used by this logger.
 type s3ClientInterface interface {
@@ -52,14 +51,13 @@ type S3LoggerConfig struct {
 	BatchSize   int
 	MaxBatchAge time.Duration
 
-	IncludeTimestamp bool
-	IncludeUUID      bool
-	FileExtension    string
+	IncludeUUID   bool
+	FileExtension string
 
 	ExtraTags map[string]string
 }
 
-// S3Logger implements LoggerInterface, writing logs to S3.
+// S3Logger writes audit logs to S3.
 type S3Logger struct {
 	config *gtvcfg.Config
 	// configSource is a live-config getter (e.g. config.Provider.Get); config
@@ -72,13 +70,18 @@ type S3Logger struct {
 	// clientFactory builds the S3 client; indirected so lazy init is testable
 	// without reaching AWS.
 	clientFactory func(context.Context) (s3ClientInterface, error)
-	batchBuffer   *bytes.Buffer
-	logBatch      [][]byte
-	mu            sync.Mutex
-	batchTimer    *time.Timer
-	ctx           context.Context
-	cancel        context.CancelFunc
-	timeNow       func() time.Time // overridden in tests
+	// mu guards logBatch only and is never held across I/O.
+	mu       sync.Mutex
+	logBatch [][]byte
+	dropped  int // records dropped since the last AuditBatchDropped report
+	// flushMu serializes uploads (so Close waits for an in-flight one) and guards retryAfter.
+	flushMu      sync.Mutex
+	retryAfter   time.Time
+	flushBackoff time.Duration
+	batchTimer   *time.Timer
+	ctx          context.Context
+	cancel       context.CancelFunc
+	timeNow      func() time.Time // overridden in tests
 
 	s3Config S3LoggerConfig
 }
@@ -88,22 +91,20 @@ func NewS3Logger(cfg *gtvcfg.Config) *S3Logger {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	logger := &S3Logger{
-		config:      cfg,
-		batchBuffer: &bytes.Buffer{},
-		logBatch:    make([][]byte, 0),
-		ctx:         ctx,
-		cancel:      cancel,
-		timeNow:     time.Now,
+		config:       cfg,
+		flushBackoff: flushBackoff,
+		ctx:          ctx,
+		cancel:       cancel,
+		timeNow:      time.Now,
 		s3Config: S3LoggerConfig{
-			Bucket:           cfg.LogBucket,
-			Prefix:           cfg.LogPrefix,
-			Timeout:          DefaultTimeout,
-			MaxRetries:       DefaultRetries,
-			BatchSize:        DefaultBatchSize,
-			MaxBatchAge:      DefaultMaxBatchWait,
-			IncludeTimestamp: true,
-			IncludeUUID:      true,
-			FileExtension:    ".json.gz",
+			Bucket:        cfg.LogBucket,
+			Prefix:        cfg.LogPrefix,
+			Timeout:       DefaultTimeout,
+			MaxRetries:    DefaultRetries,
+			BatchSize:     DefaultBatchSize,
+			MaxBatchAge:   DefaultMaxBatchWait,
+			IncludeUUID:   true,
+			FileExtension: ".json.gz",
 		},
 	}
 
@@ -117,6 +118,13 @@ func NewS3Logger(cfg *gtvcfg.Config) *S3Logger {
 	}
 
 	return logger
+}
+
+// SetS3Client injects the S3 client; handler tests in other packages need it.
+func (l *S3Logger) SetS3Client(client s3ClientInterface) {
+	l.initMu.Lock()
+	defer l.initMu.Unlock()
+	l.s3Client = client
 }
 
 // SetConfigSource wires a live-config getter (e.g. config.Provider.Get) so
@@ -237,11 +245,11 @@ func (l *S3Logger) onBatchTimer() {
 	l.batchTimer = time.AfterFunc(l.s3Config.MaxBatchAge, l.onBatchTimer)
 }
 
-// writeLogToS3 batches data for S3. Best-effort: checked against the live
-// config, not the boot snapshot, and no-ops (never errors) when disabled.
-func (l *S3Logger) writeLogToS3(data bytes.Buffer) error {
-	defer data.Reset()
-
+// writeLogToS3 batches a copy of data; best-effort, checks live config, no-ops when disabled.
+func (l *S3Logger) writeLogToS3(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
 	if c := l.liveConfig(); c == nil || !c.LogToS3 {
 		return nil
 	}
@@ -250,70 +258,108 @@ func (l *S3Logger) writeLogToS3(data bytes.Buffer) error {
 	}
 
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.logBatch = append(l.logBatch, slices.Clone(data))
+	l.capPendingLocked()
+	full := len(l.logBatch) >= l.s3Config.BatchSize
+	l.mu.Unlock()
 
-	if data.Len() == 0 {
+	if !full {
 		return nil
 	}
-
-	// Copy so the caller's buffer can be reused after this returns.
-	dataCopy := make([]byte, data.Len())
-	_, err := data.Read(dataCopy)
-	if err != nil {
-		return fmt.Errorf("failed to read log data: %w", err)
+	// A flush already running, or a recent failure, covers this record: it stays queued.
+	if !l.flushMu.TryLock() {
+		return nil
 	}
-
-	l.logBatch = append(l.logBatch, dataCopy)
-
-	if len(l.logBatch) >= l.s3Config.BatchSize {
-		return l.flushBatch()
+	defer l.flushMu.Unlock()
+	if l.timeNow().Before(l.retryAfter) {
+		return nil
 	}
-
-	return nil
+	return l.flushBatch()
 }
 
 // Flush forces all pending logs to be written to S3.
 func (l *S3Logger) Flush() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.flushMu.Lock()
+	defer l.flushMu.Unlock()
 
 	return l.flushBatch()
 }
 
-// flushBatch writes the current batch of logs to S3. Caller must hold mu.
+// flushBatch uploads the pending batch outside mu, re-queuing (capped) on failure; caller holds flushMu.
 func (l *S3Logger) flushBatch() error {
-	if len(l.logBatch) == 0 {
+	l.mu.Lock()
+	batch := l.logBatch
+	l.logBatch = nil
+	l.mu.Unlock()
+
+	if len(batch) == 0 {
 		return nil
 	}
 
-	l.batchBuffer.Reset()
-
-	for _, logData := range l.logBatch {
-		l.batchBuffer.Write(logData)
-		if !bytes.HasSuffix(logData, []byte("\n")) {
-			l.batchBuffer.WriteString("\n")
+	size := 0
+	for _, rec := range batch {
+		size += len(rec) + 1
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, size))
+	for _, rec := range batch {
+		buf.Write(rec)
+		if rec[len(rec)-1] != '\n' {
+			buf.WriteByte('\n')
 		}
 	}
 
-	key := l.generateS3Key()
-
-	compressedData, err := compressGzip(l.batchBuffer.Bytes())
-	if err != nil {
-		return fmt.Errorf("failed to compress log data: %w", err)
+	compressed, err := compressGzip(buf.Bytes())
+	if err == nil {
+		err = l.writeObject(l.ctx, l.targetBucket(), l.generateS3Key(), compressed, logevent.AuditFlushSuccess)
+	} else {
+		err = fmt.Errorf("failed to compress log data: %w", err)
 	}
-
-	err = l.WriteObject(l.targetBucket(), key, compressedData)
 	if err != nil {
-		return err
+		l.requeue(batch)
+		l.retryAfter = l.timeNow().Add(l.flushBackoff)
+	} else {
+		l.retryAfter = time.Time{}
 	}
+	l.reportDropped()
+	return err
+}
 
-	l.logBatch = l.logBatch[:0]
-	return nil
+// requeue puts a failed batch back ahead of newer records.
+func (l *S3Logger) requeue(batch [][]byte) {
+	l.mu.Lock()
+	l.logBatch = slices.Concat(batch, l.logBatch)
+	l.capPendingLocked()
+	l.mu.Unlock()
+}
+
+// reportDropped logs and resets the count of records dropped since the last report.
+func (l *S3Logger) reportDropped() {
+	l.mu.Lock()
+	dropped, pending := l.dropped, len(l.logBatch)
+	l.dropped = 0
+	l.mu.Unlock()
+
+	if dropped > 0 {
+		logevent.Error(l.ctx, nil, logevent.AuditBatchDropped, "dropped oldest audit records while S3 is unavailable",
+			slog.Int("dropped", dropped),
+			slog.Int("pending", pending))
+	}
+}
+
+// capPendingLocked drops the oldest records past maxPendingRecords. Caller must hold mu.
+func (l *S3Logger) capPendingLocked() {
+	n := len(l.logBatch) - maxPendingRecords
+	if n <= 0 {
+		return
+	}
+	clear(l.logBatch[:n])
+	l.logBatch = l.logBatch[n:]
+	l.dropped += n
 }
 
 // generateS3Key generates a unique S3 key for the log file.
 func (l *S3Logger) generateS3Key() string {
-	now := l.timeNow()
+	now := l.timeNow().UTC()
 	parts := []string{strings.Trim(l.s3Config.Prefix, "/")}
 
 	year, month, day := now.Year(), now.Month(), now.Day()
@@ -332,11 +378,6 @@ func (l *S3Logger) generateS3Key() string {
 
 	parts = append(parts, filename)
 	return strings.Join(parts, "/")
-}
-
-// WriteObject writes a batch flush to S3 with retries on the logger's background context.
-func (l *S3Logger) WriteObject(s3Bucket, key string, body []byte) error {
-	return l.writeObject(l.ctx, s3Bucket, key, body, logevent.AuditFlushSuccess)
 }
 
 // writeObject writes under parent's deadline, capped by the write timeout, and logs successEvent.
@@ -410,33 +451,7 @@ func (l *S3Logger) Close() error {
 	return err
 }
 
-// WriteSingleLog writes a single log entry to S3 immediately, bypassing the
-// batch, for critical logs.
-func (l *S3Logger) WriteSingleLog(logData []byte) error {
-	if c := l.liveConfig(); c == nil || !c.LogToS3 {
-		return nil
-	}
-	if !l.ensureBestEffortClient() {
-		return nil
-	}
-
-	compressedData, err := compressGzip(logData)
-	if err != nil {
-		return fmt.Errorf("failed to compress log data: %w", err)
-	}
-
-	key := l.generateS3Key()
-	return l.writeObject(l.ctx, l.targetBucket(), key, compressedData, logevent.AuditWriteSuccess)
-}
-
-// WriteRecord implements handler.AuditSink (duck-typed). It persists a single
-// audit record immediately, bypassing the batch, so enforcing callers can
-// await durability before releasing credentials.
-//
-// Unlike WriteSingleLog, it never no-ops: it gates on whether a durable
-// client actually exists, not on the boot-time config snapshot, so a
-// hot-reload that turns audit_required+log_to_s3 on can't silently skip the
-// audit write while still releasing credentials.
+// WriteRecord writes one audit record to S3 immediately, bypassing the batch; it never no-ops.
 func (l *S3Logger) WriteRecord(ctx context.Context, record []byte) error {
 	if err := l.ensureDurableClient(ctx); err != nil {
 		return err
@@ -454,24 +469,25 @@ func (l *S3Logger) WriteRecord(ctx context.Context, record []byte) error {
 // (BatchSize/MaxBatchAge or Close), for the best-effort path. No-ops when S3
 // logging is disabled.
 func (l *S3Logger) BufferRecord(record []byte) error {
-	var buf bytes.Buffer
-	buf.Write(record)
-	return l.writeLogToS3(buf)
+	return l.writeLogToS3(record)
 }
+
+var gzipPool = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
 
 // compressGzip compresses the given data using gzip.
 func compressGzip(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
-	gzWriter := gzip.NewWriter(&buf)
+	gz := gzipPool.Get().(*gzip.Writer)
+	gz.Reset(&buf)
 
-	_, err := gzWriter.Write(data)
-	if err != nil {
+	if _, err := gz.Write(data); err != nil {
 		return nil, fmt.Errorf("failed to write to gzip writer: %w", err)
 	}
-
-	if err := gzWriter.Close(); err != nil {
+	if err := gz.Close(); err != nil {
 		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
+	gz.Reset(io.Discard)
+	gzipPool.Put(gz)
 	return buf.Bytes(), nil
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +18,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	gtvcfg "github.com/boogy/aws-oidc-warden/internal/config"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -30,12 +35,26 @@ type MockAwsServiceWrapper struct {
 	mock.Mock
 }
 
-func (m *MockAwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	args := m.Called(ctx, bucket, key)
+func (m *MockAwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string, maxBytes int) (io.ReadCloser, error) {
+	args := m.Called(ctx, bucket, key, maxBytes)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(io.ReadCloser), args.Error(1)
+}
+
+func (m *MockAwsServiceWrapper) GetS3ObjectIfChanged(ctx context.Context, bucket, key, prevETag, owner string, maxBytes int) ([]byte, string, error) {
+	args := m.Called(ctx, bucket, key, prevETag, owner, maxBytes)
+	b, _ := args.Get(0).([]byte)
+	return b, args.String(1), args.Error(2)
+}
+
+func (m *MockAwsServiceWrapper) AssumeRoleWithWebIdentity(ctx context.Context, in *sts.AssumeRoleWithWebIdentityInput) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	args := m.Called(ctx, in)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*sts.AssumeRoleWithWebIdentityOutput), args.Error(1)
 }
 
 func (m *MockAwsServiceWrapper) AssumeRole(ctx context.Context, input *sts.AssumeRoleInput) (*sts.AssumeRoleOutput, error) {
@@ -52,10 +71,6 @@ func (m *MockAwsServiceWrapper) GetRole(ctx context.Context, input *iam.GetRoleI
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*iam.GetRoleOutput), args.Error(1)
-}
-
-func (m *MockAwsServiceWrapper) RefreshClients() {
-	m.Called()
 }
 
 func (m *MockAwsServiceWrapper) GetCallerAccount(ctx context.Context) (string, error) {
@@ -93,110 +108,6 @@ func NewMockReadCloser(content string) MockReadCloser {
 	return MockReadCloser{
 		Reader: bytes.NewReader([]byte(content)),
 	}
-}
-
-// TestMockAwsServiceWrapper_GetS3Object tests the GetS3Object method
-func TestMockAwsServiceWrapper_GetS3Object(t *testing.T) {
-	mockWrapper := new(MockAwsServiceWrapper)
-	bucket := "test-bucket"
-	key := "test-key"
-	content := "test content"
-
-	mockWrapper.On("GetS3Object", mock.Anything, bucket, key).Return(
-		NewMockReadCloser(content), nil,
-	).Once()
-
-	reader, err := mockWrapper.GetS3Object(context.Background(), bucket, key)
-	assert.NoError(t, err)
-	assert.NotNil(t, reader)
-
-	data, err := io.ReadAll(reader)
-	assert.NoError(t, err)
-	assert.Equal(t, content, string(data))
-
-	mockWrapper.AssertExpectations(t)
-}
-
-// TestMockAwsServiceWrapper_AssumeRole tests the AssumeRole method
-func TestMockAwsServiceWrapper_AssumeRole(t *testing.T) {
-	mockWrapper := new(MockAwsServiceWrapper)
-	roleArn := "arn:aws:iam::123456789012:role/test-role"
-	sessionName := "test-session"
-
-	input := &sts.AssumeRoleInput{
-		RoleArn:         aws.String(roleArn),
-		RoleSessionName: aws.String(sessionName),
-	}
-
-	output := &sts.AssumeRoleOutput{
-		Credentials: &ststypes.Credentials{
-			AccessKeyId:     aws.String("AKIATEST"),
-			SecretAccessKey: aws.String("test-secret"),
-			SessionToken:    aws.String("test-token"),
-		},
-	}
-
-	mockWrapper.On("AssumeRole", mock.Anything, input).Return(output, nil).Once()
-
-	result, err := mockWrapper.AssumeRole(context.Background(), input)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Equal(t, "AKIATEST", *result.Credentials.AccessKeyId)
-	assert.Equal(t, "test-secret", *result.Credentials.SecretAccessKey)
-	assert.Equal(t, "test-token", *result.Credentials.SessionToken)
-
-	mockWrapper.AssertExpectations(t)
-}
-
-// TestMockAwsServiceWrapper_GetRole tests the GetRole method
-func TestMockAwsServiceWrapper_GetRole(t *testing.T) {
-	mockWrapper := new(MockAwsServiceWrapper)
-	roleName := "test-role"
-
-	input := &iam.GetRoleInput{
-		RoleName: aws.String(roleName),
-	}
-
-	output := &iam.GetRoleOutput{
-		Role: &iamtypes.Role{
-			RoleName: aws.String(roleName),
-			Arn:      aws.String("arn:aws:iam::123456789012:role/test-role"),
-		},
-	}
-
-	mockWrapper.On("GetRole", mock.Anything, input).Return(output, nil).Once()
-
-	result, err := mockWrapper.GetRole(context.Background(), input)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-	assert.Equal(t, roleName, *result.Role.RoleName)
-
-	mockWrapper.AssertExpectations(t)
-}
-
-// TestMockAwsServiceWrapper_RefreshClients tests the RefreshClients method
-func TestMockAwsServiceWrapper_RefreshClients(t *testing.T) {
-	mockWrapper := new(MockAwsServiceWrapper)
-	mockWrapper.On("RefreshClients").Return().Once()
-	mockWrapper.RefreshClients()
-	mockWrapper.AssertExpectations(t)
-}
-
-// TestGetS3ObjectErrorCase tests an error case for GetS3Object
-func TestGetS3ObjectErrorCase(t *testing.T) {
-	mockWrapper := new(MockAwsServiceWrapper)
-	bucket := "test-bucket"
-	key := "error-key"
-	expectedErr := errors.New("access denied")
-
-	mockWrapper.On("GetS3Object", mock.Anything, bucket, key).Return(nil, expectedErr).Once()
-
-	reader, err := mockWrapper.GetS3Object(context.Background(), bucket, key)
-	assert.Error(t, err)
-	assert.Nil(t, reader)
-	assert.Equal(t, expectedErr, err)
-
-	mockWrapper.AssertExpectations(t)
 }
 
 // TestGetCallerIdentityInfo_RetryAfterFailure verifies a failed GetCallerIdentity
@@ -276,91 +187,6 @@ func TestGetCallerIdentityInfo_ArnDetection(t *testing.T) {
 			assert.Equal(t, tt.wantRoleSession, isRoleSession)
 		})
 	}
-}
-
-// TestServiceWrapperImplementation tests the real implementation of AwsServiceWrapper
-// These tests are skipped by default as they would require real AWS credentials
-func TestServiceWrapperImplementation(t *testing.T) {
-	t.Skip("Skipping tests that require real AWS credentials")
-
-	wrapper := NewAwsServiceWrapper()
-	assert.NotNil(t, wrapper)
-
-	// Test RefreshClients
-	t.Run("RefreshClients", func(t *testing.T) {
-		wrapper.RefreshClients() // Just verify it doesn't panic
-	})
-
-	// Test GetS3Object with a non-existent object (should return error)
-	t.Run("GetS3Object_NonExistent", func(t *testing.T) {
-		bucket := "non-existent-bucket-name-123456789012"
-		key := "non-existent-key"
-
-		reader, err := wrapper.GetS3Object(context.Background(), bucket, key)
-		assert.Error(t, err)
-		assert.Nil(t, reader)
-	})
-
-	// Test AssumeRole with a specific role (skipped by default)
-	t.Run("AssumeRole_Integration", func(t *testing.T) {
-		t.Skip("Skipping AssumeRole test that requires real AWS credentials")
-
-		// This test requires valid AWS credentials and permissions to assume a role
-		// Replace these values with actual test role ARN in your account
-		roleArn := "arn:aws:iam::123456789012:role/test-role"
-		sessionName := "aws-oidc-warden-test"
-
-		input := &sts.AssumeRoleInput{
-			RoleArn:         aws.String(roleArn),
-			RoleSessionName: aws.String(sessionName),
-			DurationSeconds: aws.Int32(900), // 15 minutes
-		}
-
-		output, err := wrapper.AssumeRole(context.Background(), input)
-		if err != nil {
-			t.Logf("AssumeRole error (expected if no permissions): %v", err)
-			return
-		}
-
-		// Verify the response contains credentials
-		assert.NotNil(t, output)
-		assert.NotNil(t, output.Credentials)
-		assert.NotEmpty(t, *output.Credentials.AccessKeyId)
-		assert.NotEmpty(t, *output.Credentials.SecretAccessKey)
-		assert.NotEmpty(t, *output.Credentials.SessionToken)
-		assert.False(t, output.Credentials.Expiration.IsZero())
-
-		t.Logf("Successfully assumed role with session: %s", sessionName)
-	})
-
-	// Test GetRole with a specific role (skipped by default)
-	t.Run("GetRole_Integration", func(t *testing.T) {
-		t.Skip("Skipping GetRole test that requires real AWS credentials")
-
-		// This test requires valid AWS credentials and permissions to get role info
-		// Replace with an actual role name in your account
-		roleName := "aws-oidc-warden-test-role"
-
-		input := &iam.GetRoleInput{
-			RoleName: aws.String(roleName),
-		}
-
-		output, err := wrapper.GetRole(context.Background(), input)
-		if err != nil {
-			t.Logf("GetRole error (expected if no permissions): %v", err)
-			return
-		}
-
-		// Verify the response contains role details
-		assert.NotNil(t, output)
-		assert.NotNil(t, output.Role)
-		assert.Equal(t, roleName, *output.Role.RoleName)
-		assert.NotEmpty(t, *output.Role.Arn)
-		assert.NotEmpty(t, *output.Role.Path)
-		assert.False(t, output.Role.CreateDate.IsZero())
-
-		t.Logf("Successfully retrieved role: %s", roleName)
-	})
 }
 
 // ---------- cache keying ----------
@@ -739,4 +565,223 @@ func TestAssumeRole_LogsSuccessWithoutCredentials(t *testing.T) {
 	assert.Contains(t, line, "durationMs")
 	assert.NotContains(t, buf.String(), "ASIASECRETKEYID")
 	assert.NotContains(t, buf.String(), "topsecret")
+}
+
+type fakeS3 struct {
+	in  *s3.GetObjectInput
+	out *s3.GetObjectOutput
+	err error
+}
+
+func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	f.in = in
+	return f.out, f.err
+}
+
+type closeErrBody struct{ io.Reader }
+
+func (closeErrBody) Close() error { return errors.New("close failed") }
+
+func s3Out(body string, etag *string) *s3.GetObjectOutput {
+	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(body)), ETag: etag}
+}
+
+func s3HTTPErr(code int) error {
+	return &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: code}},
+		Err:      errors.New("s3 error"),
+	}
+}
+
+func TestGetS3ObjectIfChanged(t *testing.T) {
+	const owner = "111122223333"
+	tests := []struct {
+		name        string
+		prev        string
+		out         *s3.GetObjectOutput
+		err         error
+		wantData    string
+		wantETag    string
+		wantErr     string
+		wantINM     string
+		wantNilData bool
+	}{
+		{name: "first fetch", out: s3Out("abc", aws.String(`"e1"`)), wantData: "abc", wantETag: `"e1"`},
+		{name: "unchanged", prev: `"e1"`, err: s3HTTPErr(304), wantETag: `"e1"`, wantINM: `"e1"`, wantNilData: true},
+		{name: "304 without prev", err: s3HTTPErr(304), wantErr: "s3 error"},
+		{name: "other error", prev: `"e1"`, err: s3HTTPErr(500), wantErr: "s3 error", wantINM: `"e1"`},
+		{name: "changed", prev: `"e1"`, out: s3Out("xyz", aws.String(`"e2"`)), wantData: "xyz", wantETag: `"e2"`, wantINM: `"e1"`},
+		{name: "200 with nil etag", out: s3Out("abc", nil), wantData: "abc"},
+		{name: "at cap", out: s3Out(strings.Repeat("a", utils.DefaultMaxConfigBytes), nil), wantData: strings.Repeat("a", utils.DefaultMaxConfigBytes)},
+		{name: "oversize", out: s3Out(strings.Repeat("a", utils.DefaultMaxConfigBytes+1), nil), wantErr: "exceeds", wantNilData: true},
+		{name: "close error", out: &s3.GetObjectOutput{Body: closeErrBody{strings.NewReader("abc")}, ETag: aws.String(`"e1"`)}, wantErr: "close failed", wantNilData: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeS3{out: tt.out, err: tt.err}
+			w := &AwsServiceWrapper{s3Client: fake, defaultTimeout: time.Second}
+
+			data, etag, err := w.GetS3ObjectIfChanged(context.Background(), "b", "k", tt.prev, owner, utils.DefaultMaxConfigBytes)
+
+			require.NotNil(t, fake.in.ExpectedBucketOwner)
+			assert.Equal(t, owner, *fake.in.ExpectedBucketOwner)
+			if tt.wantINM == "" {
+				assert.Nil(t, fake.in.IfNoneMatch)
+			} else {
+				require.NotNil(t, fake.in.IfNoneMatch)
+				assert.Equal(t, tt.wantINM, *fake.in.IfNoneMatch)
+			}
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.Nil(t, data)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantETag, etag)
+			if tt.wantNilData {
+				assert.Nil(t, data)
+			} else {
+				assert.Equal(t, tt.wantData, string(data))
+			}
+		})
+	}
+}
+
+// ctxBoundS3 serves a body that fails once the GetObject ctx is cancelled, like the SDK's HTTP body.
+type ctxBoundS3 struct{ body string }
+
+func (c *ctxBoundS3) GetObject(ctx context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return &s3.GetObjectOutput{Body: io.NopCloser(&ctxReader{ctx: ctx, r: strings.NewReader(c.body)})}, nil
+}
+
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c *ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
+}
+
+type closeTracker struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closeTracker) Close() error { c.closed = true; return nil }
+
+type rangeRecordingS3 struct {
+	length int64
+	total  string
+	rng    string
+	body   *closeTracker
+}
+
+func (r *rangeRecordingS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	r.rng = aws.ToString(in.Range)
+	r.body = &closeTracker{Reader: strings.NewReader(strings.Repeat("a", int(r.length)))}
+	out := &s3.GetObjectOutput{ContentLength: aws.Int64(r.length), Body: r.body}
+	if r.total != "" {
+		out.ContentRange = aws.String("bytes 0-" + strconv.FormatInt(r.length-1, 10) + "/" + r.total)
+	}
+	return out, nil
+}
+
+func TestGetS3Object_RangeBoundsCapAndReportedOversizeFails(t *testing.T) {
+	const limit = 4096
+	tests := []struct {
+		name    string
+		length  int64
+		total   string
+		wantErr bool
+	}{
+		{name: "at cap", length: limit, total: strconv.Itoa(limit)},
+		{name: "over cap", length: limit + 1, total: "41943040", wantErr: true},
+		{name: "short partial of larger object", length: limit, total: "41943040", wantErr: true},
+		{name: "range ignored", length: 41943040, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &rangeRecordingS3{length: tt.length, total: tt.total}
+			w := &AwsServiceWrapper{s3Client: stub, defaultTimeout: time.Second}
+
+			rc, err := w.GetS3Object(context.Background(), "b", "k", limit)
+			assert.Equal(t, "bytes=0-"+strconv.Itoa(limit), stub.rng)
+			assert.True(t, stub.body.closed)
+			if tt.wantErr {
+				require.ErrorContains(t, err, "exceeds")
+				assert.Nil(t, rc)
+				return
+			}
+			require.NoError(t, err)
+			_ = rc.Close()
+		})
+	}
+}
+
+func TestObjectSize(t *testing.T) {
+	tests := []struct {
+		name string
+		out  *s3.GetObjectOutput
+		want int64
+	}{
+		{name: "content range total", out: &s3.GetObjectOutput{ContentRange: aws.String("bytes 0-1048576/41943040"), ContentLength: aws.Int64(1048577)}, want: 41943040},
+		{name: "unknown total", out: &s3.GetObjectOutput{ContentRange: aws.String("bytes 0-9/*"), ContentLength: aws.Int64(10)}, want: 10},
+		{name: "no content range", out: &s3.GetObjectOutput{ContentLength: aws.Int64(7)}, want: 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, objectSize(tt.out))
+		})
+	}
+}
+
+func TestGetS3Object_BodyReadableAfterReturn(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int
+		wantErr string
+	}{
+		{name: "small", size: 10},
+		{name: "at cap", size: utils.DefaultMaxConfigBytes},
+		{name: "oversize", size: utils.DefaultMaxConfigBytes + 1, wantErr: "exceeds"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.Repeat("a", tt.size)
+			w := &AwsServiceWrapper{s3Client: &ctxBoundS3{body: body}, defaultTimeout: time.Second}
+
+			rc, err := w.GetS3Object(context.Background(), "b", "k", utils.DefaultMaxConfigBytes)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				assert.Nil(t, rc)
+				return
+			}
+			require.NoError(t, err)
+			defer func() { _ = rc.Close() }()
+			got, err := io.ReadAll(rc)
+			require.NoError(t, err)
+			assert.Equal(t, body, string(got))
+		})
+	}
+}
+
+type invalidRangeS3 struct{}
+
+func (invalidRangeS3) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return nil, &smithy.GenericAPIError{Code: "InvalidRange", Message: "The requested range is not satisfiable"}
+}
+
+func TestGetS3Object_EmptyObjectReadsEmpty(t *testing.T) {
+	w := &AwsServiceWrapper{s3Client: invalidRangeS3{}, defaultTimeout: time.Second}
+
+	rc, err := w.GetS3Object(context.Background(), "b", "k", 4096)
+	require.NoError(t, err)
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	assert.Empty(t, data)
 }

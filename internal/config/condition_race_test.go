@@ -39,17 +39,16 @@ role_mappings:
 	}
 
 	base := &Config{
-		Issuers:              []IssuerConfig{{Issuer: iss, Provider: "github", Audiences: []string{"sts.amazonaws.com"}}},
-		DefaultIssuer:        iss,
-		RoleSessionName:      "test",
-		ConfigFragments:      []string{fragPath},
-		ConfigReloadInterval: time.Nanosecond, // every MaybeRefresh is "due"
+		Issuers:         []IssuerConfig{{Issuer: iss, Provider: "github", Audiences: []string{"sts.amazonaws.com"}}},
+		DefaultIssuer:   iss,
+		RoleSessionName: "test",
+		ConfigFragments: []string{fragPath},
 	}
 	if err := base.Validate(); err != nil {
 		t.Fatal(err)
 	}
 
-	p := NewProvider(base, time.Nanosecond, "", nil)
+	p := NewProvider(base, time.Nanosecond, "", nil) // every MaybeRefresh is "due"
 	ctx := context.Background()
 	if err := p.Refresh(ctx); err != nil {
 		t.Fatal(err)

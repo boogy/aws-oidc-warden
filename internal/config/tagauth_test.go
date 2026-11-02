@@ -198,15 +198,11 @@ func TestTagAuthPrefixConfusion(t *testing.T) {
 func TestTagAuthTransitive_CrossAccountAllowedAccounts_Env(t *testing.T) {
 	viper.Reset()
 	once = sync.Once{}
-	for _, k := range []string{"AOW_TAG_AUTH_ENABLED", "AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "AOW_CROSS_ACCOUNT_ENABLED", "AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS", "CONFIG_NAME"} {
-		orig := os.Getenv(k)
-		t.Cleanup(func() { _ = os.Setenv(k, orig) })
-	}
-	_ = os.Setenv("AOW_TAG_AUTH_ENABLED", "true")
-	_ = os.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "true")
-	_ = os.Setenv("AOW_CROSS_ACCOUNT_ENABLED", "true")
-	_ = os.Setenv("AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS", "111111111111, 222222222222")
-	_ = os.Setenv("CONFIG_NAME", "nonexistent-config-file")
+	t.Setenv("AOW_TAG_AUTH_ENABLED", "true")
+	t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "true")
+	t.Setenv("AOW_CROSS_ACCOUNT_ENABLED", "true")
+	t.Setenv("AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS", "111111111111, 222222222222")
+	t.Setenv("CONFIG_NAME", "nonexistent-config-file")
 
 	c := &Config{}
 	require.NoError(t, c.LoadConfig())

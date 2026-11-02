@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -111,6 +112,10 @@ func TestValidate_MappingSessionTagsAreAdditiveOnly(t *testing.T) {
 		{"redefines with the same claim", map[string]string{"repo": "repository"}, "a mapping may only add tags"},
 		{"invalid STS tag key", map[string]string{"bad*key": "environment"}, "not a valid STS tag key"},
 		{"oversized STS tag key", map[string]string{strings.Repeat("k", 129): "environment"}, "not a valid STS tag key"},
+		{"reserved aws: prefix", map[string]string{"aws:tier": "environment"}, "STS reserves"},
+		{"reserved AWS: prefix, any case", map[string]string{"AwS:tier": "environment"}, "STS reserves"},
+		{"case-insensitive clash with issuer key", map[string]string{"Repo": "environment"}, "case-insensitively"},
+		{"case-insensitive clash within the mapping", map[string]string{"tier": "a", "Tier": "b"}, "case-insensitively"},
 	}
 
 	for _, tc := range tests {
@@ -214,4 +219,60 @@ func TestAuditableClaims_CoversMappingSessionTags(t *testing.T) {
 	for _, claim := range []string{"repository", "actor", "environment"} {
 		require.True(t, cfg.AuditableClaims(tagIssuer, claim), "claim %q attached as a session tag but not auditable", claim)
 	}
+}
+
+func TestValidate_SessionTagLimits(t *testing.T) {
+	tags := func(n int) map[string]string {
+		m := make(map[string]string, n)
+		for i := 0; i < n; i++ {
+			m[fmt.Sprintf("k%d", i)] = "environment"
+		}
+		return m
+	}
+
+	tests := []struct {
+		name       string
+		issuerTags map[string]string
+		mapping    map[string]string
+		wantErr    string
+	}{
+		{"issuer at the limit", tags(50), nil, ""},
+		{"issuer over the limit", tags(51), nil, "exceed the STS limit"},
+		{"union at the limit", tags(30), map[string]string{"x0": "a", "x1": "a", "x2": "a", "x3": "a", "x4": "a", "x5": "a", "x6": "a", "x7": "a", "x8": "a", "x9": "a", "x10": "a", "x11": "a", "x12": "a", "x13": "a", "x14": "a", "x15": "a", "x16": "a", "x17": "a", "x18": "a", "x19": "a"}, ""},
+		{"union over the limit", tags(50), map[string]string{"extra": "environment"}, "exceed the STS limit"},
+		{"issuer keys differing only by case", map[string]string{"repo": "repository", "Repo": "actor"}, nil, "case-insensitively"},
+		{"issuer aws: key", map[string]string{"aws:repo": "repository"}, nil, "STS reserves"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tagCfg(RoleMapping{
+				Subject:     Patterns{"acme/api"},
+				Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+				SessionTags: tc.mapping,
+			})
+			cfg.Issuers[0].SessionTags = tc.issuerTags
+			err := cfg.Validate()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// EffectiveSessionTags is precomputed in Validate and must not allocate per call.
+func TestEffectiveSessionTags_ReturnsPrecomputedUnion(t *testing.T) {
+	cfg := tagCfg(RoleMapping{
+		Subject:     Patterns{"acme/api"},
+		Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+		SessionTags: map[string]string{"tier": "environment"},
+	})
+	require.NoError(t, cfg.Validate())
+
+	d := cfg.Authorize(tagIssuer, "acme/api", "arn:aws:iam::123456789012:role/app", map[string]any{})
+	require.Equal(t, map[string]string{"repo": "repository", "actor": "actor", "tier": "environment"}, cfg.EffectiveSessionTags(tagIssuer, d))
+	require.Zero(t, testing.AllocsPerRun(100, func() { cfg.EffectiveSessionTags(tagIssuer, d) }))
 }

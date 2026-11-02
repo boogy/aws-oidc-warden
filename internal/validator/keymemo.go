@@ -2,25 +2,33 @@ package validator
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/boogy/aws-oidc-warden/internal/types"
 )
 
-// maxKeyMemoEntries bounds the in-process pre-parsed-key memo so churn of
-// distinct (issuer, kid, key-material) fingerprints can't grow it
-// unboundedly. Hitting the cap just clears the memo — perf cost only, never a
-// security regression.
+// maxKeyMemoEntries bounds the key memo; hitting it clears the memo.
 const maxKeyMemoEntries = 4096
 
-// keyMemo caches parsed, re-validated (RSA >=2048 / EC on-curve) public keys
-// keyed by a fingerprint of (issuer, kid, key material) — not just
-// (issuer, kid) — so a key rotated under a reused kid naturally misses the
-// memo and gets re-parsed + re-validated instead of serving a stale key.
+// keyMemoKey identifies a memo slot; the key material is compared on lookup.
+type keyMemoKey struct{ issuer, kid string }
+
+// keyMaterial is the part of a JWK that determines the parsed key.
+type keyMaterial struct{ kty, n, e, crv, x, y string }
+
+func materialOf(k types.JSONWebKey) keyMaterial {
+	return keyMaterial{kty: k.KeyType, n: k.N, e: k.E, crv: k.Crv, x: k.X, y: k.Y}
+}
+
+type keyMemoEntry struct {
+	material keyMaterial
+	key      any
+}
+
+// keyMemo caches parsed, re-validated public keys per (issuer, kid); served only while key material is unchanged.
 type keyMemo struct {
-	entries sync.Map // fingerprint string -> crypto public key (any)
+	entries sync.Map // keyMemoKey -> keyMemoEntry
 	size    atomic.Int64
 }
 
@@ -28,52 +36,31 @@ func newKeyMemo() *keyMemo {
 	return &keyMemo{}
 }
 
-func (m *keyMemo) load(fp string) (any, bool) {
-	return m.entries.Load(fp)
+func (m *keyMemo) load(issuer string, jwk types.JSONWebKey) (any, bool) {
+	v, ok := m.entries.Load(keyMemoKey{issuer, jwk.KeyID})
+	if !ok {
+		return nil, false
+	}
+	e := v.(keyMemoEntry)
+	if e.material != materialOf(jwk) {
+		return nil, false
+	}
+	return e.key, true
 }
 
-func (m *keyMemo) store(fp string, key any) {
+func (m *keyMemo) store(issuer string, jwk types.JSONWebKey, key any) {
 	if m.size.Load() >= maxKeyMemoEntries {
 		m.entries.Clear()
 		m.size.Store(0)
 	}
-	if _, loaded := m.entries.LoadOrStore(fp, key); !loaded {
+	if _, loaded := m.entries.Swap(keyMemoKey{issuer, jwk.KeyID}, keyMemoEntry{materialOf(jwk), key}); !loaded {
 		m.size.Add(1)
 	}
 }
 
-// keyFingerprint derives a stable identity for a JWKS key's actual material,
-// scoped to issuer + kid, so a key rotated under a reused kid gets a
-// different fingerprint instead of silently reusing a stale cached key.
-func keyFingerprint(issuer string, key types.JSONWebKey) string {
-	var b strings.Builder
-	b.WriteString(issuer)
-	b.WriteByte('|')
-	b.WriteString(key.KeyID)
-	b.WriteByte('|')
-	b.WriteString(key.KeyType)
-	b.WriteByte('|')
-	switch key.KeyType {
-	case "RSA":
-		b.WriteString(key.N)
-		b.WriteByte('.')
-		b.WriteString(key.E)
-	case "EC":
-		b.WriteString(key.Crv)
-		b.WriteByte('.')
-		b.WriteString(key.X)
-		b.WriteByte('.')
-		b.WriteString(key.Y)
-	}
-	return b.String()
-}
-
-// resolveKey returns the parsed, re-validated public key for key, using the
-// in-process memo when the (issuer, kid, key-material) fingerprint has been
-// seen before, and populating it otherwise.
+// resolveKey returns the parsed, re-validated public key, via the memo when key material matches.
 func (t *TokenValidator) resolveKey(issuer string, key types.JSONWebKey) (any, error) {
-	fp := keyFingerprint(issuer, key)
-	if cached, ok := t.keyMemo.load(fp); ok {
+	if cached, ok := t.keyMemo.load(issuer, key); ok {
 		return cached, nil
 	}
 
@@ -93,6 +80,6 @@ func (t *TokenValidator) resolveKey(issuer string, key types.JSONWebKey) (any, e
 		return nil, err
 	}
 
-	t.keyMemo.store(fp, parsed)
+	t.keyMemo.store(issuer, key, parsed)
 	return parsed, nil
 }

@@ -502,3 +502,62 @@ func TestValidate_RejectsAlgorithmsOutsideTheAllowlist(t *testing.T) {
 		assert.Nil(t, claims)
 	})
 }
+
+// An EC key is only usable for the alg whose curve it carries (RFC 7518 3.4).
+func TestGenKeyFunc_ECCurveMustMatchAlg(t *testing.T) {
+	curves := map[string]elliptic.Curve{"P-256": elliptic.P256(), "P-384": elliptic.P384(), "P-521": elliptic.P521()}
+	wantAlg := map[string]string{"P-256": "ES256", "P-384": "ES384", "P-521": "ES512"}
+
+	v := staticValidator(&config.Config{}, nil)
+	for crv, curve := range curves {
+		priv, err := ecdsa.GenerateKey(curve, rand.Reader)
+		require.NoError(t, err)
+		ecdhKey, err := priv.PublicKey.ECDH()
+		require.NoError(t, err)
+		raw := ecdhKey.Bytes()
+		n := (len(raw) - 1) / 2
+		jwk := types.JSONWebKey{
+			KeyID: "ec", KeyType: "EC", Crv: crv,
+			X: base64.RawURLEncoding.EncodeToString(raw[1 : 1+n]),
+			Y: base64.RawURLEncoding.EncodeToString(raw[1+n:]),
+		}
+		keyFunc := v.GenKeyFunc(&types.JWKS{Keys: []types.JSONWebKey{jwk}})
+
+		for _, alg := range []string{"ES256", "ES384", "ES512"} {
+			t.Run(crv+" key with "+alg+" token", func(t *testing.T) {
+				got, err := keyFunc(&jwt.Token{Header: map[string]any{"kid": "ec", "alg": alg}})
+				if alg == wantAlg[crv] {
+					require.NoError(t, err)
+					assert.IsType(t, &ecdsa.PublicKey{}, got)
+					return
+				}
+				require.Error(t, err)
+				assert.False(t, errors.Is(err, validator.ErrKeyNotFound), "kid is present; must not trigger a refetch")
+			})
+		}
+	}
+}
+
+// A curve-mismatched duplicate must not shadow the matching key.
+func TestGenKeyFunc_ECCurveMismatchSkipsToMatchingDuplicateKid(t *testing.T) {
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+	k256 := ecJwkFromKey("dup", &p256.PublicKey)
+	k256.Algorithm = ""
+	k384 := k256
+	ecdhKey, err := p384.PublicKey.ECDH()
+	require.NoError(t, err)
+	raw := ecdhKey.Bytes()
+	n := (len(raw) - 1) / 2
+	k384.Crv = "P-384"
+	k384.X = base64.RawURLEncoding.EncodeToString(raw[1 : 1+n])
+	k384.Y = base64.RawURLEncoding.EncodeToString(raw[1+n:])
+
+	v := staticValidator(&config.Config{}, nil)
+	got, err := v.GenKeyFunc(&types.JWKS{Keys: []types.JSONWebKey{k256, k384}})(
+		&jwt.Token{Header: map[string]any{"kid": "dup", "alg": "ES384"}})
+	require.NoError(t, err)
+	assert.True(t, p384.PublicKey.Equal(got))
+}

@@ -822,3 +822,50 @@ func TestValidate_EmptyAudiencesConfiguredDeniesEverything(t *testing.T) {
 	_, err = v.Validate(context.Background(), token)
 	assert.Error(t, err)
 }
+
+// encoding/json matches field names case-insensitively, so the routing peek
+// sees "ISS"; the verified-claims check must still deny it.
+func TestValidate_PeekRoutingNeverLoosensVerification(t *testing.T) {
+	const issuer = "https://example.com"
+	privateKey, publicKey, err := generateRSAKey()
+	require.NoError(t, err)
+	jwks := createJWKS("kid", publicKey)
+
+	cfg := &config.Config{
+		Issuers: []config.IssuerConfig{
+			{Issuer: issuer, Provider: "github", Audiences: []string{"aud"}, RequiredClaims: []string{"repository"}},
+		},
+		RoleSessionName: "test",
+		Cache:           &config.Cache{TTL: 10 * time.Minute},
+	}
+	require.NoError(t, cfg.Validate())
+
+	now := time.Now()
+	base := func() jwt.MapClaims {
+		return jwt.MapClaims{
+			"aud": "aud", "repository": "o/r",
+			"exp": now.Add(5 * time.Minute).Unix(), "iat": now.Unix(), "nbf": now.Unix(),
+		}
+	}
+	tests := []struct {
+		name   string
+		claims func() jwt.MapClaims
+	}{
+		{"upper-case ISS key only", func() jwt.MapClaims { c := base(); c["ISS"] = issuer; return c }},
+		{"ISS routes but iss names another issuer", func() jwt.MapClaims {
+			c := base()
+			c["ISS"] = issuer
+			c["iss"] = "https://other.example.com"
+			return c
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := cache.NewMemoryCache()
+			c.Set(context.Background(), issuer, jwks, time.Minute)
+			v := staticValidator(cfg, c)
+			_, err := v.Validate(context.Background(), signRawToken(t, privateKey, "kid", tt.claims()))
+			require.Error(t, err)
+		})
+	}
+}
