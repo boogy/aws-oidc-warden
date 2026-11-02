@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-11-02
+
+Warden-as-IdP mode lifts the 1h role-chaining cap, and role mappings can live in a separate hot-reloaded file.
+
+**Breaking:** config loading is stricter (unknown nested keys, conflicting mapping fields, out-of-range limits and invalid session tags now fail to load), `-config` no longer searches other paths or extensions, and the local server requires `jwt_validation.mode: self`. Run the new `validate` command against your config before upgrading.
+
 ### Added
 
 - **IdP mode (`idp`, optional)**: the warden mints a KMS-signed OIDC token and exchanges it via unsigned `AssumeRoleWithWebIdentity`, lifting the 1h role-chaining cap. `/verify` routes a mapping through it when its `max_session_duration` is over 1h or it sets `idp_token`; no role list; over-1h requests it cannot serve get 503 `idp_signing_unavailable`, 403 `idp_not_permitted` or 400 `duration_exceeds_cap`. See `docs/IDP.md`.
@@ -100,6 +106,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `github.com/aws/smithy-go` 1.28.2 → 1.28.7
   - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` bumps
 - `golang.org/x/sync` 0.23.0 → 0.24.0; transitive `golang.org/x/sys` 0.48.0 → 0.49.0, `golang.org/x/text` 0.42.0 → 0.43.0, `go.yaml.in/yaml/v3` 3.0.5 → 3.0.6.
+- CI action bumps: `github/codeql-action` (`init`/`autobuild`/`analyze`) 4.38.1 → 4.39.1, `docker/login-action` 4.6.0 → 4.7.0, `goreleaser/goreleaser-action` 7.2.3 → 7.3.0, `securego/gosec` 2.29.0 → 2.30.0.
 
 ### Documentation
 
@@ -829,7 +836,8 @@ Multi-issuer, any-provider release with provider-neutral canonical **subject** a
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.2...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.2...v4.0.0
 [3.5.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.1...v3.5.2
 [3.5.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.0...v3.5.1
 [3.5.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.4.1...v3.5.0
