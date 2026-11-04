@@ -1404,6 +1404,18 @@ func TestProviderRefreshWarnsOnFrozenIdPDrift(t *testing.T) {
 	}
 }
 
+func TestProviderRefreshRejectsBlockRemovalUnderOnlyEnv(t *testing.T) {
+	body := []byte(idpTestBlockYAML)
+	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+	t.Setenv("AOW_IDP_ONLY", "true")
+	require.NoError(t, p.Refresh(context.Background()))
+	require.True(t, p.Get().IdP.Only)
+
+	body = []byte("log_level: info\n")
+	require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+	require.True(t, p.Get().IdP.Only)
+}
+
 func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 	body := []byte(idpTestBlockYAML)
 	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })

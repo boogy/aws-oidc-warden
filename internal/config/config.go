@@ -1091,6 +1091,8 @@ func (c *Config) Validate() error {
 		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
 			return err
 		}
+	} else if only, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv(envVarName("idp.only")))); only {
+		return fmt.Errorf("%s is true but the config has no idp block", envVarName("idp.only"))
 	}
 
 	if c.DefaultIssuer != "" && !seenIssuers[c.DefaultIssuer] {
