@@ -18,6 +18,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`.
 
+### Fixed
+
+- **`docs/ARCHITECTURE.md`**: core pipeline sequence diagram renders on GitHub again.
+
 ## [4.0.0] - 2026-11-02
 
 Warden-as-IdP mode lifts the 1h role-chaining cap, and role mappings can live in a separate hot-reloaded file.
