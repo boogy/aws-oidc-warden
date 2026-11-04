@@ -168,7 +168,7 @@ sequenceDiagram
 
     Note over Processor: requested role must be in the matched mapping's roles
     Processor->>Processor: Resolve session policy (inline or S3)
-    Processor->>Processor: BuildSessionTags (once; also feeds the audit record)
+    Processor->>Processor: BuildSessionTags (once, also feeds the audit record)
     Processor->>Consumer: AssumeRole(role, ..., built session tags)
 
     Consumer->>STS: AssumeRole with per-issuer session tags
