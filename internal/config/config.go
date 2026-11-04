@@ -1160,7 +1160,7 @@ func (c *Config) Validate() error {
 			return err
 		}
 		if m.SessionDuration > cmp.Or(m.MaxSessionDuration, IdPDefaultMaxSessionDuration) {
-			return fmt.Errorf("%s[%d] (%s): session_duration %s exceeds max_session_duration %s (default %s)", source, i, subject, m.SessionDuration, m.MaxSessionDuration, IdPDefaultMaxSessionDuration)
+			return fmt.Errorf("%s[%d] (%s): session_duration %s exceeds max_session_duration %s", source, i, subject, m.SessionDuration, cmp.Or(m.MaxSessionDuration, IdPDefaultMaxSessionDuration))
 		}
 		if m.MaxSessionDuration > IdPDefaultMaxSessionDuration && c.IdP == nil {
 			return fmt.Errorf("%s[%d] (%s): max_session_duration over 1h requires an idp block", source, i, subject)

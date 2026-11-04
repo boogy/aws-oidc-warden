@@ -850,9 +850,14 @@ func TestSessionLifetimeOutcomeTable(t *testing.T) {
 					c.RoleMappings[0].MaxSessionDuration = row.max
 				})
 				cons := mockWI(t)
-				proc, _, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+				proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
 				var buf bytes.Buffer
 				_, err := mint(t, proc, handler.RequestData{DurationSeconds: req}, &buf)
+				if req == 0 {
+					assert.NotContains(t, sink.last(t), "requestedDurationSeconds")
+				} else {
+					assert.EqualValues(t, req, sink.last(t)["requestedDurationSeconds"])
+				}
 				want := row.cells[i]
 				if want.wantErr != nil {
 					require.ErrorIs(t, err, want.wantErr)
