@@ -316,10 +316,15 @@ func TestIdPEnvOnlyAppliesToExistingBlock(t *testing.T) {
 		reapplyEnvOverrides(c)
 		require.True(t, c.IdP.Only)
 	})
-	t.Run("only env without block", func(t *testing.T) {
+	t.Run("only env without block fails load", func(t *testing.T) {
 		t.Setenv("AOW_IDP_ONLY", "true")
-		c := &Config{}
-		reapplyEnvOverrides(c)
+		_, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.ErrorContains(t, err, "AOW_IDP_ONLY")
+	})
+	t.Run("false only env without block loads", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "false")
+		c, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.NoError(t, err)
 		require.Nil(t, c.IdP)
 	})
 	t.Run("bad duration keeps value", func(t *testing.T) {

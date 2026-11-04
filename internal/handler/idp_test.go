@@ -870,6 +870,42 @@ func TestSessionLifetimeOutcomeTable(t *testing.T) {
 	}
 }
 
+func TestIdPOnlyAfterReload(t *testing.T) {
+	removeBlock := func(c *config.Config) { c.IdP = nil }
+	tests := []struct {
+		name      string
+		startOnly bool
+		live      func(*config.Config)
+		wantErr   error
+		wantWI    int
+		wantAR    int
+	}{
+		{"block_removed_refuses", true, removeBlock, handler.ErrIdPUnavailable, 0, 0},
+		{"only_turned_off_uses_assume_role", true, func(c *config.Config) { c.IdP.Only = false }, nil, 0, 1},
+		{"block_removed_never_only_uses_assume_role", false, removeBlock, nil, 0, 1},
+		{"only_turned_on_uses_idp", false, func(c *config.Config) { c.IdP.Only = true }, nil, 1, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			built := idpConfig(t, false, "", func(c *config.Config) { c.IdP.Only = tt.startOnly })
+			live := idpConfig(t, false, "", func(c *config.Config) { c.IdP.Only = tt.startOnly }, tt.live)
+			cons := mockWI(t)
+			signer := &countingSigner{Signer: idptest.NewSigner(t)}
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(live), cons, idpClaims(nil), &fakeAuditSink{}, "test").
+				WithIdP(idpService(t, built, signer, nil))
+			var buf bytes.Buffer
+			_, err := mint(t, proc, handler.RequestData{DurationSeconds: 900}, &buf)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantWI, cons.wiCalls)
+			assert.Equal(t, tt.wantAR, cons.assumeCalls)
+		})
+	}
+}
+
 func TestProcessRequestOverOneHourWithoutIdP(t *testing.T) {
 	cfg := auditTestCfg(t, false, false)
 	cons := mockConsumer(t)

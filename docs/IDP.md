@@ -62,7 +62,9 @@ Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path a
 - `only: true` with `enabled: false` loads; it is the kill switch plus the guarantee that nothing bypasses the IdP.
 - The limit is still `max_session_duration` (1h when unset, so a tag grant is capped at 1h); over it answers 400 `duration_exceeds_cap`. See [Session lifetime](CONFIGURATION.md#session-lifetime).
 - `idp_token: false` on a `roles` item is a load error while `only` is true.
-- `only` is live like `enabled`. Removing the whole `idp` block by reload behaves as before: the block counts as disabled and the IdP is not used.
+- `only` is live like `enabled`. To leave IdP-only mode, set `only: false`.
+- If `only` was true at startup, removing the whole `idp` block by reload keeps refusing with the 503 above until a restart. If it was turned on later by reload, removal counts as disabled and short requests go back to `AssumeRole`.
+- `AOW_IDP_ONLY=true` with no `idp` block fails the load, and a reload that removes the block is rejected.
 
 ## Flow
 
