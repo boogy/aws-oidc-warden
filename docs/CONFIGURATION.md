@@ -339,6 +339,42 @@ See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefin
 
 With `role_sets`, the lowest-order mapping that grants the role decides.
 
+#### Per-role settings
+
+A `roles` item is a string or an object. In an object, every key except `role` replaces the entry's value for that role only. `subject` and `issuer` stay entry-level and are rejected on a role. Worked guide: [IAC.md](IAC.md).
+
+```yaml
+roles:
+  - "arn:aws:iam::111122223333:role/InfraAudit" # inherits everything
+  - role: "arn:aws:iam::111122223333:role/TerraformApply"
+    conditions:
+      event_name: ["push", "workflow_dispatch"]
+      ref: "refs/heads/main"
+    role_session_name: "terraform-apply"
+```
+
+| Key                                       | Rule                                                                               |
+| ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| `role`                                    | Required. An ARN or `@set`; the block applies to every member of the set           |
+| `conditions`                              | Full condition tree, same limits. Replaces the entry's conditions                  |
+| `session_policy`, `session_policy_file`   | Setting either replaces both                                                       |
+| `role_session_name`, `allow_session_name` | Setting either replaces both; `allow_session_name: false` is valid                 |
+| `max_session_duration`                    | Replaces                                                                           |
+| `idp_token`                               | Replaces; `false` is valid                                                         |
+| `session_tags`                            | Replaces the entry's tags as a whole; issuer tags still apply                      |
+
+Overrides replace and never intersect, so a role can be granted more widely than its entry. They apply inside one entry; other entries matching the same subject still add grants.
+
+These fail to load:
+
+- an empty `conditions`, `session_policy`, `session_policy_file`, `role_session_name`, `session_tags: {}` or `max_session_duration: 0` on a role (a role cannot drop an inherited setting; move it off the entry or use a second entry);
+- a role with its own settings listed twice in one entry, including through a `@set`;
+- an entry-level setting that every role overrides;
+- `idp_token: false` with an effective duration over 1h;
+- anything the entry-level rules already reject, applied to the effective values.
+
+`config.warning` codes: `unconditional_role_beside_conditioned` (a role with no conditions beside conditioned roles) and `scopedBy=role_conditions` on `tag_auth_bypasses_mapping_scoping`.
+
 #### Multi-subject entries share one policy
 
 This is the question a multi-subject entry usually raises: the entry's session policy, inline `session_policy` or S3 `session_policy_file`, applies to **every** subject the entry lists. An entry sets one or the other; setting both fails to load. The S3 key is a literal string with no subject interpolation, so one entry cannot vary the policy per subject. If you need per-subject policies, declare separate entries.
@@ -447,7 +483,7 @@ Top-level, apply across every configured issuer and every `jwt_validation.mode`.
 | `AOW_LOG_LEVEL`                | `log_level`               | Must be one of `debug`/`info`/`warn`/`error` — validated at config load. **Not currently wired to the slog handler's verbosity**; see the gotcha below.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `info`  |
 | `AOW_LOG_CLAIM_VALUES`         | `log_claim_values`        | Include claim VALUES (canonical subject, raw `sub`, audience, session tag values) in structured logs and the audit record. On by default so each record identifies who made the request; set `false` to suppress claim values in both the log stream and audit records.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `true`  |
 | `AOW_AUDIT_REQUIRED`           | `audit_required`          | Make the audit-record write a hard, fail-closed dependency: an allow decision only returns credentials after the audit record is durably written; requires `log_to_s3=true` + `log_bucket` set. Default `true`, but stays a no-op (decisions still logged to CloudWatch, warning logged at boot) until `log_to_s3`+`log_bucket` are also configured — so zero-dependency startup still works with no S3 bucket configured; **set `false`** to opt out of the fail-closed guarantee once S3 logging is configured. See [LOGGING.md](LOGGING.md#production-hardening-recommendation).                                                                                                                                                                                                              | `true`  |
-| `AOW_SESSION_TAGS_TRANSITIVE`  | `session_tags_transitive` | **RECOMMENDED: set to `true`.** Marks every session tag attached to `AssumeRole` transitive, so the requester's identity survives further role chaining by the target role and cannot be altered downstream. Without it, a session tag is dropped at the first role hop, and any ABAC policy past that hop can no longer see who the original caller was. Default `false` only for upgrade safety — transitive tags are immutable downstream, so turning this on breaks a target role that re-tags with the same keys while chaining. The deprecated `tag_auth.transitive_session_tags`/`AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` still works as a fallback; either source turning it on wins. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags). | `false` |
+| `AOW_SESSION_TAGS_TRANSITIVE`  | `session_tags_transitive` | **RECOMMENDED: set to `true`.** Marks every session tag attached to `AssumeRole` transitive, so the requester's identity survives further role chaining by the target role and cannot be altered downstream. Without it, a session tag is dropped at the first role hop, and any ABAC policy past that hop can no longer see who the original caller was. Default `false` only for upgrade safety — transitive tags are immutable downstream, so turning this on breaks a target role that re-tags with the same keys while chaining. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags). | `false` |
 | `LOG_LEVEL` (no `AOW_` prefix) | N/A                       | Sets the initial `slog` handler level at process bootstrap, **before** config is loaded (`internal/handler/bootstrap.go`). This is the env var that actually controls verbosity in the Lambda deployments.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `info`  |
 
 > **Gotcha**: `log_level`/`AOW_LOG_LEVEL` is validated (rejects an unknown level name) but is **not** currently applied to the running `slog` handler — the handler's level is set once, at bootstrap, from the bare `LOG_LEVEL` env var (Lambda) or the `-log-level` CLI flag (`cmd/local`). If you need to change verbosity, set `LOG_LEVEL` (Lambda) or `-log-level` (local), not `AOW_LOG_LEVEL`. See [LOGGING.md](LOGGING.md).
@@ -463,7 +499,6 @@ Optional, disabled by default. When enabled, a role may be assumed via its IAM t
 | `AOW_TAG_AUTH_ENABLED`                 | `tag_auth.enabled`                 | Enable tag-based authorization                                                                                                                                                                                                 | `false` |
 | `AOW_TAG_AUTH_TAG_PREFIX`              | `tag_auth.tag_prefix`              | Default namespace prefix for authorization tag keys (per-issuer `issuers[].tag_prefix` overrides it; file-only)                                                                                                                | `aow/`  |
 | `AOW_TAG_AUTH_DEFAULT_ORG`             | `tag_auth.default_org`             | Org prefix for bare `aow/repo` tokens (e.g. `"api"` → `"<org>/api"`); must not contain `/` or whitespace                                                                                                                       | (empty) |
-| `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` | `tag_auth.transitive_session_tags` | **Deprecated** — use the top-level `AOW_SESSION_TAGS_TRANSITIVE`/`session_tags_transitive` above instead; this key never had anything to do with tag-based authorization. Kept as a fallback so existing configs keep working. | `false` |
 
 `tag_auth`'s identity gate now accepts the canonical `<prefix>subject` tag (any issuer's subject) in addition to the legacy `<prefix>repo`/`<prefix>repo-owner` tags (GitHub-shaped subjects only). With more than one issuer configured, `Authorize()` also requires a matching `<prefix>issuer` tag on the role — a role with no `<prefix>issuer` tag cannot be reached via tag-auth once a second issuer is added, preventing a role scoped to one issuer's subjects from being reachable by another issuer's identically-shaped subject. See [MULTI_ISSUER.md](MULTI_ISSUER.md).
 

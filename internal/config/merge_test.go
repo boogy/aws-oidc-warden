@@ -155,7 +155,6 @@ func TestMergeBytes_BoolEnvFormsAppliedToEveryBoolKey(t *testing.T) {
 	t.Setenv("AOW_SESSION_TAGS_TRANSITIVE", "t")
 	t.Setenv("AOW_CACHE_S3_CLEANUP", "t")
 	t.Setenv("AOW_TAG_AUTH_ENABLED", "t")
-	t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "t")
 	t.Setenv("AOW_CROSS_ACCOUNT_ENABLED", "t")
 
 	c := baseConfigForEnv(t)
@@ -170,7 +169,6 @@ func TestMergeBytes_BoolEnvFormsAppliedToEveryBoolKey(t *testing.T) {
 	assert.True(t, c.Cache.S3Cleanup, "AOW_CACHE_S3_CLEANUP=t")
 	require.NotNil(t, c.TagAuth)
 	assert.True(t, c.TagAuth.Enabled, "AOW_TAG_AUTH_ENABLED=t")
-	assert.True(t, c.TagAuth.TransitiveSessionTags, "AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS=t")
 	require.NotNil(t, c.CrossAccount)
 	assert.True(t, c.CrossAccount.Enabled, "AOW_CROSS_ACCOUNT_ENABLED=t")
 }

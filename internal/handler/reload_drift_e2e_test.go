@@ -174,7 +174,7 @@ func driftGenA(issuer string) *config.Config {
 		AllowInsecureIssuers: true,
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"owner/repo"},
-			Roles:   []string{driftAllowedRole},
+			Roles:   roleEntries(driftAllowedRole),
 		}},
 	}
 }

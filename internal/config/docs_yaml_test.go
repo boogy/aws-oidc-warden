@@ -613,6 +613,47 @@ func TestCrossAccountExampleLoads(t *testing.T) {
 	require.Equal(t, []string{"arn:aws:iam::333333333333:role/aow/deploy-production"}, roles)
 }
 
+func TestIaCExampleLoads(t *testing.T) {
+	data, err := os.ReadFile("../../docs/examples/iac/config.yaml")
+	require.NoError(t, err)
+	cfg := &config.Config{}
+	require.NoError(t, cfg.MergeBytes(data, "yaml"))
+
+	const (
+		iss   = "https://token.actions.githubusercontent.com"
+		plan  = "arn:aws:iam::111122223333:role/TerraformPlan"
+		apply = "arn:aws:iam::111122223333:role/TerraformApply"
+	)
+	tests := []struct {
+		name    string
+		subject string
+		claims  map[string]any
+		want    []string
+	}{
+		{"pull request gets plan only", "octo-org/infra", map[string]any{"event_name": "pull_request", "ref": "refs/pull/7/merge"}, []string{plan}},
+		{"pull_request_target on main still denied apply", "octo-org/infra", map[string]any{"event_name": "pull_request_target", "ref": "refs/heads/main", "environment": "production",
+			"workflow_ref": "octo-org/infra/.github/workflows/apply.yml@refs/heads/main"}, nil},
+		{"main push in production gets both", "octo-org/infra", map[string]any{
+			"event_name": "push", "ref": "refs/heads/main", "environment": "production",
+			"workflow_ref": "octo-org/infra/.github/workflows/apply.yml@refs/heads/main",
+		}, []string{plan, apply}},
+		{"main push without environment denied apply", "octo-org/infra", map[string]any{
+			"event_name": "push", "ref": "refs/heads/main",
+			"workflow_ref": "octo-org/infra/.github/workflows/apply.yml@refs/heads/main",
+		}, []string{plan}},
+		{"other workflow denied apply", "octo-org/infra", map[string]any{
+			"event_name": "push", "ref": "refs/heads/main", "environment": "production",
+			"workflow_ref": "octo-org/infra/.github/workflows/pr.yml@refs/heads/main",
+		}, []string{plan}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, got := cfg.AuthorizeRoles(iss, tc.subject, tc.claims)
+			require.ElementsMatch(t, tc.want, got)
+		})
+	}
+}
+
 func TestMultiRegionExampleLoads(t *testing.T) {
 	const dir = "../../docs/examples/multi-region/"
 	data, err := os.ReadFile(dir + "config.yaml")

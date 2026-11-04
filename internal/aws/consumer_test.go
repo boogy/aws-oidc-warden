@@ -318,9 +318,7 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 }
 
 // TestAssumeRole_TransitiveFromTopLevelKey pins that transitivity is driven by
-// the top-level session_tags_transitive key, independently of tag_auth: the
-// deprecated tag_auth.transitive_session_tags fallback keeps working, and
-// either source turning it on wins.
+// the top-level session_tags_transitive key.
 func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
 	testRoleArn := "arn:aws:iam::123456789012:role/test-role"
 	testDuration := int32(3600)
@@ -330,16 +328,10 @@ func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		topLevel       bool
-		tagAuth        *gtvcfg.TagAuth
 		wantTransitive bool
 	}{
-		{"top-level on, tag_auth absent", true, nil, true},
-		{"top-level off, tag_auth absent", false, nil, false},
-		// The deprecated key is the subject under test here, not an oversight.
-		//nolint:staticcheck // SA1019: asserts the tag_auth fallback still resolves.
-		{"deprecated tag_auth key still honored", false, &gtvcfg.TagAuth{TransitiveSessionTags: true}, true},
-		//nolint:staticcheck // SA1019: asserts the top-level key overrides the fallback.
-		{"top-level on wins over tag_auth off", true, &gtvcfg.TagAuth{TransitiveSessionTags: false}, true},
+		{"top-level on", true, true},
+		{"top-level off", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mockAWS := new(MockAwsServiceWrapper)
@@ -347,7 +339,6 @@ func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
 				AWS: mockAWS,
 				Config: &gtvcfg.Config{
 					SessionTagsTransitive: tc.topLevel,
-					TagAuth:               tc.tagAuth,
 				},
 			}
 			mockAWS.On("GetCallerIdentityInfo", mock.Anything).Return("123456789012", false, nil)

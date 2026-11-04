@@ -567,7 +567,7 @@ Both features are opt-in and default to `false`:
 - Every _other_ dimension tag present must also match — AND across tags, OR within one tag's space-separated values. `aow/claim.<name>` matches the raw verified claim and can only ever narrow the decision.
 - `tag_auth.default_org` expands a bare `aow/repo` value (no `/`) to `<default_org>/<name>`, so tags can read `my-service` instead of `org/my-service`.
 
-**Session tags and chaining.** When `session_tags_transitive` is true (**recommended**; the deprecated `tag_auth.transitive_session_tags` still works as a fallback), every attached session tag is marked transitive and propagates immutably through later role chaining. Without it the tags are dropped at the first hop and any ABAC policy past it loses the caller's identity.
+**Session tags and chaining.** When `session_tags_transitive` is true (**recommended**), every attached session tag is marked transitive and propagates immutably through later role chaining. Without it the tags are dropped at the first hop and any ABAC policy past it loses the caller's identity.
 
 Full tag reference and IAM setup: [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md). Worked example: [examples/cross-account/](examples/cross-account/).
 

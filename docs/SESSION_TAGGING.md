@@ -314,7 +314,7 @@ WHERE userIdentity.sessionContext.sessionIssuer.tags.ref != 'refs/heads/main'
 
 A session tag is attached to the session the warden issues. By default it is dropped the moment that session assumes another role, so any ABAC policy past that hop can no longer see who the original caller was. The top-level `session_tags_transitive: true` (**RECOMMENDED**, default `false`) marks every attached tag transitive, so it propagates immutably through subsequent role chaining.
 
-It defaults off only for upgrade safety: a transitive tag cannot be changed downstream, so enabling it breaks a target role that re-tags with the same keys while chaining. If yours does not (the common case), turn it on. The deprecated `tag_auth.transitive_session_tags` still works as a fallback but is scoped to tag-auth; the top-level key applies to every request. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags).
+It defaults off only for upgrade safety: a transitive tag cannot be changed downstream, so enabling it breaks a target role that re-tags with the same keys while chaining. If yours does not (the common case), turn it on. See [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORIZATION.md#role-chaining--transitive-session-tags).
 
 ## Limitations
 

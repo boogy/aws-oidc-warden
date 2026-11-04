@@ -147,7 +147,7 @@ func TestMappingsFileEnv(t *testing.T) {
 }
 
 func TestValidateMappingsSplit(t *testing.T) {
-	arn := []string{mapRoleARN}
+	arn := roleEntries(mapRoleARN)
 	tests := []struct {
 		name    string
 		mutate  func(c *Config)
@@ -164,7 +164,7 @@ func TestValidateMappingsSplit(t *testing.T) {
 		}, "mappings_file is set"},
 		{"base role_sets", func(c *Config) {
 			c.MappingsFile = "/m.yaml"
-			c.RoleSets = map[string][]string{"other": arn}
+			c.RoleSets = map[string][]string{"other": {mapRoleARN}}
 		}, "role_sets"},
 		{"padded path", func(c *Config) { c.MappingsFile = " /m.yaml" }, "whitespace"},
 		{"also in config_fragments", func(c *Config) {
@@ -188,7 +188,7 @@ func TestValidateMappingsSplit(t *testing.T) {
 
 func TestMappingsFileExclusiveWithInlineMappings(t *testing.T) {
 	c := mappingsCfg(t, okMappings)
-	c.RoleMappings = []RoleMapping{{Subject: Patterns{"org/inline"}, Roles: []string{mapRoleARN}}}
+	c.RoleMappings = []RoleMapping{{Subject: Patterns{"org/inline"}, Roles: roleEntries(mapRoleARN)}}
 	err := NewProvider(c, 0, "", nil).Refresh(context.Background())
 	require.ErrorContains(t, err, "mappings_file is set")
 }

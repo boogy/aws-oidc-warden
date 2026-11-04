@@ -89,7 +89,7 @@ type RoleMapping struct {
 	Issuer             string        `mapstructure:"issuer"              json:"issuer,omitempty"`
 	SessionPolicy      string        `mapstructure:"session_policy"      json:"session_policy,omitempty"`
 	SessionPolicyFile  string        `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
-	Roles              []string      `mapstructure:"roles"               json:"roles"` // ARNs or "@role_set" aliases
+	Roles              []RoleEntry   `mapstructure:"roles"               json:"roles"` // ARNs, "@role_set" aliases, or objects with per-role settings
 	Conditions         *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`
 	RoleSessionName    string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
 	AllowSessionName   bool          `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`
@@ -107,12 +107,15 @@ type RoleMapping struct {
 	order           int            `mapstructure:"-" json:"-"`
 
 	effectiveTags map[string]string `mapstructure:"-" json:"-"` // issuer spec + SessionTags; read-only, may alias the issuer's map
+
+	grantedRoles   []string `mapstructure:"-" json:"-"` // resolved role ARNs; set on effective mappings only
+	roleConditions bool     `mapstructure:"-" json:"-"` // conditions come from a role object, not the entry
 }
 
 // RoleGroupDefaults are the fields a role_group applies uniformly to every
 // subject it expands to.
 type RoleGroupDefaults struct {
-	Roles             []string          `mapstructure:"roles"               json:"roles,omitempty"`
+	Roles             []RoleEntry       `mapstructure:"roles"               json:"roles,omitempty"`
 	Conditions        *Condition        `mapstructure:"conditions"          json:"conditions,omitempty"`
 	SessionPolicy     string            `mapstructure:"session_policy"      json:"session_policy,omitempty"`
 	SessionPolicyFile string            `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
@@ -199,11 +202,6 @@ type TagAuth struct {
 	Enabled    bool   `mapstructure:"enabled"    json:"enabled,omitempty"`
 	TagPrefix  string `mapstructure:"tag_prefix" json:"tag_prefix,omitempty"`   // default "aow/"
 	DefaultOrg string `mapstructure:"default_org" json:"default_org,omitempty"` // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
-
-	// Deprecated: use the top-level Config.SessionTagsTransitive instead.
-	// Kept only as a fallback for existing configs; see
-	// Config.TransitiveSessionTags().
-	TransitiveSessionTags bool `mapstructure:"transitive_session_tags" json:"transitive_session_tags,omitempty"`
 
 	// multiIssuer is set by Config.Validate() (len(Issuers) > 1) and gates the
 	// <prefix>issuer requirement in Authorize (no cross-issuer identity
@@ -540,14 +538,11 @@ var envBindings = []envBinding{
 		envBool("cache.s3_cleanup", v, func(b bool) { c.Cache.S3Cleanup = b })
 	}},
 
-	// Tag-based authorization knobs. enabled/transitive_session_tags create
+	// Tag-based authorization knobs. enabled creates
 	// TagAuth if nil; the rest only apply if it already exists (preserves the
 	// pre-refactor init semantics exactly).
 	{"tag_auth.enabled", func(c *Config, v string) {
 		envBool("tag_auth.enabled", v, func(b bool) { ensureTagAuth(c).Enabled = b })
-	}},
-	{"tag_auth.transitive_session_tags", func(c *Config, v string) {
-		envBool("tag_auth.transitive_session_tags", v, func(b bool) { ensureTagAuth(c).TransitiveSessionTags = b })
 	}},
 	{"tag_auth.tag_prefix", func(c *Config, v string) {
 		if c.TagAuth != nil {
@@ -671,7 +666,6 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("cache.max_local_size", cacheMaxLocalSize)
 	viper.SetDefault("tag_auth.enabled", false)
 	viper.SetDefault("tag_auth.tag_prefix", "aow/")
-	viper.SetDefault("tag_auth.transitive_session_tags", false)
 	viper.SetDefault("cross_account.enabled", false)
 	viper.SetDefault("cross_account.spoke_role_name", "aow-spoke")
 	viper.SetDefault("cross_account.spoke_session_duration", "15m")
@@ -920,15 +914,9 @@ func (c *Config) AuditEnforced() bool {
 	return c.AuditRequired && c.LogToS3 && c.LogBucket != ""
 }
 
-// TransitiveSessionTags reports whether session tags should be transitive:
-// either the top-level session_tags_transitive or the deprecated
-// tag_auth.transitive_session_tags being true wins (OR, not precedence) — a
-// config setting both inconsistently resolves toward the stronger guarantee.
+// TransitiveSessionTags reports whether session tags are marked transitive (session_tags_transitive).
 func (c *Config) TransitiveSessionTags() bool {
-	if c.SessionTagsTransitive {
-		return true
-	}
-	return c.TagAuth != nil && c.TagAuth.TransitiveSessionTags
+	return c.SessionTagsTransitive
 }
 
 // Validate checks if the configuration is valid.
@@ -1093,12 +1081,6 @@ func (c *Config) Validate() error {
 			slog.String("warning", "audit_trail_inactive"))
 	}
 
-	if c.TagAuth != nil && c.TagAuth.TransitiveSessionTags && !c.SessionTagsTransitive {
-		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
-			"tag_auth.transitive_session_tags is deprecated; use the top-level session_tags_transitive",
-			slog.String("warning", "transitive_session_tags_deprecated"))
-	}
-
 	if c.IdP != nil {
 		c.IdP.applyDefaults()
 		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
@@ -1198,14 +1180,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
 		}
 
-		roles, err := c.resolveRoleSet(m.Roles)
-		if err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
-		}
-		if len(roles) == 0 {
+		if len(m.grantedRoles) == 0 {
 			return fmt.Errorf("%s[%d] (%s): subject and roles are required", source, i, subject)
 		}
-		m.Roles = roles
 
 		m.resolvedSubject = subject
 		subjectMatcher, err := compileAnchoredSubject(subject, patterns)
@@ -1246,8 +1223,16 @@ func (c *Config) Validate() error {
 			if slices.Contains(m.Subject[:si], subject) {
 				return fmt.Errorf("%s[%d]: duplicate subject %q", source, i, subject)
 			}
-			if err := appendOne(m, subject, source, i); err != nil {
-				return err
+		}
+		pieces, err := c.expandRoles(m, source, i)
+		if err != nil {
+			return err
+		}
+		for _, subject := range m.Subject {
+			for _, piece := range pieces {
+				if err := appendOne(piece, subject, source, i); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -1315,7 +1300,7 @@ func (c *Config) Validate() error {
 	// Calculate the average number of roles per mapping for more efficient memory allocation
 	totalRoles := 0
 	for _, mapping := range c.effective {
-		totalRoles += len(mapping.Roles)
+		totalRoles += len(mapping.grantedRoles)
 	}
 
 	if len(c.effective) > 0 {
@@ -1625,22 +1610,16 @@ func validateRoleSessionName(name string) error {
 	return nil
 }
 
-// warnUnscopedRoleGrants warns when a role granted by multiple effective
-// mappings has its LOWEST-order grant carrying no session_policy while a
-// higher-order grant does — FindSessionPolicy picks lowest-order-wins, so the
-// scoped mapping's policy is silently dropped and the role assumed unscoped.
-// Reordering role_mappings can fix this, but role_mappings are always
-// appended before role_groups, so that boundary can't be fixed by reordering
-// alone. Subject overlap isn't computed (regex intersection isn't cheap);
-// sharing a role is treated as enough to warn on.
-// (TestOrderWinsAmongMappingsGrantingTheSameRole pins the selection rule.)
+// warnUnscopedRoleGrants warns when a role's lowest-order grant has no session_policy while a
+// higher-order grant does: FindSessionPolicy picks the lowest order, so the policy is dropped.
+// Pinned by TestOrderWinsAmongMappingsGrantingTheSameRole.
 func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	type grant struct{ lowest, scoped *RoleMapping }
 	grants := make(map[string]*grant)
 
 	for _, m := range effective {
 		hasPolicy := m.SessionPolicy != "" || m.SessionPolicyFile != ""
-		for _, role := range m.Roles {
+		for _, role := range m.grantedRoles {
 			key := m.Issuer + "\x00" + role
 			g, ok := grants[key]
 			if !ok {
@@ -1672,15 +1651,8 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	}
 }
 
-// warnTagAuthBypassesMappingScoping warns when a role_mapping scopes a role
-// with session_policy or role_session_name while tag_auth is enabled: if
-// AuthorizeRoles finds no matching mapping, tag-auth can still grant the same
-// role off its IAM tags, and then FindSessionPolicy/FindRoleSessionName
-// return empty — the role assumes unscoped, under the global session name.
-// Not a bypass (the identity gate still applies), but the asymmetry is
-// invisible in the config, so surface it. Over-approximates like
-// warnUnscopedRoleGrants: whether the role actually carries the tags is an
-// IAM fact this code can't see.
+// warnTagAuthBypassesMappingScoping warns when tag_auth is enabled and a mapping scopes a role (policy,
+// session name, or role-level conditions): a tag-auth grant of the same role carries none of that.
 func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
 	if tagAuth == nil || !tagAuth.Enabled {
 		return
@@ -1694,10 +1666,12 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			scopedBy = "session_policy"
 		case m.RoleSessionName != "":
 			scopedBy = "role_session_name"
+		case m.roleConditions:
+			scopedBy = "role_conditions"
 		default:
 			continue
 		}
-		for _, role := range m.Roles {
+		for _, role := range m.grantedRoles {
 			if seen[role] {
 				continue
 			}
@@ -1865,9 +1839,9 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 			return
 		}
 		d.Matched = true
-		d.Roles = append(d.Roles, mapping.Roles...)
+		d.Roles = append(d.Roles, mapping.grantedRoles...)
 
-		if role != "" && slices.Contains(mapping.Roles, role) {
+		if role != "" && slices.Contains(mapping.grantedRoles, role) {
 			if d.authorizing == nil || mapping.order < d.authorizing.order {
 				d.authorizing = mapping
 			}

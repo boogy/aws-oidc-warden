@@ -45,7 +45,7 @@ issuers:
       ref-type: "ref_type"
       actor: "actor"
       event-name: "event_name"
-    # tag_prefix: "gh/"
+    tag_prefix: "gh/" # GitHub tokens read gh/subject, gh/ref, ... from role IAM tags
 
   - issuer: "https://gitlab.com"
     provider: "generic"
@@ -59,7 +59,7 @@ issuers:
       project: "project_path"
       ref: "ref"
       ref-type: "ref_type"
-    # tag_prefix: "gl/"
+    tag_prefix: "gl/" # GitLab tokens read gl/subject, gl/ref, ...
 
 ## STS session name, 2-64 chars of [\w+=,.@-] (no "/"). Order: mapping's
 ## role_session_name, else caller's sessionName if allow_session_name, else this.
@@ -278,9 +278,8 @@ role_groups:
 ####################################################################################
 tag_auth:
   enabled: false
-  tag_prefix: "aow/" # overridden by issuers[].tag_prefix
+  tag_prefix: "aow/" # for issuers without their own issuers[].tag_prefix
   default_org: "" # expands bare aow/repo values to "<default_org>/<repo>"
-  transitive_session_tags: false # deprecated: use session_tags_transitive
 
 ####################################################################################
 # CROSS-ACCOUNT — docs/examples/cross-account/

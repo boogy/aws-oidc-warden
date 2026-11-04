@@ -48,18 +48,24 @@ func FuzzAuthorizeRolesMatchesLinearScan(f *testing.F) {
 			Issuers:         []IssuerConfig{{Issuer: iss, Provider: "github", Audiences: []string{"aud"}}},
 			RoleSessionName: "test",
 			RoleMappings: []RoleMapping{
-				{Issuer: iss, Subject: Patterns{pattern}, Roles: []string{"arn:aws:iam::123456789012:role/fuzz"}},
-				{Issuer: iss, Subject: Patterns{"owner0/repo"}, Roles: []string{"arn:aws:iam::123456789012:role/exact"}},
-				{Issuer: iss, Subject: Patterns{"owner1/.*"}, Roles: []string{"arn:aws:iam::123456789012:role/owner"}},
+				{Issuer: iss, Subject: Patterns{pattern}, Roles: roleEntries("arn:aws:iam::123456789012:role/fuzz")},
+				{Issuer: iss, Subject: Patterns{"owner0/repo"}, Roles: roleEntries("arn:aws:iam::123456789012:role/exact")},
+				{Issuer: iss, Subject: Patterns{"owner1/.*"}, Roles: roleEntries("arn:aws:iam::123456789012:role/owner")},
+				{Issuer: iss, Subject: Patterns{pattern}, Roles: []RoleEntry{
+					{Role: "arn:aws:iam::123456789012:role/plain"},
+					{Role: "arn:aws:iam::123456789012:role/gated", Conditions: &Condition{Ref: Patterns{"refs/heads/main"}}},
+				}},
 			},
 		}
 		if cfg.Validate() != nil {
 			return
 		}
-		wantMatched, wantRoles := linearAuthorizeRoles(cfg, iss, subject, nil)
-		gotMatched, gotRoles := cfg.AuthorizeRoles(iss, subject, nil)
-		assert.Equal(t, wantMatched, gotMatched, "pattern=%q subject=%q", pattern, subject)
-		assert.ElementsMatch(t, wantRoles, gotRoles, "pattern=%q subject=%q", pattern, subject)
+		for _, claims := range []map[string]any{nil, {"ref": "refs/heads/main"}, {"ref": "refs/heads/dev"}} {
+			wantMatched, wantRoles := linearAuthorizeRoles(cfg, iss, subject, claims)
+			gotMatched, gotRoles := cfg.AuthorizeRoles(iss, subject, claims)
+			assert.Equal(t, wantMatched, gotMatched, "pattern=%q subject=%q claims=%v", pattern, subject, claims)
+			assert.ElementsMatch(t, wantRoles, gotRoles, "pattern=%q subject=%q claims=%v", pattern, subject, claims)
+		}
 	})
 }
 
@@ -70,6 +76,9 @@ func FuzzParseFragmentOnlyAllowedKeys(f *testing.F) {
 		`{"Issuers":[{"issuer":"https://evil"}]}`,
 		`{"TAG_AUTH":{"enabled":true}}`,
 		`{"role_sets":{},"idp":{"enabled":true}}`,
+		`{"role_mappings":[{"subject":"org/repo","roles":["arn:aws:iam::123456789012:role/r",{"role":"arn:aws:iam::123456789012:role/s","conditions":{"ref":"refs/heads/main"},"idp_token":false}]}]}`,
+		`{"role_mappings":[{"subject":"org/repo","roles":[{"role":"arn:aws:iam::123456789012:role/s","session_tags":{},"max_session_duration":null}]}]}`,
+		`{"role_mappings":[{"subject":"org/repo","roles":[{"role":"arn:aws:iam::123456789012:role/s","subject":"x"}]}]}`,
 	} {
 		f.Add([]byte(seed))
 	}

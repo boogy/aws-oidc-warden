@@ -83,6 +83,7 @@ func nilConditionHookFunc() mapstructure.DecodeHookFuncType {
 func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 	return []viper.DecoderConfigOption{
 		viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+			roleEntryHookFunc(),
 			stringToPatternsHookFunc(),
 			nilConditionHookFunc(),
 			mapstructure.StringToTimeDurationHookFunc(),
