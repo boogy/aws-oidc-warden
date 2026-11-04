@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Removed
 
-- **`tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`.
+- **`tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`; the key, or the env var set to true, fails the load.
 
 ### Fixed
 

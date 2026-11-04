@@ -235,19 +235,14 @@ func TestTransitiveSessionTagsKeys(t *testing.T) {
 	tests := []struct {
 		name    string
 		yaml    string
-		env     string
 		wantErr string
 		want    bool
 	}{
 		{name: "removed tag_auth key fails to load", yaml: "tag_auth:\n  enabled: true\n  transitive_session_tags: true\n", wantErr: "transitive_session_tags"},
-		{name: "removed env var has no effect", yaml: "tag_auth:\n  enabled: true\n", env: "true"},
 		{name: "top-level key still works", yaml: "session_tags_transitive: true\n", want: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.env != "" {
-				t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", tc.env)
-			}
 			c := baseConfigForEnv(t)
 			err := c.MergeBytes([]byte(tc.yaml), "yaml")
 			if tc.wantErr != "" {
@@ -258,6 +253,20 @@ func TestTransitiveSessionTagsKeys(t *testing.T) {
 			assert.Equal(t, tc.want, c.TransitiveSessionTags())
 		})
 	}
+}
+
+func TestRemovedTransitiveEnvVar(t *testing.T) {
+	t.Run("true fails load", func(t *testing.T) {
+		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "true")
+		_, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.ErrorContains(t, err, "AOW_SESSION_TAGS_TRANSITIVE")
+	})
+	t.Run("false loads", func(t *testing.T) {
+		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")
+		c, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.NoError(t, err)
+		assert.False(t, c.TransitiveSessionTags())
+	})
 }
 
 func TestCrossAccount_AllowedAccounts_RejectsMalformed(t *testing.T) {
