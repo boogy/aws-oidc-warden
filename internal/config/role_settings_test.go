@@ -273,6 +273,26 @@ func TestRoleSettingLoadErrors(t *testing.T) {
         conditions:
           ref: "refs/heads/dev"
 `, false, "no role inherits"},
+		{"entry policy no role inherits", `    session_policy: '{"Version":"2012-10-17","Statement":[]}'
+    roles:
+      - role: "` + rsApply + `"
+        session_policy: '{"Version":"2012-10-17","Statement":[]}'
+`, false, "no role inherits"},
+		{"entry name no role inherits", `    role_session_name: "ent"
+    roles:
+      - role: "` + rsApply + `"
+        role_session_name: "own"
+`, false, "no role inherits"},
+		{"entry duration no role inherits", `    max_session_duration: 30m
+    roles:
+      - role: "` + rsApply + `"
+        max_session_duration: 15m
+`, false, "no role inherits"},
+		{"entry idp_token no role inherits", `    idp_token: true
+    roles:
+      - role: "` + rsApply + `"
+        idp_token: false
+`, true, "no role inherits"},
 		{"entry tags no role inherits", `    session_tags:
       a: "actor"
     roles:
