@@ -536,7 +536,7 @@ No claim is privileged or evaluated in a fixed order: every key under `condition
 
 **Session Security:**
 
-- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. A session over 1 hour requires IdP mode (`idp_token`, see [IDP.md](IDP.md)); `AssumeRole` refuses one)
+- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. A session over 1 hour requires IdP mode (`idp_token`, see [IDP.md](IDP.md)); `AssumeRole` refuses one. `idp.only` routes every credential through the IdP)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
 - Credentials are short-lived and expire on their own — no long-lived secrets are ever issued or stored
@@ -672,26 +672,26 @@ Cross-account target and spoke roles: [examples/cross-account/](examples/cross-a
 
 **IdP mode** ([IDP.md](IDP.md)) adds this contract. One issuer URL per deployment, never shared between stages. A deployment may span regions with one multi-region key (see [IDP.md](IDP.md#multi-region-deployment)).
 
-| What               | Requirement                                                                                                                                                                                                                                                                                                                   |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| KMS key            | Asymmetric, single-region, or an MRK whose primary and replicas are all in `idp.kms_allowed_regions`, `SIGN_VERIFY`, `ECC_NIST_P256` or `RSA_2048/3072/4096`, enabled. Configured by full key ARN; aliases are rejected                                                                                                                                                            |
-| Warden role        | `kms:Sign`, `kms:GetPublicKey`, `kms:DescribeKey` on each region's replica ARN (a role shared across regions needs all of them; a per-region role needs only its local one). No `sts:AssumeRole` on IdP target roles (the exchange is unsigned `sts:AssumeRoleWithWebIdentity`), and no IdP-related `iam:GetRole` (that stays only for `tag_auth`)                                                                                          |
-| Key policy         | Deny `kms:Sign` to every principal but the warden role; Deny `kms:PutKeyPolicy`, `kms:ScheduleKeyDeletion`, `kms:DisableKey`, `kms:CreateGrant`, `kms:ReplicateKey`, `kms:UpdateAlias`, `kms:UpdatePrimaryRegion` to everyone but a break-glass role. Alarm on any `kms:Sign` by another principal and on every tamper action |
-| Discovery and JWKS | Unauthenticated GET routes for discovery/JWKS, or static hosting. Static hosting from `idp-export` is the default; a warden-served JWKS couples STS availability to the Lambda                                                                                                                                                |
-| IAM OIDC provider  | URL = `idp.issuer`, client ID = `idp.audience` (one per target role ARN with `audience_mode: role_arn`)                                                                                                                                                                                                                       |
-| Target roles       | `MaxSessionDuration` at least the longest allowed session; trust policy allowing `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity` for the IdP provider, pinned on `aud` and `sub`                                                                                                                   |
+| What               | Requirement                                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| KMS key            | Asymmetric, single-region, or an MRK whose primary and replicas are all in `idp.kms_allowed_regions`, `SIGN_VERIFY`, `ECC_NIST_P256` or `RSA_2048/3072/4096`, enabled. Configured by full key ARN; aliases are rejected                                                                                                                            |
+| Warden role        | `kms:Sign`, `kms:GetPublicKey`, `kms:DescribeKey` on each region's replica ARN (a role shared across regions needs all of them; a per-region role needs only its local one). No `sts:AssumeRole` on IdP target roles (the exchange is unsigned `sts:AssumeRoleWithWebIdentity`), and no IdP-related `iam:GetRole` (that stays only for `tag_auth`) |
+| Key policy         | Deny `kms:Sign` to every principal but the warden role; Deny `kms:PutKeyPolicy`, `kms:ScheduleKeyDeletion`, `kms:DisableKey`, `kms:CreateGrant`, `kms:ReplicateKey`, `kms:UpdateAlias`, `kms:UpdatePrimaryRegion` to everyone but a break-glass role. Alarm on any `kms:Sign` by another principal and on every tamper action                      |
+| Discovery and JWKS | Unauthenticated GET routes for discovery/JWKS, or static hosting. Static hosting from `idp-export` is the default; a warden-served JWKS couples STS availability to the Lambda                                                                                                                                                                     |
+| IAM OIDC provider  | URL = `idp.issuer`, client ID = `idp.audience` (one per target role ARN with `audience_mode: role_arn`)                                                                                                                                                                                                                                            |
+| Target roles       | `MaxSessionDuration` at least the longest allowed session; trust policy allowing `sts:AssumeRoleWithWebIdentity`, `sts:TagSession`, `sts:SetSourceIdentity` for the IdP provider, pinned on `aud` and `sub`                                                                                                                                        |
 
 ### Multi-region
 
 Deploy the same package and config file in every region. Each region is independent: nothing in the request path calls another region. Region-specific resources come from `AOW_*` environment variables on each region's Lambda, which beat the config file on every load and reload:
 
-| Per region (env var)                                                              | Shared (config file)                                    |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| JWKS cache table (`AOW_CACHE_DYNAMODB_TABLE`); never a Global Table               | `issuers`, hardening knobs, `jwt_validation`            |
-| Audit bucket (`AOW_LOG_BUCKET`); a shared one fails the secondary closed          | `idp` block: one issuer, one MRK with a replica per region |
-| Mappings file (`AOW_MAPPINGS_FILE`), same content in every region                 | Session tags, `audit_required`, reload interval         |
-| Session-policy bucket (`AOW_SESSION_POLICY_BUCKET`), same content                 |                                                         |
-| S3 config overlay (`AOW_S3_CONFIG_BUCKET`, `AOW_S3_CONFIG_PATH`), same content    |                                                         |
+| Per region (env var)                                                           | Shared (config file)                                       |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| JWKS cache table (`AOW_CACHE_DYNAMODB_TABLE`); never a Global Table            | `issuers`, hardening knobs, `jwt_validation`               |
+| Audit bucket (`AOW_LOG_BUCKET`); a shared one fails the secondary closed       | `idp` block: one issuer, one MRK with a replica per region |
+| Mappings file (`AOW_MAPPINGS_FILE`), same content in every region              | Session tags, `audit_required`, reload interval            |
+| Session-policy bucket (`AOW_SESSION_POLICY_BUCKET`), same content              |                                                            |
+| S3 config overlay (`AOW_S3_CONFIG_BUCKET`, `AOW_S3_CONFIG_PATH`), same content |                                                            |
 
 - Authorization config must match across regions, or failover changes the answer. Upload mappings and policy files to every region in one CI job, or replicate them.
 - A target role's trust policy must list **every** region's execution role, or failover passes the gateway and fails at `sts:AssumeRole`. IdP-issued roles trust the IAM OIDC provider instead and need no per-region change.

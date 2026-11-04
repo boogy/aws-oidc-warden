@@ -40,8 +40,18 @@ func (r *RequestProcessor) idpEnabled(cfg *config.Config) bool {
 	return r.idp != nil && cfg.IdP != nil && cfg.IdP.Enabled
 }
 
-// selectIdP routes an IdP-eligible role to the IdP when enabled, else allows only sessions within the AssumeRole cap; refusals carry their audit reason.
+// selectIdP routes an IdP-eligible role (or every request under idp.only) to the IdP when enabled, else allows only sessions within the AssumeRole cap; refusals carry their audit reason.
 func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, requested int32) (useIdP bool, reason string, err error) {
+	if cfg.IdP != nil && cfg.IdP.Only {
+		switch {
+		case r.idpEnabled(cfg):
+			return true, "", nil
+		case r.idp == nil:
+			return false, "idp.only but idp added after startup", ErrIdPUnavailable
+		default:
+			return false, "idp.only but idp disabled", ErrIdPUnavailable
+		}
+	}
 	eligible := d.IDPTokenAllowed()
 	if eligible && r.idpEnabled(cfg) {
 		return true, "", nil
@@ -66,7 +76,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	role := requestData.Role
 
-	ceiling := o.decision.MaxSessionDuration()
+	ceiling := cmp.Or(o.decision.MaxSessionDuration(), config.IdPDefaultMaxSessionDuration)
 	capSecs := int(ceiling / time.Second)
 	rec.IdPSessionCapSeconds = &capSecs
 	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)

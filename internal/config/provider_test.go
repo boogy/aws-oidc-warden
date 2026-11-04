@@ -1384,6 +1384,7 @@ func TestProviderRefreshWarnsOnFrozenIdPDrift(t *testing.T) {
 	}{
 		{"unchanged", idpTestBlockYAML, idpTestBlockYAML + "log_level: debug\n", true, 0},
 		{"frozen field changed", idpTestBlockYAML, drifted, true, 1},
+		{"only flipped", idpTestBlockYAML, strings.Replace(idpTestBlockYAML, "  enabled: true\n", "  enabled: true\n  only: true\n", 1), true, 0},
 		{"block removed", idpTestBlockYAML, "log_level: info\n", true, 0},
 		{"block added to a warden built without one", "log_level: info\n", idpTestBlockYAML, true, 1},
 		{"cold start before freeze", "log_level: info\n", idpTestBlockYAML, false, 0},

@@ -721,6 +721,11 @@ func TestProcessMintRedactsSourceIdentity(t *testing.T) {
 }
 
 func TestProcessRequestRouting(t *testing.T) {
+	only := func(c *config.Config) { c.IdP.Only = true }
+	tagOnly := func(c *config.Config) {
+		c.RoleMappings[0].Subject = config.Patterns{"other/repo"}
+		c.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
+	}
 	tests := []struct {
 		name     string
 		mutate   func(*config.Config)
@@ -729,20 +734,36 @@ func TestProcessRequestRouting(t *testing.T) {
 		wantErr  error
 		wantWI   int
 		wantAR   int
+		wantDur  int32
+		noSvc    bool
+		tagAuth  bool
 	}{
-		{"opted_in_uses_idp", nil, true, 0, nil, 1, 0},
-		{"not_opted_in_uses_assume_role", nil, false, 3600, nil, 0, 1},
-		{"not_opted_in_over_1h", nil, false, 3601, handler.ErrIdPNotPermitted, 0, 0},
-		{"kill_switch_within_1h_uses_assume_role", func(c *config.Config) { c.IdP.Enabled = false }, true, 0, nil, 0, 1},
-		{"kill_switch_over_1h", func(c *config.Config) { c.IdP.Enabled = false }, true, 7200, handler.ErrIdPUnavailable, 0, 0},
-		{"ceiling_over_1h_uses_idp_within_1h", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, false, 900, nil, 1, 0},
-		{"ceiling_over_1h_uses_idp_over_1h", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, false, 7200, nil, 1, 0},
-		{"ceiling_1h_uses_assume_role", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = time.Hour }, false, 3600, nil, 0, 1},
+		{"opted_in_uses_idp", nil, true, 0, nil, 1, 0, 0, false, false},
+		{"not_opted_in_uses_assume_role", nil, false, 3600, nil, 0, 1, 0, false, false},
+		{"not_opted_in_over_1h", nil, false, 3601, handler.ErrIdPNotPermitted, 0, 0, 0, false, false},
+		{"kill_switch_within_1h_uses_assume_role", func(c *config.Config) { c.IdP.Enabled = false }, true, 0, nil, 0, 1, 0, false, false},
+		{"kill_switch_over_1h", func(c *config.Config) { c.IdP.Enabled = false }, true, 7200, handler.ErrIdPUnavailable, 0, 0, 0, false, false},
+		{"ceiling_over_1h_uses_idp_within_1h", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, false, 900, nil, 1, 0, 0, false, false},
+		{"ceiling_over_1h_uses_idp_over_1h", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, false, 7200, nil, 1, 0, 0, false, false},
+		{"ceiling_1h_uses_assume_role", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = time.Hour }, false, 3600, nil, 0, 1, 0, false, false},
 		{"ceiling_over_1h_kill_switch_over_1h", func(c *config.Config) {
 			c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour
 			c.IdP.Enabled = false
-		}, false, 7200, handler.ErrIdPUnavailable, 0, 0},
-		{"over_12h_invalid", nil, true, 43201, handler.ErrInvalidDuration, 0, 0},
+		}, false, 7200, handler.ErrIdPUnavailable, 0, 0, 0, false, false},
+		{"over_12h_invalid", nil, true, 43201, handler.ErrInvalidDuration, 0, 0, 0, false, false},
+
+		{"only_off_short_plain_uses_assume_role", nil, false, 900, nil, 0, 1, 900, false, false},
+		{"only_off_disabled_short_uses_assume_role", func(c *config.Config) { c.IdP.Enabled = false }, false, 900, nil, 0, 1, 900, false, false},
+		{"only_plain_short_uses_idp", only, false, 1800, nil, 1, 0, 1800, false, false},
+		{"only_plain_omitted_uses_idp", only, false, 0, nil, 1, 0, 3600, false, false},
+		{"only_opted_in_uses_idp", only, true, 900, nil, 1, 0, 900, false, false},
+		{"only_disabled_short_unavailable", func(c *config.Config) { only(c); c.IdP.Enabled = false }, false, 900, handler.ErrIdPUnavailable, 0, 0, 0, false, false},
+		{"only_disabled_omitted_unavailable", func(c *config.Config) { only(c); c.IdP.Enabled = false }, true, 0, handler.ErrIdPUnavailable, 0, 0, 0, false, false},
+		{"only_no_service_unavailable", only, false, 900, handler.ErrIdPUnavailable, 0, 0, 0, true, false},
+		{"only_over_1h_plain_exceeds_cap", only, false, 7200, handler.ErrDurationExceedsCap, 0, 0, 0, false, false},
+		{"only_tag_grant_uses_idp", func(c *config.Config) { only(c); tagOnly(c) }, false, 900, nil, 1, 0, 900, false, true},
+		{"only_tag_grant_over_1h_exceeds_cap", func(c *config.Config) { only(c); tagOnly(c) }, false, 7200, handler.ErrDurationExceedsCap, 0, 0, 0, false, true},
+		{"only_off_tag_grant_uses_assume_role", tagOnly, false, 900, nil, 0, 1, 900, false, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -752,7 +773,13 @@ func TestProcessRequestRouting(t *testing.T) {
 			}
 			cfg := idpConfig(t, tt.optedIn, "", mutate...)
 			cons := mockWI(t)
+			if tt.tagAuth {
+				cons.tags = map[string]string{"aow/subject": "org/repo"}
+			}
 			proc, sink, signer := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+			if tt.noSvc {
+				proc = handler.NewRequestProcessor(config.NewStaticProvider(cfg), cons, idpClaims(nil), sink, "apigatewayv2")
+			}
 			var buf bytes.Buffer
 			_, err := mint(t, proc, handler.RequestData{DurationSeconds: tt.duration}, &buf)
 			if tt.wantErr != nil {
@@ -764,6 +791,16 @@ func TestProcessRequestRouting(t *testing.T) {
 			}
 			assert.Equal(t, tt.wantWI, cons.wiCalls)
 			assert.Equal(t, tt.wantAR, cons.assumeCalls)
+			switch {
+			case tt.wantDur == 0:
+			case tt.wantWI > 0:
+				assert.Equal(t, tt.wantDur, cons.lastWI.duration)
+			case tt.wantAR > 0:
+				assert.Equal(t, tt.wantDur, cons.gotDuration)
+			}
+			if tt.tagAuth && tt.wantWI > 0 {
+				assert.EqualValues(t, 3600, sink.last(t)["idpSessionCapSeconds"])
+			}
 		})
 	}
 }

@@ -572,6 +572,11 @@ var envBindings = []envBinding{
 			envBool("idp.enabled", v, func(b bool) { c.IdP.Enabled = b })
 		}
 	}},
+	{"idp.only", func(c *Config, v string) {
+		if c.IdP != nil {
+			envBool("idp.only", v, func(b bool) { c.IdP.Only = b })
+		}
+	}},
 	{"idp.issuer", func(c *Config, v string) {
 		if c.IdP != nil {
 			c.IdP.Issuer = v

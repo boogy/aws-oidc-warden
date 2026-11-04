@@ -311,6 +311,7 @@ jwt_validation:
 ####################################################################################
 # idp:
 #   enabled: true
+#   only: false # true: every credential goes through the IdP, never AssumeRole
 #   issuer: "https://idp.warden.example.com" # must differ from every issuers[] entry
 #   audience: "idp-audience-example"
 #   audience_mode: "static" # static (default) | role_arn

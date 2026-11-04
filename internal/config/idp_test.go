@@ -233,7 +233,7 @@ func TestIdPDefaultJWKSURIFollowsCustomPath(t *testing.T) {
 
 func TestIdPFingerprintIgnoresReloadableFields(t *testing.T) {
 	a, b := validIdP(), validIdP()
-	b.Enabled = false
+	b.Enabled, b.Only = false, true
 	require.Equal(t, a.Fingerprint(), b.Fingerprint())
 	b.TokenTTL = time.Minute
 	require.NotEqual(t, a.Fingerprint(), b.Fingerprint())
@@ -298,6 +298,26 @@ func TestIdPEnvOnlyAppliesToExistingBlock(t *testing.T) {
 	})
 	t.Run("reapply without block", func(t *testing.T) {
 		t.Setenv("AOW_IDP_ENABLED", "true")
+		c := &Config{}
+		reapplyEnvOverrides(c)
+		require.Nil(t, c.IdP)
+	})
+	t.Run("only env applies to existing block", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "true")
+		c, err := loadIdPYAML(t, idpTestIssuerYAML+idpTestBlockYAML)
+		require.NoError(t, err)
+		require.True(t, c.IdP.Only)
+	})
+	t.Run("only env reapplied on reload", func(t *testing.T) {
+		c, err := loadIdPYAML(t, idpTestIssuerYAML+idpTestBlockYAML)
+		require.NoError(t, err)
+		require.False(t, c.IdP.Only)
+		t.Setenv("AOW_IDP_ONLY", "true")
+		reapplyEnvOverrides(c)
+		require.True(t, c.IdP.Only)
+	})
+	t.Run("only env without block", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "true")
 		c := &Config{}
 		reapplyEnvOverrides(c)
 		require.Nil(t, c.IdP)
