@@ -49,6 +49,10 @@ A request for more than 1h that cannot use the IdP is refused, never shortened:
 | `idp.enabled: false` (kill switch)                       | 503 `idp_signing_unavailable` |
 | the `idp` block was added after startup (restart)        | 503 `idp_signing_unavailable` |
 
+These are checked in the order numbered below.
+
+![Credential path and refusals for a role that is already authorized](img/idp-routing.svg)
+
 ## Flow
 
 ```mermaid

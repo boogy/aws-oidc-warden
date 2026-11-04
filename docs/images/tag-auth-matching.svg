@@ -1,48 +1,76 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="820" height="360" viewBox="0 0 820 360" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-  <defs>
-    <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L8,3 L0,6 Z" fill="#5f6368"/>
-    </marker>
-  </defs>
-  <rect x="0" y="0" width="820" height="360" fill="#ffffff"/>
-  <text x="410" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Tag matching:  AND across tags · OR within a tag</text>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 348" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="tag-auth-matching-title tag-auth-matching-desc" id="tag-auth-matching-root">
+        <title id="tag-auth-matching-title">How role tags match claims</title>
+        <desc id="tag-auth-matching-desc">Matrix of three role tags against two runs: every tag must match its claim, a space-separated tag value accepts any listed item, and one mismatched ref denies the second run.</desc>
+        <defs>
+      <style>#tag-auth-matching-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #tag-auth-matching-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #tag-auth-matching-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#tag-auth-matching-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="tag-auth-matching-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="tag-auth-matching-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="tag-auth-matching-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
 
-  <!-- column headers -->
-  <text x="225" y="64" text-anchor="middle" font-size="12" font-weight="600" fill="#5f6368">ROLE TAGS</text>
-  <text x="640" y="64" text-anchor="middle" font-size="12" font-weight="600" fill="#5f6368">TOKEN CLAIMS</text>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
 
-  <!-- Row A -->
-  <rect x="40" y="86" width="118" height="40" rx="6" fill="#e8eaed" stroke="#9aa0a6"/>
-  <text x="99" y="111" text-anchor="middle" font-size="13" fill="#202124">aow/repo</text>
-  <rect x="170" y="86" width="92" height="40" rx="6" fill="#ffffff" stroke="#4285f4"/>
-  <text x="216" y="111" text-anchor="middle" font-size="12" fill="#202124">acme/api</text>
-  <text x="285" y="111" text-anchor="middle" font-size="12" font-weight="600" fill="#f9ab00">OR</text>
-  <rect x="308" y="86" width="92" height="40" rx="6" fill="#ffffff" stroke="#4285f4"/>
-  <text x="354" y="111" text-anchor="middle" font-size="12" fill="#202124">acme/web</text>
-  <line x1="404" y1="106" x2="476" y2="106" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow2)"/>
-  <text x="440" y="98" text-anchor="middle" font-size="11" fill="#5f6368">=?</text>
-  <rect x="486" y="86" width="286" height="40" rx="6" fill="#e8f0fe" stroke="#4285f4"/>
-  <text x="629" y="111" text-anchor="middle" font-size="12" fill="#202124">repository = "acme/api"</text>
-  <text x="790" y="112" text-anchor="middle" font-size="18" font-weight="700" fill="#137333">✓</text>
+        <text x="24" y="34" fill="#2d3142" font-size="15" font-family="'Geist', system-ui, sans-serif" font-weight="600">AND across tags, OR within a tag</text>
+<rect x="24" y="56" width="160" height="40" rx="6" fill="#2d3142"/>
+<text x="104.0" y="81" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Tag on the role</text>
+<rect x="192" y="56" width="228" height="40" rx="6" fill="#2d3142"/>
+<text x="306.0" y="81" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Accepted values</text>
+<rect x="428" y="56" width="124" height="40" rx="6" fill="#2d3142"/>
+<text x="490.0" y="81" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Claim</text>
+<rect x="560" y="56" width="180" height="40" rx="6" fill="#2d3142"/>
+<text x="650.0" y="81" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Run A</text>
+<rect x="748" y="56" width="188" height="40" rx="6" fill="#2d3142"/>
+<text x="842.0" y="81" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Run B</text>
+<rect x="24" y="104" width="160" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.30"/>
+<text x="104.0" y="126" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">aow/subject</text>
+<rect x="192" y="104" width="228" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="306.0" y="126" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">acme/api acme/web</text>
+<rect x="428" y="104" width="124" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="490.0" y="126" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">canonical subject</text>
+<rect x="560" y="104" width="180" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="650.0" y="126" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">acme/web</text>
+<rect x="748" y="104" width="188" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="842.0" y="126" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">acme/api</text>
+<rect x="24" y="146" width="160" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.30"/>
+<text x="104.0" y="168" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">aow/ref</text>
+<rect x="192" y="146" width="228" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="306.0" y="168" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">refs/heads/main</text>
+<rect x="428" y="146" width="124" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="490.0" y="168" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">ref</text>
+<rect x="560" y="146" width="180" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="650.0" y="168" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">refs/heads/main</text>
+<rect x="748" y="146" width="188" height="36" rx="4" fill="#bf4520" stroke="#bf4520" stroke-width="1.4" fill-opacity="0.08"/>
+<text x="842.0" y="168" fill="#bf4520" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">refs/heads/dev</text>
+<rect x="24" y="188" width="160" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.30"/>
+<text x="104.0" y="210" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">aow/event-name</text>
+<rect x="192" y="188" width="228" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="306.0" y="210" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">push</text>
+<rect x="428" y="188" width="124" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="490.0" y="210" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">event_name</text>
+<rect x="560" y="188" width="180" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="650.0" y="210" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">push</text>
+<rect x="748" y="188" width="188" height="36" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="842.0" y="210" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">push</text>
+<rect x="24" y="230" width="528" height="36" rx="4" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
+<text x="288.0" y="252" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">every tag on the role must match</text>
+<rect x="560" y="230" width="180" height="36" rx="4" fill="#2d3142"/>
+<text x="650.0" y="252" fill="#ffffff" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">authorized</text>
+<rect x="748" y="230" width="188" height="36" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="842.0" y="252" fill="#5a6580" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<line x1="24" y1="284" x2="936" y2="284" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="24" y="308" fill="#4f5d75" font-size="11.5" font-family="'Geist', system-ui, sans-serif">Matching is exact, never regex. A space-separated value accepts any item in it.</text>
+<text x="24" y="326" fill="#4f5d75" font-size="11.5" font-family="'Geist', system-ui, sans-serif">A role needs an identity tag (aow/subject, aow/repo or aow/repo-owner). With several issuers it also needs aow/issuer.</text>
 
-  <!-- AND connector -->
-  <rect x="372" y="146" width="76" height="28" rx="14" fill="#f9ab00"/>
-  <text x="410" y="165" text-anchor="middle" font-size="13" font-weight="700" fill="#ffffff">AND</text>
-
-  <!-- Row B -->
-  <rect x="40" y="194" width="118" height="40" rx="6" fill="#e8eaed" stroke="#9aa0a6"/>
-  <text x="99" y="219" text-anchor="middle" font-size="13" fill="#202124">aow/ref</text>
-  <rect x="170" y="194" width="230" height="40" rx="6" fill="#ffffff" stroke="#4285f4"/>
-  <text x="285" y="219" text-anchor="middle" font-size="12" fill="#202124">refs/heads/main</text>
-  <line x1="404" y1="214" x2="476" y2="214" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow2)"/>
-  <text x="440" y="206" text-anchor="middle" font-size="11" fill="#5f6368">=?</text>
-  <rect x="486" y="194" width="286" height="40" rx="6" fill="#e8f0fe" stroke="#4285f4"/>
-  <text x="629" y="219" text-anchor="middle" font-size="12" fill="#202124">ref = "refs/heads/main"</text>
-  <text x="790" y="220" text-anchor="middle" font-size="18" font-weight="700" fill="#137333">✓</text>
-
-  <!-- result -->
-  <line x1="410" y1="234" x2="410" y2="296" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow2)"/>
-  <text x="470" y="272" text-anchor="middle" font-size="12" fill="#5f6368">all tags match</text>
-  <rect x="330" y="300" width="160" height="42" rx="8" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="410" y="326" text-anchor="middle" font-size="14" font-weight="600" fill="#137333">AUTHORIZED</text>
-</svg>
+      </svg>

@@ -250,6 +250,8 @@ role_mappings:
 
 Reads as: a tag build, from either a release tag or a bot-driven hotfix tag, never on the sandbox runner.
 
+![Condition tree for the example above, with traced runs](img/condition-logic.svg)
+
 There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` / `none_of` with nesting is functionally complete — every boolean expression can be written as nested `any_of`-of-`all_of` — and a one-entry `none_of` already is `not`.
 
 **Rules `Validate()` enforces at load time** (never at request time — nothing here costs a request anything):
@@ -295,6 +297,10 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 `Config.AuthorizeRoles(issuer, subject, claims)` unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping.
 
 Everything else a mapping can specify — session policy, `role_session_name`, extra `session_tags` — then resolves through the **same** `(issuer, subject, role, conditions)` match. That is the point: a role's scoping always travels with the grant that authorized it, and can never be supplied by an unrelated mapping that merely shares the subject. Where several mappings qualify, the first-declared (config order) wins. The same rule picks `max_session_duration` and `idp_token`, so an earlier broad mapping can cap a later narrow one.
+
+![How a role is authorized: union of mappings, then tag fallback, then 403](img/authorization-resolution.svg)
+
+The target account gate runs first: a refused account gets 403 `permission_denied` whatever the mappings say.
 
 <!-- prettier-ignore -->
 > [!WARNING]
@@ -344,14 +350,40 @@ With `role_sets`, the lowest-order mapping that grants the role decides.
 A `roles` item is a string or an object. In an object, every key except `role` replaces the entry's value for that role only. `subject` and `issuer` stay entry-level and are rejected on a role. Worked guide: [IAC.md](IAC.md).
 
 ```yaml
-roles:
-  - "arn:aws:iam::111122223333:role/InfraAudit" # inherits everything
-  - role: "arn:aws:iam::111122223333:role/TerraformApply"
+idp: # required by max_session_duration over 1h
+  enabled: true
+  issuer: "https://idp.example.com"
+  audience: "idp-audience-example"
+  signing_keys:
+    - kms_key_id: "arn:aws:kms:eu-west-1:123456789012:key/00000000-0000-0000-0000-000000000000"
+      algorithm: ES256
+      status: active
+
+role_mappings:
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/infra"
     conditions:
-      event_name: ["push", "workflow_dispatch"]
+      event_name: "push"
       ref: "refs/heads/main"
-    role_session_name: "terraform-apply"
+    allow_session_name: true
+    session_tags:
+      triggered-by: "actor"
+    roles:
+      - "arn:aws:iam::111122223333:role/InfraAudit" # inherits everything
+      - role: "arn:aws:iam::111122223333:role/TerraformPlan"
+        conditions:
+          event_name: ["pull_request", "push"]
+        session_policy_file: "session-policies/terraform-plan.json"
+      - role: "arn:aws:iam::111122223333:role/TerraformApply"
+        conditions:
+          event_name: ["push", "workflow_dispatch"]
+          ref: "refs/heads/main"
+          environment: "production"
+        role_session_name: "terraform-apply"
+        max_session_duration: 2h
 ```
+
+![What each role in the example above resolves to: role setting, then entry setting, then built-in default](img/per-role-precedence.svg)
 
 | Key                                       | Rule                                                                               |
 | ----------------------------------------- | ---------------------------------------------------------------------------------- |

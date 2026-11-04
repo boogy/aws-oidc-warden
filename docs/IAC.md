@@ -32,6 +32,10 @@ role_mappings:
 
 Conditions at one level are AND'd. A role's `conditions` replace the entry's; they never intersect with them.
 
+How the worked config answers common runs:
+
+![Which runs get TerraformPlan and TerraformApply](img/iac-trust-matrix.svg)
+
 ## Variants
 
 [`examples/iac/config.yaml`](examples/iac/config.yaml) lists three, strongest first:

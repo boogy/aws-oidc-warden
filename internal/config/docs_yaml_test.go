@@ -645,6 +645,19 @@ func TestIaCExampleLoads(t *testing.T) {
 			"event_name": "push", "ref": "refs/heads/main", "environment": "production",
 			"workflow_ref": "octo-org/infra/.github/workflows/pr.yml@refs/heads/main",
 		}, []string{plan}},
+		{"pull request declaring production denied apply", "octo-org/infra", map[string]any{"event_name": "pull_request", "ref": "refs/pull/7/merge", "environment": "production"}, []string{plan}},
+		{"feature push declaring production denied apply", "octo-org/infra", map[string]any{
+			"event_name": "push", "ref": "refs/heads/feature", "environment": "production",
+			"workflow_ref": "octo-org/infra/.github/workflows/apply.yml@refs/heads/feature",
+		}, []string{plan}},
+		{"main dispatch gets apply only", "octo-org/infra", map[string]any{
+			"event_name": "workflow_dispatch", "ref": "refs/heads/main", "environment": "production",
+			"workflow_ref": "octo-org/infra/.github/workflows/apply.yml@refs/heads/main",
+		}, []string{apply}},
+		{"feature dispatch gets nothing", "octo-org/infra", map[string]any{
+			"event_name": "workflow_dispatch", "ref": "refs/heads/feature", "environment": "production",
+			"workflow_ref": "octo-org/infra/.github/workflows/apply.yml@refs/heads/feature",
+		}, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

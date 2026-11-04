@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Per-role settings** in `role_mappings` and `role_groups`: a `roles` item can override any entry setting except `subject` and `issuer`.
 - **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
 - **`example-config.yaml`** now shows per-issuer `tag_prefix`.
+- **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
 - **`config.warning` code `unconditional_role_beside_conditioned`**, and `scopedBy=role_conditions` on `tag_auth_bypasses_mapping_scoping`.
 
 ### Removed
