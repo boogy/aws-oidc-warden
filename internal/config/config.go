@@ -1088,6 +1088,10 @@ func (c *Config) Validate() error {
 			slog.String("warning", "audit_trail_inactive"))
 	}
 
+	if removed, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS"))); removed {
+		return errors.New("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS was removed: use AOW_SESSION_TAGS_TRANSITIVE")
+	}
+
 	if c.IdP != nil {
 		c.IdP.applyDefaults()
 		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
