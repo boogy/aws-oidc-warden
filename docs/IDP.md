@@ -60,7 +60,7 @@ Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path a
 
 - It never falls back to `AssumeRole`. With the IdP unusable (`idp.enabled: false`, or the block added after startup) every request answers 503 `idp_signing_unavailable`, with the audit reason `idp.only but idp disabled` or `idp.only but idp added after startup`.
 - `only: true` with `enabled: false` loads; it is the kill switch plus the guarantee that nothing bypasses the IdP.
-- The limit is still `max_session_duration` (1h when unset, so a tag grant is capped at 1h); over it answers 400 `duration_exceeds_cap`.
+- The limit is still `max_session_duration` (1h when unset, so a tag grant is capped at 1h); over it answers 400 `duration_exceeds_cap`. See [Session lifetime](CONFIGURATION.md#session-lifetime).
 - `idp_token: false` on a `roles` item is a load error while `only` is true.
 - `only` is live like `enabled`. Removing the whole `idp` block by reload behaves as before: the block counts as disabled and the IdP is not used.
 
@@ -319,14 +319,16 @@ Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-pr
 
 ## Session duration
 
-| Request `durationSeconds`             | Result                                     |
-| ------------------------------------- | ------------------------------------------ |
-| omitted                               | `min(3600, ceiling)`                       |
-| outside 900..43200                    | 400 `invalid_duration`                     |
-| above the ceiling                     | 400 `duration_exceeds_cap` (never clamped) |
-| above the role's `MaxSessionDuration` | 400 `duration_exceeds_role_max`            |
+| Request `durationSeconds`             | Result                                        |
+| ------------------------------------- | --------------------------------------------- |
+| omitted                               | `session_duration`, else `min(3600, ceiling)` |
+| outside 900..43200                    | 400 `invalid_duration`                        |
+| above the ceiling                     | 400 `duration_exceeds_cap` (never clamped)    |
+| above the role's `MaxSessionDuration` | 400 `duration_exceeds_role_max`               |
 
-Ceiling = the authorizing mapping's `max_session_duration` (1h when unset). When several mappings grant the role, the lowest-order one wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
+Ceiling = the authorizing mapping's `max_session_duration` (1h when unset); omitted = its `session_duration` when set. Both keys: [CONFIGURATION.md § Session lifetime](CONFIGURATION.md#session-lifetime).
+
+When several mappings grant the role, the lowest-order one wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
 A role served by `AssumeRole` accepts `durationSeconds` from 900 to 3600 (omitted = 3600). Above that see [Why](#why).
 
@@ -404,9 +406,9 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 
 ## Hot reload and the kill switch
 
-| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `only`, plus per-mapping `idp_token`, `max_session_duration` |
+| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `only`, plus per-mapping `idp_token`, `max_session_duration`, `session_duration` |
 
 A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` on every reload that rebuilds the config (the overlay or a fragment changed) while the effective `idp` settings differ from the running ones, and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected. While `include_source_identity` is true, so is one that adds a second issuer when the frozen `source_identity` lacks `{issuer}`, or two issuers rendering the same `{issuer}`. The rejection logs `config.reload.failure`, or `config.idp.issuer_collision` when the reload itself changes frozen `idp` keys.
 

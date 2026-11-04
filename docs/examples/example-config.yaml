@@ -151,7 +151,8 @@ role_sets:
 #   allow_session_name   honor the caller's sessionName (default false)
 #   session_tags         extra tags; may not redefine the issuer's
 #   idp_token            issue via the IdP even at a 1h ceiling (see IDP MODE)
-#   max_session_duration 15m..12h (default 1h); over 1h issues via the IdP
+#   max_session_duration the limit on the caller's durationSeconds, 15m..12h (default 1h); over 1h issues via the IdP
+#   session_duration     the default when the caller omits durationSeconds, up to the limit
 #
 # Rejected at load: empty `conditions`, empty patterns/lists/groups, bare `.*`.
 ####################################################################################
@@ -345,7 +346,8 @@ jwt_validation:
 #       - "arn:aws:iam::123456789012:role/backup-runner"
 #       - "arn:aws:iam::123456789012:role/backup-verify"
 #     conditions: { event_name: "schedule" }
-#     max_session_duration: 12h # over 1h: IdP
+#     max_session_duration: 12h # limit; over 1h: IdP
+#     session_duration: 2h # default when the caller sends no durationSeconds
 #     role_session_name: "nightly-backup"
 #
 # role_groups:

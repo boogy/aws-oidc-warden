@@ -24,6 +24,7 @@ type RoleEntry struct {
 	AllowSessionName   *bool             `mapstructure:"allow_session_name"   json:"allow_session_name,omitempty"`
 	IDPToken           *bool             `mapstructure:"idp_token"            json:"idp_token,omitempty"`
 	MaxSessionDuration *time.Duration    `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"`
+	SessionDuration    *time.Duration    `mapstructure:"session_duration"     json:"session_duration,omitempty"`
 	SessionTags        map[string]string `mapstructure:"session_tags"         json:"session_tags"` // nil = inherit; an empty map must survive the clone
 }
 
@@ -76,6 +77,7 @@ const (
 	groupPolicy
 	groupName
 	groupDuration
+	groupSessionDuration
 	groupIDPToken
 	groupTags
 	groupCount
@@ -86,18 +88,20 @@ var overrideGroupNames = [groupCount]string{
 	"session_policy/session_policy_file",
 	"role_session_name/allow_session_name",
 	"max_session_duration",
+	"session_duration",
 	"idp_token",
 	"session_tags",
 }
 
 func (r RoleEntry) overrides() [groupCount]bool {
 	return [groupCount]bool{
-		groupConditions: r.Conditions != nil,
-		groupPolicy:     r.SessionPolicy != nil || r.SessionPolicyFile != nil,
-		groupName:       r.RoleSessionName != nil || r.AllowSessionName != nil,
-		groupDuration:   r.MaxSessionDuration != nil,
-		groupIDPToken:   r.IDPToken != nil,
-		groupTags:       r.SessionTags != nil,
+		groupConditions:      r.Conditions != nil,
+		groupPolicy:          r.SessionPolicy != nil || r.SessionPolicyFile != nil,
+		groupName:            r.RoleSessionName != nil || r.AllowSessionName != nil,
+		groupDuration:        r.MaxSessionDuration != nil,
+		groupSessionDuration: r.SessionDuration != nil,
+		groupIDPToken:        r.IDPToken != nil,
+		groupTags:            r.SessionTags != nil,
 	}
 }
 
@@ -121,6 +125,8 @@ func (r RoleEntry) validate() error {
 		return fmt.Errorf("role_session_name must not be empty")
 	case r.MaxSessionDuration != nil && *r.MaxSessionDuration == 0:
 		return fmt.Errorf("max_session_duration must not be 0")
+	case r.SessionDuration != nil && *r.SessionDuration == 0:
+		return fmt.Errorf("session_duration must not be 0")
 	case r.SessionTags != nil && len(r.SessionTags) == 0:
 		return fmt.Errorf("session_tags must not be empty")
 	}
@@ -151,6 +157,9 @@ func (r RoleEntry) overlay(m RoleMapping) RoleMapping {
 	if g[groupDuration] {
 		m.MaxSessionDuration = *r.MaxSessionDuration
 	}
+	if g[groupSessionDuration] {
+		m.SessionDuration = *r.SessionDuration
+	}
 	if g[groupIDPToken] {
 		m.IDPToken = *r.IDPToken
 	}
@@ -163,12 +172,13 @@ func (r RoleEntry) overlay(m RoleMapping) RoleMapping {
 // entrySets reports which override groups the entry itself sets; false values are indistinguishable from unset.
 func (m RoleMapping) entrySets() [groupCount]bool {
 	return [groupCount]bool{
-		groupConditions: m.Conditions != nil,
-		groupPolicy:     m.SessionPolicy != "" || m.SessionPolicyFile != "",
-		groupName:       m.RoleSessionName != "" || m.AllowSessionName,
-		groupDuration:   m.MaxSessionDuration != 0,
-		groupIDPToken:   m.IDPToken,
-		groupTags:       len(m.SessionTags) > 0,
+		groupConditions:      m.Conditions != nil,
+		groupPolicy:          m.SessionPolicy != "" || m.SessionPolicyFile != "",
+		groupName:            m.RoleSessionName != "" || m.AllowSessionName,
+		groupDuration:        m.MaxSessionDuration != 0,
+		groupSessionDuration: m.SessionDuration != 0,
+		groupIDPToken:        m.IDPToken,
+		groupTags:            len(m.SessionTags) > 0,
 	}
 }
 

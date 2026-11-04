@@ -95,6 +95,7 @@ type RoleMapping struct {
 	AllowSessionName   bool          `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`
 	IDPToken           bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`
 	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"` // 0 = 1h
+	SessionDuration    time.Duration `mapstructure:"session_duration"    json:"session_duration,omitempty"`      // 0 = min(1h, ceiling)
 
 	// Additive to the issuer's session_tags; overlapping keys are rejected.
 	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
@@ -125,6 +126,7 @@ type RoleGroupDefaults struct {
 
 	IDPToken           bool          `mapstructure:"idp_token"                json:"idp_token,omitempty"`
 	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"`
+	SessionDuration    time.Duration `mapstructure:"session_duration"     json:"session_duration,omitempty"`
 }
 
 // RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
@@ -1152,6 +1154,12 @@ func (c *Config) Validate() error {
 		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): max_session_duration", source, i, subject), m.MaxSessionDuration); err != nil {
 			return err
 		}
+		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): session_duration", source, i, subject), m.SessionDuration); err != nil {
+			return err
+		}
+		if m.SessionDuration > cmp.Or(m.MaxSessionDuration, IdPDefaultMaxSessionDuration) {
+			return fmt.Errorf("%s[%d] (%s): session_duration %s exceeds max_session_duration %s (default %s)", source, i, subject, m.SessionDuration, m.MaxSessionDuration, IdPDefaultMaxSessionDuration)
+		}
 		if m.MaxSessionDuration > IdPDefaultMaxSessionDuration && c.IdP == nil {
 			return fmt.Errorf("%s[%d] (%s): max_session_duration over 1h requires an idp block", source, i, subject)
 		}
@@ -1268,6 +1276,7 @@ func (c *Config) Validate() error {
 
 				IDPToken:           group.Defaults.IDPToken,
 				MaxSessionDuration: group.Defaults.MaxSessionDuration,
+				SessionDuration:    group.Defaults.SessionDuration,
 			}
 			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
 				return err
@@ -1811,6 +1820,14 @@ func (d Decision) MaxSessionDuration() time.Duration {
 		return IdPDefaultMaxSessionDuration
 	}
 	return d.authorizing.MaxSessionDuration
+}
+
+// SessionDuration is the authorizing mapping's configured default session length; 0 when unset or nothing authorized.
+func (d Decision) SessionDuration() time.Duration {
+	if d.authorizing == nil {
+		return 0
+	}
+	return d.authorizing.SessionDuration
 }
 
 // RoleSessionName returns the authorizing mapping's session-name override, or

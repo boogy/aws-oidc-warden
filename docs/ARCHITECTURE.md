@@ -536,7 +536,7 @@ No claim is privileged or evaluated in a fixed order: every key under `condition
 
 **Session Security:**
 
-- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. A session over 1 hour requires IdP mode (`idp_token`, see [IDP.md](IDP.md)); `AssumeRole` refuses one. `idp.only` routes every credential through the IdP)
+- Session duration limits (default: 1 hour, max: 12 hours; whenever the warden's own credentials are a role session — always true on Lambda, same-account assumes included — chaining clamps the issued session to 1 hour regardless of target. A session over 1 hour requires IdP mode (`idp_token`, see [IDP.md](IDP.md)); `AssumeRole` refuses one. `idp.only` routes every credential through the IdP; `session_duration` sets the default when the caller omits `durationSeconds`)
 - Session tags for audit trails and ABAC policies
 - Optional session policies to further restrict permissions
 - Credentials are short-lived and expire on their own — no long-lived secrets are ever issued or stored

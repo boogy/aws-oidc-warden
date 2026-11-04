@@ -110,6 +110,7 @@ func TestRoleKeyGroupsReplaceIndependently(t *testing.T) {
 	const doc = `    session_policy: '{"Version":"2012-10-17","Statement":[]}'
     allow_session_name: true
     max_session_duration: 30m
+    session_duration: 20m
     session_tags:
       who: "actor"
     roles:
@@ -117,6 +118,7 @@ func TestRoleKeyGroupsReplaceIndependently(t *testing.T) {
       - role: "` + rsPlan + `"
         session_policy_file: "policies/plan.json"
         role_session_name: "plan"
+        session_duration: 25m
       - role: "` + rsApply + `"
         allow_session_name: false
         max_session_duration: 45m
@@ -136,11 +138,12 @@ func TestRoleKeyGroupsReplaceIndependently(t *testing.T) {
 		wantName     string
 		wantAllow    bool
 		wantDuration time.Duration
+		wantDefault  time.Duration
 		wantTags     map[string]string
 	}{
-		{"inherits all", rsAudit, inline, "", "", true, 30 * time.Minute, map[string]string{"who": "actor"}},
-		{"policy pair replaced, name pair replaced, rest inherited", rsPlan, "", "policies/plan.json", "plan", false, 30 * time.Minute, map[string]string{"who": "actor"}},
-		{"explicit false and tags replace; policy inherited", rsApply, inline, "", "", false, 45 * time.Minute, map[string]string{"env": "environment"}},
+		{"inherits all", rsAudit, inline, "", "", true, 30 * time.Minute, 20 * time.Minute, map[string]string{"who": "actor"}},
+		{"policy pair replaced, name pair replaced, session_duration only on role, limit inherited", rsPlan, "", "policies/plan.json", "plan", false, 30 * time.Minute, 25 * time.Minute, map[string]string{"who": "actor"}},
+		{"explicit false and tags replace; limit only on role, default inherited", rsApply, inline, "", "", false, 45 * time.Minute, 20 * time.Minute, map[string]string{"env": "environment"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -152,6 +155,7 @@ func TestRoleKeyGroupsReplaceIndependently(t *testing.T) {
 			assert.Equal(t, tc.wantName, d.RoleSessionName())
 			assert.Equal(t, tc.wantAllow, d.SessionNameAllowed())
 			assert.Equal(t, tc.wantDuration, d.MaxSessionDuration())
+			assert.Equal(t, tc.wantDefault, d.SessionDuration())
 			assert.Equal(t, tc.wantTags, cfg.EffectiveSessionTags(vIss, d))
 		})
 	}
@@ -161,12 +165,14 @@ func TestRoleOverridesSurviveClone(t *testing.T) {
 	const doc = `    allow_session_name: true
     idp_token: true
     max_session_duration: 2h
+    session_duration: 90m
     roles:
       - "` + rsAudit + `"
       - role: "` + rsApply + `"
         allow_session_name: false
         idp_token: false
         max_session_duration: 30m
+        session_duration: 20m
         conditions:
           ref: "refs/heads/main"
 `
@@ -189,6 +195,7 @@ func TestRoleOverridesSurviveClone(t *testing.T) {
 			assert.False(t, d.SessionNameAllowed())
 			assert.False(t, d.IDPTokenAllowed())
 			assert.Equal(t, 30*time.Minute, d.MaxSessionDuration())
+			assert.Equal(t, 20*time.Minute, d.SessionDuration())
 			assert.NotContains(t, c.Authorize(vIss, "acme/app", rsApply, map[string]any{"ref": "refs/heads/dev"}).Roles, rsApply)
 		})
 	}
@@ -303,6 +310,36 @@ func TestRoleSettingLoadErrors(t *testing.T) {
         allow_session_name: true
         role_session_name: "fixed"
 `, false, "allow_session_name"},
+		{"zero session_duration", `    roles:
+      - role: "` + rsApply + `"
+        session_duration: 0
+`, false, "session_duration must not be 0"},
+		{"session_duration over default limit", `    session_duration: 2h
+    roles:
+      - "` + rsApply + `"
+`, true, "session_duration 2h0m0s exceeds max_session_duration"},
+		{"role session_duration over inherited limit", `    max_session_duration: 2h
+    roles:
+      - role: "` + rsApply + `"
+        session_duration: 3h
+`, true, "exceeds max_session_duration"},
+		{"role limit drops below inherited session_duration", `    max_session_duration: 3h
+    session_duration: 2h
+    roles:
+      - "` + rsAudit + `"
+      - role: "` + rsApply + `"
+        max_session_duration: 1h
+`, true, "exceeds max_session_duration"},
+		{"session_duration out of bounds", `    roles:
+      - role: "` + rsApply + `"
+        session_duration: 1m
+`, false, "session_duration"},
+		{"entry session_duration no role inherits", `    max_session_duration: 30m
+    session_duration: 20m
+    roles:
+      - role: "` + rsApply + `"
+        session_duration: 25m
+`, false, "no role inherits"},
 		{"duration out of bounds", `    roles:
       - role: "` + rsApply + `"
         max_session_duration: 1m
@@ -459,4 +496,48 @@ func TestIdPOnlyWithIdPDisabledLoads(t *testing.T) {
 	_, err := rsLoadIdP(t, rsMapping(`    roles: ["`+rsAudit+`"]
 `), idp)
 	require.NoError(t, err)
+}
+
+func TestSessionDurationValidate(t *testing.T) {
+	tests := []struct {
+		name         string
+		session, max time.Duration
+		wantErr      string
+	}{
+		{"unset", 0, 0, ""},
+		{"equals default limit", time.Hour, 0, ""},
+		{"below limit", 30 * time.Minute, 4 * time.Hour, ""},
+		{"equals limit", 4 * time.Hour, 4 * time.Hour, ""},
+		{"over default limit", 2 * time.Hour, 0, "session_duration 2h0m0s exceeds max_session_duration"},
+		{"over limit", 5 * time.Hour, 4 * time.Hour, "exceeds max_session_duration"},
+		{"under 15m", 14 * time.Minute, 4 * time.Hour, "session_duration"},
+		{"over 12h", 13 * time.Hour, 12 * time.Hour, "session_duration"},
+		{"sub-second", 30*time.Minute + time.Millisecond, time.Hour, "whole number of seconds"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(rsApply), SessionDuration: tt.session, MaxSessionDuration: tt.max})
+			cfg.IdP = validIdP()
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestRoleSessionDurationWithinStatementLimit(t *testing.T) {
+	cfg, err := rsLoad(t, rsMapping(`    max_session_duration: 3h
+    roles:
+      - "`+rsAudit+`"
+      - role: "`+rsApply+`"
+        session_duration: 2h
+`), true)
+	require.NoError(t, err)
+	d := cfg.Authorize(vIss, "acme/app", rsApply, map[string]any{})
+	assert.Equal(t, 2*time.Hour, d.SessionDuration())
+	assert.Equal(t, 3*time.Hour, d.MaxSessionDuration())
+	assert.Zero(t, cfg.Authorize(vIss, "acme/app", rsAudit, map[string]any{}).SessionDuration())
 }

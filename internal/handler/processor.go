@@ -235,6 +235,11 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if err := checkDuration(requestData.DurationSeconds); err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
+	eff := *requestData
+	if eff.DurationSeconds == 0 {
+		eff.DurationSeconds = int32(o.decision.SessionDuration() / time.Second)
+	}
+	requestData = &eff
 	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requestData.DurationSeconds)
 	if err != nil {
 		return nil, r.refuse(ctx, o, "duration", reason, "Duration refused", err)
