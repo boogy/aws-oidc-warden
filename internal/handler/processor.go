@@ -279,6 +279,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 	if err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
+	rec.DurationSeconds = int(duration)
 
 	sessionPolicy, policyRef, tags, err := r.grantScope(ctx, o)
 	if err != nil {

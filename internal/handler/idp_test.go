@@ -829,6 +829,34 @@ func TestProcessRequestRouting(t *testing.T) {
 	}
 }
 
+func TestDenyAfterDurationResolutionRecordsDuration(t *testing.T) {
+	tests := []struct {
+		name     string
+		idpToken bool
+		max      time.Duration
+		want     int
+	}{
+		{"assume_role_default_1h", false, 0, 3600},
+		{"assume_role_capped_by_mapping_max", false, 15 * time.Minute, 900},
+		{"idp_default_1h", true, 0, 3600},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := idpConfig(t, tt.idpToken, "", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = tt.max })
+			cons := mockWI(t)
+			cons.assumeErr, cons.wiErr = errors.New("sts down"), errors.New("sts down")
+			proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+			var buf bytes.Buffer
+			_, err := mint(t, proc, handler.RequestData{}, &buf)
+			require.Error(t, err)
+			assert.Equal(t, tt.idpToken, cons.wiCalls == 1)
+			rec := sink.last(t)
+			assert.Equal(t, "deny", rec["decision"])
+			assert.EqualValues(t, tt.want, rec["durationSeconds"])
+		})
+	}
+}
+
 func TestSessionLifetimeOutcomeTable(t *testing.T) {
 	type cell struct {
 		wantDur int32

@@ -83,6 +83,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	if err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
+	rec.DurationSeconds = int(duration)
 
 	var sourceIdentity string
 	var truncated bool
