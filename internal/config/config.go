@@ -754,14 +754,11 @@ func (c *Config) LoadConfig() error {
 
 // checkIdPOnlyEnv rejects AOW_IDP_ONLY on a fully merged config with no idp block.
 func (c *Config) checkIdPOnlyEnv() error {
-	if c.IdP != nil {
-		return nil
-	}
 	only, err := envFlag(envVarName("idp.only"))
 	if err != nil {
 		return err
 	}
-	if only {
+	if only && c.IdP == nil {
 		return fmt.Errorf("%s is true but the config has no idp block", envVarName("idp.only"))
 	}
 	return nil
