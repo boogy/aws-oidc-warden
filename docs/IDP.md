@@ -453,20 +453,20 @@ In order:
 
 Every response uses the standard error envelope. "Retry" means the same request may succeed later.
 
-| Code                          | Status | Retry | Cause                                                                            |
-| ----------------------------- | ------ | ----- | -------------------------------------------------------------------------------- |
-| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant        |
-| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                 |
-| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`      |
-| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider              |
-| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                             |
-| `duration_exceeds_cap`        | 400    | No    | Above the mapping's `max_session_duration`, or over 1h with no `idp` block       |
-| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                            |
-| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                  |
-| `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false  |
-| `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                        |
-| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags or policy  |
-| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; or over 1h under the kill switch or before restart |
-| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS, or reported the minted token expired      |
+| Code                          | Status | Retry | Cause                                                                                                                                                        |
+| ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant                                                                                    |
+| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                                                                                             |
+| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`                                                                                  |
+| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider                                                                                          |
+| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                                                                                                         |
+| `duration_exceeds_cap`        | 400    | No    | Above the mapping's `max_session_duration`, or over 1h with no `idp` block                                                                                   |
+| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                                                                                                        |
+| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                                                                                              |
+| `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false                                                                              |
+| `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                                    |
+| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags or policy                                                                              |
+| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; or over 1h under the kill switch or before restart; or any request under `idp.only` while the IdP is disabled or not yet built |
+| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS, or reported the minted token expired                                                                                  |
 
 The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `durationSeconds`, `requestedDurationSeconds` when the caller sent one, `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).

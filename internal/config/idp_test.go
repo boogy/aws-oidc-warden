@@ -321,6 +321,11 @@ func TestIdPEnvOnlyAppliesToExistingBlock(t *testing.T) {
 		_, err := loadIdPYAML(t, idpTestIssuerYAML)
 		require.ErrorContains(t, err, "AOW_IDP_ONLY")
 	})
+	t.Run("unparseable only env without block fails load", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "yes")
+		_, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.ErrorContains(t, err, "AOW_IDP_ONLY")
+	})
 	t.Run("false only env without block loads", func(t *testing.T) {
 		t.Setenv("AOW_IDP_ONLY", "false")
 		c, err := loadIdPYAML(t, idpTestIssuerYAML)

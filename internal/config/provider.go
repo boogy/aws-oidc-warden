@@ -326,6 +326,16 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	if p.frozenIdP != nil && prevEnabled != enabled {
 		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", enabled), slog.Bool("blockPresent", cfg.IdP != nil))
 	}
+	// A removed block keeps the startup value, matching the handler's idpOnly.
+	liveOnly := func(c *IdPConfig) bool {
+		if c != nil {
+			return c.Only
+		}
+		return p.frozenIdP != nil && p.frozenIdP.Only
+	}
+	if only := liveOnly(cfg.IdP); p.idpFrozen && liveOnly(prevIdP) != only {
+		logevent.Warn(ctx, nil, logevent.ConfigIdPOnlyChanged, "idp.only changed by reload", slog.Bool("only", only), slog.Bool("blockPresent", cfg.IdP != nil))
+	}
 	if p.idpFrozen && cfg.IdP != nil && (p.frozenIdP == nil || cfg.IdP.Fingerprint() != p.frozenIdP.Fingerprint()) {
 		logevent.Warn(ctx, nil, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")
 	}
