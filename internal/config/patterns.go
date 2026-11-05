@@ -89,7 +89,7 @@ func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.StringToSliceHookFunc(","),
 		)),
-		// DecodeNil: affects only the two keys the hooks above claim.
+		// DecodeNil: affects only the keys the hooks above claim.
 		func(c *mapstructure.DecoderConfig) { c.DecodeNil = true; c.Metadata = md },
 	}
 }

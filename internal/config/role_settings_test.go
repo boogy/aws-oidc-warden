@@ -266,6 +266,16 @@ func TestRoleSettingLoadErrors(t *testing.T) {
       - role: "` + rsApply + `"
         max_session_duration: 30m
 `, false, "more than once"},
+		{"duplicate override role differing in case", `    roles:
+      - "arn:aws:iam::111122223333:role/apply"
+      - role: "` + rsApply + `"
+        max_session_duration: 30m
+`, false, "more than once"},
+		{"override error names the role", `    roles:
+      - "` + rsAudit + `"
+      - role: "` + rsApply + `"
+        role_session_name: "a/b"
+`, false, "role " + rsApply + ": role_session_name"},
 		{"entry conditions no role inherits", `    conditions:
       ref: "refs/heads/main"
     roles:
@@ -417,6 +427,10 @@ func TestRoleEntryWarnings(t *testing.T) {
       - role: "` + rsApply + `"
         max_session_duration: 15m
 `, true, "tag_auth_bypasses_mapping_scoping", rsApply, "max_session_duration"},
+		{"tag auth duration at 1h is no bypass", `    roles:
+      - role: "` + rsApply + `"
+        max_session_duration: 1h
+`, true, "", "", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -511,4 +525,36 @@ func TestRoleGroupWarnsOncePerRoleNotPerSubject(t *testing.T) {
 	})
 	assert.Equal(t, 1, strings.Count(logs, "unconditional_role_beside_conditioned"))
 	assert.Len(t, c.effective, 6)
+}
+
+func TestInheritedConditionTypoWarnsOncePerSubject(t *testing.T) {
+	const ghIss = "https://token.actions.githubusercontent.com"
+	doc := `
+issuers:
+  - issuer: "` + ghIss + `"
+    provider: "github"
+    audiences: ["sts.amazonaws.com"]
+default_issuer: "` + ghIss + `"
+role_session_name: "test"
+role_mappings:
+  - subject: "repo:o/r:ref:refs/heads/main"
+    conditions:
+      claims:
+        evnet_name: "push"
+    roles:
+      - "` + rsAudit + `"
+      - role: "` + rsApply + `"
+        role_session_name: "apply"
+      - role: "` + rsPlan + `"
+        role_session_name: "plan"
+`
+	logs := captureWarnings(t, func() {
+		v := viper.New()
+		v.SetConfigType("yaml")
+		require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
+		var c Config
+		require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
+		require.NoError(t, c.Validate())
+	})
+	assert.Equal(t, 1, strings.Count(logs, "condition_unknown_claim"))
 }
