@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -237,7 +238,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	}
 	eff := *requestData
 	if eff.DurationSeconds == 0 {
-		eff.DurationSeconds = int32(o.decision.SessionDuration() / time.Second)
+		eff.DurationSeconds = int32(cmp.Or(o.decision.SessionDuration(), min(time.Hour, cmp.Or(o.decision.MaxSessionDuration(), config.IdPDefaultMaxSessionDuration))) / time.Second)
 	}
 	requestData = &eff
 	o.rec.DurationSeconds = int(eff.DurationSeconds)

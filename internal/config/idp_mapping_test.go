@@ -135,7 +135,7 @@ func TestMaxSessionDurationValidate(t *testing.T) {
 	})
 }
 
-func TestRoleGroupExpansionCopiesMaxSessionDuration(t *testing.T) {
+func TestRoleGroupExpansionCopiesSessionLimits(t *testing.T) {
 	const grouped, own = "arn:aws:iam::123456789012:role/Grouped", "arn:aws:iam::123456789012:role/Own"
 	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/own"}, Roles: roleEntries(own), IDPToken: true, MaxSessionDuration: 2 * time.Hour, SessionDuration: time.Hour})
 	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/grouped"}, Defaults: RoleGroupDefaults{Roles: roleEntries(grouped), IDPToken: true, MaxSessionDuration: 4 * time.Hour, SessionDuration: 3 * time.Hour}}}

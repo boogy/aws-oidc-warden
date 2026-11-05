@@ -838,21 +838,34 @@ func TestDenyAfterDurationResolutionRecordsDuration(t *testing.T) {
 		name     string
 		idpToken bool
 		max      time.Duration
+		badName  bool
 		want     int
 	}{
-		{"assume_role_default_1h", false, 0, 3600},
-		{"assume_role_capped_by_mapping_max", false, 15 * time.Minute, 900},
-		{"idp_default_1h", true, 0, 3600},
+		{"assume_role_default_1h", false, 0, false, 3600},
+		{"assume_role_capped_by_mapping_max", false, 15 * time.Minute, false, 900},
+		{"idp_default_1h", true, 0, false, 3600},
+		{"session_name_deny_default_1h", false, 0, true, 3600},
+		{"session_name_deny_capped_by_mapping_max", false, 15 * time.Minute, true, 900},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpConfig(t, tt.idpToken, "", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = tt.max })
+			cfg := idpConfig(t, tt.idpToken, "", func(c *config.Config) {
+				c.RoleMappings[0].MaxSessionDuration = tt.max
+				c.RoleMappings[0].AllowSessionName = tt.badName
+			})
 			cons := mockWI(t)
 			cons.assumeErr, cons.wiErr = errors.New("sts down"), errors.New("sts down")
 			proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
 			var buf bytes.Buffer
-			_, err := mint(t, proc, handler.RequestData{}, &buf)
+			req := handler.RequestData{}
+			if tt.badName {
+				req.SessionName = "bad name!"
+			}
+			_, err := mint(t, proc, req, &buf)
 			require.Error(t, err)
+			if tt.badName {
+				require.ErrorIs(t, err, handler.ErrInvalidSessionName)
+			}
 			assert.Equal(t, tt.idpToken, cons.wiCalls == 1)
 			rec := sink.last(t)
 			assert.Equal(t, "deny", rec["decision"])
