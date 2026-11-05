@@ -756,14 +756,11 @@ func (c *Config) LoadConfig() error {
 
 // checkIdPOnlyEnv rejects AOW_IDP_ONLY on a fully merged config with no idp block.
 func (c *Config) checkIdPOnlyEnv() error {
-	if c.IdP != nil {
-		return nil
-	}
 	only, err := envFlag(envVarName("idp.only"))
 	if err != nil {
 		return err
 	}
-	if only {
+	if only && c.IdP == nil {
 		return fmt.Errorf("%s is true but the config has no idp block", envVarName("idp.only"))
 	}
 	return nil
@@ -1185,13 +1182,25 @@ func (c *Config) Validate() error {
 
 	// appendOne resolves ONE subject into an effective mapping; m is by value,
 	// so these writes are private to this element.
+	type condWarnKey struct {
+		cond  *Condition
+		where string
+		tags  string
+	}
+	warnedConds := make(map[condWarnKey]bool)
+
 	appendOne := func(m RoleMapping, subject, source string, i int) error {
+		entry := fmt.Sprintf("%s[%d] (%s)", source, i, subject)
+		label := entry
+		if len(m.grantedRoles) == 1 {
+			label += " role " + m.grantedRoles[0]
+		}
 		if m.RoleSessionName != "" {
 			if err := validateRoleSessionName(m.RoleSessionName); err != nil {
-				return fmt.Errorf("%s[%d] (%s): role_session_name: %w", source, i, subject, err)
+				return fmt.Errorf("%s: role_session_name: %w", label, err)
 			}
 		}
-		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): max_session_duration", source, i, subject), m.MaxSessionDuration); err != nil {
+		if err := validateIdPSessionCap(label+": max_session_duration", m.MaxSessionDuration); err != nil {
 			return err
 		}
 		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): session_duration", source, i, subject), m.SessionDuration); err != nil {
@@ -1201,40 +1210,40 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s[%d] (%s): session_duration %s exceeds max_session_duration %s", source, i, subject, m.SessionDuration, cmp.Or(m.MaxSessionDuration, IdPDefaultMaxSessionDuration))
 		}
 		if m.MaxSessionDuration > IdPDefaultMaxSessionDuration && c.IdP == nil {
-			return fmt.Errorf("%s[%d] (%s): max_session_duration over 1h requires an idp block", source, i, subject)
+			return fmt.Errorf("%s: max_session_duration over 1h requires an idp block", label)
 		}
 		if m.IDPToken && c.IdP == nil {
-			return fmt.Errorf("%s[%d] (%s): idp_token requires an idp block", source, i, subject)
+			return fmt.Errorf("%s: idp_token requires an idp block", label)
 		}
 		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
-			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
+			return fmt.Errorf("%s: set session_policy or session_policy_file, not both", label)
 		}
 		if m.AllowSessionName && m.RoleSessionName != "" {
-			return fmt.Errorf("%s[%d] (%s): set allow_session_name or role_session_name, not both", source, i, subject)
+			return fmt.Errorf("%s: set allow_session_name or role_session_name, not both", label)
 		}
 		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
+			return fmt.Errorf("%s: %w", label, err)
 		}
 		m.Issuer = resolvedIssuer
 
 		issuerTags := c.IssuerSessionTags(resolvedIssuer)
 		if err := validateSessionTagKeys(m.SessionTags); err != nil {
-			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
+			return fmt.Errorf("%s: session_tags: %w", label, err)
 		}
 		// Rejected, not ignored: a dropped override reads as applied and feeds ABAC.
 		for tagKey := range m.SessionTags {
 			if _, dup := issuerTags[tagKey]; dup {
-				return fmt.Errorf("%s[%d] (%s): session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", source, i, subject, tagKey, resolvedIssuer)
+				return fmt.Errorf("%s: session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", label, tagKey, resolvedIssuer)
 			}
 		}
 		m.effectiveTags, err = mergeSessionTags(issuerTags, m.SessionTags)
 		if err != nil {
-			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
+			return fmt.Errorf("%s: session_tags: %w", label, err)
 		}
 
 		if len(m.grantedRoles) == 0 {
-			return fmt.Errorf("%s[%d] (%s): subject and roles are required", source, i, subject)
+			return fmt.Errorf("%s: subject and roles are required", label)
 		}
 
 		m.resolvedSubject = subject
@@ -1249,13 +1258,21 @@ func (c *Config) Validate() error {
 		}
 
 		// Clone first: compileCondition mutates in place and a *Condition can be shared across snapshots.
+		inherited := m.Conditions
 		m.Conditions = cloneCondition(m.Conditions)
 		if err := compileCondition(m.Conditions, patterns); err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
+			return fmt.Errorf("%s: %w", label, err)
 		}
 
 		// Advisory only: an unknown claim name never fails authorization.
-		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, subject), withSessionTagClaims(knownClaims[m.Issuer], m.SessionTags))
+		where := entry
+		if m.roleConditions {
+			where = label
+		}
+		if k := (condWarnKey{inherited, where, fmt.Sprint(m.SessionTags)}); !warnedConds[k] {
+			warnedConds[k] = true
+			warnConditionKeys(m.Conditions, "conditions", where, withSessionTagClaims(knownClaims[m.Issuer], m.SessionTags))
+		}
 
 		m.order = len(c.effective)
 		c.effective = append(c.effective, &m)
@@ -1712,7 +1729,7 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 }
 
 // warnTagAuthBypassesMappingScoping warns when tag_auth is enabled and a mapping scopes a role (policy,
-// session name, role-level conditions, or max_session_duration): a tag-auth grant of the same role carries none of that.
+// session name, role-level conditions, or a duration limit under 1h): a tag-auth grant of the same role carries none of that.
 func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
 	if tagAuth == nil || !tagAuth.Enabled {
 		return
@@ -1728,7 +1745,7 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			scopedBy = "role_session_name"
 		case m.roleConditions:
 			scopedBy = "role_conditions"
-		case m.MaxSessionDuration != 0:
+		case m.MaxSessionDuration != 0 && m.MaxSessionDuration < IdPDefaultMaxSessionDuration:
 			scopedBy = "max_session_duration"
 		default:
 			continue
@@ -1741,7 +1758,7 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 				"tag_auth is enabled and this role is scoped in role_mappings; "+
 					"a tag-auth grant of the same role carries no session policy, no "+
-					"role_session_name override, no role conditions and no max_session_duration limit. Remove the role's tag-auth tags, or "+
+					"role_session_name override, no role conditions and no max_session_duration under 1h. Remove the role's tag-auth tags, or "+
 					"accept that the tag-auth path is unscoped.",
 				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
 				slog.String("roleArn", role),

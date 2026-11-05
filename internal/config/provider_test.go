@@ -1416,6 +1416,13 @@ func TestProviderRefreshRejectsBlockRemovalUnderOnlyEnv(t *testing.T) {
 	require.True(t, p.Get().IdP.Only)
 }
 
+func TestProviderRefreshRejectsUnparseableOnlyEnvWithOverlayBlock(t *testing.T) {
+	body := []byte(idpTestBlockYAML)
+	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+	t.Setenv("AOW_IDP_ONLY", "on")
+	require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+}
+
 func TestProviderRefreshRejectsBlockRemovalUnderOnly(t *testing.T) {
 	onBlock := strings.Replace(idpTestBlockYAML, "  enabled: true\n", "  enabled: true\n  only: true\n", 1)
 	require.NotEqual(t, idpTestBlockYAML, onBlock)
