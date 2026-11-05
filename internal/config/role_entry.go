@@ -1,9 +1,7 @@
 package config
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -28,25 +26,6 @@ type RoleEntry struct {
 }
 
 var roleEntryType = reflect.TypeOf(RoleEntry{})
-
-// UnmarshalJSON accepts the bare-string form as well as the object form, for cloneConfig.
-func (r *RoleEntry) UnmarshalJSON(data []byte) error {
-	if bytes.HasPrefix(bytes.TrimSpace(data), []byte(`"`)) {
-		var role string
-		if err := json.Unmarshal(data, &role); err != nil {
-			return err
-		}
-		*r = RoleEntry{Role: role}
-		return nil
-	}
-	type plain RoleEntry
-	var p plain
-	if err := json.Unmarshal(data, &p); err != nil {
-		return err
-	}
-	*r = RoleEntry(p)
-	return nil
-}
 
 // roleEntryHookFunc decodes a bare string into {role: s} and rejects a present-but-empty key,
 // which would otherwise decode like an absent one and silently inherit.
@@ -110,7 +89,7 @@ func (r RoleEntry) hasOverride() bool {
 	return false
 }
 
-// validate rejects an override that sets a group to nothing: a role cannot drop an inherited setting.
+// validate rejects a present-but-empty override; allow_session_name: false is not empty and clears an inherited name.
 func (r RoleEntry) validate() error {
 	switch {
 	case r.SessionPolicy != nil && *r.SessionPolicy == "":
