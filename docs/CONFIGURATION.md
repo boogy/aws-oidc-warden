@@ -455,7 +455,7 @@ These fail to load:
 - a `session_duration` above the effective `max_session_duration` (1h when unset);
 - anything the entry-level rules already reject, applied to the effective values.
 
-`config.warning` codes: `unconditional_role_beside_conditioned` (a role with no conditions beside conditioned roles) and `scopedBy=role_conditions` on `tag_auth_bypasses_mapping_scoping`.
+`config.warning` codes: `unconditional_role_beside_conditioned` (a role with no conditions beside conditioned roles) and `tag_auth_bypasses_mapping_scoping` with `scopedBy` = `session_policy`, `role_session_name`, `role_conditions` or `max_session_duration`.
 
 #### Multi-subject entries share one policy
 
