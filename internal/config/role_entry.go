@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -179,7 +180,7 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 		}
 		resolved[ri] = arns
 		for _, arn := range arns {
-			counts[arn]++
+			counts[strings.ToLower(arn)]++
 		}
 	}
 
@@ -190,7 +191,7 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 		if e.hasOverride() {
 			overridden = append(overridden, ri)
 			for _, arn := range resolved[ri] {
-				if counts[arn] > 1 {
+				if counts[strings.ToLower(arn)] > 1 {
 					return nil, wrap(fmt.Errorf("role %q has its own settings and appears more than once in this entry", arn))
 				}
 			}
@@ -226,7 +227,7 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 		pieces = append(pieces, piece)
 	}
 
-	if m.Conditions == nil && slicesAnyConditioned(m.Roles) {
+	if m.Conditions == nil && slices.ContainsFunc(m.Roles, func(e RoleEntry) bool { return e.Conditions != nil }) {
 		for ri, e := range m.Roles {
 			if e.Conditions != nil {
 				continue
@@ -241,13 +242,4 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 		}
 	}
 	return pieces, nil
-}
-
-func slicesAnyConditioned(roles []RoleEntry) bool {
-	for _, e := range roles {
-		if e.Conditions != nil {
-			return true
-		}
-	}
-	return false
 }
