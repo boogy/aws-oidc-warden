@@ -348,6 +348,11 @@ func TestRoleSettingLoadErrors(t *testing.T) {
     roles:
       - "` + rsApply + `"
 `, true, "session_duration 2h0m0s exceeds max_session_duration"},
+		{"session_duration error names the role", `    roles:
+      - "` + rsAudit + `"
+      - role: "` + rsApply + `"
+        session_duration: 2h
+`, true, "role " + rsApply + ": session_duration 2h0m0s exceeds"},
 		{"role session_duration over inherited limit", `    max_session_duration: 2h
     roles:
       - role: "` + rsApply + `"

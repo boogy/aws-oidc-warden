@@ -779,7 +779,7 @@ func TestProcessRequestRouting(t *testing.T) {
 			c.RoleMappings[0].SessionDuration = 6 * time.Hour
 			c.RoleMappings[0].MaxSessionDuration = 12 * time.Hour
 			c.IdP.Enabled = false
-		}, wantErr: handler.ErrIdPUnavailable},
+		}, wantErr: handler.ErrIdPUnavailable, wantDur: 21600},
 		{name: "session_duration_only_sends_exchange_value", mutate: func(c *config.Config) {
 			only(c)
 			c.RoleMappings[0].SessionDuration = 30 * time.Minute
@@ -807,6 +807,9 @@ func TestProcessRequestRouting(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 				assert.Zero(t, signer.calls)
 				assert.Equal(t, "deny", sink.last(t)["decision"])
+				if tt.wantDur != 0 {
+					assert.EqualValues(t, tt.wantDur, sink.last(t)["durationSeconds"])
+				}
 			} else {
 				require.NoError(t, err)
 			}
