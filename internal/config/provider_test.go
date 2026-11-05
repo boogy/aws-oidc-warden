@@ -1505,9 +1505,9 @@ func TestProviderRefreshLogsIdPOnlyFlip(t *testing.T) {
 			}
 			body = []byte(tt.next)
 			out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
-			if got := p.Get().IdP; got != nil {
-				assert.Equal(t, tt.want, got.Only)
-			}
+			got := p.Get().IdP
+			require.NotNil(t, got)
+			assert.Equal(t, tt.want, got.Only)
 			if !tt.wantLog {
 				assert.NotContains(t, out, "config.idp.only_changed")
 				return
