@@ -738,32 +738,32 @@ func TestProcessRequestRouting(t *testing.T) {
 		noSvc    bool
 		tagAuth  bool
 	}{
-		{"opted_in_uses_idp", nil, true, 0, nil, 1, 0, 0, false, false},
-		{"not_opted_in_uses_assume_role", nil, false, 3600, nil, 0, 1, 0, false, false},
-		{"not_opted_in_over_1h", nil, false, 3601, handler.ErrIdPNotPermitted, 0, 0, 0, false, false},
-		{"kill_switch_within_1h_uses_assume_role", func(c *config.Config) { c.IdP.Enabled = false }, true, 0, nil, 0, 1, 0, false, false},
-		{"kill_switch_over_1h", func(c *config.Config) { c.IdP.Enabled = false }, true, 7200, handler.ErrIdPUnavailable, 0, 0, 0, false, false},
-		{"ceiling_over_1h_uses_idp_within_1h", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, false, 900, nil, 1, 0, 0, false, false},
-		{"ceiling_over_1h_uses_idp_over_1h", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, false, 7200, nil, 1, 0, 0, false, false},
-		{"ceiling_1h_uses_assume_role", func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = time.Hour }, false, 3600, nil, 0, 1, 0, false, false},
-		{"ceiling_over_1h_kill_switch_over_1h", func(c *config.Config) {
+		{name: "opted_in_uses_idp", optedIn: true, wantWI: 1},
+		{name: "not_opted_in_uses_assume_role", duration: 3600, wantAR: 1},
+		{name: "not_opted_in_over_1h", duration: 3601, wantErr: handler.ErrIdPNotPermitted},
+		{name: "kill_switch_within_1h_uses_assume_role", mutate: func(c *config.Config) { c.IdP.Enabled = false }, optedIn: true, wantAR: 1},
+		{name: "kill_switch_over_1h", mutate: func(c *config.Config) { c.IdP.Enabled = false }, optedIn: true, duration: 7200, wantErr: handler.ErrIdPUnavailable},
+		{name: "ceiling_over_1h_uses_idp_within_1h", mutate: func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, duration: 900, wantWI: 1},
+		{name: "ceiling_over_1h_uses_idp_over_1h", mutate: func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, duration: 7200, wantWI: 1},
+		{name: "ceiling_1h_uses_assume_role", mutate: func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = time.Hour }, duration: 3600, wantAR: 1},
+		{name: "ceiling_over_1h_kill_switch_over_1h", mutate: func(c *config.Config) {
 			c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour
 			c.IdP.Enabled = false
-		}, false, 7200, handler.ErrIdPUnavailable, 0, 0, 0, false, false},
-		{"over_12h_invalid", nil, true, 43201, handler.ErrInvalidDuration, 0, 0, 0, false, false},
+		}, duration: 7200, wantErr: handler.ErrIdPUnavailable},
+		{name: "over_12h_invalid", optedIn: true, duration: 43201, wantErr: handler.ErrInvalidDuration},
 
-		{"only_off_short_plain_uses_assume_role", nil, false, 900, nil, 0, 1, 900, false, false},
-		{"only_off_disabled_short_uses_assume_role", func(c *config.Config) { c.IdP.Enabled = false }, false, 900, nil, 0, 1, 900, false, false},
-		{"only_plain_short_uses_idp", only, false, 1800, nil, 1, 0, 1800, false, false},
-		{"only_plain_omitted_uses_idp", only, false, 0, nil, 1, 0, 3600, false, false},
-		{"only_opted_in_uses_idp", only, true, 900, nil, 1, 0, 900, false, false},
-		{"only_disabled_short_unavailable", func(c *config.Config) { only(c); c.IdP.Enabled = false }, false, 900, handler.ErrIdPUnavailable, 0, 0, 0, false, false},
-		{"only_disabled_omitted_unavailable", func(c *config.Config) { only(c); c.IdP.Enabled = false }, true, 0, handler.ErrIdPUnavailable, 0, 0, 0, false, false},
-		{"only_no_service_unavailable", only, false, 900, handler.ErrIdPUnavailable, 0, 0, 0, true, false},
-		{"only_over_1h_plain_exceeds_cap", only, false, 7200, handler.ErrDurationExceedsCap, 0, 0, 0, false, false},
-		{"only_tag_grant_uses_idp", func(c *config.Config) { only(c); tagOnly(c) }, false, 900, nil, 1, 0, 900, false, true},
-		{"only_tag_grant_over_1h_exceeds_cap", func(c *config.Config) { only(c); tagOnly(c) }, false, 7200, handler.ErrDurationExceedsCap, 0, 0, 0, false, true},
-		{"only_off_tag_grant_uses_assume_role", tagOnly, false, 900, nil, 0, 1, 900, false, true},
+		{name: "only_off_short_plain_uses_assume_role", duration: 900, wantAR: 1, wantDur: 900},
+		{name: "only_off_disabled_short_uses_assume_role", mutate: func(c *config.Config) { c.IdP.Enabled = false }, duration: 900, wantAR: 1, wantDur: 900},
+		{name: "only_plain_short_uses_idp", mutate: only, duration: 1800, wantWI: 1, wantDur: 1800},
+		{name: "only_plain_omitted_uses_idp", mutate: only, wantWI: 1, wantDur: 3600},
+		{name: "only_opted_in_uses_idp", mutate: only, optedIn: true, duration: 900, wantWI: 1, wantDur: 900},
+		{name: "only_disabled_short_unavailable", mutate: func(c *config.Config) { only(c); c.IdP.Enabled = false }, duration: 900, wantErr: handler.ErrIdPUnavailable},
+		{name: "only_disabled_omitted_unavailable", mutate: func(c *config.Config) { only(c); c.IdP.Enabled = false }, optedIn: true, wantErr: handler.ErrIdPUnavailable},
+		{name: "only_no_service_unavailable", mutate: only, duration: 900, wantErr: handler.ErrIdPUnavailable, noSvc: true},
+		{name: "only_over_1h_plain_exceeds_cap", mutate: only, duration: 7200, wantErr: handler.ErrDurationExceedsCap},
+		{name: "only_tag_grant_uses_idp", mutate: func(c *config.Config) { only(c); tagOnly(c) }, duration: 900, wantWI: 1, wantDur: 900, tagAuth: true},
+		{name: "only_tag_grant_over_1h_exceeds_cap", mutate: func(c *config.Config) { only(c); tagOnly(c) }, duration: 7200, wantErr: handler.ErrDurationExceedsCap, tagAuth: true},
+		{name: "only_off_tag_grant_uses_assume_role", mutate: tagOnly, duration: 900, wantAR: 1, wantDur: 900, tagAuth: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -815,7 +815,6 @@ func TestIdPOnlyAfterReload(t *testing.T) {
 		wantWI    int
 		wantAR    int
 	}{
-		{"block_removed_refuses", true, removeBlock, handler.ErrIdPUnavailable, 0, 0},
 		{"only_turned_off_uses_assume_role", true, func(c *config.Config) { c.IdP.Only = false }, nil, 0, 1},
 		{"block_removed_never_only_uses_assume_role", false, removeBlock, nil, 0, 1},
 		{"only_turned_on_uses_idp", false, func(c *config.Config) { c.IdP.Only = true }, nil, 1, 0},

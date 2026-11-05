@@ -236,6 +236,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
 	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requestData.DurationSeconds)
+	if errors.Is(err, ErrIdPUnavailable) {
+		return nil, r.refuse(ctx, o, "idp_unavailable", reason, "IdP unavailable", err)
+	}
 	if err != nil {
 		return nil, r.refuse(ctx, o, "duration", reason, "Duration refused", err)
 	}

@@ -40,17 +40,9 @@ func (r *RequestProcessor) idpEnabled(cfg *config.Config) bool {
 	return r.idp != nil && cfg.IdP != nil && cfg.IdP.Enabled
 }
 
-// idpOnly falls back to the startup value when a reload removed the block, so removal keeps IdP-only closed when only was on at startup.
-func (r *RequestProcessor) idpOnly(cfg *config.Config) bool {
-	if cfg.IdP != nil {
-		return cfg.IdP.Only
-	}
-	return r.idp != nil && r.idp.Config().Only
-}
-
 // selectIdP routes an IdP-eligible role (or every request under idp.only) to the IdP when enabled, else allows only sessions within the AssumeRole cap; refusals carry their audit reason.
 func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, requested int32) (useIdP bool, reason string, err error) {
-	if r.idpOnly(cfg) {
+	if cfg.IdP != nil && cfg.IdP.Only {
 		switch {
 		case r.idpEnabled(cfg):
 			return true, "", nil

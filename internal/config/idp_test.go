@@ -321,6 +321,12 @@ func TestIdPEnvOnlyAppliesToExistingBlock(t *testing.T) {
 		_, err := loadIdPYAML(t, idpTestIssuerYAML)
 		require.ErrorContains(t, err, "AOW_IDP_ONLY")
 	})
+	t.Run("only env without block loads when an overlay may supply it", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "true")
+		c, err := loadIdPYAML(t, idpTestIssuerYAML+"s3_config_bucket: b\ns3_config_path: k.yaml\n")
+		require.NoError(t, err)
+		require.Nil(t, c.IdP)
+	})
 	t.Run("unparseable only env without block fails load", func(t *testing.T) {
 		t.Setenv("AOW_IDP_ONLY", "yes")
 		_, err := loadIdPYAML(t, idpTestIssuerYAML)

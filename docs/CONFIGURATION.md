@@ -422,7 +422,7 @@ Concretely, a mapping is `byOwner`-bucketed only when its compiled pattern's gua
 
 ## `idp` (optional identity provider)
 
-Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](IDP.md).
+Absent or `enabled: false` leaves the service unchanged, except under `idp.only` (all requests 503). Full guide: [IDP.md](IDP.md).
 
 | Key                        | Default                                              | Bounds / values                                                                                                         | Notes                                                                                                                                        |
 | -------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
