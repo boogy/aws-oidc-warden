@@ -727,22 +727,23 @@ func TestProcessRequestRouting(t *testing.T) {
 		c.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
 	}
 	tests := []struct {
-		name     string
-		mutate   func(*config.Config)
-		optedIn  bool
-		duration int32
-		wantErr  error
-		wantWI   int
-		wantAR   int
-		wantDur  int32
-		noSvc    bool
-		tagAuth  bool
+		name      string
+		mutate    func(*config.Config)
+		optedIn   bool
+		duration  int32
+		wantErr   error
+		wantWI    int
+		wantAR    int
+		wantDur   int32
+		noSvc     bool
+		wantStage string
+		tagAuth   bool
 	}{
 		{name: "opted_in_uses_idp", optedIn: true, wantWI: 1},
 		{name: "not_opted_in_uses_assume_role", duration: 3600, wantAR: 1},
-		{name: "not_opted_in_over_1h", duration: 3601, wantErr: handler.ErrIdPNotPermitted},
+		{name: "not_opted_in_over_1h", duration: 3601, wantErr: handler.ErrIdPNotPermitted, wantStage: "duration"},
 		{name: "kill_switch_within_1h_uses_assume_role", mutate: func(c *config.Config) { c.IdP.Enabled = false }, optedIn: true, wantAR: 1},
-		{name: "kill_switch_over_1h", mutate: func(c *config.Config) { c.IdP.Enabled = false }, optedIn: true, duration: 7200, wantErr: handler.ErrIdPUnavailable},
+		{name: "kill_switch_over_1h", mutate: func(c *config.Config) { c.IdP.Enabled = false }, optedIn: true, duration: 7200, wantErr: handler.ErrIdPUnavailable, wantStage: "idp_unavailable"},
 		{name: "ceiling_over_1h_uses_idp_within_1h", mutate: func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, duration: 900, wantWI: 1},
 		{name: "ceiling_over_1h_uses_idp_over_1h", mutate: func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour }, duration: 7200, wantWI: 1},
 		{name: "ceiling_1h_uses_assume_role", mutate: func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = time.Hour }, duration: 3600, wantAR: 1},
@@ -757,10 +758,10 @@ func TestProcessRequestRouting(t *testing.T) {
 		{name: "only_plain_short_uses_idp", mutate: only, duration: 1800, wantWI: 1, wantDur: 1800},
 		{name: "only_plain_omitted_uses_idp", mutate: only, wantWI: 1, wantDur: 3600},
 		{name: "only_opted_in_uses_idp", mutate: only, optedIn: true, duration: 900, wantWI: 1, wantDur: 900},
-		{name: "only_disabled_short_unavailable", mutate: func(c *config.Config) { only(c); c.IdP.Enabled = false }, duration: 900, wantErr: handler.ErrIdPUnavailable},
-		{name: "only_disabled_omitted_unavailable", mutate: func(c *config.Config) { only(c); c.IdP.Enabled = false }, optedIn: true, wantErr: handler.ErrIdPUnavailable},
-		{name: "only_no_service_unavailable", mutate: only, duration: 900, wantErr: handler.ErrIdPUnavailable, noSvc: true},
-		{name: "only_over_1h_plain_exceeds_cap", mutate: only, duration: 7200, wantErr: handler.ErrDurationExceedsCap},
+		{name: "only_disabled_short_unavailable", mutate: func(c *config.Config) { only(c); c.IdP.Enabled = false }, duration: 900, wantErr: handler.ErrIdPUnavailable, wantStage: "idp_unavailable"},
+		{name: "only_disabled_omitted_unavailable", mutate: func(c *config.Config) { only(c); c.IdP.Enabled = false }, optedIn: true, wantErr: handler.ErrIdPUnavailable, wantStage: "idp_unavailable"},
+		{name: "only_no_service_unavailable", mutate: only, duration: 900, wantErr: handler.ErrIdPUnavailable, noSvc: true, wantStage: "idp_unavailable"},
+		{name: "only_over_1h_plain_exceeds_cap", mutate: only, duration: 7200, wantErr: handler.ErrDurationExceedsCap, wantStage: "duration"},
 		{name: "only_tag_grant_uses_idp", mutate: func(c *config.Config) { only(c); tagOnly(c) }, duration: 900, wantWI: 1, wantDur: 900, tagAuth: true},
 		{name: "only_tag_grant_over_1h_exceeds_cap", mutate: func(c *config.Config) { only(c); tagOnly(c) }, duration: 7200, wantErr: handler.ErrDurationExceedsCap, tagAuth: true},
 		{name: "only_off_tag_grant_uses_assume_role", mutate: tagOnly, duration: 900, wantAR: 1, wantDur: 900, tagAuth: true},
@@ -786,6 +787,9 @@ func TestProcessRequestRouting(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 				assert.Zero(t, signer.calls)
 				assert.Equal(t, "deny", sink.last(t)["decision"])
+				if tt.wantStage != "" {
+					assert.Equal(t, tt.wantStage, sink.last(t)["stage"])
+				}
 			} else {
 				require.NoError(t, err)
 			}
