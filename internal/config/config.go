@@ -384,6 +384,19 @@ func envVarName(key string) string {
 	return "AOW_" + strings.ToUpper(envKeyReplacer.Replace(key))
 }
 
+// envFlag reads a boolean env var for a load-failing check; an unparseable value is an error.
+func envFlag(name string) (bool, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", name, err)
+	}
+	return b, nil
+}
+
 // envBool parses a boolean AOW_ env value via strconv.ParseBool — the same
 // parser viper's cast.ToBool uses at boot, so the two paths can't disagree on
 // a value. On a parse error it warns and leaves the current value untouched
@@ -968,12 +981,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("issuers[%d] (%s): non-github issuers must define claim_mappings.subject", i, iss.Issuer)
 		}
 
-		// Only claim_mappings.subject's VALUE is constrained here; other keys
-		// are a supported way to add a claim to the auditable set, not rejected.
-		// Comparison is case-sensitive (map values aren't viper-folded) — safe
-		// because an IdP would need to mint a claim literally named e.g. "ISS"
-		// for the check to miss, and absent that the mapping fails to resolve
-		// a subject at all rather than yielding one.
+		// Only the subject mapping's value is constrained; other keys add auditable claims.
 		if claimName := iss.ClaimMappings["subject"]; nonIdentityClaims[claimName] {
 			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}
@@ -1086,7 +1094,11 @@ func (c *Config) Validate() error {
 			slog.String("warning", "audit_trail_inactive"))
 	}
 
-	if removed, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS"))); removed {
+	removed, err := envFlag("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS")
+	if err != nil {
+		return err
+	}
+	if removed {
 		return errors.New("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS was removed: use AOW_SESSION_TAGS_TRANSITIVE")
 	}
 
@@ -1206,10 +1218,7 @@ func (c *Config) Validate() error {
 			m.compiledPattern = subjectMatcher.re
 		}
 
-		// Clone into effective-private memory BEFORE compiling: compileCondition
-		// mutates *Condition in place, and one *Condition can be shared across
-		// snapshots (fragment reuse, role_group defaults) — compiling it live
-		// would race a concurrent reader and could transiently pass all conditions.
+		// Clone first: compileCondition mutates in place and a *Condition can be shared across snapshots.
 		m.Conditions = cloneCondition(m.Conditions)
 		if err := compileCondition(m.Conditions, patterns); err != nil {
 			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
@@ -1260,23 +1269,32 @@ func (c *Config) Validate() error {
 		if len(group.Subjects) == 0 {
 			return fmt.Errorf("role_groups[%d]: subjects must not be empty", gi)
 		}
-		for si, subject := range group.Subjects {
-			m := RoleMapping{
-				Subject:           Patterns{subject},
-				Issuer:            group.Issuer,
-				Roles:             group.Defaults.Roles,
-				Conditions:        group.Defaults.Conditions,
-				SessionPolicy:     group.Defaults.SessionPolicy,
-				SessionPolicyFile: group.Defaults.SessionPolicyFile,
-				RoleSessionName:   group.Defaults.RoleSessionName,
-				AllowSessionName:  group.Defaults.AllowSessionName,
-				SessionTags:       group.Defaults.SessionTags,
+		if len(group.Defaults.Roles) == 0 {
+			return fmt.Errorf("role_groups[%d]: subject and roles are required", gi)
+		}
+		pieces, err := c.expandRoles(RoleMapping{
+			Issuer:            group.Issuer,
+			Roles:             group.Defaults.Roles,
+			Conditions:        group.Defaults.Conditions,
+			SessionPolicy:     group.Defaults.SessionPolicy,
+			SessionPolicyFile: group.Defaults.SessionPolicyFile,
+			RoleSessionName:   group.Defaults.RoleSessionName,
+			AllowSessionName:  group.Defaults.AllowSessionName,
+			SessionTags:       group.Defaults.SessionTags,
 
-				IDPToken:           group.Defaults.IDPToken,
-				MaxSessionDuration: group.Defaults.MaxSessionDuration,
-			}
-			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
-				return err
+			IDPToken:           group.Defaults.IDPToken,
+			MaxSessionDuration: group.Defaults.MaxSessionDuration,
+		}, "role_groups", gi)
+		if err != nil {
+			return err
+		}
+		source := fmt.Sprintf("role_groups[%d].subjects", gi)
+		for si, subject := range group.Subjects {
+			for _, piece := range pieces {
+				piece.Subject = Patterns{subject}
+				if err := appendOne(piece, subject, source, si); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1663,7 +1681,7 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 }
 
 // warnTagAuthBypassesMappingScoping warns when tag_auth is enabled and a mapping scopes a role (policy,
-// session name, or role-level conditions): a tag-auth grant of the same role carries none of that.
+// session name, role-level conditions, or duration limit): a tag-auth grant of the same role carries none of that.
 func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
 	if tagAuth == nil || !tagAuth.Enabled {
 		return
@@ -1679,6 +1697,8 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			scopedBy = "role_session_name"
 		case m.roleConditions:
 			scopedBy = "role_conditions"
+		case m.MaxSessionDuration != 0:
+			scopedBy = "max_session_duration"
 		default:
 			continue
 		}
@@ -1689,8 +1709,8 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			seen[role] = true
 			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 				"tag_auth is enabled and this role is scoped in role_mappings; "+
-					"a tag-auth grant of the same role carries no session policy and no "+
-					"role_session_name override. Remove the role's tag-auth tags, or "+
+					"a tag-auth grant of the same role carries no session policy, no "+
+					"role_session_name override and no max_session_duration limit. Remove the role's tag-auth tags, or "+
 					"accept that the tag-auth path is unscoped.",
 				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
 				slog.String("roleArn", role),

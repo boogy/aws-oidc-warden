@@ -261,6 +261,11 @@ func TestRemovedTransitiveEnvVar(t *testing.T) {
 		_, err := loadIdPYAML(t, idpTestIssuerYAML)
 		require.ErrorContains(t, err, "AOW_SESSION_TAGS_TRANSITIVE")
 	})
+	t.Run("unparseable fails load", func(t *testing.T) {
+		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "yes")
+		_, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.ErrorContains(t, err, "AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS")
+	})
 	t.Run("false loads", func(t *testing.T) {
 		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")
 		c, err := loadIdPYAML(t, idpTestIssuerYAML)

@@ -385,21 +385,21 @@ role_mappings:
 
 ![What each role in the example above resolves to: role setting, then entry setting, then built-in default](img/per-role-precedence.svg)
 
-| Key                                       | Rule                                                                     |
-| ----------------------------------------- | ------------------------------------------------------------------------ |
-| `role`                                    | Required. An ARN or `@set`; the block applies to every member of the set |
-| `conditions`                              | Full condition tree, same limits. Replaces the entry's conditions        |
-| `session_policy`, `session_policy_file`   | Setting either replaces both                                             |
-| `role_session_name`, `allow_session_name` | Setting either replaces both; `allow_session_name: false` is valid       |
-| `max_session_duration`                    | Replaces                                                                 |
-| `idp_token`                               | Replaces; `false` is valid                                               |
-| `session_tags`                            | Replaces the entry's tags as a whole; issuer tags still apply            |
+| Key                                       | Rule                                                                                                           |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `role`                                    | Required. An ARN or `@set`; the block applies to every member of the set                                       |
+| `conditions`                              | Full condition tree, same limits. Replaces the entry's conditions                                              |
+| `session_policy`, `session_policy_file`   | Setting either replaces both                                                                                   |
+| `role_session_name`, `allow_session_name` | Setting either replaces both; `allow_session_name: false` is valid and clears an inherited `role_session_name` |
+| `max_session_duration`                    | Replaces                                                                                                       |
+| `idp_token`                               | Replaces; `false` is valid                                                                                     |
+| `session_tags`                            | Replaces the entry's tags as a whole; issuer tags still apply                                                  |
 
 Overrides replace and never intersect, so a role can be granted more widely than its entry. They apply inside one entry; other entries matching the same subject still add grants.
 
 These fail to load:
 
-- an empty `conditions`, `session_policy`, `session_policy_file`, `role_session_name`, `session_tags: {}` or `max_session_duration: 0` on a role (a role cannot drop an inherited setting; move it off the entry or use a second entry);
+- an empty `conditions`, `session_policy`, `session_policy_file`, `role_session_name`, `session_tags: {}` or `max_session_duration: 0` on a role (a role cannot set an inherited setting to empty; move it off the entry or use a second entry);
 - a role with its own settings listed twice in one entry, including through a `@set`;
 - an entry-level setting that every role overrides;
 - `idp_token: false` with an effective duration over 1h;
