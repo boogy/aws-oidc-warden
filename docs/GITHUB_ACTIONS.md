@@ -75,7 +75,7 @@ The status code tells your client whether retrying is worth anything:
 | `500 assume_role_failed`          | Throttling, expired broker credentials, or a malformed session policy                                          | **Yes** — transient¹                                 |
 | `500 policy_error`                | The mapping's S3 session policy is missing, unreadable or invalid                                              | **No** — deterministic²                              |
 | `500 audit_write_failed`          | `audit_required` is on and the audit write to S3 failed                                                        | **No** — deterministic²                              |
-| `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h                                                     | **No** — deterministic                               |
+| `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h                              | **No** — deterministic                               |
 | `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                    | **No** — deterministic                               |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                           | **No** — deterministic                               |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                      | **No** — deterministic                               |
@@ -86,7 +86,7 @@ The status code tells your client whether retrying is worth anything:
 | `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                   | **No** — deterministic                               |
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                      | **No** — deterministic                               |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags or the session policy                    | **No** — deterministic                               |
-| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                      | **Yes** — transient                                  |
+| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h, or for any request under `idp.only` | **Yes** — transient                                  |
 | `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the minted token expired                   | **Yes** — transient                                  |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`                                                              | **Yes** — transient, retry with backoff or fail over |
 | `502` / `503` / timeout           | The endpoint is unhealthy or unreachable                                                                       | **Yes**                                              |

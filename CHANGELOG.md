@@ -9,16 +9,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **Per-role settings** in `role_mappings` and `role_groups`: a `roles` item can override any entry setting except `subject` and `issuer`.
-- **`idp.only`** (`AOW_IDP_ONLY`): issue every credential through the IdP, never `AssumeRole`.
+- **`idp.only`** (`AOW_IDP_ONLY`): issue every credential through the IdP, never `AssumeRole`; a reload that flips it logs `config.idp.only_changed`.
 - **`session_duration`** per mapping, group defaults and role: the default length when the caller omits `durationSeconds`; `max_session_duration` stays the limit.
 - **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
 - **`example-config.yaml`** now shows per-issuer `tag_prefix`.
 - **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
-- **`config.warning` code `unconditional_role_beside_conditioned`**, and `scopedBy=role_conditions` on `tag_auth_bypasses_mapping_scoping`.
+- **`config.warning` code `unconditional_role_beside_conditioned`**, and `scopedBy=role_conditions` / `max_session_duration` on `tag_auth_bypasses_mapping_scoping`.
 
 ### Removed
 
-- **`tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`; the key, or the env var set to true, fails the load.
+- **`tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`; the key, or the env var set to true or an unparseable value, fails the load.
 
 ### Fixed
 

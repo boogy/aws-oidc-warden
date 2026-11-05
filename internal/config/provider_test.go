@@ -1438,6 +1438,46 @@ func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 	}
 }
 
+func TestProviderRefreshLogsIdPOnlyFlip(t *testing.T) {
+	const removed = "log_level: info\n"
+	onBlock := strings.Replace(idpTestBlockYAML, "  enabled: true\n", "  enabled: true\n  only: true\n", 1)
+	require.NotEqual(t, idpTestBlockYAML, onBlock)
+	tests := []struct {
+		name          string
+		first, next   string
+		noFreeze      bool
+		want, wantLog bool
+	}{
+		{name: "enable", first: idpTestBlockYAML, next: onBlock, want: true, wantLog: true},
+		{name: "disable", first: onBlock, next: idpTestBlockYAML, wantLog: true},
+		{name: "unchanged", first: onBlock, next: onBlock, want: true},
+		{name: "block removed keeps startup value", first: onBlock, next: removed},
+		{name: "block added after startup", first: removed, next: onBlock, want: true, wantLog: true},
+		{name: "cold start", first: idpTestBlockYAML, next: onBlock, noFreeze: true, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(tt.first)
+			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+			require.NoError(t, p.Refresh(context.Background()))
+			if !tt.noFreeze {
+				p.FreezeIdP(p.Get().IdP)
+			}
+			body = []byte(tt.next)
+			out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
+			if got := p.Get().IdP; got != nil {
+				assert.Equal(t, tt.want, got.Only)
+			}
+			if !tt.wantLog {
+				assert.NotContains(t, out, "config.idp.only_changed")
+				return
+			}
+			assert.Contains(t, out, "config.idp.only_changed")
+			assert.Contains(t, out, fmt.Sprintf(`"only":%t`, tt.want))
+		})
+	}
+}
+
 func TestProviderRefreshLogsIdPEnabledFlip(t *testing.T) {
 	tests := []struct {
 		name          string

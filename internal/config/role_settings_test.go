@@ -441,6 +441,10 @@ func TestRoleEntryWarnings(t *testing.T) {
         conditions:
           ref: "refs/heads/main"
 `, true, "tag_auth_bypasses_mapping_scoping", rsApply, "role_conditions"},
+		{"tag auth bypasses duration limit", `    roles:
+      - role: "` + rsApply + `"
+        max_session_duration: 15m
+`, true, "tag_auth_bypasses_mapping_scoping", rsApply, "max_session_duration"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -560,4 +564,23 @@ func TestRoleSessionDurationWithinStatementLimit(t *testing.T) {
 	assert.Equal(t, 2*time.Hour, d.SessionDuration())
 	assert.Equal(t, 3*time.Hour, d.MaxSessionDuration())
 	assert.Zero(t, cfg.Authorize(vIss, "acme/app", rsAudit, map[string]any{}).SessionDuration())
+}
+
+func TestRoleGroupWarnsOncePerRoleNotPerSubject(t *testing.T) {
+	var c *Config
+	logs := captureWarnings(t, func() {
+		var err error
+		c, err = rsLoad(t, `role_groups:
+  - subjects: ["repo:o/a:ref:refs/heads/main", "repo:o/b:ref:refs/heads/main", "repo:o/c:ref:refs/heads/main"]
+    defaults:
+      roles:
+        - "`+rsAudit+`"
+        - role: "`+rsApply+`"
+          conditions:
+            ref: "refs/heads/main"
+`, false)
+		require.NoError(t, err)
+	})
+	assert.Equal(t, 1, strings.Count(logs, "unconditional_role_beside_conditioned"))
+	assert.Len(t, c.effective, 6)
 }

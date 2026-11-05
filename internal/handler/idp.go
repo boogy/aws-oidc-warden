@@ -40,7 +40,7 @@ func (r *RequestProcessor) idpEnabled(cfg *config.Config) bool {
 	return r.idp != nil && cfg.IdP != nil && cfg.IdP.Enabled
 }
 
-// idpOnly falls back to the startup value when a reload removed the block, so removal cannot reopen AssumeRole.
+// idpOnly falls back to the startup value when a reload removed the block, so removal keeps IdP-only closed when only was on at startup.
 func (r *RequestProcessor) idpOnly(cfg *config.Config) bool {
 	if cfg.IdP != nil {
 		return cfg.IdP.Only
