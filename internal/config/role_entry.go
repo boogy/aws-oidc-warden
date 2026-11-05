@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
@@ -25,12 +26,21 @@ type RoleEntry struct {
 	SessionTags        map[string]string `mapstructure:"session_tags"         json:"session_tags"` // nil = inherit; an empty map must survive the clone
 }
 
-var roleEntryType = reflect.TypeOf(RoleEntry{})
+var (
+	roleEntryType      = reflect.TypeOf(RoleEntry{})
+	roleEntrySliceType = reflect.SliceOf(roleEntryType)
+)
 
-// roleEntryHookFunc decodes a bare string into {role: s} and rejects a present-but-empty key,
-// which would otherwise decode like an absent one and silently inherit.
+// roleEntryHookFunc splits a scalar `roles: "a,b"`, decodes a bare string into {role: s}, and rejects a present-but-empty key.
 func roleEntryHookFunc() mapstructure.DecodeHookFuncType {
 	return func(_, to reflect.Type, data any) (any, error) {
+		if s, ok := data.(string); ok && to == roleEntrySliceType {
+			// StringToSliceHookFunc splits only for []string targets.
+			if s == "" {
+				return []string{}, nil
+			}
+			return strings.Split(s, ","), nil
+		}
 		if to != roleEntryType {
 			return data, nil
 		}

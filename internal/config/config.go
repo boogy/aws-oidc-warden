@@ -1716,7 +1716,7 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 				"tag_auth is enabled and this role is scoped in role_mappings; "+
 					"a tag-auth grant of the same role carries no session policy, no "+
-					"role_session_name override and no max_session_duration limit. Remove the role's tag-auth tags, or "+
+					"role_session_name override, no role conditions and no max_session_duration limit. Remove the role's tag-auth tags, or "+
 					"accept that the tag-auth path is unscoped.",
 				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
 				slog.String("roleArn", role),

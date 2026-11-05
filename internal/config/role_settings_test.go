@@ -345,6 +345,15 @@ func TestRoleSettingLoadErrors(t *testing.T) {
 	}
 }
 
+func TestScalarRolesSplitOnComma(t *testing.T) {
+	cfg, err := rsLoad(t, rsMapping(`    roles: "`+rsAudit+`,`+rsApply+`"
+`), false)
+	require.NoError(t, err)
+	for _, role := range []string{rsAudit, rsApply} {
+		assert.Contains(t, cfg.Authorize(vIss, "acme/app", role, nil).Roles, role)
+	}
+}
+
 func TestRoleSetBlockAppliesToEveryMember(t *testing.T) {
 	const doc = `    roles:
       - role: "@pair"
