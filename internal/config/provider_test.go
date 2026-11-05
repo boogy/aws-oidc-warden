@@ -1416,6 +1416,40 @@ func TestProviderRefreshRejectsBlockRemovalUnderOnlyEnv(t *testing.T) {
 	require.True(t, p.Get().IdP.Only)
 }
 
+func TestProviderRefreshRejectsBlockRemovalUnderOnly(t *testing.T) {
+	onBlock := strings.Replace(idpTestBlockYAML, "  enabled: true\n", "  enabled: true\n  only: true\n", 1)
+	require.NotEqual(t, idpTestBlockYAML, onBlock)
+	tests := []struct {
+		name          string
+		first, second string
+		wantErr       bool
+	}{
+		{"only at startup", onBlock, onBlock, true},
+		{"only turned on by reload", idpTestBlockYAML, onBlock, true},
+		{"only turned off first", onBlock, idpTestBlockYAML, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(tt.first)
+			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+			require.NoError(t, p.Refresh(context.Background()))
+			p.FreezeIdP(p.Get().IdP)
+			body = []byte(tt.second)
+			require.NoError(t, p.Refresh(context.Background()))
+
+			body = []byte("log_level: info\n")
+			err := p.Refresh(context.Background())
+			if !tt.wantErr {
+				require.NoError(t, err)
+				require.Nil(t, p.Get().IdP)
+				return
+			}
+			require.ErrorContains(t, err, "idp.only")
+			require.True(t, p.Get().IdP.Only)
+		})
+	}
+}
+
 func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 	body := []byte(idpTestBlockYAML)
 	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
@@ -1451,7 +1485,6 @@ func TestProviderRefreshLogsIdPOnlyFlip(t *testing.T) {
 		{name: "enable", first: idpTestBlockYAML, next: onBlock, want: true, wantLog: true},
 		{name: "disable", first: onBlock, next: idpTestBlockYAML, wantLog: true},
 		{name: "unchanged", first: onBlock, next: onBlock, want: true},
-		{name: "block removed keeps startup value", first: onBlock, next: removed},
 		{name: "block added after startup", first: removed, next: onBlock, want: true, wantLog: true},
 		{name: "cold start", first: idpTestBlockYAML, next: onBlock, noFreeze: true, want: true},
 	}

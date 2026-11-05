@@ -745,7 +745,28 @@ func (c *Config) LoadConfig() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	// An overlay may supply the idp block; mergeBytes checks after merging.
+	if c.S3ConfigBucket == "" || c.S3ConfigPath == "" {
+		if err := c.checkIdPOnlyEnv(); err != nil {
+			return err
+		}
+	}
 	return c.validateMappingsSplit()
+}
+
+// checkIdPOnlyEnv rejects AOW_IDP_ONLY on a fully merged config with no idp block.
+func (c *Config) checkIdPOnlyEnv() error {
+	if c.IdP != nil {
+		return nil
+	}
+	only, err := envFlag(envVarName("idp.only"))
+	if err != nil {
+		return err
+	}
+	if only {
+		return fmt.Errorf("%s is true but the config has no idp block", envVarName("idp.only"))
+	}
+	return nil
 }
 
 // MergeBytes overlays the keys present in data (snake_case config schema, viper format; empty means json) onto c and re-validates.
@@ -816,6 +837,9 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 		if frozenMode != "" && frozenMode != reloadedMode {
 			err = fmt.Errorf("under frozen jwt_validation.mode %q: %w", frozenMode, err)
 		}
+		return "", err
+	}
+	if err := next.checkIdPOnlyEnv(); err != nil {
 		return "", err
 	}
 
@@ -1108,14 +1132,6 @@ func (c *Config) Validate() error {
 		c.IdP.applyDefaults()
 		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
 			return err
-		}
-	} else {
-		only, err := envFlag(envVarName("idp.only"))
-		if err != nil {
-			return err
-		}
-		if only {
-			return fmt.Errorf("%s is true but the config has no idp block", envVarName("idp.only"))
 		}
 	}
 
@@ -1727,7 +1743,7 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 				"tag_auth is enabled and this role is scoped in role_mappings; "+
 					"a tag-auth grant of the same role carries no session policy, no "+
-					"role_session_name override and no max_session_duration or session_duration. Remove the role's tag-auth tags, or "+
+					"role_session_name override, no role conditions and no max_session_duration limit. Remove the role's tag-auth tags, or "+
 					"accept that the tag-auth path is unscoped.",
 				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
 				slog.String("roleArn", role),

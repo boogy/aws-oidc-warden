@@ -382,6 +382,15 @@ func TestRoleSettingLoadErrors(t *testing.T) {
 	}
 }
 
+func TestScalarRolesSplitOnComma(t *testing.T) {
+	cfg, err := rsLoad(t, rsMapping(`    roles: "`+rsAudit+`,`+rsApply+`"
+`), false)
+	require.NoError(t, err)
+	for _, role := range []string{rsAudit, rsApply} {
+		assert.Contains(t, cfg.Authorize(vIss, "acme/app", role, nil).Roles, role)
+	}
+}
+
 func TestRoleSetBlockAppliesToEveryMember(t *testing.T) {
 	const doc = `    roles:
       - role: "@pair"
@@ -534,9 +543,9 @@ func TestSessionDurationValidate(t *testing.T) {
 	}{
 		{"unset", 0, 0, ""},
 		{"equals default limit", time.Hour, 0, ""},
+		{"over default limit", 2 * time.Hour, 0, "session_duration 2h0m0s exceeds max_session_duration"},
 		{"below limit", 30 * time.Minute, 4 * time.Hour, ""},
 		{"equals limit", 4 * time.Hour, 4 * time.Hour, ""},
-		{"over default limit", 2 * time.Hour, 0, "session_duration 2h0m0s exceeds max_session_duration"},
 		{"over limit", 5 * time.Hour, 4 * time.Hour, "exceeds max_session_duration"},
 		{"under 15m", 14 * time.Minute, 4 * time.Hour, "session_duration"},
 		{"over 12h", 13 * time.Hour, 12 * time.Hour, "session_duration"},

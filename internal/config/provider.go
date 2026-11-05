@@ -305,6 +305,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	}
 
 	prevIdP := p.current.Load().IdP
+	if prevIdP != nil && prevIdP.Only && cfg.IdP == nil {
+		return errors.New("reload removes the idp block while idp.only is true: set only: false first")
+	}
 	p.current.Store(cfg)
 	p.fragments = nextFragments
 	p.overlaySum, p.built = sum, true
@@ -326,15 +329,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	if p.frozenIdP != nil && prevEnabled != enabled {
 		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", enabled), slog.Bool("blockPresent", cfg.IdP != nil))
 	}
-	// A removed block keeps the startup value, matching the handler's idpOnly.
-	liveOnly := func(c *IdPConfig) bool {
-		if c != nil {
-			return c.Only
-		}
-		return p.frozenIdP != nil && p.frozenIdP.Only
-	}
-	if only := liveOnly(cfg.IdP); p.idpFrozen && liveOnly(prevIdP) != only {
-		logevent.Warn(ctx, nil, logevent.ConfigIdPOnlyChanged, "idp.only changed by reload", slog.Bool("only", only), slog.Bool("blockPresent", cfg.IdP != nil))
+	prevOnly, only := prevIdP != nil && prevIdP.Only, cfg.IdP != nil && cfg.IdP.Only
+	if p.idpFrozen && prevOnly != only {
+		logevent.Warn(ctx, nil, logevent.ConfigIdPOnlyChanged, "idp.only changed by reload", slog.Bool("only", only))
 	}
 	if p.idpFrozen && cfg.IdP != nil && (p.frozenIdP == nil || cfg.IdP.Fingerprint() != p.frozenIdP.Fingerprint()) {
 		logevent.Warn(ctx, nil, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")

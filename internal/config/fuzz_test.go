@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -60,11 +61,14 @@ func FuzzAuthorizeRolesMatchesLinearScan(f *testing.F) {
 		if cfg.Validate() != nil {
 			return
 		}
+		subjectMatches := subjectOracle(&RoleMapping{resolvedSubject: pattern}).MatchString(subject)
 		for _, claims := range []map[string]any{nil, {"ref": "refs/heads/main"}, {"ref": "refs/heads/dev"}} {
 			wantMatched, wantRoles := linearAuthorizeRoles(cfg, iss, subject, claims)
 			gotMatched, gotRoles := cfg.AuthorizeRoles(iss, subject, claims)
 			assert.Equal(t, wantMatched, gotMatched, "pattern=%q subject=%q claims=%v", pattern, subject, claims)
 			assert.ElementsMatch(t, wantRoles, gotRoles, "pattern=%q subject=%q claims=%v", pattern, subject, claims)
+			wantGated := subjectMatches && claims["ref"] == "refs/heads/main"
+			assert.Equal(t, wantGated, slices.Contains(gotRoles, "arn:aws:iam::123456789012:role/gated"), "pattern=%q subject=%q claims=%v", pattern, subject, claims)
 		}
 	})
 }

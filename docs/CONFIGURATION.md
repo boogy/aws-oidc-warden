@@ -450,7 +450,7 @@ These fail to load:
 - an empty `conditions`, `session_policy`, `session_policy_file`, `role_session_name`, `session_tags: {}`, `max_session_duration: 0` or `session_duration: 0` on a role (a role cannot set an inherited setting to empty; move it off the entry or use a second entry);
 - a role with its own settings listed twice in one entry, including through a `@set`;
 - an entry-level setting that every role overrides;
-- `idp_token: false` with an effective duration over 1h;
+- `idp_token: false` on a role with an effective duration over 1h;
 - `idp_token: false` on a role while `idp.only` is true;
 - a `session_duration` above the effective `max_session_duration` (1h when unset);
 - anything the entry-level rules already reject, applied to the effective values.
@@ -471,7 +471,7 @@ Concretely, a mapping is `byOwner`-bucketed only when its compiled pattern's gua
 
 ## `idp` (optional identity provider)
 
-Absent or `enabled: false` leaves the service unchanged. Full guide: [IDP.md](IDP.md).
+Absent or `enabled: false` leaves the service unchanged, except under `idp.only` (all requests 503). Full guide: [IDP.md](IDP.md).
 
 | Key                        | Default                                              | Bounds / values                                                                                                         | Notes                                                                                                                                        |
 | -------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |

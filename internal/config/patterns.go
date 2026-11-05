@@ -98,6 +98,9 @@ func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 func rejectUnusedKeys(unused []string, source string) error {
 	unused = slices.Sorted(slices.Values(unused))
 	for _, key := range unused {
+		if key == "tag_auth.transitive_session_tags" {
+			return fmt.Errorf("%s: %s was removed: use session_tags_transitive", source, key)
+		}
 		if strings.ContainsAny(key, ".[") {
 			return fmt.Errorf("%s: unknown key %q is not a config field (check the spelling)", source, key)
 		}
