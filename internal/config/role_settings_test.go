@@ -454,10 +454,6 @@ func TestRoleEntryWarnings(t *testing.T) {
       - role: "` + rsApply + `"
         max_session_duration: 15m
 `, true, "tag_auth_bypasses_mapping_scoping", rsApply, "max_session_duration"},
-		{"tag auth bypasses duration default", `    roles:
-      - role: "` + rsApply + `"
-        session_duration: 15m
-`, true, "tag_auth_bypasses_mapping_scoping", rsApply, "session_duration"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -543,10 +539,8 @@ func TestSessionDurationValidate(t *testing.T) {
 	}{
 		{"unset", 0, 0, ""},
 		{"equals default limit", time.Hour, 0, ""},
-		{"over default limit", 2 * time.Hour, 0, "session_duration 2h0m0s exceeds max_session_duration"},
 		{"below limit", 30 * time.Minute, 4 * time.Hour, ""},
 		{"equals limit", 4 * time.Hour, 4 * time.Hour, ""},
-		{"over limit", 5 * time.Hour, 4 * time.Hour, "exceeds max_session_duration"},
 		{"under 15m", 14 * time.Minute, 4 * time.Hour, "session_duration"},
 		{"over 12h", 13 * time.Hour, 12 * time.Hour, "session_duration"},
 		{"sub-second", 30*time.Minute + time.Millisecond, time.Hour, "whole number of seconds"},

@@ -1712,7 +1712,7 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 }
 
 // warnTagAuthBypassesMappingScoping warns when tag_auth is enabled and a mapping scopes a role (policy,
-// session name, role-level conditions, or duration settings): a tag-auth grant of the same role carries none of that.
+// session name, role-level conditions, or max_session_duration): a tag-auth grant of the same role carries none of that.
 func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
 	if tagAuth == nil || !tagAuth.Enabled {
 		return
@@ -1730,8 +1730,6 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			scopedBy = "role_conditions"
 		case m.MaxSessionDuration != 0:
 			scopedBy = "max_session_duration"
-		case m.SessionDuration != 0:
-			scopedBy = "session_duration"
 		default:
 			continue
 		}

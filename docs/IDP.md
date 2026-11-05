@@ -332,7 +332,7 @@ Ceiling = the authorizing mapping's `max_session_duration` (1h when unset); omit
 
 When several mappings grant the role, the lowest-order one wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
-A role served by `AssumeRole` accepts `durationSeconds` from 900 up to the mapping's limit, at most 3600; above it answers 400 `duration_exceeds_cap`. Omitted = `session_duration` when set, else `min(3600, max_session_duration)`. Why the 1h bound: see [Why](#why).
+A role served by `AssumeRole` accepts `durationSeconds` from 900 up to the mapping's limit, at most 3600; a request over that limit but within 1h answers 400 `duration_exceeds_cap`, and one over 1h is answered per the table above. Omitted = `session_duration` when set, else `min(3600, max_session_duration)`. Why the 1h bound: see [Why](#why).
 
 ## Session name
 
@@ -417,7 +417,7 @@ A reload that changes a frozen field, or adds an `idp` block absent at startup, 
 **Kill switch:** set `idp.enabled: false` in the layer that set it. Environment beats S3: `AOW_IDP_ENABLED` is re-applied after every S3 merge, so never set `AOW_IDP_ENABLED` on Lambda if the S3 overlay is your switch. Order of operations:
 
 1. Disable.
-2. Confirm a request for more than 1h answers 503 `idp_signing_unavailable`. Requests of 1h or less fall back to `AssumeRole`, which only works where the role also trusts the warden's own role; a role trusting only the warden IdP answers 403 `assume_role_denied`. Under `idp.only` every request answers 503 instead: disabling is a full outage.
+2. Confirm a request for more than 1h answers 503 `idp_signing_unavailable`. Requests of 1h or less fall back to `AssumeRole`, which only works where the role also trusts the warden's own role; a role trusting only the warden IdP answers 403 `assume_role_denied`. Under `idp.only` every request answers 503 instead: disabling is a full outage. A request that omits `durationSeconds` against a mapping whose `session_duration` is over 1h counts as over 1h and also answers 503.
 3. Then revoke (remove the client ID from the warden's IAM OIDC provider; add a Deny on `aws:TokenIssueTime`).
 
 While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its discovery and JWKS paths (other methods stay 405) (logged at Debug as `idp.path.disabled`, not as a near miss), so STS stops trusting the key once its JWKS cache expires. Statically hosted documents (`idp-export`) keep serving: remove them yourself. For an IdP built at startup, a reload that changes the effective `idp.enabled` (a missing block counts as disabled) logs `config.idp.enabled_changed` (Warn) with the new value and whether the block is present; an env override (`AOW_IDP_ENABLED`) beats the S3 config's `idp.enabled`, so a flip there never lands. The env knob applies only to an existing block. Removing the block is not a kill switch while it matters: `Validate()` rejects the reload while any mapping sets `idp_token` or `max_session_duration` over 1h, and the provider rejects it while `idp.only` is true. Once no mapping is eligible the removal is accepted and acts as disabled (404 on the discovery and JWKS paths; `enabled_changed` with `blockPresent:false` only if it flips `enabled`, so removing an already-disabled block logs nothing), and over-1h requests change from 403 `idp_not_permitted` to 400 `duration_exceeds_cap`.
