@@ -14,7 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
 - **`example-config.yaml`** now shows per-issuer `tag_prefix`.
 - **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
-- **`config.warning` code `unconditional_role_beside_conditioned`**, and `scopedBy=role_conditions` / `max_session_duration` on `tag_auth_bypasses_mapping_scoping`.
+- **`config.warning` code `unconditional_role_beside_conditioned`**, and `scopedBy=role_conditions` / `max_session_duration` / `session_duration` on `tag_auth_bypasses_mapping_scoping`.
 
 ### Removed
 

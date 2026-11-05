@@ -268,7 +268,7 @@ Three behaviors are intentional but easy to misjudge. Review them before enablin
 
 2. **`cross_account.enabled: false` (or omitted) hard-blocks all cross-account use** — both assumes and tag reads fail closed with an error; it is not a silent no-op. Once enabled, an **empty `allowed_accounts` still fails open**: the warden may assume into **any** member account. Config load only logs a warning in that case. Always populate `allowed_accounts` in production. See [Target account allow-list](#target-account-allow-list).
 
-3. **Tag-authorized roles receive no session policy.** Session policies come only from `role_mappings`; a role authorized via tags is scoped solely by its own IAM permissions. Keep tag-authorized roles least-privilege at the IAM level — there is no session-policy backstop. A mapping's `max_session_duration` does not apply either: the limit on this path is 1h.
+3. **Tag-authorized roles receive no session policy.** Session policies come only from `role_mappings`; a role authorized via tags is scoped solely by its own IAM permissions. Keep tag-authorized roles least-privilege at the IAM level — there is no session-policy backstop. A mapping's `max_session_duration` and `session_duration` do not apply either: the limit on this path is 1h.
 
 ---
 

@@ -1696,7 +1696,7 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 }
 
 // warnTagAuthBypassesMappingScoping warns when tag_auth is enabled and a mapping scopes a role (policy,
-// session name, role-level conditions, or duration limit): a tag-auth grant of the same role carries none of that.
+// session name, role-level conditions, or duration settings): a tag-auth grant of the same role carries none of that.
 func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
 	if tagAuth == nil || !tagAuth.Enabled {
 		return
@@ -1714,6 +1714,8 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			scopedBy = "role_conditions"
 		case m.MaxSessionDuration != 0:
 			scopedBy = "max_session_duration"
+		case m.SessionDuration != 0:
+			scopedBy = "session_duration"
 		default:
 			continue
 		}
@@ -1725,7 +1727,7 @@ func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMappin
 			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 				"tag_auth is enabled and this role is scoped in role_mappings; "+
 					"a tag-auth grant of the same role carries no session policy, no "+
-					"role_session_name override and no max_session_duration limit. Remove the role's tag-auth tags, or "+
+					"role_session_name override and no max_session_duration or session_duration. Remove the role's tag-auth tags, or "+
 					"accept that the tag-auth path is unscoped.",
 				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
 				slog.String("roleArn", role),

@@ -445,6 +445,10 @@ func TestRoleEntryWarnings(t *testing.T) {
       - role: "` + rsApply + `"
         max_session_duration: 15m
 `, true, "tag_auth_bypasses_mapping_scoping", rsApply, "max_session_duration"},
+		{"tag auth bypasses duration default", `    roles:
+      - role: "` + rsApply + `"
+        session_duration: 15m
+`, true, "tag_auth_bypasses_mapping_scoping", rsApply, "session_duration"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
