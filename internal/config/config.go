@@ -552,9 +552,7 @@ var envBindings = []envBinding{
 		envBool("cache.s3_cleanup", v, func(b bool) { c.Cache.S3Cleanup = b })
 	}},
 
-	// Tag-based authorization knobs. enabled creates
-	// TagAuth if nil; the rest only apply if it already exists (preserves the
-	// pre-refactor init semantics exactly).
+	// tag_prefix and default_org apply only if TagAuth already exists; enabled creates it.
 	{"tag_auth.enabled", func(c *Config, v string) {
 		envBool("tag_auth.enabled", v, func(b bool) { ensureTagAuth(c).Enabled = b })
 	}},
@@ -1262,7 +1260,7 @@ func (c *Config) Validate() error {
 		if m.roleConditions {
 			where = label
 		}
-		if k := (condWarnKey{inherited, where, fmt.Sprint(m.SessionTags)}); !warnedConds[k] {
+		if k := (condWarnKey{inherited, where, unknownTagClaims(knownClaims[m.Issuer], m.SessionTags)}); !warnedConds[k] {
 			warnedConds[k] = true
 			warnConditionKeys(m.Conditions, "conditions", where, withSessionTagClaims(knownClaims[m.Issuer], m.SessionTags))
 		}
