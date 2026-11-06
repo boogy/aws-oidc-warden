@@ -1404,23 +1404,30 @@ func TestProviderRefreshWarnsOnFrozenIdPDrift(t *testing.T) {
 	}
 }
 
-func TestProviderRefreshRejectsBlockRemovalUnderOnlyEnv(t *testing.T) {
-	body := []byte(idpTestBlockYAML)
-	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
-	t.Setenv("AOW_IDP_ONLY", "true")
-	require.NoError(t, p.Refresh(context.Background()))
-	require.True(t, p.Get().IdP.Only)
-
-	body = []byte("log_level: info\n")
-	require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
-	require.True(t, p.Get().IdP.Only)
-}
-
-func TestProviderRefreshRejectsUnparseableOnlyEnvWithOverlayBlock(t *testing.T) {
-	body := []byte(idpTestBlockYAML)
-	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
-	t.Setenv("AOW_IDP_ONLY", "on")
-	require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+func TestProviderRefreshOnlyEnv(t *testing.T) {
+	tests := []struct {
+		name, env string
+		firstErr  bool
+	}{
+		{"block removal rejected", "true", false},
+		{"unparseable value with overlay block", "on", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(idpTestBlockYAML)
+			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+			t.Setenv("AOW_IDP_ONLY", tt.env)
+			if tt.firstErr {
+				require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+				return
+			}
+			require.NoError(t, p.Refresh(context.Background()))
+			require.True(t, p.Get().IdP.Only)
+			body = []byte("log_level: info\n")
+			require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+			require.True(t, p.Get().IdP.Only)
+		})
+	}
 }
 
 func TestProviderRefreshRejectsBlockRemovalUnderOnly(t *testing.T) {
