@@ -1153,8 +1153,6 @@ func (c *Config) Validate() error {
 
 	patterns := make(regexCache)
 
-	// appendOne resolves ONE subject into an effective mapping; m is by value,
-	// so these writes are private to this element.
 	type condWarnKey struct {
 		cond  *Condition
 		where string
@@ -1162,6 +1160,7 @@ func (c *Config) Validate() error {
 	}
 	warnedConds := make(map[condWarnKey]bool)
 
+	// appendOne resolves ONE subject into an effective mapping; m is by value.
 	appendOne := func(m RoleMapping, subject, source string, i int) error {
 		entry := fmt.Sprintf("%s[%d] (%s)", source, i, subject)
 		label := entry
@@ -1207,10 +1206,6 @@ func (c *Config) Validate() error {
 		m.effectiveTags, err = mergeSessionTags(issuerTags, m.SessionTags)
 		if err != nil {
 			return fmt.Errorf("%s: session_tags: %w", label, err)
-		}
-
-		if len(m.grantedRoles) == 0 {
-			return fmt.Errorf("%s: subject and roles are required", label)
 		}
 
 		m.resolvedSubject = subject
@@ -1655,7 +1650,6 @@ func validateRoleSessionName(name string) error {
 
 // warnUnscopedRoleGrants warns when a role's lowest-order grant has no session_policy while a
 // higher-order grant does: FindSessionPolicy picks the lowest order, so the policy is dropped.
-// Pinned by TestOrderWinsAmongMappingsGrantingTheSameRole.
 func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	type grant struct{ lowest, scoped *RoleMapping }
 	grants := make(map[string]*grant)
