@@ -231,7 +231,7 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 	for _, ri := range overridden {
 		e := m.Roles[ri]
 		piece := e.overlay(m)
-		piece.Roles, piece.grantedRoles, piece.roleOverride = nil, resolved[ri], true
+		piece.Roles, piece.grantedRoles, piece.roleLabel = nil, resolved[ri], e.Role
 		if e.IDPToken != nil && !*e.IDPToken && piece.MaxSessionDuration > IdPDefaultMaxSessionDuration {
 			return nil, wrap(fmt.Errorf("role %q sets idp_token: false but max_session_duration over 1h requires the IdP", e.Role))
 		}

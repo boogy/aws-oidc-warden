@@ -284,6 +284,10 @@ func TestRoleSettingLoadErrors(t *testing.T) {
       - role: "` + rsApply + `"
         role_session_name: "a/b"
 `, false, "role " + rsApply + ": role_session_name"},
+		{"set override error names the set", `    roles:
+      - role: "@pair"
+        role_session_name: "a/b"
+`, false, "role @pair: role_session_name"},
 		{"entry-level error on a single role names no role", `    role_session_name: "a/b"
     roles:
       - "` + rsApply + `"
