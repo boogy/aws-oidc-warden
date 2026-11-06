@@ -37,12 +37,9 @@ func defaultDuration(d config.Decision) int32 {
 	return int32(cmp.Or(d.SessionDuration(), def) / time.Second)
 }
 
-// resolveDuration checks a non-zero, checkDuration-valid request against the ceiling; a non-positive ceiling falls back to the default.
+// resolveDuration checks a non-zero, checkDuration-valid request against the ceiling.
 func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 	ceilingSecs := int32(ceiling / time.Second)
-	if ceilingSecs <= 0 {
-		ceilingSecs = utils.DefaultSTSSessionSecs
-	}
 	if requested > ceilingSecs {
 		return 0, ErrDurationExceedsCap
 	}
