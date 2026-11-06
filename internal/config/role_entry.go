@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -50,8 +51,8 @@ func roleEntryHookFunc() mapstructure.DecodeHookFuncType {
 		case string:
 			return map[string]any{"role": v}, nil
 		case map[string]any:
-			for key, val := range v {
-				if val == nil {
+			for _, key := range slices.Sorted(maps.Keys(v)) {
+				if v[key] == nil {
 					return nil, fmt.Errorf("role setting %q is present but empty", key)
 				}
 			}
@@ -230,7 +231,7 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 	for _, ri := range overridden {
 		e := m.Roles[ri]
 		piece := e.overlay(m)
-		piece.Roles, piece.grantedRoles = nil, resolved[ri]
+		piece.Roles, piece.grantedRoles, piece.roleOverride = nil, resolved[ri], true
 		if e.IDPToken != nil && !*e.IDPToken && piece.MaxSessionDuration > IdPDefaultMaxSessionDuration {
 			return nil, wrap(fmt.Errorf("role %q sets idp_token: false but max_session_duration over 1h requires the IdP", e.Role))
 		}

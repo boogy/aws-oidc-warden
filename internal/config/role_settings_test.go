@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -283,6 +284,10 @@ func TestRoleSettingLoadErrors(t *testing.T) {
       - role: "` + rsApply + `"
         role_session_name: "a/b"
 `, false, "role " + rsApply + ": role_session_name"},
+		{"entry-level error on a single role names no role", `    role_session_name: "a/b"
+    roles:
+      - "` + rsApply + `"
+`, false, "(acme/app): role_session_name"},
 		{"entry conditions no role inherits", `    conditions:
       ref: "refs/heads/main"
     roles:
@@ -394,6 +399,14 @@ func TestRoleSettingLoadErrors(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
+	}
+}
+
+func TestRoleEntryHookReportsFirstEmptyKeyInOrder(t *testing.T) {
+	data := map[string]any{"role": "x", "session_policy": nil, "idp_token": nil, "conditions": nil, "max_session_duration": nil}
+	for range 50 {
+		_, err := roleEntryHookFunc()(reflect.TypeOf(data), roleEntryType, data)
+		require.EqualError(t, err, `role setting "conditions" is present but empty`)
 	}
 }
 
