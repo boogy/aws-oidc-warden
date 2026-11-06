@@ -599,7 +599,7 @@ Optional, disabled by default, and a **policy gate**: `false` (the default) hard
 
 ### IdP Settings
 
-Applied only when the config file or S3 object already carries an `idp:` block; env alone never creates it. `signing_keys` and `paths` are file/S3 only. Env beats S3 on every reload, including `AOW_IDP_ENABLED`.
+Applied only when the config file or S3 object already carries an `idp:` block; env alone never creates it, and `AOW_IDP_ONLY=true` (or an unparseable value) without one fails the load. `signing_keys` and `paths` are file/S3 only. Env beats S3 on every reload, including `AOW_IDP_ENABLED`.
 
 | Environment Variable               | Config File Key                | Default                          |
 | ---------------------------------- | ------------------------------ | -------------------------------- |
