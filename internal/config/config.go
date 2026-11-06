@@ -745,12 +745,17 @@ func (c *Config) LoadConfig() error {
 		return err
 	}
 	// An overlay may supply the idp block; mergeBytes checks after merging.
-	if c.S3ConfigBucket == "" || c.S3ConfigPath == "" {
+	if !c.HasS3Overlay() {
 		if err := c.checkIdPOnlyEnv(); err != nil {
 			return err
 		}
 	}
 	return c.validateMappingsSplit()
+}
+
+// HasS3Overlay reports whether an S3 config overlay is configured.
+func (c *Config) HasS3Overlay() bool {
+	return c.S3ConfigBucket != "" && c.S3ConfigPath != ""
 }
 
 // checkIdPOnlyEnv rejects AOW_IDP_ONLY on a fully merged config with no idp block.

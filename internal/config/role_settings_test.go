@@ -493,20 +493,24 @@ func TestIdPOnlyRejectsExplicitIdPTokenFalse(t *testing.T) {
       - role: "` + rsApply + `"
         idp_token: true
 `
+	const plainRole = `    roles: ["` + rsAudit + `"]
+`
 	tests := []struct {
-		name    string
-		entry   string
-		only    bool
-		wantErr string
+		name     string
+		entry    string
+		only     bool
+		disabled bool
+		wantErr  string
 	}{
-		{"idp_token false with only", falseRole, true, "idp.only"},
-		{"idp_token false without only", falseRole, false, ""},
-		{"idp_token true with only", trueRole, true, ""},
+		{"idp_token false with only", falseRole, true, false, "idp.only"},
+		{"idp_token false without only", falseRole, false, false, ""},
+		{"idp_token true with only", trueRole, true, false, ""},
+		{"only with idp disabled", plainRole, true, true, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			idp := validIdP()
-			idp.Only = tc.only
+			idp.Only, idp.Enabled = tc.only, !tc.disabled
 			_, err := rsLoadIdP(t, rsMapping(tc.entry), idp)
 			if tc.wantErr == "" {
 				require.NoError(t, err)
@@ -515,14 +519,6 @@ func TestIdPOnlyRejectsExplicitIdPTokenFalse(t *testing.T) {
 			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
-}
-
-func TestIdPOnlyWithIdPDisabledLoads(t *testing.T) {
-	idp := validIdP()
-	idp.Only, idp.Enabled = true, false
-	_, err := rsLoadIdP(t, rsMapping(`    roles: ["`+rsAudit+`"]
-`), idp)
-	require.NoError(t, err)
 }
 
 func TestRoleGroupWarnsOncePerRoleNotPerSubject(t *testing.T) {

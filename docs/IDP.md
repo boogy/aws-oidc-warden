@@ -61,7 +61,7 @@ Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: 
 - It never falls back to `AssumeRole`. With the IdP unusable (`idp.enabled: false`, or the block added after startup) every request answers 503 `idp_signing_unavailable`, with the audit reason `idp.only but idp disabled` or `idp.only but idp added after startup`.
 - `only: true` with `enabled: false` loads; it is the kill switch plus the guarantee that nothing bypasses the IdP.
 - The limit is still `max_session_duration` (1h when unset, so a tag grant is capped at 1h); over it answers 400 `duration_exceeds_cap`.
-- `idp_token: false` on a `roles` item is a load error while `only` is true.
+- `idp_token: false` on a `roles` item is a load error while `only` is true; at mapping or `role_groups` level it is indistinguishable from unset and is ignored.
 - `only` is live like `enabled`. To leave IdP-only mode, set `only: false`.
 - A reload that removes the whole `idp` block while `only` is true is rejected and the running config stays; set `only: false` first. A cold start has no running config to compare: it loads the config as it then stands.
 - `AOW_IDP_ONLY=true` with no `idp` block once every layer is merged fails the load, and a reload that removes the block is rejected; an unparseable value always fails. Set it in the environment, not only in the S3 overlay, to hold every cold start to IdP-only.

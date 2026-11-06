@@ -43,14 +43,10 @@ func (r *RequestProcessor) idpEnabled(cfg *config.Config) bool {
 // selectIdP routes an IdP-eligible role (or every request under idp.only) to the IdP when enabled, else allows only sessions within the AssumeRole cap; refusals carry their audit reason.
 func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, requested int32) (useIdP bool, reason string, err error) {
 	if cfg.IdP != nil && cfg.IdP.Only {
-		switch {
-		case r.idpEnabled(cfg):
+		if r.idpEnabled(cfg) {
 			return true, "", nil
-		case r.idp == nil:
-			return false, "idp.only but idp added after startup", ErrIdPUnavailable
-		default:
-			return false, "idp.only but idp disabled", ErrIdPUnavailable
 		}
+		return false, "idp.only but " + r.unavailableReason(), ErrIdPUnavailable
 	}
 	eligible := d.IDPTokenAllowed()
 	if eligible && r.idpEnabled(cfg) {
@@ -64,11 +60,16 @@ func (r *RequestProcessor) selectIdP(cfg *config.Config, d config.Decision, requ
 		return false, "over 1h without idp", ErrDurationExceedsCap
 	case !eligible:
 		return false, "over 1h but role not idp-enabled", ErrIdPNotPermitted
-	case r.idp == nil:
-		return false, "over 1h but idp added after startup", ErrIdPUnavailable
 	default:
-		return false, "over 1h but idp disabled", ErrIdPUnavailable
+		return false, "over 1h but " + r.unavailableReason(), ErrIdPUnavailable
 	}
+}
+
+func (r *RequestProcessor) unavailableReason() string {
+	if r.idp == nil {
+		return "idp added after startup"
+	}
+	return "idp disabled"
 }
 
 // issueIdP mints an IdP token in-process for an authorized request and exchanges it for credentials.
