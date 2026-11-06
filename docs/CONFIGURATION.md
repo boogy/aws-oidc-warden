@@ -458,7 +458,7 @@ Every request goes to `/verify`. The body takes `token` and `role`, plus:
 | `durationSeconds` | 900..43200. `AssumeRole` roles: up to 3600, omitted = 3600. IdP roles: up to the ceiling, omitted = `min(3600, ceiling)`; never clamped |
 | `sessionName`     | `^[\w+=,.@-]{2,64}$`. Used only with the mapping's `allow_session_name: true`, else ignored; a `role_session_name` overrides it         |
 
-A mapping with `max_session_duration` over 1h or `idp_token: true` is issued through the IdP while `idp.enabled`; any other uses `AssumeRole`, capped at 1h ([IDP.md § When the IdP is used](IDP.md#when-the-idp-is-used)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
+A mapping with `max_session_duration` over 1h or `idp_token: true` is issued through the IdP while `idp.enabled`; any other uses `AssumeRole`, capped at 1h, unless `idp.only` sends every request through the IdP ([IDP.md § When the IdP is used](IDP.md#when-the-idp-is-used)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
 ## Environment Variable Reference
 
