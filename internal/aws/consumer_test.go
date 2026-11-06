@@ -297,7 +297,6 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, creds)
 
-	// TransitiveSessionTags off: no transitive keys are set, even with tags present.
 	consumer.Config.SessionTagsTransitive = false
 	mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
 		return *input.RoleArn == testRoleArn && input.TransitiveTagKeys == nil && len(input.Tags) == 2
@@ -315,56 +314,6 @@ func TestAwsConsumer_AssumeRole_TransitiveSessionTags(t *testing.T) {
 	assert.NotNil(t, creds)
 
 	mockAWS.AssertExpectations(t)
-}
-
-// TestAssumeRole_TransitiveFromTopLevelKey pins that transitivity is driven by
-// the top-level session_tags_transitive key.
-func TestAssumeRole_TransitiveFromTopLevelKey(t *testing.T) {
-	testRoleArn := "arn:aws:iam::123456789012:role/test-role"
-	testDuration := int32(3600)
-	testClaims := &gtypes.Claims{Raw: map[string]any{"repository": "owner/repo"}}
-	testSpec := map[string]string{"repo": "repository"}
-
-	for _, tc := range []struct {
-		name           string
-		topLevel       bool
-		wantTransitive bool
-	}{
-		{"top-level on", true, true},
-		{"top-level off", false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mockAWS := new(MockAwsServiceWrapper)
-			consumer := &AwsConsumer{
-				AWS: mockAWS,
-				Config: &gtvcfg.Config{
-					SessionTagsTransitive: tc.topLevel,
-				},
-			}
-			mockAWS.On("GetCallerIdentityInfo", mock.Anything).Return("123456789012", false, nil)
-
-			var captured *sts.AssumeRoleInput
-			mockAWS.On("AssumeRole", mock.Anything, mock.MatchedBy(func(input *sts.AssumeRoleInput) bool {
-				captured = input
-				return *input.RoleArn == testRoleArn
-			})).Return(&sts.AssumeRoleOutput{
-				Credentials: &ststypes.Credentials{
-					AccessKeyId:     aws.String("AKIATEST"),
-					SecretAccessKey: aws.String("SECRET"),
-					SessionToken:    aws.String("TOKEN"),
-				},
-			}, nil).Once()
-
-			_, err := consumer.AssumeRole(context.Background(), testRoleArn, "test-session", nil, &testDuration, BuildSessionTags(context.Background(), testClaims.Raw, testSpec))
-			require.NoError(t, err)
-
-			if tc.wantTransitive {
-				assert.Equal(t, []string{"repo"}, captured.TransitiveTagKeys)
-			} else {
-				assert.Empty(t, captured.TransitiveTagKeys)
-			}
-		})
-	}
 }
 
 func TestTransitiveKeys(t *testing.T) {
