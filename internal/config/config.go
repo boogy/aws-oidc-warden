@@ -110,7 +110,7 @@ type RoleMapping struct {
 
 	grantedRoles   []string `mapstructure:"-" json:"-"` // resolved role ARNs; set on effective mappings only
 	roleConditions bool     `mapstructure:"-" json:"-"` // conditions come from a role object, not the entry
-	roleOverride   bool     `mapstructure:"-" json:"-"` // piece built from a role object's settings
+	roleLabel      string   `mapstructure:"-" json:"-"` // the role object's role, set only on its override piece
 }
 
 // RoleGroupDefaults are the fields a role_group applies uniformly to every
@@ -1165,8 +1165,8 @@ func (c *Config) Validate() error {
 	appendOne := func(m RoleMapping, subject, source string, i int) error {
 		entry := fmt.Sprintf("%s[%d] (%s)", source, i, subject)
 		label := entry
-		if m.roleOverride {
-			label += " role " + m.grantedRoles[0]
+		if m.roleLabel != "" {
+			label += " role " + m.roleLabel
 		}
 		if m.RoleSessionName != "" {
 			if err := validateRoleSessionName(m.RoleSessionName); err != nil {
