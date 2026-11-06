@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
@@ -82,6 +83,18 @@ func withSessionTagClaims(known map[string]bool, tags map[string]string) map[str
 		out[claim] = true
 	}
 	return out
+}
+
+// unknownTagClaims lists, sorted, the tag claims outside known: the only part of tags that changes the warning set.
+func unknownTagClaims(known map[string]bool, tags map[string]string) string {
+	var out []string
+	for _, claim := range tags {
+		if known != nil && !known[claim] {
+			out = append(out, claim)
+		}
+	}
+	slices.Sort(out)
+	return strings.Join(slices.Compact(out), ",")
 }
 
 // warnConditionKeys walks a whole condition tree warning once per unknown
