@@ -236,13 +236,9 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 	if err := checkDuration(requestData.DurationSeconds); err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
-	eff := *requestData
-	if eff.DurationSeconds == 0 {
-		eff.DurationSeconds = int32(cmp.Or(o.decision.SessionDuration(), min(time.Hour, cmp.Or(o.decision.MaxSessionDuration(), config.IdPDefaultMaxSessionDuration))) / time.Second)
-	}
-	requestData = &eff
-	o.rec.DurationSeconds = int(eff.DurationSeconds)
-	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requestData.DurationSeconds)
+	requested := cmp.Or(requestData.DurationSeconds, defaultDuration(o.decision))
+	o.rec.DurationSeconds = int(requested)
+	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requested)
 	if errors.Is(err, ErrIdPUnavailable) {
 		return nil, r.refuse(ctx, o, "idp_unavailable", reason, "IdP unavailable", err)
 	}
@@ -262,25 +258,23 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		logevent.Warn(ctx, o.log, logevent.AuthzSessionNameIgnored, "requested session name ignored", slog.String("sessionNameSource", nameSource))
 	}
 	if useIdP {
-		return r.issueIdP(ctx, o, requestData, sessionName, requestID)
+		return r.issueIdP(ctx, o, requestData.Role, requested, sessionName, requestID)
 	}
-	return r.issueAssumeRole(ctx, o, requestData, sessionName)
+	return r.issueAssumeRole(ctx, o, requestData.Role, requested, sessionName)
 }
 
 // issueAssumeRole assumes the role from the warden's own credentials.
-func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestData *RequestData, sessionName string) (*IssuedCredentials, error) {
+func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestedRole string, requested int32, sessionName string) (*IssuedCredentials, error) {
 	cfg, rec, log := o.cfg, o.rec, o.log
-	requestedRole := requestData.Role
 
 	ceiling := time.Duration(utils.RoleChainingMaxSecs) * time.Second
 	if m := o.decision.MaxSessionDuration(); m > 0 && m < ceiling {
 		ceiling = m
 	}
-	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
+	duration, err := resolveDuration(requested, ceiling)
 	if err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
-	rec.DurationSeconds = int(duration)
 
 	sessionPolicy, policyRef, tags, err := r.grantScope(ctx, o)
 	if err != nil {

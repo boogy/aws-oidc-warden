@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -27,14 +28,20 @@ func checkDuration(requested int32) error {
 	return nil
 }
 
-// resolveDuration returns the session duration for a checkDuration-valid request; a non-positive ceiling falls back to the default.
+// defaultDuration is the session length for a request that omits durationSeconds: session_duration, else min(1h, the role's limit).
+func defaultDuration(d config.Decision) int32 {
+	def := time.Duration(utils.DefaultSTSSessionSecs) * time.Second
+	if m := d.MaxSessionDuration(); m > 0 {
+		def = min(def, m)
+	}
+	return int32(cmp.Or(d.SessionDuration(), def) / time.Second)
+}
+
+// resolveDuration checks a non-zero, checkDuration-valid request against the ceiling; a non-positive ceiling falls back to the default.
 func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
 	ceilingSecs := int32(ceiling / time.Second)
 	if ceilingSecs <= 0 {
 		ceilingSecs = utils.DefaultSTSSessionSecs
-	}
-	if requested == 0 {
-		return min(int32(utils.DefaultSTSSessionSecs), ceilingSecs), nil
 	}
 	if requested > ceilingSecs {
 		return 0, ErrDurationExceedsCap

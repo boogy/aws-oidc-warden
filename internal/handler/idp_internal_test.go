@@ -21,9 +21,6 @@ func TestResolveDuration(t *testing.T) {
 		want      int32
 		wantErr   error
 	}{
-		{"omitted", 0, time.Hour, 3600, nil},
-		{"omitted, 30m ceiling", 0, 30 * time.Minute, 1800, nil},
-		{"omitted, ceiling 0 (fail closed)", 0, 0, 3600, nil},
 		{"7200 under 4h", 7200, 4 * time.Hour, 7200, nil},
 		{"over ceiling", 18000, 4 * time.Hour, 0, ErrDurationExceedsCap},
 		{"default ceiling blocks 2h", 7200, time.Hour, 0, ErrDurationExceedsCap},

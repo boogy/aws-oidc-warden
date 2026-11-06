@@ -73,18 +73,16 @@ func (r *RequestProcessor) unavailableReason() string {
 }
 
 // issueIdP mints an IdP token in-process for an authorized request and exchanges it for credentials.
-func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, requestData *RequestData, sessionName, requestID string) (*IssuedCredentials, error) {
+func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, role string, requested int32, sessionName, requestID string) (*IssuedCredentials, error) {
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
-	role := requestData.Role
 
 	ceiling := cmp.Or(o.decision.MaxSessionDuration(), config.IdPDefaultMaxSessionDuration)
 	capSecs := int(ceiling / time.Second)
 	rec.IdPSessionCapSeconds = &capSecs
-	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
+	duration, err := resolveDuration(requested, ceiling)
 	if err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
-	rec.DurationSeconds = int(duration)
 
 	var sourceIdentity string
 	var truncated bool
