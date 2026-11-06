@@ -264,15 +264,14 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 }
 
 // issueAssumeRole assumes the role from the warden's own credentials.
-func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestedRole string, requested int32, sessionName string) (*IssuedCredentials, error) {
+func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestedRole string, duration int32, sessionName string) (*IssuedCredentials, error) {
 	cfg, rec, log := o.cfg, o.rec, o.log
 
 	ceiling := time.Duration(utils.RoleChainingMaxSecs) * time.Second
 	if m := o.decision.MaxSessionDuration(); m > 0 && m < ceiling {
 		ceiling = m
 	}
-	duration, err := resolveDuration(requested, ceiling)
-	if err != nil {
+	if err := checkCeiling(duration, ceiling); err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
 

@@ -13,38 +13,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolveDuration(t *testing.T) {
+func TestCheckDurationAndCeiling(t *testing.T) {
 	tests := []struct {
 		name      string
 		requested int32
 		ceiling   time.Duration
-		want      int32
 		wantErr   error
 	}{
-		{"7200 under 4h", 7200, 4 * time.Hour, 7200, nil},
-		{"over ceiling", 18000, 4 * time.Hour, 0, ErrDurationExceedsCap},
-		{"default ceiling blocks 2h", 7200, time.Hour, 0, ErrDurationExceedsCap},
-		{"43200 under default", 43200, time.Hour, 0, ErrDurationExceedsCap},
-		{"43200 under 12h", 43200, 12 * time.Hour, 43200, nil},
-		{"ceiling 0 never means 12h", 7200, 0, 0, ErrDurationExceedsCap},
-		{"too short", 600, 12 * time.Hour, 0, ErrInvalidDuration},
-		{"too long", 43201, 12 * time.Hour, 0, ErrInvalidDuration},
-		{"negative", -1, 12 * time.Hour, 0, ErrInvalidDuration},
-		{"exact min", 900, time.Hour, 900, nil},
+		{"7200 under 4h", 7200, 4 * time.Hour, nil},
+		{"over ceiling", 18000, 4 * time.Hour, ErrDurationExceedsCap},
+		{"default ceiling blocks 2h", 7200, time.Hour, ErrDurationExceedsCap},
+		{"43200 under default", 43200, time.Hour, ErrDurationExceedsCap},
+		{"43200 under 12h", 43200, 12 * time.Hour, nil},
+		{"ceiling 0 never means 12h", 7200, 0, ErrDurationExceedsCap},
+		{"too short", 600, 12 * time.Hour, ErrInvalidDuration},
+		{"too long", 43201, 12 * time.Hour, ErrInvalidDuration},
+		{"negative", -1, 12 * time.Hour, ErrInvalidDuration},
+		{"exact min", 900, time.Hour, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var got int32
 			err := checkDuration(tt.requested)
 			if err == nil {
-				got, err = resolveDuration(tt.requested, tt.ceiling)
+				err = checkCeiling(tt.requested, tt.ceiling)
 			}
 			if tt.wantErr != nil {
 				require.ErrorIs(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tt.want, got)
 		})
 	}
 }

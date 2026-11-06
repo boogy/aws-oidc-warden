@@ -37,13 +37,12 @@ func defaultDuration(d config.Decision) int32 {
 	return int32(cmp.Or(d.SessionDuration(), def) / time.Second)
 }
 
-// resolveDuration checks a non-zero, checkDuration-valid request against the ceiling.
-func resolveDuration(requested int32, ceiling time.Duration) (int32, error) {
-	ceilingSecs := int32(ceiling / time.Second)
-	if requested > ceilingSecs {
-		return 0, ErrDurationExceedsCap
+// checkCeiling refuses a checkDuration-valid request over the ceiling.
+func checkCeiling(requested int32, ceiling time.Duration) error {
+	if requested > int32(ceiling/time.Second) {
+		return ErrDurationExceedsCap
 	}
-	return requested, nil
+	return nil
 }
 
 // resolveSessionName applies mapping > request (ignored unless allowed) > global; a used requested name is validated.
