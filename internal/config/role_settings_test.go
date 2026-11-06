@@ -498,7 +498,27 @@ func TestRoleGroupWarnsOncePerRoleNotPerSubject(t *testing.T) {
 
 func TestInheritedConditionTypoWarnsOncePerSubject(t *testing.T) {
 	const ghIss = "https://token.actions.githubusercontent.com"
-	doc := `
+	for _, tc := range []struct {
+		name, claim, roles string
+		want               int
+	}{
+		{"known-claim tags do not split the warning", "evnet_name", `
+      - "` + rsAudit + `"
+      - role: "` + rsApply + `"
+        role_session_name: "apply"
+        session_tags: {repo: "repository"}
+      - role: "` + rsPlan + `"
+        session_tags: {owner: "repository_owner"}
+`, 1},
+		{"tag naming the claim silences only its own role", "team_slug", `
+      - role: "` + rsApply + `"
+        session_tags: {team: "team_slug"}
+      - role: "` + rsPlan + `"
+        role_session_name: "plan"
+`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := `
 issuers:
   - issuer: "` + ghIss + `"
     provider: "github"
@@ -509,21 +529,17 @@ role_mappings:
   - subject: "repo:o/r:ref:refs/heads/main"
     conditions:
       claims:
-        evnet_name: "push"
-    roles:
-      - "` + rsAudit + `"
-      - role: "` + rsApply + `"
-        role_session_name: "apply"
-      - role: "` + rsPlan + `"
-        role_session_name: "plan"
-`
-	logs := captureWarnings(t, func() {
-		v := viper.New()
-		v.SetConfigType("yaml")
-		require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
-		var c Config
-		require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
-		require.NoError(t, c.Validate())
-	})
-	assert.Equal(t, 1, strings.Count(logs, "condition_unknown_claim"))
+        ` + tc.claim + `: "push"
+    roles:` + tc.roles
+			logs := captureWarnings(t, func() {
+				v := viper.New()
+				v.SetConfigType("yaml")
+				require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
+				var c Config
+				require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
+				require.NoError(t, c.Validate())
+			})
+			assert.Equal(t, tc.want, strings.Count(logs, "condition_unknown_claim"))
+		})
+	}
 }
