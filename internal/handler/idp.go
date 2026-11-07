@@ -163,7 +163,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, role s
 		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: %s", exchangeError(err), reason), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	rec.setGrant(cfg, role, sessionName, int(duration), policyRef, tags, creds.Expiration)
+	rec.setGrant(cfg, role, sessionName, policyRef, tags, creds.Expiration)
 	rec.AccessKeyID = *creds.AccessKeyId
 	rec.SourceIdentity = sourceIdentity
 	rec.SourceIdentityTruncated = truncated

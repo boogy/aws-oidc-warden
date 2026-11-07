@@ -293,7 +293,7 @@ func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome,
 		return nil, r.deny(ctx, o, "Failed to assume role", fmt.Errorf("failed to assume role: %w", ret), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	rec.setGrant(cfg, requestedRole, sessionName, int(duration), policyRef, tags, credentials.Expiration)
+	rec.setGrant(cfg, requestedRole, sessionName, policyRef, tags, credentials.Expiration)
 	rec.ProcessingMS = o.elapsed()
 
 	if err := r.finalizeAllow(ctx, log, cfg, rec); err != nil {
