@@ -236,7 +236,7 @@ The failure modes that actually bite, in rough order of likelihood:
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                                                                |
 | `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                                                                     |
 | `400 duration_exceeds_cap`        | `durationSeconds` above the mapping's `max_session_duration` (at most 1h for `AssumeRole`), or over 1h with no `idp` block                               |
-| `400 duration_exceeds_role_max`   | `durationSeconds` or `session_duration` above the role's `MaxSessionDuration`                                                                         |
+| `400 duration_exceeds_role_max`   | `durationSeconds` or `session_duration` above the role's `MaxSessionDuration`                                                                            |
 | `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                                                                     |
 | `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                                                             |
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                                |
