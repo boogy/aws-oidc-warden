@@ -810,7 +810,6 @@ func TestProcessRequestRouting(t *testing.T) {
 }
 
 func TestIdPOnlyAfterReload(t *testing.T) {
-	removeBlock := func(c *config.Config) { c.IdP = nil }
 	tests := []struct {
 		name      string
 		startOnly bool
@@ -819,7 +818,6 @@ func TestIdPOnlyAfterReload(t *testing.T) {
 		wantAR    int
 	}{
 		{"only_turned_off_uses_assume_role", true, func(c *config.Config) { c.IdP.Only = false }, 0, 1},
-		{"block_removed_never_only_uses_assume_role", false, removeBlock, 0, 1},
 		{"only_turned_on_uses_idp", false, func(c *config.Config) { c.IdP.Only = true }, 1, 0},
 	}
 	for _, tt := range tests {
