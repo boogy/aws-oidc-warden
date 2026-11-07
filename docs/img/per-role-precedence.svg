@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1064 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="per-role-precedence-title per-role-precedence-desc" id="per-role-precedence-root">
+<svg viewBox="0 0 1064 568" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="per-role-precedence-title per-role-precedence-desc" id="per-role-precedence-root">
         <title id="per-role-precedence-title">Per-role settings: what each role gets</title>
         <desc id="per-role-precedence-desc">Matrix of the five per-role settings for one mapping entry, showing the built-in default, the entry value, and the value each of three roles resolves to, where a role setting replaces the entry value and an entry value replaces the built-in default.</desc>
         <defs>
@@ -106,31 +106,44 @@
 <text x="944.0" y="352.0" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">2h</text>
 <text x="944.0" y="367.0" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">issued via the IdP</text>
 <rect x="24" y="388" width="120" height="48" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
-<text x="34" y="416.0" fill="#2d3142" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">session_tags</text>
+<text x="34" y="409.0" fill="#2d3142" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">session_</text>
+<text x="34" y="423.0" fill="#2d3142" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">duration</text>
 <rect x="152" y="388" width="132" height="48" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
-<text x="218.0" y="415.5" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">issuer tags only</text>
-<rect x="292" y="388" width="172" height="48" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.30"/>
-<text x="378.0" y="415.5" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">triggered-by: actor</text>
-<rect x="480" y="388" width="176" height="48" rx="4" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
-<text x="568.0" y="408.0" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">issuer tags +</text>
-<text x="568.0" y="423.0" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">triggered-by: actor</text>
-<rect x="664" y="388" width="176" height="48" rx="4" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
-<text x="752.0" y="408.0" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">issuer tags +</text>
-<text x="752.0" y="423.0" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">triggered-by: actor</text>
-<rect x="848" y="388" width="192" height="48" rx="4" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
-<text x="944.0" y="408.0" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">issuer tags +</text>
-<text x="944.0" y="423.0" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">triggered-by: actor</text>
-<line x1="24" y1="450" x2="1040" y2="450" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
-<text x="24" y="468" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.6">LEGEND</text>
-<rect x="24" y="482" width="24" height="14" rx="3" fill="#ffffff" stroke="#2d3142" stroke-width="1.2"/>
-<text x="56" y="492" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Set on the role</text>
-<rect x="169.10000000000002" y="482" width="24" height="14" rx="3" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
-<text x="201.10000000000002" y="492" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Inherited from the entry</text>
-<rect x="367.66" y="482" width="24" height="14" rx="3" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.30"/>
-<text x="399.66" y="492" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Set on the entry</text>
-<rect x="518.7" y="482" width="24" height="14" rx="3" fill="#f5f5f5" stroke="#2d3142" stroke-width=".8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
-<text x="550.7" y="492" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Built-in default</text>
-<rect x="669.74" y="482" width="24" height="14" rx="3" fill="#bf4520" stroke="#bf4520" stroke-width="1.4" fill-opacity="0.08"/>
-<text x="701.74" y="492" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Replaces the entry value, never intersects</text>
+<text x="218.0" y="415.5" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">1h</text>
+<rect x="292" y="388" width="172" height="48" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="378.0" y="415.5" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">not set</text>
+<rect x="480" y="388" width="176" height="48" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="568.0" y="415.5" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">1h</text>
+<rect x="664" y="388" width="176" height="48" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="752.0" y="415.5" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">1h</text>
+<rect x="848" y="388" width="192" height="48" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="944.0" y="415.5" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">1h</text>
+<rect x="24" y="444" width="120" height="48" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="34" y="472" fill="#2d3142" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">session_tags</text>
+<rect x="152" y="444" width="132" height="48" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="218.0" y="471.5" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">issuer tags only</text>
+<rect x="292" y="444" width="172" height="48" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.30"/>
+<text x="378.0" y="471.5" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">triggered-by: actor</text>
+<rect x="480" y="444" width="176" height="48" rx="4" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
+<text x="568.0" y="464" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">issuer tags +</text>
+<text x="568.0" y="479" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">triggered-by: actor</text>
+<rect x="664" y="444" width="176" height="48" rx="4" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
+<text x="752.0" y="464" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">issuer tags +</text>
+<text x="752.0" y="479" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">triggered-by: actor</text>
+<rect x="848" y="444" width="192" height="48" rx="4" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
+<text x="944.0" y="464" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">issuer tags +</text>
+<text x="944.0" y="479" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">triggered-by: actor</text>
+<line x1="24" y1="506" x2="1040" y2="506" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="24" y="524" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.6">LEGEND</text>
+<rect x="24" y="538" width="24" height="14" rx="3" fill="#ffffff" stroke="#2d3142" stroke-width="1.2"/>
+<text x="56" y="548" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Set on the role</text>
+<rect x="169.10000000000002" y="538" width="24" height="14" rx="3" fill="#4f5d75" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.12"/>
+<text x="201.10000000000002" y="548" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Inherited from the entry</text>
+<rect x="367.66" y="538" width="24" height="14" rx="3" fill="#ffffff" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.30"/>
+<text x="399.66" y="548" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Set on the entry</text>
+<rect x="518.7" y="538" width="24" height="14" rx="3" fill="#f5f5f5" stroke="#2d3142" stroke-width=".8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="550.7" y="548" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Built-in default</text>
+<rect x="669.74" y="538" width="24" height="14" rx="3" fill="#bf4520" stroke="#bf4520" stroke-width="1.4" fill-opacity="0.08"/>
+<text x="701.74" y="548" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Replaces the entry value, never intersects</text>
 
       </svg>

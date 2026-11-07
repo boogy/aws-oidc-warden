@@ -51,7 +51,7 @@ var (
 	ErrIdPTokenTooLarge         = errors.New("IdP token exceeds the STS size limit")
 	ErrInvalidDuration          = fmt.Errorf("durationSeconds must be between %d and %d", utils.MinSTSSessionSecs, utils.MaxSTSSessionSecs)
 	ErrDurationExceedsCap       = errors.New("durationSeconds exceeds the configured cap")
-	ErrDurationExceedsRoleMax   = errors.New("durationSeconds exceeds the role's MaxSessionDuration")
+	ErrDurationExceedsRoleMax   = errors.New("session duration (requested or mapping default) exceeds the role's MaxSessionDuration")
 	ErrInvalidSessionName       = errors.New("sessionName must match " + utils.STSNameRule)
 	ErrIdPSourceIdentityInvalid = errors.New("source identity could not be derived for this request")
 	ErrIdPSubjectInvalid        = errors.New("IdP subject could not be derived for this request")

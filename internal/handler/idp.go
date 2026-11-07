@@ -73,20 +73,19 @@ func (r *RequestProcessor) unavailableReason() string {
 }
 
 // issueIdP mints an IdP token in-process for an authorized request and exchanges it for credentials.
-func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, requestData *RequestData, sessionName, requestID string) (*IssuedCredentials, error) {
+func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, role string, duration int32, sessionName, requestID string) (*IssuedCredentials, error) {
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
-	role := requestData.Role
 
 	ceiling := cmp.Or(o.decision.MaxSessionDuration(), config.IdPDefaultMaxSessionDuration)
 	capSecs := int(ceiling / time.Second)
 	rec.IdPSessionCapSeconds = &capSecs
-	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
-	if err != nil {
+	if err := checkCeiling(duration, ceiling); err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
 
 	var sourceIdentity string
 	var truncated bool
+	var err error
 	if r.sourceIdentity != nil {
 		sourceIdentity, truncated, err = r.sourceIdentity.render(requestID, claims.Issuer, claims.Subject, claims.Raw)
 		if err != nil {
@@ -164,7 +163,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 		return nil, r.deny(ctx, o, "Web identity exchange failed", fmt.Errorf("%w: %s", exchangeError(err), reason), rec.reasonAttr(cfg.LogClaimValues))
 	}
 
-	rec.setGrant(cfg, role, sessionName, int(duration), policyRef, tags, creds.Expiration)
+	rec.setGrant(cfg, role, sessionName, policyRef, tags, creds.Expiration)
 	rec.AccessKeyID = *creds.AccessKeyId
 	rec.SourceIdentity = sourceIdentity
 	rec.SourceIdentityTruncated = truncated

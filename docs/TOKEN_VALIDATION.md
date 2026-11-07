@@ -258,7 +258,7 @@ Validation failures propagate as sentinel errors mapped to HTTP status by the fr
 | IdP mode: STS refused the minted token: fix the role trust policy or the IAM OIDC provider                               | `ErrIdPExchangeDenied`        | 403  | `idp_exchange_denied`         |
 | IdP mode: `durationSeconds` outside 900..43200                                                                           | `ErrInvalidDuration`          | 400  | `invalid_duration`            |
 | `durationSeconds` above the mapping's `max_session_duration` (1h for `AssumeRole`), or over 1h with no `idp` block       | `ErrDurationExceedsCap`       | 400  | `duration_exceeds_cap`        |
-| IdP mode: `durationSeconds` above the role's `MaxSessionDuration`                                                        | `ErrDurationExceedsRoleMax`   | 400  | `duration_exceeds_role_max`   |
+| IdP mode: `durationSeconds` or `session_duration` above the role's `MaxSessionDuration`                                  | `ErrDurationExceedsRoleMax`   | 400  | `duration_exceeds_role_max`   |
 | IdP mode: `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                           | `ErrInvalidSessionName`       | 400  | `invalid_session_name`        |
 | IdP mode: a near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                   | `ErrIdPPathNotFound`          | 404  | `idp_path_not_found`          |
 | IdP mode: not `GET`/`HEAD` on a discovery/JWKS path                                                                      | `ErrMethodNotAllowed`         | 405  | `method_not_allowed`          |

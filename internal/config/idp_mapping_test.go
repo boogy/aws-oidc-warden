@@ -135,14 +135,16 @@ func TestMaxSessionDurationValidate(t *testing.T) {
 	})
 }
 
-func TestRoleGroupExpansionCopiesMaxSessionDuration(t *testing.T) {
+func TestRoleGroupExpansionCopiesSessionLimits(t *testing.T) {
 	const grouped, own = "arn:aws:iam::123456789012:role/Grouped", "arn:aws:iam::123456789012:role/Own"
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/own"}, Roles: roleEntries(own), IDPToken: true, MaxSessionDuration: 2 * time.Hour})
-	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/grouped"}, Defaults: RoleGroupDefaults{Roles: roleEntries(grouped), IDPToken: true, MaxSessionDuration: 4 * time.Hour}}}
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/own"}, Roles: roleEntries(own), IDPToken: true, MaxSessionDuration: 2 * time.Hour, SessionDuration: time.Hour})
+	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/grouped"}, Defaults: RoleGroupDefaults{Roles: roleEntries(grouped), IDPToken: true, MaxSessionDuration: 4 * time.Hour, SessionDuration: 3 * time.Hour}}}
 	cfg.IdP = validIdP()
 	require.NoError(t, cfg.Validate())
 	require.Equal(t, 4*time.Hour, cfg.Authorize(idpTestIss, "org/grouped", grouped, map[string]any{}).MaxSessionDuration())
 	require.Equal(t, 2*time.Hour, cfg.Authorize(idpTestIss, "org/own", own, map[string]any{}).MaxSessionDuration(), "an explicit mapping keeps its own cap next to a group default")
+	require.Equal(t, 3*time.Hour, cfg.Authorize(idpTestIss, "org/grouped", grouped, map[string]any{}).SessionDuration())
+	require.Equal(t, time.Hour, cfg.Authorize(idpTestIss, "org/own", own, map[string]any{}).SessionDuration())
 }
 
 func TestIdPSessionCap(t *testing.T) {
@@ -192,10 +194,11 @@ func TestDecisionMaxSessionDurationUsesAuthorizingMapping(t *testing.T) {
 }
 
 func TestIdPMappingFieldsSurviveClone(t *testing.T) {
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries("arn:aws:iam::123456789012:role/R"), IDPToken: true, MaxSessionDuration: 2 * time.Hour})
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries("arn:aws:iam::123456789012:role/R"), IDPToken: true, MaxSessionDuration: 2 * time.Hour, SessionDuration: 90 * time.Minute})
 	clone, err := cloneConfig(cfg)
 	require.NoError(t, err)
 	got := clone.RoleMappings[0]
 	require.True(t, got.IDPToken)
 	require.Equal(t, 2*time.Hour, got.MaxSessionDuration)
+	require.Equal(t, 90*time.Minute, got.SessionDuration)
 }

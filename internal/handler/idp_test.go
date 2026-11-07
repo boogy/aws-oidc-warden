@@ -763,6 +763,28 @@ func TestProcessRequestRouting(t *testing.T) {
 		{name: "only_tag_grant_uses_idp", mutate: func(c *config.Config) { only(c); tagOnly(c) }, duration: 900, wantWI: 1, wantDur: 900, tagAuth: true},
 		{name: "only_tag_grant_over_1h_exceeds_cap", mutate: func(c *config.Config) { only(c); tagOnly(c) }, duration: 7200, wantErr: handler.ErrDurationExceedsCap, tagAuth: true},
 		{name: "only_off_tag_grant_uses_assume_role", mutate: tagOnly, duration: 900, wantAR: 1, wantDur: 900, tagAuth: true},
+
+		{name: "session_duration_omitted_assume_role", mutate: func(c *config.Config) { c.RoleMappings[0].SessionDuration = 30 * time.Minute }, wantAR: 1, wantDur: 1800},
+		{name: "session_duration_omitted_idp", mutate: func(c *config.Config) { c.RoleMappings[0].SessionDuration = 30 * time.Minute }, optedIn: true, wantWI: 1, wantDur: 1800},
+		{name: "session_duration_explicit_wins", mutate: func(c *config.Config) {
+			c.RoleMappings[0].SessionDuration = 30 * time.Minute
+			c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour
+		}, duration: 7200, wantWI: 1, wantDur: 7200},
+		{name: "session_duration_over_1h_omitted_uses_idp", mutate: func(c *config.Config) {
+			c.RoleMappings[0].SessionDuration = 6 * time.Hour
+			c.RoleMappings[0].MaxSessionDuration = 12 * time.Hour
+		}, wantWI: 1, wantDur: 21600},
+		{name: "session_duration_over_1h_omitted_kill_switch", mutate: func(c *config.Config) {
+			c.RoleMappings[0].SessionDuration = 6 * time.Hour
+			c.RoleMappings[0].MaxSessionDuration = 12 * time.Hour
+			c.IdP.Enabled = false
+		}, wantErr: handler.ErrIdPUnavailable, wantDur: 21600},
+		{name: "session_duration_only_sends_exchange_value", mutate: func(c *config.Config) {
+			only(c)
+			c.RoleMappings[0].SessionDuration = 30 * time.Minute
+		}, wantWI: 1, wantDur: 1800},
+		{name: "unset_session_duration_uses_ceiling_when_below_1h", mutate: func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 30 * time.Minute }, wantAR: 1, wantDur: 1800},
+		{name: "tag_grant_omitted_duration_defaults_1h", mutate: tagOnly, wantAR: 1, wantDur: 3600, tagAuth: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -785,6 +807,9 @@ func TestProcessRequestRouting(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 				assert.Zero(t, signer.calls)
 				assert.Equal(t, "deny", sink.last(t)["decision"])
+				if tt.wantDur != 0 {
+					assert.EqualValues(t, tt.wantDur, sink.last(t)["durationSeconds"])
+				}
 				if tt.wantStage != "" {
 					assert.Equal(t, tt.wantStage, sink.last(t)["stage"])
 				}
@@ -804,6 +829,96 @@ func TestProcessRequestRouting(t *testing.T) {
 				assert.EqualValues(t, 3600, sink.last(t)["idpSessionCapSeconds"])
 			}
 		})
+	}
+}
+
+func TestDenyAfterDurationResolutionRecordsDuration(t *testing.T) {
+	tests := []struct {
+		name     string
+		idpToken bool
+		max      time.Duration
+		badName  bool
+		want     int
+	}{
+		{"assume_role_default_1h", false, 0, false, 3600},
+		{"assume_role_capped_by_mapping_max", false, 15 * time.Minute, false, 900},
+		{"idp_default_1h", true, 0, false, 3600},
+		{"session_name_deny_default_1h", false, 0, true, 3600},
+		{"session_name_deny_capped_by_mapping_max", false, 15 * time.Minute, true, 900},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := idpConfig(t, tt.idpToken, "", func(c *config.Config) {
+				c.RoleMappings[0].MaxSessionDuration = tt.max
+				c.RoleMappings[0].AllowSessionName = tt.badName
+			})
+			cons := mockWI(t)
+			cons.assumeErr, cons.wiErr = errors.New("sts down"), errors.New("sts down")
+			proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+			var buf bytes.Buffer
+			req := handler.RequestData{}
+			if tt.badName {
+				req.SessionName = "bad name!"
+			}
+			_, err := mint(t, proc, req, &buf)
+			require.Error(t, err)
+			if tt.badName {
+				require.ErrorIs(t, err, handler.ErrInvalidSessionName)
+			}
+			assert.Equal(t, tt.idpToken, cons.wiCalls == 1)
+			rec := sink.last(t)
+			assert.Equal(t, "deny", rec["decision"])
+			assert.EqualValues(t, tt.want, rec["durationSeconds"])
+		})
+	}
+}
+
+func TestSessionLifetimeOutcomeTable(t *testing.T) {
+	type cell struct {
+		wantDur int32
+		wantErr error
+	}
+	rows := []struct {
+		name         string
+		session, max time.Duration
+		cells        [3]cell
+	}{
+		{"nothing set", 0, 0, [3]cell{{3600, nil}, {1800, nil}, {0, handler.ErrIdPNotPermitted}}},
+		{"max 30m", 0, 30 * time.Minute, [3]cell{{1800, nil}, {1800, nil}, {0, handler.ErrIdPNotPermitted}}},
+		{"max 12h", 0, 12 * time.Hour, [3]cell{{3600, nil}, {1800, nil}, {21600, nil}}},
+		{"max 12h session 2h", 2 * time.Hour, 12 * time.Hour, [3]cell{{7200, nil}, {1800, nil}, {21600, nil}}},
+	}
+	requests := [3]int32{0, 1800, 21600}
+	for _, row := range rows {
+		for i, req := range requests {
+			t.Run(fmt.Sprintf("%s/request_%d", row.name, req), func(t *testing.T) {
+				cfg := idpConfig(t, false, "", func(c *config.Config) {
+					c.RoleMappings[0].SessionDuration = row.session
+					c.RoleMappings[0].MaxSessionDuration = row.max
+				})
+				cons := mockWI(t)
+				proc, sink, _ := idpProcessorFor(t, cfg, cons, idpClaims(nil))
+				var buf bytes.Buffer
+				_, err := mint(t, proc, handler.RequestData{DurationSeconds: req}, &buf)
+				if req == 0 {
+					assert.NotContains(t, sink.last(t), "requestedDurationSeconds")
+				} else {
+					assert.EqualValues(t, req, sink.last(t)["requestedDurationSeconds"])
+				}
+				want := row.cells[i]
+				if want.wantErr != nil {
+					require.ErrorIs(t, err, want.wantErr)
+					assert.Zero(t, cons.wiCalls+cons.assumeCalls)
+					return
+				}
+				require.NoError(t, err)
+				got := cons.gotDuration
+				if cons.wiCalls > 0 {
+					got = cons.lastWI.duration
+				}
+				assert.Equal(t, want.wantDur, got)
+			})
+		}
 	}
 }
 

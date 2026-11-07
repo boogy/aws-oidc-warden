@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Per-role settings** in `role_mappings` and `role_groups`: a `roles` item can override any entry setting except `subject` and `issuer`.
 - **`idp.only`** (`AOW_IDP_ONLY`): issue every credential through the IdP, never `AssumeRole`; a reload that flips it logs `config.idp.only_changed`, and one that removes the block while it is on is rejected.
+- **`session_duration`** per mapping, group defaults and role: the default length when the caller omits `durationSeconds`; `max_session_duration` stays the limit.
 - **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
 - **`example-config.yaml`** now shows per-issuer `tag_prefix`.
 - **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.

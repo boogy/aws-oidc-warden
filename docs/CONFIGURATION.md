@@ -296,7 +296,7 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 
 `Config.AuthorizeRoles(issuer, subject, claims)` unions the roles of every `(issuer, subject)`-matching, condition-satisfying mapping.
 
-Everything else a mapping can specify — session policy, `role_session_name`, extra `session_tags` — then resolves through the **same** `(issuer, subject, role, conditions)` match. That is the point: a role's scoping always travels with the grant that authorized it, and can never be supplied by an unrelated mapping that merely shares the subject. Where several mappings qualify, the first-declared (config order) wins. The same rule picks `max_session_duration` and `idp_token`, so an earlier broad mapping can cap a later narrow one.
+Everything else a mapping can specify — session policy, `role_session_name`, extra `session_tags` — then resolves through the **same** `(issuer, subject, role, conditions)` match. That is the point: a role's scoping always travels with the grant that authorized it, and can never be supplied by an unrelated mapping that merely shares the subject. Where several mappings qualify, the first-declared (config order) wins. The same rule picks `max_session_duration`, `session_duration` and `idp_token`, so an earlier broad mapping can cap a later narrow one.
 
 ![How a role is authorized: union of mappings, then tag fallback, then 403](img/authorization-resolution.svg)
 
@@ -336,14 +336,61 @@ See [SESSION_TAGGING.md](SESSION_TAGGING.md#a-mapping-can-add-tags-never-redefin
 
 #### Per-mapping IdP fields
 
-`role_mappings[]` and `role_groups[].defaults` accept two IdP fields. They apply only when [IdP mode](IDP.md) is configured, and only to roles granted by that mapping (group defaults apply to the expanded mappings).
+`role_mappings[]` and `role_groups[].defaults` accept three per-mapping fields. Only `idp_token` and a `max_session_duration` over 1h need an `idp` block ([IdP mode](IDP.md)). Each applies only to roles granted by that mapping (group defaults apply to the expanded mappings).
 
-| Field                  | Default | Notes                                                                                                                         |
-| ---------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `idp_token`            | `false` | Issue this mapping's roles through the IdP while `idp.enabled`, even at 1h. Needs an `idp` block. Implied by over-1h ceilings |
-| `max_session_duration` | `1h`    | Ceiling for the caller's `durationSeconds` on every role this mapping grants, 15m to 12h. Over 1h routes through the IdP      |
+| Field                  | Default | Notes                                                                                                                                      |
+| ---------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `idp_token`            | `false` | Issue this mapping's roles through the IdP while `idp.enabled`, even at 1h. Needs an `idp` block. Implied by over-1h ceilings              |
+| `max_session_duration` | `1h`    | The **limit** on the caller's `durationSeconds`, 15m to 12h. Over 1h routes through the IdP                                                |
+| `session_duration`     | unset   | The **default** length when the caller omits `durationSeconds`: 15m to 12h, not above the limit. See [Session lifetime](#session-lifetime) |
 
 With `role_sets`, the lowest-order mapping that grants the role decides.
+
+#### Session lifetime
+
+Two keys, one job each:
+
+- `max_session_duration` is the **limit**: the longest session a caller may ask for. A request above it is refused, never shortened.
+- `session_duration` is the **default**: the length used when the caller sends no `durationSeconds`. A caller who asks for a length gets it, up to the limit. Over 1h it must not exceed the role's IAM `MaxSessionDuration`.
+
+Both work per entry (`role_mappings`), in `role_groups[].defaults` and per `roles` item, where a role's value replaces the entry's. What a caller gets, by what the effective mapping sets and what the caller sends:
+
+| Mapping sets                                        | Caller sends nothing | Caller asks 30m | Caller asks 6h      |
+| --------------------------------------------------- | -------------------- | --------------- | ------------------- |
+| nothing                                             | 1h                   | 30m             | refused (limit 1h)  |
+| `max_session_duration: 30m`                         | 30m                  | 30m             | refused (limit 30m) |
+| `max_session_duration: 12h`                         | 1h                   | 30m             | 6h, through the IdP |
+| `max_session_duration: 12h`, `session_duration: 2h` | 2h                   | 30m             | 6h, through the IdP |
+
+```yaml
+idp:
+  enabled: true
+  issuer: "https://idp.example.com"
+  audience: "idp-audience-example"
+  signing_keys:
+    - kms_key_id: "arn:aws:kms:eu-west-1:123456789012:key/00000000-0000-0000-0000-000000000000"
+      algorithm: ES256
+      status: active
+
+role_mappings:
+  - issuer: "https://token.actions.githubusercontent.com"
+    subject: "octo-org/long-job"
+    max_session_duration: 12h # limit
+    session_duration: 2h # default when the caller sends no durationSeconds
+    roles:
+      - "arn:aws:iam::123456789012:role/LongDeploy"
+      - role: "arn:aws:iam::123456789012:role/NightlyBackup"
+        session_duration: 6h # this role's default; the limit stays 12h
+```
+
+Rules:
+
+- `session_duration` is 15m to 12h in whole seconds and may not exceed the limit (1h when `max_session_duration` is unset). The error names both keys. Validation uses the effective values after a role's overrides.
+- A role that sets only one of the two inherits the other from its entry.
+- The path follows the effective default: a request that sends nothing against a default over 1h needs the IdP, so with `idp.enabled: false` it answers 503 `idp_signing_unavailable` and never reaches `AssumeRole`.
+- Unset, an omitted request gets `min(1h, limit)`.
+- The audit record keeps `requestedDurationSeconds` as the caller sent it.
+- Under [`idp.only`](IDP.md#idp-only-mode) the limit is still `max_session_duration` (1h when unset).
 
 #### Per-role settings
 
@@ -391,7 +438,8 @@ role_mappings:
 | `conditions`                              | Full condition tree, same limits. Replaces the entry's conditions                                              |
 | `session_policy`, `session_policy_file`   | Setting either replaces both                                                                                   |
 | `role_session_name`, `allow_session_name` | Setting either replaces both; `allow_session_name: false` is valid and clears an inherited `role_session_name` |
-| `max_session_duration`                    | Replaces                                                                                                       |
+| `max_session_duration`                    | Replaces (the limit)                                                                                           |
+| `session_duration`                        | Replaces (the default); the other key is inherited when unset                                                  |
 | `idp_token`                               | Replaces; `false` is valid                                                                                     |
 | `session_tags`                            | Replaces the entry's tags as a whole; issuer tags still apply                                                  |
 
@@ -399,11 +447,12 @@ Overrides replace and never intersect, so a role can be granted more widely than
 
 These fail to load:
 
-- an empty `conditions`, `session_policy`, `session_policy_file`, `role_session_name`, `session_tags: {}` or `max_session_duration: 0` on a role (a role cannot set an inherited setting to empty; move it off the entry or use a second entry);
+- an empty `conditions`, `session_policy`, `session_policy_file`, `role_session_name`, `session_tags: {}`, `max_session_duration: 0` or `session_duration: 0` on a role (a role cannot set an inherited setting to empty; move it off the entry or use a second entry);
 - a role with its own settings listed twice in one entry, including through a `@set`;
 - an entry-level setting that every role overrides;
 - `idp_token: false` on a role with an effective duration over 1h;
 - `idp_token: false` on a role while `idp.only` is true;
+- a `session_duration` above the effective `max_session_duration` (1h when unset);
 - anything the entry-level rules already reject, applied to the effective values.
 
 `config.warning` codes: `unconditional_role_beside_conditioned` (a role with no conditions beside conditioned roles) and `tag_auth_bypasses_mapping_scoping` with `scopedBy` = `session_policy`, `role_session_name`, `role_conditions` or `max_session_duration`.
@@ -453,10 +502,10 @@ Absent leaves the service unchanged; so does `enabled: false`, except under `idp
 
 Every request goes to `/verify`. The body takes `token` and `role`, plus:
 
-| Field             | Notes                                                                                                                                   |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `durationSeconds` | 900..43200. `AssumeRole` roles: up to 3600, omitted = 3600. IdP roles: up to the ceiling, omitted = `min(3600, ceiling)`; never clamped |
-| `sessionName`     | `^[\w+=,.@-]{2,64}$`. Used only with the mapping's `allow_session_name: true`, else ignored; a `role_session_name` overrides it         |
+| Field             | Notes                                                                                                                                                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `durationSeconds` | 900..43200, up to the limit (`max_session_duration`), never clamped. Omitted = the mapping's `session_duration`, else `min(3600, limit)`. `AssumeRole` roles: limit 3600 ([Session lifetime](#session-lifetime)) |
+| `sessionName`     | `^[\w+=,.@-]{2,64}$`. Used only with the mapping's `allow_session_name: true`, else ignored; a `role_session_name` overrides it                                                                                  |
 
 A mapping with `max_session_duration` over 1h or `idp_token: true` is issued through the IdP while `idp.enabled`; any other uses `AssumeRole`, capped at 1h, unless `idp.only` sends every request through the IdP ([IDP.md § When the IdP is used](IDP.md#when-the-idp-is-used)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
@@ -608,7 +657,7 @@ With `mappings_file` set, the service config may not carry inline `role_mappings
 
 ### What the mappings file may contain
 
-Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token` and `max_session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner`, `session_policy_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment".
+Only `default_issuer`, `role_sets`, `role_mappings` and `role_groups`. A `role_mappings` entry may carry the IdP fields `idp_token`, `max_session_duration` and `session_duration`, but the file can never set `idp.*`, `issuers`, `mappings_file`, `mappings_max_stale`, `s3_config_bucket_owner`, `session_policy_bucket_owner` or `config_fragments`: those are rejected as "not allowed in a config fragment".
 
 The mappings file is a layer beside the base config and the S3 overlay (`s3_config_bucket`/`s3_config_path`). It merges first, then `config_fragments` in order; fragments are rejected inside it. A `role_sets` name defined twice across layers is an error.
 
@@ -652,7 +701,7 @@ Deleting or breaking the file is not revocation: the last good config keeps gran
 
 ### Security
 
-Whoever writes the mappings can grant roles and route them through the IdP (`idp_token`, `max_session_duration`), but never set `idp.*` or `issuers`. The target role's trust policy (in IdP mode, the `sub` pin on the warden's IAM OIDC provider) and IAM `MaxSessionDuration` remain the final gate.
+Whoever writes the mappings can grant roles and route them through the IdP (`idp_token`, `max_session_duration`, `session_duration`), but never set `idp.*` or `issuers`. The target role's trust policy (in IdP mode, the `sub` pin on the warden's IAM OIDC provider) and IAM `MaxSessionDuration` remain the final gate.
 
 ## Config fragments
 
