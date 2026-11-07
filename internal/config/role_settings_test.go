@@ -229,6 +229,10 @@ func TestRoleSettingLoadErrors(t *testing.T) {
 		idp     bool
 		wantErr string
 	}{
+		{"role object without role names its index", `    roles:
+      - "` + rsAudit + `"
+      - session_policy_file: "p.json"
+`, false, "roles[1]: roles: an entry is empty"},
 		{"empty conditions key", `    roles:
       - role: "` + rsApply + `"
         conditions:

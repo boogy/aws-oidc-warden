@@ -177,7 +177,7 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 		}
 		arns, err := c.resolveRoleSet([]string{e.Role})
 		if err != nil {
-			return nil, wrap(err)
+			return nil, wrap(fmt.Errorf("roles[%d]: %w", ri, err))
 		}
 		resolved[ri] = arns
 		for _, arn := range arns {
