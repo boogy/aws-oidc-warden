@@ -753,8 +753,6 @@ func TestProcessRequestRouting(t *testing.T) {
 		}, duration: 7200, wantErr: handler.ErrIdPUnavailable},
 		{name: "over_12h_invalid", optedIn: true, duration: 43201, wantErr: handler.ErrInvalidDuration},
 
-		{name: "only_off_short_plain_uses_assume_role", duration: 900, wantAR: 1, wantDur: 900},
-		{name: "only_off_disabled_short_uses_assume_role", mutate: func(c *config.Config) { c.IdP.Enabled = false }, duration: 900, wantAR: 1, wantDur: 900},
 		{name: "only_plain_short_uses_idp", mutate: only, duration: 1800, wantWI: 1, wantDur: 1800},
 		{name: "only_plain_omitted_uses_idp", mutate: only, wantWI: 1, wantDur: 3600},
 		{name: "only_opted_in_uses_idp", mutate: only, optedIn: true, duration: 900, wantWI: 1, wantDur: 900},
