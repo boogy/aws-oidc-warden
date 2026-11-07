@@ -95,7 +95,7 @@ The mode also changes **what the caller sends on the wire** — because it chang
 3. Scoped parser        build a parser pinned to this issuer: alg allow-list, exp required, iat, leeway
 4. Signature verify     fetch this issuer's JWKS (cache-first), select the key by kid+alg+type, verify
 4b. Re-assert issuer    the verified iss must still equal the spec used (guards a mid-call hot reload)
-6–10. Claim checks       sub, iat, exp, nbf, lifetime/age caps, audience ANY-match, required_claims
+6–9. Claim checks        sub, iat, exp, nbf, lifetime/age caps, audience ANY-match, required_claims
 10. Normalize           derive canonical Subject + raw-claims map via the provider adapter
 ```
 

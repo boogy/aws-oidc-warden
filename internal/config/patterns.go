@@ -83,12 +83,13 @@ func nilConditionHookFunc() mapstructure.DecodeHookFuncType {
 func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 	return []viper.DecoderConfigOption{
 		viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
+			roleEntryHookFunc(),
 			stringToPatternsHookFunc(),
 			nilConditionHookFunc(),
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.StringToSliceHookFunc(","),
 		)),
-		// DecodeNil: affects only the two keys the hooks above claim.
+		// DecodeNil: affects only the keys the hooks above claim.
 		func(c *mapstructure.DecoderConfig) { c.DecodeNil = true; c.Metadata = md },
 	}
 }
@@ -97,6 +98,9 @@ func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 func rejectUnusedKeys(unused []string, source string) error {
 	unused = slices.Sorted(slices.Values(unused))
 	for _, key := range unused {
+		if key == "tag_auth.transitive_session_tags" {
+			return fmt.Errorf("%s: %s was removed: use session_tags_transitive", source, key)
+		}
 		if strings.ContainsAny(key, ".[") {
 			return fmt.Errorf("%s: unknown key %q is not a config field (check the spelling)", source, key)
 		}

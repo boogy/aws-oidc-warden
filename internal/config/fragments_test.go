@@ -94,10 +94,10 @@ func TestMergeFragment_RoleSetCollision(t *testing.T) {
 
 func TestMergeFragment_AppendsRoleMappingsAndGroupsInOrder(t *testing.T) {
 	cfg := &Config{
-		RoleMappings: []RoleMapping{{Subject: Patterns{"base/repo"}, Roles: []string{"arn:aws:iam::111111111111:role/base"}}},
+		RoleMappings: []RoleMapping{{Subject: Patterns{"base/repo"}, Roles: roleEntries("arn:aws:iam::111111111111:role/base")}},
 	}
 	frag := &FragmentConfig{
-		RoleMappings: []RoleMapping{{Subject: Patterns{"frag/repo"}, Roles: []string{"arn:aws:iam::111111111111:role/frag"}}},
+		RoleMappings: []RoleMapping{{Subject: Patterns{"frag/repo"}, Roles: roleEntries("arn:aws:iam::111111111111:role/frag")}},
 		RoleGroups:   []RoleGroup{{Subjects: []string{"frag/a"}}},
 	}
 
@@ -226,7 +226,7 @@ func TestAudit_MergeFragmentTouchesOnlyFourFields(t *testing.T) {
 	before := cloneMustJSON(t, cfg)
 
 	frag := &FragmentConfig{
-		RoleMappings: []RoleMapping{{Subject: Patterns{"o/r"}, Roles: []string{"arn:aws:iam::111111111111:role/x"}}},
+		RoleMappings: []RoleMapping{{Subject: Patterns{"o/r"}, Roles: roleEntries("arn:aws:iam::111111111111:role/x")}},
 	}
 	require.NoError(t, mergeFragment(cfg, frag, "f", map[string]bool{cfg.Issuers[0].Issuer: true}))
 
@@ -273,10 +273,10 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 		Cache:           &Cache{Type: "memory", TTL: time.Hour},
 		RoleSets:        map[string][]string{"prod": {"arn:aws:iam::111111111111:role/prod"}},
 		RoleMappings: []RoleMapping{
-			{Subject: Patterns{"o/r"}, Roles: []string{"@prod"}, SessionPolicyFile: "p.json",
+			{Subject: Patterns{"o/r"}, Roles: roleEntries("@prod"), SessionPolicyFile: "p.json",
 				Conditions: &Condition{Ref: Patterns{"main"}, Claims: map[string]Patterns{"custom": {"v"}}}},
 		},
-		TagAuth:                 &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "acme", TransitiveSessionTags: true},
+		TagAuth:                 &TagAuth{Enabled: true, TagPrefix: "aow/", DefaultOrg: "acme"},
 		CrossAccount:            &CrossAccount{Enabled: true, SpokeRoleName: "aow-spoke", ExternalID: "eid", AllowedAccounts: []string{"222222222222"}},
 		JWTValidation:           JWTValidation{Mode: "apigw", ALBExpectedSigner: "arn:aws:elasticloadbalancing:eu-west-1:111111111111:loadbalancer/app/x/y"},
 		JWTLeeway:               &leeway,
@@ -324,7 +324,7 @@ func TestAudit_CloneConfigPreservesSecurityFields(t *testing.T) {
 	require.Len(t, clone.effective, 1)
 	assert.NotEmpty(t, clone.effective[0].resolvedSubject)
 	assert.True(t, clone.effective[0].compiledPattern != nil || clone.effective[0].subjectClass == subjectExact, "subject must be compiled or an exact literal")
-	assert.Equal(t, []string{"arn:aws:iam::111111111111:role/prod"}, clone.effective[0].Roles)
+	assert.Equal(t, []string{"arn:aws:iam::111111111111:role/prod"}, clone.effective[0].grantedRoles)
 	assert.NotEmpty(t, clone.effective[0].Conditions.compiled)
 }
 
@@ -475,7 +475,7 @@ role_mappings:
 	base.RoleGroups = []RoleGroup{{
 		Subjects: []string{"acme/app"},
 		Defaults: RoleGroupDefaults{
-			Roles:             []string{"arn:aws:iam::111111111111:role/prod"},
+			Roles:             roleEntries("arn:aws:iam::111111111111:role/prod"),
 			SessionPolicyFile: "restrict-prod.json",
 		},
 	}}
@@ -518,7 +518,7 @@ role_mappings:
 	base := a2Base(t)
 	base.RoleMappings = []RoleMapping{{
 		Subject:           Patterns{"acme/app"},
-		Roles:             []string{"arn:aws:iam::111111111111:role/prod"},
+		Roles:             roleEntries("arn:aws:iam::111111111111:role/prod"),
 		SessionPolicyFile: "restrict-prod.json",
 	}}
 	base.ConfigFragments = []string{f}
@@ -549,7 +549,7 @@ func TestAudit_FragmentDefaultIssuerCannotRebindBaseMappings(t *testing.T) {
 	})
 	// Base mapping with NO explicit issuer + 2 issuers + no default_issuer.
 	base.RoleMappings = []RoleMapping{{
-		Subject: Patterns{"acme/app"}, Roles: []string{"arn:aws:iam::111111111111:role/prod"},
+		Subject: Patterns{"acme/app"}, Roles: roleEntries("arn:aws:iam::111111111111:role/prod"),
 	}}
 	base.ConfigFragments = []string{f}
 	err := base.Validate()
@@ -576,7 +576,7 @@ func TestAudit_OverlayAddsIssuerThenFragmentDefaultIssuer(t *testing.T) {
 
 	base := a2Base(t)
 	base.RoleMappings = []RoleMapping{{
-		Subject: Patterns{"acme/app"}, Roles: []string{"arn:aws:iam::111111111111:role/prod"},
+		Subject: Patterns{"acme/app"}, Roles: roleEntries("arn:aws:iam::111111111111:role/prod"),
 	}}
 	base.ConfigFragments = []string{f}
 	require.NoError(t, base.Validate())
@@ -646,7 +646,7 @@ role_groups:
 
 	cached := p.fragments[f]
 	require.NotNil(t, cached)
-	snap := []string{}
+	snap := []RoleEntry{}
 	snap = append(snap, cached.parsed.RoleMappings[0].Roles...)
 	condBranch := cached.parsed.RoleMappings[0].Conditions.Ref
 	setLen := len(cached.parsed.RoleSets["fragset"])
@@ -728,14 +728,14 @@ func TestAudit_RoleMappingOutranksRoleGroupWithoutFragments(t *testing.T) {
 	c.RoleGroups = []RoleGroup{{
 		Subjects: []string{"acme/app"},
 		Defaults: RoleGroupDefaults{
-			Roles:             []string{"arn:aws:iam::111111111111:role/prod"},
+			Roles:             roleEntries("arn:aws:iam::111111111111:role/prod"),
 			SessionPolicyFile: "restrict-prod.json",
 		},
 	}}
 	// Declared SECOND: an unrestricted role_mapping for the same subject+role.
 	c.RoleMappings = []RoleMapping{{
 		Subject: Patterns{"acme/app"},
-		Roles:   []string{"arn:aws:iam::111111111111:role/prod"},
+		Roles:   roleEntries("arn:aws:iam::111111111111:role/prod"),
 	}}
 	require.NoError(t, c.Validate())
 
@@ -766,9 +766,9 @@ func TestAudit_RoleGroupOrderingAmongstThemselves(t *testing.T) {
 	c := a2Base(t)
 	c.RoleGroups = []RoleGroup{
 		{Subjects: []string{"acme/app"}, Defaults: RoleGroupDefaults{
-			Roles: []string{"arn:aws:iam::111111111111:role/prod"}, SessionPolicyFile: "first.json"}},
+			Roles: roleEntries("arn:aws:iam::111111111111:role/prod"), SessionPolicyFile: "first.json"}},
 		{Subjects: []string{"acme/app"}, Defaults: RoleGroupDefaults{
-			Roles: []string{"arn:aws:iam::111111111111:role/prod"}}},
+			Roles: roleEntries("arn:aws:iam::111111111111:role/prod")}},
 	}
 	require.NoError(t, c.Validate())
 	_, polFile := c.FindSessionPolicy(c.Issuers[0].Issuer, "acme/app",

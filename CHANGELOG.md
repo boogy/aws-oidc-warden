@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Per-role settings** in `role_mappings` and `role_groups`: a `roles` item can override any entry setting except `subject` and `issuer`.
+- **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
+- **`example-config.yaml`** now shows per-issuer `tag_prefix`.
+- **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
+- **`config.warning` code `unconditional_role_beside_conditioned`**, and `scopedBy=role_conditions` / `max_session_duration` (under 1h) on `tag_auth_bypasses_mapping_scoping`.
+
+### Removed
+
+- **Breaking: `tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`; the key, or the env var set to true or an unparseable value, fails the load.
+
+### Fixed
+
+- **`docs/ARCHITECTURE.md`**: core pipeline sequence diagram renders on GitHub again.
+
 ## [4.0.0] - 2026-11-02
 
 Warden-as-IdP mode lifts the 1h role-chaining cap, and role mappings can live in a separate hot-reloaded file.

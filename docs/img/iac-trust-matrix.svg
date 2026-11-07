@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 888 532" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="iac-trust-matrix-title iac-trust-matrix-desc" id="iac-trust-matrix-root">
+        <title id="iac-trust-matrix-title">Which run gets which role</title>
+        <desc id="iac-trust-matrix-desc">Matrix of nine GitHub Actions runs against the example plan and apply roles, marking each claim value that fails an apply condition; only a push or workflow_dispatch on main, in production, from apply.yml gets the apply role.</desc>
+        <defs>
+      <style>#iac-trust-matrix-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #iac-trust-matrix-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #iac-trust-matrix-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#iac-trust-matrix-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="iac-trust-matrix-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="iac-trust-matrix-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="iac-trust-matrix-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <text x="24" y="34" fill="#2d3142" font-size="15" font-family="'Geist', system-ui, sans-serif" font-weight="600">A run needs all four claims to get TerraformApply</text>
+<text x="24" y="62" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.6">CLAIMS IN THE TOKEN</text>
+<text x="636" y="62" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.6">ROLE GRANTED</text>
+<rect x="24" y="72" width="160" height="52" rx="6" fill="#2d3142"/>
+<text x="104.0" y="94" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">event_name</text>
+<text x="104.0" y="110" fill="#ffffff" font-size="9.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">push, workflow_dispatch</text>
+<rect x="190" y="72" width="142" height="52" rx="6" fill="#2d3142"/>
+<text x="261.0" y="94" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">ref</text>
+<text x="261.0" y="110" fill="#ffffff" font-size="9.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">refs/heads/main</text>
+<rect x="338" y="72" width="96" height="52" rx="6" fill="#2d3142"/>
+<text x="386.0" y="94" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">environment</text>
+<text x="386.0" y="110" fill="#ffffff" font-size="9.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">production</text>
+<rect x="440" y="72" width="190" height="52" rx="6" fill="#2d3142"/>
+<text x="535.0" y="94" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">workflow_ref</text>
+<text x="535.0" y="110" fill="#ffffff" font-size="9.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">apply.yml@refs/heads/main</text>
+<rect x="636" y="72" width="116" height="52" rx="6" fill="#2d3142"/>
+<text x="694.0" y="94" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">TerraformPlan</text>
+<text x="694.0" y="110" fill="#ffffff" font-size="9.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">pull_request, push</text>
+<rect x="758" y="72" width="106" height="52" rx="6" fill="#2d3142"/>
+<text x="811.0" y="94" fill="#ffffff" font-size="12" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">TerraformApply</text>
+<text x="811.0" y="110" fill="#ffffff" font-size="9.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">all four</text>
+<rect x="24" y="132" width="160" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="104.0" y="151" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">pull_request</text>
+<rect x="190" y="132" width="142" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="261.0" y="151" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">refs/pull/7/merge</text>
+<rect x="338" y="132" width="96" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="386.0" y="151" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">none</text>
+<rect x="440" y="132" width="190" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="535.0" y="151" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">apply.yml@refs/pull/7/merge</text>
+<rect x="636" y="132" width="116" height="30" rx="4" fill="#2d3142"/>
+<text x="694.0" y="151" fill="#ffffff" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">granted</text>
+<rect x="758" y="132" width="106" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="811.0" y="151" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="24" y="166" width="160" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="104.0" y="185" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">pull_request</text>
+<rect x="190" y="166" width="142" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="261.0" y="185" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">refs/pull/7/merge</text>
+<rect x="338" y="166" width="96" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="386.0" y="185" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">production</text>
+<rect x="440" y="166" width="190" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="535.0" y="185" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">apply.yml@refs/pull/7/merge</text>
+<rect x="636" y="166" width="116" height="30" rx="4" fill="#2d3142"/>
+<text x="694.0" y="185" fill="#ffffff" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">granted</text>
+<rect x="758" y="166" width="106" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="811.0" y="185" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="24" y="200" width="160" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="104.0" y="219" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">push</text>
+<rect x="190" y="200" width="142" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="261.0" y="219" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">refs/heads/main</text>
+<rect x="338" y="200" width="96" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="386.0" y="219" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">production</text>
+<rect x="440" y="200" width="190" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="535.0" y="219" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">apply.yml@refs/heads/main</text>
+<rect x="636" y="200" width="116" height="30" rx="4" fill="#2d3142"/>
+<text x="694.0" y="219" fill="#ffffff" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">granted</text>
+<rect x="758" y="200" width="106" height="30" rx="4" fill="#2d3142"/>
+<text x="811.0" y="219" fill="#ffffff" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">granted</text>
+<rect x="24" y="234" width="160" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="104.0" y="253" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">push</text>
+<rect x="190" y="234" width="142" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="261.0" y="253" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">refs/heads/main</text>
+<rect x="338" y="234" width="96" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="386.0" y="253" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">none</text>
+<rect x="440" y="234" width="190" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="535.0" y="253" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">apply.yml@refs/heads/main</text>
+<rect x="636" y="234" width="116" height="30" rx="4" fill="#2d3142"/>
+<text x="694.0" y="253" fill="#ffffff" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">granted</text>
+<rect x="758" y="234" width="106" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="811.0" y="253" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="24" y="268" width="160" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="104.0" y="287" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">push</text>
+<rect x="190" y="268" width="142" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="261.0" y="287" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">refs/heads/feature</text>
+<rect x="338" y="268" width="96" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="386.0" y="287" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">production</text>
+<rect x="440" y="268" width="190" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="535.0" y="287" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">apply.yml@refs/heads/feature</text>
+<rect x="636" y="268" width="116" height="30" rx="4" fill="#2d3142"/>
+<text x="694.0" y="287" fill="#ffffff" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">granted</text>
+<rect x="758" y="268" width="106" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="811.0" y="287" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="24" y="302" width="160" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="104.0" y="321" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">push</text>
+<rect x="190" y="302" width="142" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="261.0" y="321" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">refs/heads/main</text>
+<rect x="338" y="302" width="96" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="386.0" y="321" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">production</text>
+<rect x="440" y="302" width="190" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="535.0" y="321" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">pr.yml@refs/heads/main</text>
+<rect x="636" y="302" width="116" height="30" rx="4" fill="#2d3142"/>
+<text x="694.0" y="321" fill="#ffffff" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">granted</text>
+<rect x="758" y="302" width="106" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="811.0" y="321" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="24" y="336" width="160" height="30" rx="4" fill="#bf4520" stroke="#bf4520" stroke-width="1.4" fill-opacity="0.08"/>
+<text x="104.0" y="355" fill="#bf4520" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">pull_request_target</text>
+<rect x="190" y="336" width="142" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="261.0" y="355" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">refs/heads/main</text>
+<rect x="338" y="336" width="96" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="386.0" y="355" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">production</text>
+<rect x="440" y="336" width="190" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="535.0" y="355" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">apply.yml@refs/heads/main</text>
+<rect x="636" y="336" width="116" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="694.0" y="355" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="758" y="336" width="106" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="811.0" y="355" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="24" y="370" width="160" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="104.0" y="389" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">workflow_dispatch</text>
+<rect x="190" y="370" width="142" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="261.0" y="389" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">refs/heads/main</text>
+<rect x="338" y="370" width="96" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="386.0" y="389" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">production</text>
+<rect x="440" y="370" width="190" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="535.0" y="389" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">apply.yml@refs/heads/main</text>
+<rect x="636" y="370" width="116" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="694.0" y="389" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="758" y="370" width="106" height="30" rx="4" fill="#2d3142"/>
+<text x="811.0" y="389" fill="#ffffff" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">granted</text>
+<rect x="24" y="404" width="160" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="104.0" y="423" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">workflow_dispatch</text>
+<rect x="190" y="404" width="142" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="261.0" y="423" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">refs/heads/feature</text>
+<rect x="338" y="404" width="96" height="30" rx="4" fill="#ffffff" stroke="#2d3142" stroke-width="0.6" stroke-opacity="0.12"/>
+<text x="386.0" y="423" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">production</text>
+<rect x="440" y="404" width="190" height="30" rx="4" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="535.0" y="423" fill="#2d3142" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600" text-anchor="middle">apply.yml@refs/heads/feature</text>
+<rect x="636" y="404" width="116" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="694.0" y="423" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<rect x="758" y="404" width="106" height="30" rx="4" fill="#f5f5f5" stroke="#2d3142" stroke-width="0.8" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="811.0" y="423" fill="#5a6580" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">denied</text>
+<line x1="24" y1="446" x2="864" y2="446" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="24" y="464" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.6">LEGEND</text>
+<rect x="24" y="478" width="24" height="14" rx="3" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.08" stroke-opacity="0.30"/>
+<text x="56" y="488" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Fails an Apply condition</text>
+<rect x="222.56" y="478" width="24" height="14" rx="3" fill="#bf4520" stroke="#bf4520" stroke-width="1.4" fill-opacity="0.08"/>
+<text x="254.56" y="488" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Only event_name stops this run</text>
+<rect x="456.76" y="478" width="24" height="14" rx="3" fill="#2d3142" stroke="#2d3142" stroke-width="1"/>
+<text x="488.76" y="488" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Granted</text>
+<text x="24" y="510" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Subject octo-org/infra. workflow_ref is shown without octo-org/infra/.github/workflows/.</text>
+
+      </svg>

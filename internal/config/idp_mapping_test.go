@@ -25,7 +25,7 @@ func TestIDPTokenDecision(t *testing.T) {
 		flag bool
 	}{{"opted in", true}, {"not opted in", false}} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: tc.flag})
+			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: tc.flag})
 			cfg.IdP = validIdP()
 			require.NoError(t, cfg.Validate())
 			d := cfg.Authorize(idpTestIss, "org/repo", role, map[string]any{})
@@ -36,16 +36,16 @@ func TestIDPTokenDecision(t *testing.T) {
 }
 
 func TestIDPTokenWithSessionPolicyAllowed(t *testing.T) {
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{"arn:aws:iam::123456789012:role/R"}, IDPToken: true, SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`, RoleSessionName: "fixed"})
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries("arn:aws:iam::123456789012:role/R"), IDPToken: true, SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`, RoleSessionName: "fixed"})
 	cfg.IdP = validIdP()
 	require.NoError(t, cfg.Validate())
 }
 
 func TestIDPTokenInheritedFromRoleGroup(t *testing.T) {
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{"arn:aws:iam::123456789012:role/Other"}})
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: roleEntries("arn:aws:iam::123456789012:role/Other")})
 	cfg.RoleGroups = []RoleGroup{{
 		Subjects: []string{"org/repo"},
-		Defaults: RoleGroupDefaults{Roles: []string{"arn:aws:iam::123456789012:role/R"}, IDPToken: true},
+		Defaults: RoleGroupDefaults{Roles: roleEntries("arn:aws:iam::123456789012:role/R"), IDPToken: true},
 	}}
 	cfg.IdP = validIdP()
 	require.NoError(t, cfg.Validate())
@@ -70,7 +70,7 @@ func TestIDPTokenAllowedFollowsMapping(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: tt.idpTok, MaxSessionDuration: tt.max})
+			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: tt.idpTok, MaxSessionDuration: tt.max})
 			cfg.IdP = validIdP()
 			require.NoError(t, cfg.Validate())
 			require.Equal(t, tt.want, cfg.Authorize(idpTestIss, "org/repo", role, map[string]any{}).IDPTokenAllowed())
@@ -99,7 +99,7 @@ func TestMaxSessionDurationValidate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: tt.idpTok, MaxSessionDuration: tt.mapping})
+			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: tt.idpTok, MaxSessionDuration: tt.mapping})
 			cfg.IdP = validIdP()
 			err := cfg.Validate()
 			if tt.wantErr == "" {
@@ -111,34 +111,34 @@ func TestMaxSessionDurationValidate(t *testing.T) {
 	}
 
 	t.Run("group default ok", func(t *testing.T) {
-		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{role}})
-		cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{role}, MaxSessionDuration: 4 * time.Hour}}}
+		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: roleEntries(role)})
+		cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: roleEntries(role), MaxSessionDuration: 4 * time.Hour}}}
 		cfg.IdP = validIdP()
 		require.NoError(t, cfg.Validate())
 	})
 	t.Run("over 1h without idp block", func(t *testing.T) {
-		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, MaxSessionDuration: 4 * time.Hour})
+		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), MaxSessionDuration: 4 * time.Hour})
 		require.ErrorContains(t, cfg.Validate(), "max_session_duration over 1h requires an idp block")
 	})
 	t.Run("idp_token without idp block", func(t *testing.T) {
-		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true})
+		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: true})
 		require.ErrorContains(t, cfg.Validate(), "idp_token requires an idp block")
 	})
 	t.Run("group idp_token without idp block", func(t *testing.T) {
-		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: []string{role}})
-		cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{role}, IDPToken: true}}}
+		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"x/y"}, Roles: roleEntries(role)})
+		cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: roleEntries(role), IDPToken: true}}}
 		require.ErrorContains(t, cfg.Validate(), "idp_token requires an idp block")
 	})
 	t.Run("1h without idp block", func(t *testing.T) {
-		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, MaxSessionDuration: time.Hour})
+		cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), MaxSessionDuration: time.Hour})
 		require.NoError(t, cfg.Validate())
 	})
 }
 
 func TestRoleGroupExpansionCopiesMaxSessionDuration(t *testing.T) {
 	const grouped, own = "arn:aws:iam::123456789012:role/Grouped", "arn:aws:iam::123456789012:role/Own"
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/own"}, Roles: []string{own}, IDPToken: true, MaxSessionDuration: 2 * time.Hour})
-	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/grouped"}, Defaults: RoleGroupDefaults{Roles: []string{grouped}, IDPToken: true, MaxSessionDuration: 4 * time.Hour}}}
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/own"}, Roles: roleEntries(own), IDPToken: true, MaxSessionDuration: 2 * time.Hour})
+	cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/grouped"}, Defaults: RoleGroupDefaults{Roles: roleEntries(grouped), IDPToken: true, MaxSessionDuration: 4 * time.Hour}}}
 	cfg.IdP = validIdP()
 	require.NoError(t, cfg.Validate())
 	require.Equal(t, 4*time.Hour, cfg.Authorize(idpTestIss, "org/grouped", grouped, map[string]any{}).MaxSessionDuration())
@@ -168,11 +168,11 @@ func TestIdPSessionCap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true, MaxSessionDuration: tt.mapping})
+			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: true, MaxSessionDuration: tt.mapping})
 			cfg.IdP = validIdP()
 			cfg.RoleMappings = append(cfg.RoleMappings,
-				RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{override}, IDPToken: true, MaxSessionDuration: tt.mapping})
-			cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: []string{grouped, override}, IDPToken: true, MaxSessionDuration: tt.group}}}
+				RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(override), IDPToken: true, MaxSessionDuration: tt.mapping})
+			cfg.RoleGroups = []RoleGroup{{Subjects: []string{"org/repo"}, Defaults: RoleGroupDefaults{Roles: roleEntries(grouped, override), IDPToken: true, MaxSessionDuration: tt.group}}}
 			require.NoError(t, cfg.Validate())
 			require.Equal(t, tt.want, cfg.Authorize(idpTestIss, "org/repo", tt.role, map[string]any{}).MaxSessionDuration())
 		})
@@ -182,9 +182,9 @@ func TestIdPSessionCap(t *testing.T) {
 
 func TestDecisionMaxSessionDurationUsesAuthorizingMapping(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/R"
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true, MaxSessionDuration: 2 * time.Hour})
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: true, MaxSessionDuration: 2 * time.Hour})
 	cfg.IdP = validIdP()
-	cfg.RoleMappings = append(cfg.RoleMappings, RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{role}, IDPToken: true, MaxSessionDuration: 8 * time.Hour})
+	cfg.RoleMappings = append(cfg.RoleMappings, RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: true, MaxSessionDuration: 8 * time.Hour})
 	require.NoError(t, cfg.Validate())
 	d := cfg.Authorize(idpTestIss, "org/repo", role, map[string]any{})
 	require.Equal(t, 2*time.Hour, d.MaxSessionDuration(), "lowest-order mapping wins, so a tight mapping shadows a looser one")
@@ -192,7 +192,7 @@ func TestDecisionMaxSessionDurationUsesAuthorizingMapping(t *testing.T) {
 }
 
 func TestIdPMappingFieldsSurviveClone(t *testing.T) {
-	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: []string{"arn:aws:iam::123456789012:role/R"}, IDPToken: true, MaxSessionDuration: 2 * time.Hour})
+	cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries("arn:aws:iam::123456789012:role/R"), IDPToken: true, MaxSessionDuration: 2 * time.Hour})
 	clone, err := cloneConfig(cfg)
 	require.NoError(t, err)
 	got := clone.RoleMappings[0]

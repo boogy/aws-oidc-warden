@@ -171,7 +171,7 @@ func TestCredentialPathSessionFields(t *testing.T) {
 				Cache:           &config.Cache{TTL: 0},
 				RoleMappings: []config.RoleMapping{{
 					Subject:          config.Patterns{"org/repo"},
-					Roles:            []string{role},
+					Roles:            roleEntries(role),
 					RoleSessionName:  tc.fixed,
 					AllowSessionName: tc.allow,
 				}},

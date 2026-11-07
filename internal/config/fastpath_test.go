@@ -74,7 +74,7 @@ func TestAuthorizeAmbiguityIsPerMapping(t *testing.T) {
 	claims := map[string]any{"isContractor": "true", "iscontractor": "false", "ref": "main"}
 
 	mapping := func(subject, role string, c *Condition) RoleMapping {
-		return RoleMapping{Subject: Patterns{subject}, Roles: []string{role}, Conditions: c}
+		return RoleMapping{Subject: Patterns{subject}, Roles: roleEntries(role), Conditions: c}
 	}
 	ambiguous := &Condition{Claims: map[string]Patterns{"iscontractor": {"false"}}}
 	clean := &Condition{Ref: Patterns{"main"}}
@@ -105,13 +105,13 @@ func TestAuthorizeAmbiguityIsPerMapping(t *testing.T) {
 }
 
 func TestAuthorizeKeepsOrderAcrossBuckets(t *testing.T) {
-	roles := func(i int) []string { return []string{fmt.Sprintf("arn:aws:iam::111111111111:role/r%d", i)} }
+	roles := func(i int) []RoleEntry { return roleEntries(fmt.Sprintf("arn:aws:iam::111111111111:role/r%d", i)) }
 	cfg := vcfg(t, []RoleMapping{
 		{Subject: Patterns{"acme/.*"}, Roles: roles(0), SessionPolicy: "p0"},
 		{Subject: Patterns{"acme/app"}, Roles: roles(0), SessionPolicy: "p1"},
 		{Subject: Patterns{`ac.*/app`}, Roles: roles(0), SessionPolicy: "p2"},
 	})
-	d := cfg.Authorize(vIss, "acme/app", roles(0)[0], map[string]any{})
+	d := cfg.Authorize(vIss, "acme/app", roles(0)[0].Role, map[string]any{})
 	require.True(t, d.Matched)
 	require.Len(t, d.Roles, 3)
 	p, _ := d.SessionPolicy()

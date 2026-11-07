@@ -80,7 +80,7 @@ cache_type: "memory"
 		t.Logf("Config file used: %s", v.ConfigFileUsed())
 
 		// Extract values from viper
-		if err := v.Unmarshal(cfg); err != nil {
+		if err := v.Unmarshal(cfg, decoderOptions(nil)...); err != nil {
 			return err
 		}
 
@@ -104,7 +104,7 @@ cache_type: "memory"
 	assert.Equal(t, 2, len(cfg.RoleMappings))
 	assert.Equal(t, Patterns{"org/repo1"}, cfg.RoleMappings[0].Subject)
 	assert.Equal(t, "policy1", cfg.RoleMappings[0].SessionPolicy)
-	assert.Equal(t, []string{"arn:aws:iam::123456789012:role/role1", "arn:aws:iam::123456789012:role/role2"}, cfg.RoleMappings[0].Roles)
+	assert.Equal(t, roleEntries("arn:aws:iam::123456789012:role/role1", "arn:aws:iam::123456789012:role/role2"), cfg.RoleMappings[0].Roles)
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
@@ -145,7 +145,7 @@ func TestValidate(t *testing.T) {
 					{
 						Subject:       Patterns{"org/repo"},
 						SessionPolicy: "policy",
-						Roles:         []string{"arn:aws:iam::123456789012:role/role1"},
+						Roles:         roleEntries("arn:aws:iam::123456789012:role/role1"),
 					},
 				},
 			},
@@ -160,7 +160,7 @@ func TestValidate(t *testing.T) {
 					{
 						Subject:       Patterns{"org/repo"},
 						SessionPolicy: "policy",
-						Roles:         []string{"arn:aws:iam::123456789012:role/role1"},
+						Roles:         roleEntries("arn:aws:iam::123456789012:role/role1"),
 					},
 				},
 			},
@@ -336,7 +336,7 @@ func TestValidate(t *testing.T) {
 				RoleMappings: []RoleMapping{
 					{
 						SessionPolicy: "policy",
-						Roles:         []string{"arn:aws:iam::123456789012:role/role1"},
+						Roles:         roleEntries("arn:aws:iam::123456789012:role/role1"),
 					},
 				},
 			},
@@ -350,7 +350,7 @@ func TestValidate(t *testing.T) {
 				RoleMappings: []RoleMapping{
 					{
 						Subject: Patterns{"org/repo"},
-						Roles:   []string{"arn:aws:iam::123456789012:role/role1"},
+						Roles:   roleEntries("arn:aws:iam::123456789012:role/role1"),
 					},
 				},
 			},
@@ -365,7 +365,7 @@ func TestValidate(t *testing.T) {
 					{
 						Subject:       Patterns{"org/repo"},
 						SessionPolicy: "policy",
-						Roles:         []string{},
+						Roles:         []RoleEntry{},
 					},
 				},
 			},
@@ -503,12 +503,12 @@ func TestFindSessionPolicy(t *testing.T) {
 			{
 				Subject:       Patterns{"org/repo1"},
 				SessionPolicy: "policy1",
-				Roles:         []string{"arn:aws:iam::123456789012:role/role1"},
+				Roles:         roleEntries("arn:aws:iam::123456789012:role/role1"),
 			},
 			{
 				Subject:       Patterns{"org/repo2.*"},
 				SessionPolicy: "policy2",
-				Roles:         []string{"arn:aws:iam::123456789012:role/role2"},
+				Roles:         roleEntries("arn:aws:iam::123456789012:role/role2"),
 			},
 		},
 	}
@@ -571,15 +571,15 @@ func TestAuthorizeRoles(t *testing.T) {
 		RoleMappings: []RoleMapping{
 			{
 				Subject: Patterns{"org/repo1"},
-				Roles:   []string{"arn:aws:iam::123456789012:role/role1", "arn:aws:iam::123456789012:role/role2"},
+				Roles:   roleEntries("arn:aws:iam::123456789012:role/role1", "arn:aws:iam::123456789012:role/role2"),
 			},
 			{
 				Subject: Patterns{"org/repo2.*"},
-				Roles:   []string{"arn:aws:iam::123456789012:role/role3"},
+				Roles:   roleEntries("arn:aws:iam::123456789012:role/role3"),
 			},
 			{
 				Subject: Patterns{"org/shared-.*"},
-				Roles:   []string{"arn:aws:iam::123456789012:role/shared-role"},
+				Roles:   roleEntries("arn:aws:iam::123456789012:role/shared-role"),
 			},
 		},
 	}
@@ -990,8 +990,8 @@ func TestFindRoleSessionName_ComesFromAuthorizingMapping(t *testing.T) {
 		RoleSessionName: "aws-oidc-warden",
 		RoleMappings: []RoleMapping{
 			// Declared first (lowest order) but does NOT grant the role below.
-			{Subject: Patterns{"acme/.+"}, Roles: []string{"arn:aws:iam::111122223333:role/other"}},
-			{Subject: Patterns{"acme/api"}, Roles: []string{"arn:aws:iam::111122223333:role/deploy"},
+			{Subject: Patterns{"acme/.+"}, Roles: roleEntries("arn:aws:iam::111122223333:role/other")},
+			{Subject: Patterns{"acme/api"}, Roles: roleEntries("arn:aws:iam::111122223333:role/deploy"),
 				RoleSessionName: "acme-api-deploy"},
 		},
 	}
@@ -1019,7 +1019,7 @@ func TestFindRoleSessionName_RespectsConditions(t *testing.T) {
 		Issuers:         singleIssuer(iss, "sts.amazonaws.com"),
 		RoleSessionName: "aws-oidc-warden",
 		RoleMappings: []RoleMapping{
-			{Subject: Patterns{"acme/api"}, Roles: []string{role}, RoleSessionName: "prod-only",
+			{Subject: Patterns{"acme/api"}, Roles: roleEntries(role), RoleSessionName: "prod-only",
 				Conditions: &Condition{Claims: map[string]Patterns{"ref": {"refs/heads/main"}}}},
 		},
 	}
@@ -1048,7 +1048,7 @@ func TestRoleSessionName_RejectedAtValidate(t *testing.T) {
 				Issuers:         singleIssuer("https://issuer.com", "aud"),
 				RoleSessionName: "aws-oidc-warden",
 				RoleMappings: []RoleMapping{{
-					Subject: Patterns{"acme/api"}, Roles: []string{"arn:aws:iam::111122223333:role/deploy"},
+					Subject: Patterns{"acme/api"}, Roles: roleEntries("arn:aws:iam::111122223333:role/deploy"),
 					RoleSessionName: tc.sessionName,
 				}},
 			}
@@ -1069,7 +1069,7 @@ func TestRoleGroupDefaults_PropagateRoleSessionName(t *testing.T) {
 		RoleSessionName: "aws-oidc-warden",
 		RoleGroups: []RoleGroup{{
 			Subjects: []string{"acme/api", "acme/web"},
-			Defaults: RoleGroupDefaults{Roles: []string{role}, RoleSessionName: "acme-team"},
+			Defaults: RoleGroupDefaults{Roles: roleEntries(role), RoleSessionName: "acme-team"},
 		}},
 	}
 	require.NoError(t, cfg.Validate())
@@ -1316,7 +1316,7 @@ func TestValidate_RejectsInvalidRoleEntries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := wildcardCfg("acme/repo")
 			cfg.RoleSets = tc.sets
-			cfg.RoleMappings[0].Roles = tc.roles
+			cfg.RoleMappings[0].Roles = roleEntries(tc.roles...)
 			err := cfg.Validate()
 			if tc.wantErr == "" {
 				require.NoError(t, err)

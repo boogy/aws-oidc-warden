@@ -75,7 +75,7 @@ func idpConfig(t *testing.T, idpToken bool, policy string, mutate ...func(*confi
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject:       config.Patterns{"org/repo"},
-			Roles:         []string{testRoleARN},
+			Roles:         roleEntries(testRoleARN),
 			IDPToken:      idpToken,
 			SessionPolicy: policy,
 		}},

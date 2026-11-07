@@ -195,11 +195,10 @@ func TestTagAuthPrefixConfusion(t *testing.T) {
 
 // ---------- cross-account / transitive knobs ----------
 
-func TestTagAuthTransitive_CrossAccountAllowedAccounts_Env(t *testing.T) {
+func TestTagAuthEnabled_CrossAccountAllowedAccounts_Env(t *testing.T) {
 	viper.Reset()
 	once = sync.Once{}
 	t.Setenv("AOW_TAG_AUTH_ENABLED", "true")
-	t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "true")
 	t.Setenv("AOW_CROSS_ACCOUNT_ENABLED", "true")
 	t.Setenv("AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS", "111111111111, 222222222222")
 	t.Setenv("CONFIG_NAME", "nonexistent-config-file")
@@ -207,14 +206,12 @@ func TestTagAuthTransitive_CrossAccountAllowedAccounts_Env(t *testing.T) {
 	c := &Config{}
 	require.NoError(t, c.LoadConfig())
 	require.NotNil(t, c.TagAuth)
-	assert.True(t, c.TagAuth.TransitiveSessionTags)
 	require.NotNil(t, c.CrossAccount)
 	assert.True(t, c.CrossAccount.Enabled)
 	assert.Equal(t, []string{"111111111111", "222222222222"}, c.CrossAccount.AllowedAccounts)
 }
 
-func TestMergeBytes_EnvTagAuthTransitiveAndCrossAccountAllowedAccounts(t *testing.T) {
-	t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "true")
+func TestMergeBytes_EnvCrossAccountAllowedAccounts(t *testing.T) {
 	t.Setenv("AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS", "111111111111, 222222222222")
 
 	c := &Config{
@@ -230,9 +227,51 @@ func TestMergeBytes_EnvTagAuthTransitiveAndCrossAccountAllowedAccounts(t *testin
 	require.NoError(t, c.MergeBytes(yaml, "yaml"))
 
 	require.NotNil(t, c.TagAuth)
-	assert.True(t, c.TagAuth.TransitiveSessionTags, "AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS must survive S3 hot-reload")
 	require.NotNil(t, c.CrossAccount)
 	assert.Equal(t, []string{"111111111111", "222222222222"}, c.CrossAccount.AllowedAccounts, "AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS must survive S3 hot-reload, whitespace-trimmed")
+}
+
+func TestTransitiveSessionTagsKeys(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr string
+		want    bool
+	}{
+		{name: "removed tag_auth key fails to load", yaml: "tag_auth:\n  enabled: true\n  transitive_session_tags: true\n", wantErr: "was removed: use session_tags_transitive"},
+		{name: "top-level key still works", yaml: "session_tags_transitive: true\n", want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := baseConfigForEnv(t)
+			err := c.MergeBytes([]byte(tc.yaml), "yaml")
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, c.TransitiveSessionTags())
+		})
+	}
+}
+
+func TestRemovedTransitiveEnvVar(t *testing.T) {
+	t.Run("true fails load", func(t *testing.T) {
+		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "true")
+		_, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.ErrorContains(t, err, "AOW_SESSION_TAGS_TRANSITIVE")
+	})
+	t.Run("unparseable fails load", func(t *testing.T) {
+		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "yes")
+		_, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.ErrorContains(t, err, "AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS")
+	})
+	t.Run("false loads", func(t *testing.T) {
+		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")
+		c, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.NoError(t, err)
+		assert.False(t, c.TransitiveSessionTags())
+	})
 }
 
 func TestCrossAccount_AllowedAccounts_RejectsMalformed(t *testing.T) {
@@ -408,7 +447,7 @@ func tagAuthScopingCfg(tagAuthEnabled bool, m RoleMapping) *Config {
 func TestValidate_WarnsWhenTagAuthCanBypassSessionPolicy(t *testing.T) {
 	cfg := tagAuthScopingCfg(true, RoleMapping{
 		Subject:       Patterns{"org/repo"},
-		Roles:         []string{"arn:aws:iam::111111111111:role/deploy"},
+		Roles:         roleEntries("arn:aws:iam::111111111111:role/deploy"),
 		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
 	})
 
@@ -435,7 +474,7 @@ func TestValidate_WarnsWhenTagAuthCanBypassSessionPolicy(t *testing.T) {
 func TestValidate_WarnsOncePerRoleForMultiSubjectEntry(t *testing.T) {
 	cfg := tagAuthScopingCfg(true, RoleMapping{
 		Subject:       Patterns{"org/repo", "org/other", "org/third"},
-		Roles:         []string{"arn:aws:iam::111111111111:role/deploy"},
+		Roles:         roleEntries("arn:aws:iam::111111111111:role/deploy"),
 		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
 	})
 
@@ -455,7 +494,7 @@ func TestValidate_WarnsOncePerRoleForMultiSubjectEntry(t *testing.T) {
 func TestValidate_WarnsWhenTagAuthCanBypassRoleSessionName(t *testing.T) {
 	cfg := tagAuthScopingCfg(true, RoleMapping{
 		Subject:         Patterns{"org/repo"},
-		Roles:           []string{"arn:aws:iam::111111111111:role/deploy"},
+		Roles:           roleEntries("arn:aws:iam::111111111111:role/deploy"),
 		RoleSessionName: "gha-org-repo",
 	})
 
@@ -479,7 +518,7 @@ func TestValidate_WarnsWhenTagAuthCanBypassRoleSessionName(t *testing.T) {
 func TestValidate_NoTagAuthWarningWhenTagAuthDisabled(t *testing.T) {
 	cfg := tagAuthScopingCfg(false, RoleMapping{
 		Subject:       Patterns{"org/repo"},
-		Roles:         []string{"arn:aws:iam::111111111111:role/deploy"},
+		Roles:         roleEntries("arn:aws:iam::111111111111:role/deploy"),
 		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
 	})
 
@@ -500,7 +539,7 @@ func TestValidate_NoTagAuthWarningWhenTagAuthDisabled(t *testing.T) {
 func TestValidate_NoTagAuthWarningForUnscopedMapping(t *testing.T) {
 	cfg := tagAuthScopingCfg(true, RoleMapping{
 		Subject: Patterns{"org/repo"},
-		Roles:   []string{"arn:aws:iam::111111111111:role/deploy"},
+		Roles:   roleEntries("arn:aws:iam::111111111111:role/deploy"),
 	})
 
 	out := captureWarnings(t, func() {

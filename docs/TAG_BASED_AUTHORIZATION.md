@@ -268,7 +268,7 @@ Three behaviors are intentional but easy to misjudge. Review them before enablin
 
 2. **`cross_account.enabled: false` (or omitted) hard-blocks all cross-account use** — both assumes and tag reads fail closed with an error; it is not a silent no-op. Once enabled, an **empty `allowed_accounts` still fails open**: the warden may assume into **any** member account. Config load only logs a warning in that case. Always populate `allowed_accounts` in production. See [Target account allow-list](#target-account-allow-list).
 
-3. **Tag-authorized roles receive no session policy.** Session policies come only from `role_mappings`; a role authorized via tags is scoped solely by its own IAM permissions. Keep tag-authorized roles least-privilege at the IAM level — there is no session-policy backstop.
+3. **Tag-authorized roles receive no session policy.** Session policies come only from `role_mappings`; a role authorized via tags is scoped solely by its own IAM permissions. Keep tag-authorized roles least-privilege at the IAM level — there is no session-policy backstop. A mapping's `max_session_duration` does not apply either: the limit on this path is 1h.
 
 ---
 
@@ -330,7 +330,7 @@ For the target role's **own** trust or boundary, you can also gate the assume it
 
 When a workflow assumes a target role that **itself chains to further roles** (via `sts:AssumeRole` in the target's permissions), the warden can mark the attached session tags as **transitive**, making them immutable and propagated to every downstream assumption in the chain.
 
-Enable with the top-level `session_tags_transitive: true` — it applies to every `AssumeRole` call regardless of whether `tag_auth` is enabled. The nested `tag_auth.transitive_session_tags` key is **deprecated**: it predates the top-level key, has nothing to do with tag-based authorization, and stays only as a fallback for existing configs (either key turning it on wins).
+Enable with the top-level `session_tags_transitive: true` — it applies to every `AssumeRole` call regardless of whether `tag_auth` is enabled.
 
 ### How the chain works
 
@@ -505,4 +505,4 @@ cross_account:
   allowed_accounts: [] # restrict target accounts; hub always allowed; empty = any (once enabled)
 ```
 
-Or via environment variables: `AOW_TAG_AUTH_ENABLED`, `AOW_TAG_AUTH_TAG_PREFIX`, `AOW_TAG_AUTH_DEFAULT_ORG`, `AOW_SESSION_TAGS_TRANSITIVE` (the deprecated `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS` still works as a fallback), `AOW_CROSS_ACCOUNT_ENABLED`, `AOW_CROSS_ACCOUNT_SPOKE_ROLE_NAME`, `AOW_CROSS_ACCOUNT_EXTERNAL_ID`, `AOW_CROSS_ACCOUNT_SPOKE_SESSION_DURATION`, `AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS` (comma-separated account IDs).
+Or via environment variables: `AOW_TAG_AUTH_ENABLED`, `AOW_TAG_AUTH_TAG_PREFIX`, `AOW_TAG_AUTH_DEFAULT_ORG`, `AOW_SESSION_TAGS_TRANSITIVE`, `AOW_CROSS_ACCOUNT_ENABLED`, `AOW_CROSS_ACCOUNT_SPOKE_ROLE_NAME`, `AOW_CROSS_ACCOUNT_EXTERNAL_ID`, `AOW_CROSS_ACCOUNT_SPOKE_SESSION_DURATION`, `AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNTS` (comma-separated account IDs).

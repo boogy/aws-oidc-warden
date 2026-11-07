@@ -55,7 +55,7 @@ func staticProviderMode(t *testing.T, mode string) *config.Provider {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"org/repo"},
-			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 	}
 	if mode == "alb" {
@@ -303,7 +303,7 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 		TagAuth:         &config.TagAuth{Enabled: true, TagPrefix: "aow/"},
 		RoleMappings: []config.RoleMapping{{
 			Subject:    config.Patterns{"acme/api"},
-			Roles:      []string{"arn:aws:iam::111111111111:role/app"},
+			Roles:      roleEntries("arn:aws:iam::111111111111:role/app"),
 			Conditions: &config.Condition{Ref: config.Patterns{"main"}}, // requires ref == main
 		}},
 	}
@@ -520,7 +520,7 @@ func sessionNameCfg(t *testing.T, override string) *config.Config {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject:         config.Patterns{"org/repo"},
-			Roles:           []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:           roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 			RoleSessionName: override,
 		}},
 	}
@@ -584,12 +584,12 @@ func TestAssumeRole_SessionNameComesFromAuthorizingMapping(t *testing.T) {
 				// Declared first and matches the subject, but does not grant
 				// the requested role.
 				Subject:         config.Patterns{"org/repo"},
-				Roles:           []string{"arn:aws:iam::123456789012:role/OtherRole"},
+				Roles:           roleEntries("arn:aws:iam::123456789012:role/OtherRole"),
 				RoleSessionName: "wrong-name",
 			},
 			{
 				Subject:         config.Patterns{"org/repo"},
-				Roles:           []string{"arn:aws:iam::123456789012:role/MyRole"},
+				Roles:           roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 				RoleSessionName: "right-name",
 			},
 		},
@@ -767,11 +767,11 @@ func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject:     config.Patterns{"acme/api"},
-			Roles:       []string{"arn:aws:iam::111111111111:role/app"},
+			Roles:       roleEntries("arn:aws:iam::111111111111:role/app"),
 			SessionTags: map[string]string{"tier": "environment"},
 		}, {
 			Subject: config.Patterns{"acme/web"},
-			Roles:   []string{"arn:aws:iam::111111111111:role/web"},
+			Roles:   roleEntries("arn:aws:iam::111111111111:role/web"),
 		}},
 		LogClaimValues: true,
 	}

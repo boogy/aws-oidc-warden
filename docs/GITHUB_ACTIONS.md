@@ -19,6 +19,7 @@ permissions:
 | [Multi-region failover](#multi-region-failover)                 | Two regions, primary first — in both `github-script` and `curl`                    |
 | [Ship it as a composite action](#ship-it-as-a-composite-action) | **The recommended rollout** — one component your teams consume, and you can change |
 | [Non-GitHub callers](#non-github-callers)                       | GitLab and any other OIDC provider                                                 |
+| [Infrastructure as code](IAC.md)                                | Plan from pull requests, apply only from trusted runs                              |
 
 ---
 
