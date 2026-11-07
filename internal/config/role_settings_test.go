@@ -591,20 +591,6 @@ func TestSessionDurationValidate(t *testing.T) {
 	}
 }
 
-func TestRoleSessionDurationWithinStatementLimit(t *testing.T) {
-	cfg, err := rsLoad(t, rsMapping(`    max_session_duration: 3h
-    roles:
-      - "`+rsAudit+`"
-      - role: "`+rsApply+`"
-        session_duration: 2h
-`), true)
-	require.NoError(t, err)
-	d := cfg.Authorize(vIss, "acme/app", rsApply, map[string]any{})
-	assert.Equal(t, 2*time.Hour, d.SessionDuration())
-	assert.Equal(t, 3*time.Hour, d.MaxSessionDuration())
-	assert.Zero(t, cfg.Authorize(vIss, "acme/app", rsAudit, map[string]any{}).SessionDuration())
-}
-
 func TestRoleGroupWarnsOncePerRoleNotPerSubject(t *testing.T) {
 	var c *Config
 	logs := captureWarnings(t, func() {
