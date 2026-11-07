@@ -305,6 +305,10 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	}
 
 	prevIdP := p.current.Load().IdP
+	prevOnly, only := prevIdP != nil && prevIdP.Only, cfg.IdP != nil && cfg.IdP.Only
+	if prevOnly && cfg.IdP == nil {
+		return errors.New("reload removes the idp block while idp.only is true: set only: false first")
+	}
 	p.current.Store(cfg)
 	p.fragments = nextFragments
 	p.overlaySum, p.built = sum, true
@@ -325,6 +329,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	prevEnabled, enabled := prevIdP != nil && prevIdP.Enabled, cfg.IdP != nil && cfg.IdP.Enabled
 	if p.frozenIdP != nil && prevEnabled != enabled {
 		logevent.Warn(ctx, nil, logevent.ConfigIdPEnabledChanged, "idp.enabled changed by reload", slog.Bool("enabled", enabled), slog.Bool("blockPresent", cfg.IdP != nil))
+	}
+	if p.idpFrozen && prevOnly != only {
+		logevent.Warn(ctx, nil, logevent.ConfigIdPOnlyChanged, "idp.only changed by reload", slog.Bool("only", only))
 	}
 	if p.idpFrozen && cfg.IdP != nil && (p.frozenIdP == nil || cfg.IdP.Fingerprint() != p.frozenIdP.Fingerprint()) {
 		logevent.Warn(ctx, nil, logevent.ConfigIdPReloadIgnored, "idp settings changed on reload; restart to apply")

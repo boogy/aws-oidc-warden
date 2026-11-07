@@ -1403,6 +1403,66 @@ func TestProviderRefreshWarnsOnFrozenIdPDrift(t *testing.T) {
 	}
 }
 
+func TestProviderRefreshOnlyEnv(t *testing.T) {
+	tests := []struct {
+		name, env string
+		firstErr  bool
+	}{
+		{"env only, overlay drops block", "true", false},
+		{"unparseable value with overlay block", "on", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(idpTestBlockYAML)
+			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+			t.Setenv("AOW_IDP_ONLY", tt.env)
+			if tt.firstErr {
+				require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+				return
+			}
+			require.NoError(t, p.Refresh(context.Background()))
+			require.True(t, p.Get().IdP.Only)
+			body = []byte("log_level: info\n")
+			require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+			require.True(t, p.Get().IdP.Only)
+		})
+	}
+}
+
+func TestProviderRefreshRejectsBlockRemovalUnderOnly(t *testing.T) {
+	onBlock := strings.Replace(idpTestBlockYAML, "  enabled: true\n", "  enabled: true\n  only: true\n", 1)
+	require.NotEqual(t, idpTestBlockYAML, onBlock)
+	tests := []struct {
+		name          string
+		first, second string
+		wantErr       bool
+	}{
+		{"only at startup", onBlock, onBlock, true},
+		{"only turned on by reload", idpTestBlockYAML, onBlock, true},
+		{"only turned off first", onBlock, idpTestBlockYAML, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(tt.first)
+			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+			require.NoError(t, p.Refresh(context.Background()))
+			p.FreezeIdP(p.Get().IdP)
+			body = []byte(tt.second)
+			require.NoError(t, p.Refresh(context.Background()))
+
+			body = []byte("log_level: info\n")
+			err := p.Refresh(context.Background())
+			if !tt.wantErr {
+				require.NoError(t, err)
+				require.Nil(t, p.Get().IdP)
+				return
+			}
+			require.ErrorContains(t, err, "idp.only")
+			require.True(t, p.Get().IdP.Only)
+		})
+	}
+}
+
 func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 	body := []byte(idpTestBlockYAML)
 	p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
@@ -1422,6 +1482,45 @@ func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(out, `config.idp.enabled_changed`))
 		assert.Contains(t, out, fmt.Sprintf(`"blockPresent":%t`, step.enabled))
 		assert.Equal(t, step.ignored, strings.Count(out, `config.idp.reload_ignored`))
+	}
+}
+
+func TestProviderRefreshLogsIdPOnlyFlip(t *testing.T) {
+	const removed = "log_level: info\n"
+	onBlock := strings.Replace(idpTestBlockYAML, "  enabled: true\n", "  enabled: true\n  only: true\n", 1)
+	require.NotEqual(t, idpTestBlockYAML, onBlock)
+	tests := []struct {
+		name          string
+		first, next   string
+		noFreeze      bool
+		want, wantLog bool
+	}{
+		{name: "enable", first: idpTestBlockYAML, next: onBlock, want: true, wantLog: true},
+		{name: "disable", first: onBlock, next: idpTestBlockYAML, wantLog: true},
+		{name: "unchanged", first: onBlock, next: onBlock, want: true},
+		{name: "block added after startup", first: removed, next: onBlock, want: true, wantLog: true},
+		{name: "cold start", first: idpTestBlockYAML, next: onBlock, noFreeze: true, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(tt.first)
+			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
+			require.NoError(t, p.Refresh(context.Background()))
+			if !tt.noFreeze {
+				p.FreezeIdP(p.Get().IdP)
+			}
+			body = []byte(tt.next)
+			out := captureWarnings(t, func() { require.NoError(t, p.Refresh(context.Background())) })
+			got := p.Get().IdP
+			require.NotNil(t, got)
+			assert.Equal(t, tt.want, got.Only)
+			if !tt.wantLog {
+				assert.NotContains(t, out, "config.idp.only_changed")
+				return
+			}
+			assert.Contains(t, out, "config.idp.only_changed")
+			assert.Contains(t, out, fmt.Sprintf(`"only":%t`, tt.want))
+		})
 	}
 }
 

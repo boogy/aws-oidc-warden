@@ -584,6 +584,11 @@ var envBindings = []envBinding{
 			envBool("idp.enabled", v, func(b bool) { c.IdP.Enabled = b })
 		}
 	}},
+	{"idp.only", func(c *Config, v string) {
+		if c.IdP != nil {
+			envBool("idp.only", v, func(b bool) { c.IdP.Only = b })
+		}
+	}},
 	{"idp.issuer", func(c *Config, v string) {
 		if c.IdP != nil {
 			c.IdP.Issuer = v
@@ -737,7 +742,30 @@ func (c *Config) LoadConfig() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	// An overlay may supply the idp block; mergeBytes checks after merging.
+	if !c.HasS3Overlay() {
+		if err := c.checkIdPOnlyEnv(); err != nil {
+			return err
+		}
+	}
 	return c.validateMappingsSplit()
+}
+
+// HasS3Overlay reports whether an S3 config overlay is configured.
+func (c *Config) HasS3Overlay() bool {
+	return c.S3ConfigBucket != "" && c.S3ConfigPath != ""
+}
+
+// checkIdPOnlyEnv rejects AOW_IDP_ONLY on a fully merged config with no idp block.
+func (c *Config) checkIdPOnlyEnv() error {
+	only, err := envFlag(envVarName("idp.only"))
+	if err != nil {
+		return err
+	}
+	if only && c.IdP == nil {
+		return fmt.Errorf("%s is true but the config has no idp block", envVarName("idp.only"))
+	}
+	return nil
 }
 
 // MergeBytes overlays the keys present in data (snake_case config schema, viper format; empty means json) onto c and re-validates.
@@ -808,6 +836,9 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 		if frozenMode != "" && frozenMode != reloadedMode {
 			err = fmt.Errorf("under frozen jwt_validation.mode %q: %w", frozenMode, err)
 		}
+		return "", err
+	}
+	if err := next.checkIdPOnlyEnv(); err != nil {
 		return "", err
 	}
 

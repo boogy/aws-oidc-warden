@@ -230,7 +230,7 @@ The failure modes that actually bite, in rough order of likelihood:
 | `500 policy_error`                | The mapping's S3 session policy could not be read (missing object, no `s3:GetObject`) or is not valid JSON                                               |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`. Transient; retry with backoff or fail over                                                            |
 | `500 audit_write_failed`          | `audit_required` is on and the S3 audit write failed. Needs `s3:PutObject` **and** `s3:PutObjectTagging` on the log bucket; `make run` has no S3 sink    |
-| `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h                                                                       |
+| `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h (not under `idp.only`)                                                |
 | `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                                                              |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                                                                     |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                                                                |
@@ -241,7 +241,7 @@ The failure modes that actually bite, in rough order of likelihood:
 | `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                                                             |
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                                |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                                                                    |
-| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                                                                |
+| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h, or for any request under `idp.only`                                           |
 | `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the minted token expired                                                             |
 | Cache misses / throttling         | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                  |
 | Cross-account failures            | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts`   |

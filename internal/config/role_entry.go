@@ -225,6 +225,9 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 		if e.IDPToken != nil && !*e.IDPToken && piece.MaxSessionDuration > IdPDefaultMaxSessionDuration {
 			return nil, wrap(fmt.Errorf("role %q sets idp_token: false but max_session_duration over 1h requires the IdP", e.Role))
 		}
+		if e.IDPToken != nil && !*e.IDPToken && c.IdP != nil && c.IdP.Only {
+			return nil, wrap(fmt.Errorf("role %q sets idp_token: false but idp.only routes every role through the IdP", e.Role))
+		}
 		pieces = append(pieces, piece)
 	}
 

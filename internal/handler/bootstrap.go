@@ -210,9 +210,7 @@ func BuildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) 
 func buildConfigProvider(cfg *config.Config, consumer aws.AwsConsumerInterface) (*config.Provider, error) {
 	ctx := context.Background()
 	opt := config.WithFragmentFetcher(s3FragmentFetcher(consumer))
-	hasOverlay := cfg.S3ConfigBucket != "" && cfg.S3ConfigPath != ""
-
-	if !hasOverlay {
+	if !cfg.HasS3Overlay() {
 		if cfg.MappingsFile == "" && len(cfg.ConfigFragments) == 0 {
 			return config.NewStaticProvider(cfg), nil
 		}

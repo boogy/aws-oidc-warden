@@ -66,4 +66,4 @@ A pull request can edit its own workflow and use the read-only role however it l
 - Precedence applies only inside one entry. Another entry matching the same subject still adds its grants.
 - A role override replaces, so it can widen access as well as narrow it. Review role objects as carefully as entries.
 - The same role with different policies needs two entries with mutually exclusive conditions. Otherwise the first declared wins.
-- A role with `max_session_duration` over 1h routes through the IdP, so its trust policy must trust the warden's OIDC provider. See [IDP.md](IDP.md).
+- A role with `max_session_duration` over 1h or `idp_token: true`, or any role under `idp.only`, routes through the IdP, so its trust policy must trust the warden's OIDC provider. See [IDP.md](IDP.md).

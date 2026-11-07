@@ -35,6 +35,14 @@ role_sets:
 
 func rsLoad(t *testing.T, mappings string, withIdP bool) (*Config, error) {
 	t.Helper()
+	if !withIdP {
+		return rsLoadIdP(t, mappings, nil)
+	}
+	return rsLoadIdP(t, mappings, validIdP())
+}
+
+func rsLoadIdP(t *testing.T, mappings string, idp *IdPConfig) (*Config, error) {
+	t.Helper()
 	v := viper.New()
 	v.SetConfigType("yaml")
 	require.NoError(t, v.ReadConfig(strings.NewReader(rsHeader+mappings)))
@@ -46,9 +54,7 @@ func rsLoad(t *testing.T, mappings string, withIdP bool) (*Config, error) {
 	if err := rejectUnusedKeys(md.Unused, "test"); err != nil {
 		return nil, err
 	}
-	if withIdP {
-		c.IdP = validIdP()
-	}
+	c.IdP = idp
 	return &c, c.Validate()
 }
 
@@ -477,6 +483,44 @@ func TestRoleEntryWarnings(t *testing.T) {
 				}
 			}
 			assert.True(t, found)
+		})
+	}
+}
+
+func TestIdPOnlyRejectsExplicitIdPTokenFalse(t *testing.T) {
+	const falseRole = `    roles:
+      - "` + rsAudit + `"
+      - role: "` + rsApply + `"
+        idp_token: false
+`
+	const trueRole = `    roles:
+      - role: "` + rsApply + `"
+        idp_token: true
+`
+	const plainRole = `    roles: ["` + rsAudit + `"]
+`
+	tests := []struct {
+		name     string
+		entry    string
+		only     bool
+		disabled bool
+		wantErr  string
+	}{
+		{"idp_token false with only", falseRole, true, false, "idp.only"},
+		{"idp_token false without only", falseRole, false, false, ""},
+		{"idp_token true with only", trueRole, true, false, ""},
+		{"only with idp disabled", plainRole, true, true, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			idp := validIdP()
+			idp.Only, idp.Enabled = tc.only, !tc.disabled
+			_, err := rsLoadIdP(t, rsMapping(tc.entry), idp)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
 }

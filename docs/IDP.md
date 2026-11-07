@@ -11,6 +11,7 @@ Optional. The warden validates the inbound OIDC token as usual, then mints its *
 - [IAM OIDC provider](#iam-oidc-provider)
 - [Trust policy](#trust-policy)
 - [Configuration](#configuration)
+- [IdP-only mode](#idp-only-mode)
 - [Session duration](#session-duration)
 - [Session name](#session-name)
 - [Source identity](#source-identity)
@@ -45,13 +46,25 @@ A request for more than 1h that cannot use the IdP is refused, never shortened:
 | Over 1h requested, and…                                  | Answer                        |
 | -------------------------------------------------------- | ----------------------------- |
 | no `idp` block configured                                | 400 `duration_exceeds_cap`    |
-| the mapping is not an IdP mapping (nor is any tag grant) | 403 `idp_not_permitted`       |
+| the mapping is not an IdP mapping (nor is any tag grant), not under `idp.only` | 403 `idp_not_permitted`       |
 | `idp.enabled: false` (kill switch)                       | 503 `idp_signing_unavailable` |
 | the `idp` block was added after startup (restart)        | 503 `idp_signing_unavailable` |
 
-These are checked in the order numbered below.
+Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: the kill switch and a late-added `idp` block answer 503 `idp_signing_unavailable`, and a request over the mapping's session cap (default 1h) answers 400 `duration_exceeds_cap`; `idp_not_permitted` never applies. These are checked in the order numbered below.
 
 ![Credential path and refusals for a role that is already authorized](img/idp-routing.svg)
+
+## IdP-only mode
+
+`idp.only: true` (env `AOW_IDP_ONLY`, default `false`) is for deployments where every target role trusts only the warden's IAM OIDC provider. Every authorized request, short ones and tag grants included, goes through the IdP regardless of `idp_token` or the duration.
+
+- It never falls back to `AssumeRole`. With the IdP unusable (`idp.enabled: false`, or the block added after startup) every request answers 503 `idp_signing_unavailable`, with the audit reason `idp.only but idp disabled` or `idp.only but idp added after startup`.
+- `only: true` with `enabled: false` loads; it is the kill switch plus the guarantee that nothing bypasses the IdP.
+- The limit is still `max_session_duration` (1h when unset, so a tag grant is capped at 1h); over it answers 400 `duration_exceeds_cap`.
+- `idp_token: false` on a `roles` item is a load error while `only` is true; at mapping or `role_groups` level it is indistinguishable from unset and is ignored.
+- `only` is live like `enabled`. To leave IdP-only mode, set `only: false`.
+- A reload that removes the whole `idp` block while `only` is true is rejected and the running config stays; set `only: false` first. A cold start has no running config to compare: it loads the config as it then stands.
+- `AOW_IDP_ONLY=true` with no `idp` block once every layer is merged fails the load, and a reload that removes the block is rejected; an unparseable value always fails. Set it in the environment, not only in the S3 overlay, to hold every cold start to IdP-only.
 
 ## Flow
 
@@ -393,19 +406,19 @@ Disabling a KMS key that is still configured makes the load fail and takes the I
 
 ## Hot reload and the kill switch
 
-| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, plus per-mapping `idp_token`, `max_session_duration` |
+| Frozen at cold start (restart to change)                                                                                                                                                         | Live (read per request)                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `issuer`, `audience`, `audience_mode`, `jwks_uri`, `paths`, `signing_keys`, `subject_template`, `source_identity*`, `include_source_identity`, `token_ttl`, `sign_timeout`, `jwks_cache_max_age` | `enabled`, `only`, plus per-mapping `idp_token`, `max_session_duration` |
 
-A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` on every reload that rebuilds the config (the overlay or a fragment changed) while the effective `idp` settings differ from the running ones, and keeps the running values. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected. While `include_source_identity` is true, so is one that adds a second issuer when the frozen `source_identity` lacks `{issuer}`, or two issuers rendering the same `{issuer}`. The rejection logs `config.reload.failure`, or `config.idp.issuer_collision` when the reload itself changes frozen `idp` keys.
+A reload that changes a frozen field, or adds an `idp` block absent at startup, logs `config.idp.reload_ignored` on every reload that rebuilds the config (the overlay or a fragment changed) while the effective `idp` settings differ from the running ones, and keeps the running values. `only` still applies, so such a block with `only: true` answers 503 until restart. A reload that makes an inbound issuer equal the frozen IdP issuer is rejected. While `include_source_identity` is true, so is one that adds a second issuer when the frozen `source_identity` lacks `{issuer}`, or two issuers rendering the same `{issuer}`. The rejection logs `config.reload.failure`, or `config.idp.issuer_collision` when the reload itself changes frozen `idp` keys.
 
 **Kill switch:** set `idp.enabled: false` in the layer that set it. Environment beats S3: `AOW_IDP_ENABLED` is re-applied after every S3 merge, so never set `AOW_IDP_ENABLED` on Lambda if the S3 overlay is your switch. Order of operations:
 
 1. Disable.
-2. Confirm a request for more than 1h answers 503 `idp_signing_unavailable`. Requests of 1h or less fall back to `AssumeRole`, which only works where the role also trusts the warden's own role; a role trusting only the warden IdP answers 403 `assume_role_denied`.
+2. Confirm a request for more than 1h answers 503 `idp_signing_unavailable`. Requests of 1h or less fall back to `AssumeRole`, which only works where the role also trusts the warden's own role; a role trusting only the warden IdP answers 403 `assume_role_denied`. Under `idp.only` every request answers 503 instead: disabling is a full outage.
 3. Then revoke (remove the client ID from the warden's IAM OIDC provider; add a Deny on `aws:TokenIssueTime`).
 
-While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its discovery and JWKS paths (other methods stay 405) (logged at Debug as `idp.path.disabled`, not as a near miss), so STS stops trusting the key once its JWKS cache expires. Statically hosted documents (`idp-export`) keep serving: remove them yourself. For an IdP built at startup, a reload that changes the effective `idp.enabled` (a missing block counts as disabled) logs `config.idp.enabled_changed` (Warn) with the new value and whether the block is present; an env override (`AOW_IDP_ENABLED`) beats the S3 config's `idp.enabled`, so a flip there never lands. The env knob applies only to an existing block. Removing the block is not a kill switch while it matters: `Validate()` rejects the reload while any mapping sets `idp_token` or `max_session_duration` over 1h. Once no mapping is eligible the removal is accepted and acts as disabled (404 on the discovery and JWKS paths; `enabled_changed` with `blockPresent:false` only if it flips `enabled`, so removing an already-disabled block logs nothing), and over-1h requests change from 403 `idp_not_permitted` to 400 `duration_exceeds_cap`.
+While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its discovery and JWKS paths (other methods stay 405) (logged at Debug as `idp.path.disabled`, not as a near miss), so STS stops trusting the key once its JWKS cache expires. Statically hosted documents (`idp-export`) keep serving: remove them yourself. For an IdP built at startup, a reload that changes the effective `idp.enabled` (a missing block counts as disabled) logs `config.idp.enabled_changed` (Warn) with the new value and whether the block is present; an env override (`AOW_IDP_ENABLED`) beats the S3 config's `idp.enabled`, so a flip there never lands. The env knob applies only to an existing block. Removing the block is not a kill switch while it matters: `Validate()` rejects the reload while any mapping sets `idp_token` or `max_session_duration` over 1h, and the provider rejects it while `idp.only` is true. Once no mapping is eligible the removal is accepted and acts as disabled (404 on the discovery and JWKS paths; `enabled_changed` with `blockPresent:false` only if it flips `enabled`, so removing an already-disabled block logs nothing), and over-1h requests change from 403 `idp_not_permitted` to 400 `duration_exceeds_cap`.
 
 ## Security notes
 
@@ -429,7 +442,7 @@ While disabled, the warden answers 404 `idp_path_not_found` on GET/HEAD of its d
 
 In order:
 
-1. Stop minting: `idp.enabled: false` (see the kill switch above).
+1. Stop minting: `idp.enabled: false` (see the kill switch above; with `idp.only` this refuses all requests).
 2. Stop STS accepting: remove the client ID from the warden's IAM OIDC provider, or disable the KMS key.
 3. Revoke live sessions: add a Deny on `aws:TokenIssueTime` to the affected roles.
 4. Scope the damage in CloudTrail by `accessKeyId` and `sourceIdentity` (both are in the audit record).
@@ -440,20 +453,20 @@ In order:
 
 Every response uses the standard error envelope. "Retry" means the same request may succeed later.
 
-| Code                          | Status | Retry | Cause                                                                           |
-| ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------- |
-| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant       |
-| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                |
-| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`     |
-| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider             |
-| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                            |
-| `duration_exceeds_cap`        | 400    | No    | Above the mapping's `max_session_duration`, or over 1h with no `idp` block      |
-| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                           |
-| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                 |
-| `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false |
-| `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                       |
-| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags or policy |
-| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; or over 1h under the kill switch or before restart |
-| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS, or reported the minted token expired     |
+| Code                          | Status | Retry | Cause                                                                                                                                                        |
+| ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant (not under `idp.only`)                                                                                    |
+| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                                                                                             |
+| `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`                                                                                  |
+| `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider                                                                                          |
+| `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                                                                                                         |
+| `duration_exceeds_cap`        | 400    | No    | Above the mapping's `max_session_duration`, or over 1h with no `idp` block                                                                                   |
+| `duration_exceeds_role_max`   | 400    | No    | Above the role's `MaxSessionDuration`                                                                                                                        |
+| `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                                                                                              |
+| `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false                                                                              |
+| `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                                    |
+| `idp_token_too_large`         | 500    | No    | Minted token or packed policy over the STS limit; reduce session tags or policy                                                                              |
+| `idp_signing_unavailable`     | 503    | Yes   | KMS unavailable or throttled; or over 1h under the kill switch or before restart; or any request under `idp.only` while the IdP is disabled or not yet built |
+| `idp_exchange_unavailable`    | 503    | Yes   | STS could not reach discovery or JWKS, or reported the minted token expired                                                                                  |
 
 The audit record gains, for `action: mint_token`: `tokenId`, `idpSessionCapSeconds`, `sourceIdentity`, `sourceIdentityTruncated`, `accessKeyId`. Both actions record `durationSeconds`, `requestedDurationSeconds` when the caller sent one, `sessionNameSource` (`mapping`, `request` or `default`) and, when the caller sent one and `log_claim_values` is true, `requestedSessionName`, even if it was ignored. Log events are catalogued in [LOGGING.md](LOGGING.md#event-catalog).
