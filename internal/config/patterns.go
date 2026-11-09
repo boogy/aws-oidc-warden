@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
@@ -99,7 +100,7 @@ func rejectUnusedKeys(v *viper.Viper, unused []string, source string) error {
 	unused = slices.Sorted(slices.Values(unused))
 	for _, key := range unused {
 		if key == "tag_auth.transitive_session_tags" {
-			if b, ok := v.Get(key).(bool); ok && !b {
+			if b, err := strconv.ParseBool(fmt.Sprint(v.Get(key))); err == nil && !b {
 				continue
 			}
 			return fmt.Errorf("%s: %s was removed: use session_tags_transitive", source, key)
