@@ -51,7 +51,7 @@ func rsLoadIdP(t *testing.T, mappings string, idp *IdPConfig) (*Config, error) {
 	if err := v.Unmarshal(&c, decoderOptions(&md)...); err != nil {
 		return nil, err
 	}
-	if err := rejectUnusedKeys(md.Unused, "test"); err != nil {
+	if err := rejectUnusedKeys(v, md.Unused, "test"); err != nil {
 		return nil, err
 	}
 	c.IdP = idp
