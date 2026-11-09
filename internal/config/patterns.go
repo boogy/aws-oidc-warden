@@ -21,10 +21,10 @@ import (
 type Patterns []string
 
 // patternsType is the decode target the mapstructure hook below keys on.
-var patternsType = reflect.TypeOf(Patterns(nil))
+var patternsType = reflect.TypeFor[Patterns]()
 
 // conditionPtrType is the decode target nilConditionHookFunc keys on.
-var conditionPtrType = reflect.TypeOf((*Condition)(nil))
+var conditionPtrType = reflect.TypeFor[*Condition]()
 
 // UnmarshalJSON mirrors the mapstructure hook's string-or-list decode; needed
 // separately because cloneConfig round-trips through encoding/json.

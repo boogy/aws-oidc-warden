@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/utils"
@@ -143,12 +144,7 @@ func valueInList(claimVal, tagVal string) bool {
 	if claimVal == "" {
 		return false
 	}
-	for _, want := range strings.Fields(tagVal) {
-		if claimVal == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Fields(tagVal), claimVal)
 }
 
 // repoMatches reports whether claimRepo matches the aow/repo tag value. A
@@ -158,7 +154,7 @@ func repoMatches(claimRepo, tagVal, defaultOrg string) bool {
 	if claimRepo == "" {
 		return false
 	}
-	for _, want := range strings.Fields(tagVal) {
+	for want := range strings.FieldsSeq(tagVal) {
 		if !strings.Contains(want, "/") {
 			if defaultOrg == "" {
 				continue

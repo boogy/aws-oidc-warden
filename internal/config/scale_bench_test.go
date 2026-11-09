@@ -34,10 +34,10 @@ role_mappings:
         - actor: "release-bot"
         - repository: "acme/.*"
 `
-	for i := 0; i < nLiteral; i++ {
+	for i := range nLiteral {
 		fmt.Fprintf(&sb, "  - subject: \"acme/repo%d\"\n    roles: [\"arn:aws:iam::123456789012:role/r%d\"]\n%s", i, i, cond)
 	}
-	for i := 0; i < nWild; i++ {
+	for i := range nWild {
 		fmt.Fprintf(&sb, "  - subject: \"acme/team%d-.*\"\n    roles: [\"arn:aws:iam::123456789012:role/w%d\"]\n%s", i, i, cond)
 	}
 	cfg := &Config{}
@@ -113,7 +113,7 @@ issuers:
 default_issuer: "` + bIss + `"
 role_mappings:
 `)
-			for i := 0; i < n; i++ {
+			for i := range n {
 				fmt.Fprintf(&sb, "  - subject: \"repo:acme%d/.*-prod\"\n    roles: [\"arn:aws:iam::123456789012:role/r%d\"]\n", i, i)
 			}
 			cfg := &Config{}

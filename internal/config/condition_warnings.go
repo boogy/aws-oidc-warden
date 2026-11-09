@@ -26,8 +26,7 @@ func buildGitHubClaimNames() map[string]bool {
 	names := make(map[string]bool, 32)
 	var walk func(reflect.Type)
 	walk = func(t reflect.Type) {
-		for i := range t.NumField() {
-			f := t.Field(i)
+		for f := range t.Fields() {
 			if f.Anonymous && f.Type.Kind() == reflect.Struct {
 				walk(f.Type)
 				continue
@@ -38,7 +37,7 @@ func buildGitHubClaimNames() map[string]bool {
 			}
 		}
 	}
-	walk(reflect.TypeOf(types.Claims{}))
+	walk(reflect.TypeFor[types.Claims]())
 
 	// Claims GitHub issues that types.Claims does not model as a field.
 	for _, extra := range []string{"environment", "enterprise", "enterprise_id", "issuer_scope"} {

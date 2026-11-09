@@ -651,7 +651,7 @@ role_groups:
 	condBranch := cached.parsed.RoleMappings[0].Conditions.Ref
 	setLen := len(cached.parsed.RoleSets["fragset"])
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, p.Refresh(context.Background()))
 		cfg := p.Get()
 		// Grants must be stable across reloads.
