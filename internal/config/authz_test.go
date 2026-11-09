@@ -186,10 +186,10 @@ func TestIndexDifferentialFuzz(t *testing.T) {
 	}
 
 	rng := rand.New(rand.NewSource(1))
-	for iter := 0; iter < 400; iter++ {
+	for iter := range 400 {
 		n := 1 + rng.Intn(6)
 		ms := make([]RoleMapping, 0, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			p := patterns[rng.Intn(len(patterns))]
 			m := RoleMapping{
 				Subject: Patterns{p},
@@ -215,7 +215,7 @@ func TestIndexDifferentialFuzz(t *testing.T) {
 					t.Fatalf("AuthorizeRoles mismatch iter=%d iss=%s subject=%q\n patterns=%v\n index=(%v,%v) linear=(%v,%v)",
 						iter, iss, s, patternsOf(ms), gotM, gotR, wantM, wantR)
 				}
-				for r := 0; r < 3; r++ {
+				for r := range 3 {
 					role := fmt.Sprintf("arn:aws:iam::111111111111:role/r%d", r)
 					gp, gf := c.FindSessionPolicy(iss, s, role, map[string]any{})
 					wp, wf := linearFindSessionPolicy(c, iss, s, role, map[string]any{})
@@ -324,7 +324,7 @@ func TestIndexParity(t *testing.T) {
 	subjects = append(subjects, "unrelated/thing", "owner1/anything", "owner2/anything", "x/shared-repo")
 
 	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		subjects = append(subjects, fmt.Sprintf("owner%d/repo%d", rng.Intn(numOwners*2), rng.Intn(20)))
 	}
 
@@ -946,7 +946,7 @@ issuers:
 default_issuer: "` + issuer + `"
 role_mappings:
 `)
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		fmt.Fprintf(&sb, `  - subject: "org%d/repo%d:.*"
     roles: ["arn:aws:iam::123456789012:role/r%d"]
     conditions:

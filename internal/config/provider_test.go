@@ -107,27 +107,27 @@ role_mappings:
 func TestProvider_MaybeRefreshRespectsInterval(t *testing.T) {
 	base := baseConfig(t)
 
-	var calls int32
+	var calls atomic.Int32
 	now := time.Unix(1_000_000, 0)
 	p := NewProvider(base, time.Minute, "yaml", func(context.Context) ([]byte, error) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		return []byte(`{}`), nil
 	})
 	p.now = func() time.Time { return now }
 
 	// First call refreshes (lastRefresh == 0).
 	p.MaybeRefresh(context.Background())
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+	assert.Equal(t, int32(1), calls.Load())
 
 	// Within the interval: no refetch.
 	now = now.Add(30 * time.Second)
 	p.MaybeRefresh(context.Background())
-	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+	assert.Equal(t, int32(1), calls.Load())
 
 	// After the interval elapses: refetch.
 	now = now.Add(40 * time.Second)
 	p.MaybeRefresh(context.Background())
-	assert.Equal(t, int32(2), atomic.LoadInt32(&calls))
+	assert.Equal(t, int32(2), calls.Load())
 }
 
 func TestProvider_RefreshErrorKeepsPreviousConfig(t *testing.T) {
@@ -199,12 +199,10 @@ func TestProvider_MaybeRefreshNoConcurrentBurst(t *testing.T) {
 	now = now.Add(2 * time.Minute)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 50 {
+		wg.Go(func() {
 			p.MaybeRefresh(context.Background())
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -679,9 +677,7 @@ func TestProvider_FragmentReload_Race(t *testing.T) {
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		i := 0
 		for {
 			select {
@@ -696,27 +692,23 @@ role_mappings:
     roles: ["arn:aws:iam::111111111111:role/r%d"]
 `, i, i))
 		}
-	}()
+	})
 
-	for r := 0; r < 8; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 200; i++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
 				p.MaybeRefresh(context.Background())
 			}
-		}()
+		})
 	}
 
-	for r := 0; r < 8; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 200; i++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
 				cfg := p.Get()
 				_, _ = cfg.AuthorizeRoles(base.Issuers[0].Issuer, "owner/repo-1", map[string]any{})
 			}
-		}()
+		})
 	}
 
 	time.Sleep(50 * time.Millisecond)
@@ -961,7 +953,7 @@ func (f *backoffFixture) step(d time.Duration) int32 {
 
 func TestProviderBackoffFailedFetchNotRetriedPerRequest(t *testing.T) {
 	f := newBackoffFixture(t, true)
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		f.p.MaybeRefresh(context.Background())
 	}
 	assert.Equal(t, int32(1), f.calls.Load())
@@ -1349,19 +1341,15 @@ func TestProviderRefresh_UnchangedRaceSafe(t *testing.T) {
 	u := newUnchangedProvider(t)
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range 50 {
 				u.clock.Add(int64(time.Minute))
 				u.MaybeRefresh(context.Background())
 				_ = u.Get().RoleMappings
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := range 20 {
 			if i%2 == 0 {
 				u.overlay.Store([]byte("log_level: debug\n"))
@@ -1370,7 +1358,7 @@ func TestProviderRefresh_UnchangedRaceSafe(t *testing.T) {
 			}
 			_ = u.Refresh(context.Background())
 		}
-	}()
+	})
 	wg.Wait()
 }
 

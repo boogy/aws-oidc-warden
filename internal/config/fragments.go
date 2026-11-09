@@ -69,8 +69,8 @@ func parseFragment(data []byte, format, source string) (*FragmentConfig, error) 
 func rejectDisallowedFragmentKeys(keys []string) error {
 	for _, key := range keys {
 		top := key
-		if i := strings.IndexByte(key, '.'); i >= 0 {
-			top = key[:i]
+		if before, _, ok := strings.Cut(key, "."); ok {
+			top = before
 		}
 		if !fragmentAllowedKeys[top] {
 			return fmt.Errorf(

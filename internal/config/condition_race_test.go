@@ -59,18 +59,14 @@ role_mappings:
 	var wg sync.WaitGroup
 
 	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for !stop.Load() {
 				p.MaybeRefresh(ctx)
 			}
-		}()
+		})
 	}
 	for i := range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			claims := denied[i%len(denied)]
 			for !stop.Load() {
 				ok, roles := p.Get().AuthorizeRoles(iss, "acme/app", claims)
@@ -83,7 +79,7 @@ role_mappings:
 					}
 				}
 			}
-		}()
+		})
 	}
 
 	time.Sleep(200 * time.Millisecond)

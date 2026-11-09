@@ -224,7 +224,7 @@ func TestAuditableClaims_CoversMappingSessionTags(t *testing.T) {
 func TestValidate_SessionTagLimits(t *testing.T) {
 	tags := func(n int) map[string]string {
 		m := make(map[string]string, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			m[fmt.Sprintf("k%d", i)] = "environment"
 		}
 		return m

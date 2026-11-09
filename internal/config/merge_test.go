@@ -459,9 +459,8 @@ cross_account:
 
 func TestClearOnDeclareCoversEverySliceOfStructField(t *testing.T) {
 	var want []string
-	rt := reflect.TypeOf(Config{})
-	for i := range rt.NumField() {
-		f := rt.Field(i)
+	rt := reflect.TypeFor[Config]()
+	for f := range rt.Fields() {
 		key := f.Tag.Get("mapstructure")
 		if key == "" || key == "-" {
 			continue

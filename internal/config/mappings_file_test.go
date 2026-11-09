@@ -36,8 +36,6 @@ func s3MappingsCfg(t *testing.T, interval time.Duration) (*Config, *fakeFragment
 	return c, st
 }
 
-func dur(d time.Duration) *time.Duration { return &d }
-
 func TestMappingsFileLoadsRoleMappings(t *testing.T) {
 	tests := []struct {
 		name string
@@ -205,15 +203,15 @@ func TestMaxStale(t *testing.T) {
 		wantErr  string
 	}{
 		{name: "s3 unset interval 1m", interval: time.Minute, want: 3 * time.Minute},
-		{name: "s3 explicit zero", interval: time.Minute, stale: dur(0), want: 0},
-		{name: "s3 10m", interval: time.Minute, stale: dur(10 * time.Minute), want: 10 * time.Minute},
+		{name: "s3 explicit zero", interval: time.Minute, stale: new(time.Duration(0)), want: 0},
+		{name: "s3 10m", interval: time.Minute, stale: new(10 * time.Minute), want: 10 * time.Minute},
 		{name: "s3 unset interval 0", want: 0},
 		{name: "local unset", local: true, interval: time.Minute, want: 0},
 		{name: "s3 unset overlay interval 5m", interval: time.Minute, overlay: true, want: 15 * time.Minute},
-		{name: "local 10m", local: true, interval: time.Minute, stale: dur(10 * time.Minute), wantErr: "s3://"},
-		{name: "s3 90s", interval: time.Minute, stale: dur(90 * time.Second), wantErr: "at least twice"},
-		{name: "s3 10m interval 0", stale: dur(10 * time.Minute), wantErr: "config_reload_interval"},
-		{name: "s3 negative", interval: time.Minute, stale: dur(-time.Second), wantErr: "negative"},
+		{name: "local 10m", local: true, interval: time.Minute, stale: new(10 * time.Minute), wantErr: "s3://"},
+		{name: "s3 90s", interval: time.Minute, stale: new(90 * time.Second), wantErr: "at least twice"},
+		{name: "s3 10m interval 0", stale: new(10 * time.Minute), wantErr: "config_reload_interval"},
+		{name: "s3 negative", interval: time.Minute, stale: new(-time.Second), wantErr: "negative"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -249,7 +247,7 @@ func TestMaxStale(t *testing.T) {
 
 func TestMaxStaleStale(t *testing.T) {
 	c, st := s3MappingsCfg(t, time.Minute)
-	c.MappingsMaxStale = dur(10 * time.Minute)
+	c.MappingsMaxStale = new(10 * time.Minute)
 	require.NoError(t, c.Validate())
 
 	now := time.Now()
@@ -276,7 +274,7 @@ func TestMaxStaleStale(t *testing.T) {
 }
 
 func TestMaxStaleStaticProviderNeverStale(t *testing.T) {
-	_, _, stale := NewStaticProvider(&Config{MappingsMaxStale: dur(10 * time.Minute)}).Stale()
+	_, _, stale := NewStaticProvider(&Config{MappingsMaxStale: new(10 * time.Minute)}).Stale()
 	require.False(t, stale)
 }
 
@@ -352,7 +350,7 @@ func TestSessionPolicyBucketOwnerEnv(t *testing.T) {
 
 func TestMaxStaleMaybeRefreshWaitsOnInFlightRefresh(t *testing.T) {
 	c, st := s3MappingsCfg(t, time.Minute)
-	c.MappingsMaxStale = dur(10 * time.Minute)
+	c.MappingsMaxStale = new(10 * time.Minute)
 	require.NoError(t, c.Validate())
 
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -382,7 +380,7 @@ func TestMaxStaleMaybeRefreshWaitsOnInFlightRefresh(t *testing.T) {
 
 func TestMaxStaleMaybeRefreshWaitHonoursContext(t *testing.T) {
 	c, st := s3MappingsCfg(t, time.Minute)
-	c.MappingsMaxStale = dur(10 * time.Minute)
+	c.MappingsMaxStale = new(10 * time.Minute)
 	require.NoError(t, c.Validate())
 
 	entered, release := make(chan struct{}), make(chan struct{})
