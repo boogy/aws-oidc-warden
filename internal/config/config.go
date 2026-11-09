@@ -722,7 +722,7 @@ func (c *Config) LoadConfig() error {
 	if err := viper.Unmarshal(c, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
-	if err := rejectUnusedKeys(md.Unused, "config file"); err != nil {
+	if err := rejectUnusedKeys(viper.GetViper(), md.Unused, "config file"); err != nil {
 		return err
 	}
 
@@ -777,7 +777,7 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 	if err := v.Unmarshal(next, decoderOptions(&md)...); err != nil {
 		return "", fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}
-	if err := rejectUnusedKeys(md.Unused, "overlay"); err != nil {
+	if err := rejectUnusedKeys(v, md.Unused, "overlay"); err != nil {
 		return "", err
 	}
 

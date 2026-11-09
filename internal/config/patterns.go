@@ -95,10 +95,13 @@ func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 }
 
 // rejectUnusedKeys fails on an unclaimed nested key; an unused top-level key (e.g. YAML anchors) only warns.
-func rejectUnusedKeys(unused []string, source string) error {
+func rejectUnusedKeys(v *viper.Viper, unused []string, source string) error {
 	unused = slices.Sorted(slices.Values(unused))
 	for _, key := range unused {
 		if key == "tag_auth.transitive_session_tags" {
+			if b, ok := v.Get(key).(bool); ok && !b {
+				continue
+			}
 			return fmt.Errorf("%s: %s was removed: use session_tags_transitive", source, key)
 		}
 		if strings.ContainsAny(key, ".[") {

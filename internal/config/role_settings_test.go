@@ -43,7 +43,7 @@ func rsLoad(t *testing.T, mappings string, withIdP bool) (*Config, error) {
 	if err := v.Unmarshal(&c, decoderOptions(&md)...); err != nil {
 		return nil, err
 	}
-	if err := rejectUnusedKeys(md.Unused, "test"); err != nil {
+	if err := rejectUnusedKeys(v, md.Unused, "test"); err != nil {
 		return nil, err
 	}
 	if withIdP {

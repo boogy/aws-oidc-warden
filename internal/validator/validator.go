@@ -316,11 +316,10 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 
 // peekIssuer returns the token's unverified, exact-key iss for registry routing only.
 func peekIssuer(tokenString string) (string, error) {
-	_, after, ok := strings.Cut(tokenString, ".")
+	_, rest, ok := strings.Cut(tokenString, ".")
 	if !ok {
 		return "", malformedTokenErr("token contains an invalid number of segments")
 	}
-	rest := after
 	second := strings.IndexByte(rest, '.')
 	if second < 0 || strings.IndexByte(rest[second+1:], '.') >= 0 {
 		return "", malformedTokenErr("token contains an invalid number of segments")
