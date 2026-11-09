@@ -64,6 +64,7 @@ Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: 
 - `idp_token: false` on a `roles` item is a load error while `only` is true; at mapping or `role_groups` level it is indistinguishable from unset and is ignored.
 - `only` is live like `enabled`. To leave IdP-only mode, set `only: false`.
 - A reload that removes the whole `idp` block while `only` is true is rejected and the running config stays; set `only: false` first. A cold start has no running config to compare: it loads the config as it then stands.
+- A reload that adds `only` while no `idp` block existed at startup is accepted and fails closed: warm environments answer 503 until Lambda recycles them, while cold starts build the IdP. Ship `idp` and `only` in a function deploy, which cold-starts every environment, not a remote config push.
 - `AOW_IDP_ONLY=true` with no `idp` block once every layer is merged fails the load, and a reload that removes the block is rejected; an unparseable value always fails. Set it in the environment, not only in the S3 overlay, to hold every cold start to IdP-only.
 
 ## Flow
