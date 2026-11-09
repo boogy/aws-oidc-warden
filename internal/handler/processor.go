@@ -226,7 +226,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	return o, nil
 }
 
-// ProcessRequest authorizes once, then issues credentials through the IdP for an IdP-enabled role or AssumeRole otherwise.
+// ProcessRequest authorizes once, then issues credentials through the IdP (every request under idp.only, else IdP-enabled roles) or AssumeRole.
 func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*IssuedCredentials, error) {
 	o, err := r.authorizeRequest(ctx, requestData, input, requestID, log)
 	if err != nil {

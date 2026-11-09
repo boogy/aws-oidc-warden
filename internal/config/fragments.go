@@ -57,7 +57,7 @@ func parseFragment(data []byte, format, source string) (*FragmentConfig, error) 
 	if err := v.Unmarshal(&frag, decoderOptions(&md)...); err != nil {
 		return nil, fmt.Errorf("config fragment %q: failed to unmarshal: %w", source, err)
 	}
-	if err := rejectUnusedKeys(md.Unused, fmt.Sprintf("config fragment %q", source)); err != nil {
+	if err := rejectUnusedKeys(v, md.Unused, fmt.Sprintf("config fragment %q", source)); err != nil {
 		return nil, err
 	}
 	return &frag, nil

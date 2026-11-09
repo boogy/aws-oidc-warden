@@ -239,6 +239,7 @@ func TestTransitiveSessionTagsKeys(t *testing.T) {
 		want    bool
 	}{
 		{name: "removed tag_auth key fails to load", yaml: "tag_auth:\n  enabled: true\n  transitive_session_tags: true\n", wantErr: "was removed: use session_tags_transitive"},
+		{name: "removed tag_auth key set false loads", yaml: "tag_auth:\n  enabled: true\n  transitive_session_tags: false\n"},
 		{name: "top-level key still works", yaml: "session_tags_transitive: true\n", want: true},
 	}
 	for _, tc := range tests {
