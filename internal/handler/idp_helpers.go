@@ -31,10 +31,7 @@ func checkDuration(requested int32) error {
 // defaultDuration is the session length for a request that omits durationSeconds: session_duration, else min(1h, the role's limit).
 func defaultDuration(d config.Decision) int32 {
 	def := time.Duration(utils.DefaultSTSSessionSecs) * time.Second
-	if m := d.MaxSessionDuration(); m > 0 {
-		def = min(def, m)
-	}
-	return int32(cmp.Or(d.SessionDuration(), def) / time.Second)
+	return int32(cmp.Or(d.SessionDuration(), min(def, cmp.Or(d.MaxSessionDuration(), def))) / time.Second)
 }
 
 // checkCeiling refuses a checkDuration-valid request over the ceiling.
