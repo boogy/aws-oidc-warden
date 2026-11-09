@@ -31,6 +31,10 @@ role_sets:
   pair:
     - "` + rsPlan + `"
     - "` + rsApply + `"
+  dup:
+    - "` + rsPlan + `"
+    - "` + rsApply + `"
+    - "` + rsPlan + `"
 `
 
 func rsLoad(t *testing.T, mappings string, withIdP bool) (*Config, error) {
@@ -428,21 +432,23 @@ func TestScalarRolesSplitOnComma(t *testing.T) {
 }
 
 func TestRoleSetBlockAppliesToEveryMember(t *testing.T) {
-	const doc = `    roles:
-      - role: "@pair"
+	for _, set := range []string{"@pair", "@dup"} {
+		doc := `    roles:
+      - role: "` + set + `"
         conditions:
           ref: "refs/heads/main"
         max_session_duration: 30m
 `
-	cfg, err := rsLoad(t, rsMapping(doc), false)
-	require.NoError(t, err)
-	for _, role := range []string{rsPlan, rsApply} {
-		t.Run(role, func(t *testing.T) {
-			d := cfg.Authorize(vIss, "acme/app", role, map[string]any{"ref": "refs/heads/main"})
-			require.True(t, d.Matched)
-			assert.Equal(t, 30*time.Minute, d.MaxSessionDuration())
-			assert.NotContains(t, cfg.Authorize(vIss, "acme/app", role, map[string]any{"ref": "refs/heads/dev"}).Roles, role)
-		})
+		cfg, err := rsLoad(t, rsMapping(doc), false)
+		require.NoError(t, err, set)
+		for _, role := range []string{rsPlan, rsApply} {
+			t.Run(set+"/"+role, func(t *testing.T) {
+				d := cfg.Authorize(vIss, "acme/app", role, map[string]any{"ref": "refs/heads/main"})
+				require.True(t, d.Matched)
+				assert.Equal(t, 30*time.Minute, d.MaxSessionDuration())
+				assert.NotContains(t, cfg.Authorize(vIss, "acme/app", role, map[string]any{"ref": "refs/heads/dev"}).Roles, role)
+			})
+		}
 	}
 }
 
