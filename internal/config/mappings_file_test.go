@@ -36,9 +36,6 @@ func s3MappingsCfg(t *testing.T, interval time.Duration) (*Config, *fakeFragment
 	return c, st
 }
 
-//go:fix inline
-func dur(d time.Duration) *time.Duration { return new(d) }
-
 func TestMappingsFileLoadsRoleMappings(t *testing.T) {
 	tests := []struct {
 		name string

@@ -735,20 +735,6 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 	assert.Equal(t, "env-logs/", cfg.LogPrefix, "Log prefix should match env var")
 }
 
-// Helper function to convert string to pointer
-//
-//go:fix inline
-func strPtr(s string) *string {
-	return new(s)
-}
-
-// Helper function to convert time.Duration to pointer
-//
-//go:fix inline
-func durationPtr(d time.Duration) *time.Duration {
-	return new(d)
-}
-
 // singleIssuer builds a one-entry Issuers slice for tests that only care
 // about a single trusted issuer, mirroring the pre-v2 single-issuer shape
 // (which always did native GitHub claim unmarshal, i.e. provider: github —
