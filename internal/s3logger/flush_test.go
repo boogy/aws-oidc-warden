@@ -198,9 +198,7 @@ func TestBufferRecord_CopiesCallerSlice(t *testing.T) {
 func TestCompressGzip_PooledWritersRoundTrip(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for j := range 50 {
 				in := strings.Repeat(fmt.Sprintf("{\"w\":%d,\"j\":%d}\n", i, j), j+1)
 				out, err := compressGzip([]byte(in))
@@ -209,7 +207,7 @@ func TestCompressGzip_PooledWritersRoundTrip(t *testing.T) {
 				}
 				assert.Equal(t, in, gunzip(t, out))
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

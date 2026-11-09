@@ -142,8 +142,7 @@ func (c *s3Cache) getFromS3(ctx context.Context, key string) (*types.JWKS, time.
 	})
 
 	if err != nil {
-		var noSuchKey *s3types.NoSuchKey
-		if errors.As(err, &noSuchKey) {
+		if _, ok := errors.AsType[*s3types.NoSuchKey](err); ok {
 			logevent.Debug(ctx, nil, logevent.CacheMiss, "cache miss", cacheAttrs(backendS3, key)...)
 			return nil, time.Time{}, false
 		}

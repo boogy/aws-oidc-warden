@@ -17,7 +17,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,9 +117,9 @@ func vE2ECfg(t *testing.T, mappings []config.RoleMapping) *config.Config {
 
 func vE2EClaims(subject, ref string) *types.Claims {
 	return &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: vE2EIssuer, Subject: subject},
-		Sub:              "repo:" + subject,
-		Repository:       subject, Ref: ref,
+		Issuer: vE2EIssuer, Subject: subject,
+		Sub:        "repo:" + subject,
+		Repository: subject, Ref: ref,
 		Raw: map[string]any{
 			"iss": vE2EIssuer, "repository": subject, "ref": ref,
 			"repository_owner": "myorg", "actor": "alice", "event_name": "push",
@@ -405,8 +404,8 @@ func gE2ECfg(t *testing.T, mappings []config.RoleMapping) *config.Config {
 // extraction, and the validator suite covers the half before it.
 func gE2EClaims(projectPath, pipelineSource string, groups []any) *types.Claims {
 	return &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: gE2EIssuer, Subject: projectPath},
-		Sub:              "project_path:" + projectPath + ":ref_type:branch",
+		Issuer: gE2EIssuer, Subject: projectPath,
+		Sub: "project_path:" + projectPath + ":ref_type:branch",
 		Raw: map[string]any{
 			"iss":             gE2EIssuer,
 			"sub":             "project_path:" + projectPath + ":ref_type:branch",
@@ -663,7 +662,7 @@ func vRunLogged(t *testing.T, cfg *config.Config, rec *vRecorder, claims *types.
 func logRecords(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		if line == "" {
 			continue
 		}

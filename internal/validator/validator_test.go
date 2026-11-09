@@ -83,13 +83,11 @@ func createJWKS(keyID string, publicKey *rsa.PublicKey) *types.JWKS {
 // createGithubToken creates a test token signed with the given private key
 func createGithubToken(privateKey *rsa.PrivateKey, keyID, issuer, audience, repository string) (string, error) {
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    issuer,
-			Subject:   repository,
-			Audience:  jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
+		Issuer:    issuer,
+		Subject:   repository,
+		Audience:  jwt.ClaimStrings{audience},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		// Sub (depth-0) is what actually marshals to "sub" -- it shadows
 		// RegisteredClaims.Subject above for JSON purposes.
 		Sub:                  repository,
@@ -185,9 +183,9 @@ func TestValidate_Success(t *testing.T) {
 }
 
 func TestValidate_UnknownIssuer_JWKSNeverFetched(t *testing.T) {
-	var fetchCount int32
+	var fetchCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&fetchCount, 1)
+		fetchCount.Add(1)
 		http.NotFound(w, r)
 	}))
 	defer srv.Close()
@@ -211,7 +209,7 @@ func TestValidate_UnknownIssuer_JWKSNeverFetched(t *testing.T) {
 	_, err = v.Validate(context.Background(), token)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, validator.ErrUnknownIssuer))
-	assert.Equal(t, int32(0), atomic.LoadInt32(&fetchCount), "discovery/JWKS endpoint must never be hit for an unknown issuer")
+	assert.Equal(t, int32(0), fetchCount.Load(), "discovery/JWKS endpoint must never be hit for an unknown issuer")
 }
 
 func TestValidate_InvalidAudience(t *testing.T) {
@@ -658,7 +656,7 @@ func TestGenKeyFunc(t *testing.T) {
 	signedString, err := testToken.SignedString(privateKey)
 	require.NoError(t, err)
 
-	parsedToken, err := jwt.Parse(signedString, func(t *jwt.Token) (interface{}, error) {
+	parsedToken, err := jwt.Parse(signedString, func(t *jwt.Token) (any, error) {
 		return key, nil
 	})
 

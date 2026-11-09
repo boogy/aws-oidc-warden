@@ -72,7 +72,7 @@ func TestMemoryCacheConcurrentAccessRace(t *testing.T) {
 	c := NewMemoryCache(WithMemoryMaxSize(5), WithMemoryDefaultTTL(50*time.Millisecond))
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(2)
 		go func(i int) {
 			defer wg.Done()
@@ -95,7 +95,7 @@ func TestDynamoDBCacheConcurrentLocalTierRace(t *testing.T) {
 	c.local.maxSize = 5
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(2)
 		go func(i int) {
 			defer wg.Done()
@@ -118,7 +118,7 @@ func TestS3CacheConcurrentLocalTierRace(t *testing.T) {
 	c.local.maxSize = 5
 
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(2)
 		go func(i int) {
 			defer wg.Done()
