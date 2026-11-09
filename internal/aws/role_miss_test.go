@@ -93,6 +93,3 @@ func TestGetRoleTags_NegativeCacheIsBounded(t *testing.T) {
 	assert.Len(t, c.roleMissCache, 1, "map is cleared when full, then holds only the new miss")
 	assert.Contains(t, c.roleMissCache, missRole)
 }
-
-//go:fix inline
-func errStr(s string) *string { return new(s) }

@@ -577,12 +577,6 @@ func TestTokenSizeCap(t *testing.T) {
 	}
 }
 
-// durPtr returns a pointer to d, for config.Config.JWTLeeway's *time.Duration
-// field.
-//
-//go:fix inline
-func durPtr(d time.Duration) *time.Duration { return new(d) }
-
 // apigwOpaqueParityFixture builds the JWKS server, signing key and config
 // shared by TestApigwNoneOfDenyListOpaqueClaimParity and
 // TestApigwPositiveConditionMatchesOpaqueClaimVerbatim.
