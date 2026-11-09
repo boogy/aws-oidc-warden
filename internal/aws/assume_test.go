@@ -250,7 +250,7 @@ func TestBadSessionTagValuesSkipped(t *testing.T) {
 	}
 	bigRaw := map[string]any{}
 	bigSpec := map[string]string{}
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		k := string(rune('a'+i%26)) + string(rune('a'+i/26))
 		bigRaw[k] = "v"
 		bigSpec["T"+k] = k

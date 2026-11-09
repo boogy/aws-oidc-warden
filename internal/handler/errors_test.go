@@ -14,7 +14,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -179,8 +178,8 @@ func TestCredentialPathSessionFields(t *testing.T) {
 			require.NoError(t, cfg.Validate())
 			consumer := &stubConsumer{}
 			ex := &stubExtractor{claims: &gtypes.Claims{
-				RegisteredClaims: jwt.RegisteredClaims{Issuer: issuer, Subject: "org/repo"},
-				Repository:       "org/repo",
+				Issuer: issuer, Subject: "org/repo",
+				Repository: "org/repo",
 			}}
 			proc := NewRequestProcessor(config.NewStaticProvider(cfg), consumer, ex, nil, "test")
 			_, err := proc.ProcessRequest(context.Background(), tc.req, validator.ExtractionInput{}, "req-1", slog.Default())

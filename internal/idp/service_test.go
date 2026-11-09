@@ -92,12 +92,10 @@ func TestServiceLoadsOnce(t *testing.T) {
 			errs := make([]error, 16)
 			for i := range errs {
 				started.Add(1)
-				done.Add(1)
-				go func() {
-					defer done.Done()
+				done.Go(func() {
 					started.Done()
 					_, errs[i] = s.KeySet(context.Background())
-				}()
+				})
 			}
 			started.Wait()
 			synctest.Wait()
@@ -117,11 +115,9 @@ func TestServiceLoadsOnce(t *testing.T) {
 		var wg sync.WaitGroup
 		got := make([]*KeySet, 32)
 		for i := range got {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				got[i], _ = s.KeySet(context.Background())
-			}()
+			})
 		}
 		wg.Wait()
 		require.Equal(t, int32(1), calls.Load())
