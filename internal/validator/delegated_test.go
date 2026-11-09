@@ -89,13 +89,11 @@ func TestSelfDelegatedParity(t *testing.T) {
 
 	// --- self mode: sign + full verification ---
 	selfClaims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    issuer,
-			Subject:   repository,
-			Audience:  jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(exp),
-			IssuedAt:  jwt.NewNumericDate(iat),
-		},
+		Issuer:          issuer,
+		Subject:         repository,
+		Audience:        jwt.ClaimStrings{audience},
+		ExpiresAt:       jwt.NewNumericDate(exp),
+		IssuedAt:        jwt.NewNumericDate(iat),
 		Sub:             repository,
 		Actor:           "testuser",
 		Repository:      repository,
@@ -223,13 +221,11 @@ func TestSelfDelegatedParityMultiIssuer(t *testing.T) {
 
 	// --- self mode: sign + full verification ---
 	selfClaims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    issuer,
-			Subject:   repository,
-			Audience:  jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(exp),
-			IssuedAt:  jwt.NewNumericDate(iat),
-		},
+		Issuer:          issuer,
+		Subject:         repository,
+		Audience:        jwt.ClaimStrings{audience},
+		ExpiresAt:       jwt.NewNumericDate(exp),
+		IssuedAt:        jwt.NewNumericDate(iat),
 		Sub:             repository,
 		Actor:           "testuser",
 		Repository:      repository,
@@ -583,7 +579,9 @@ func TestTokenSizeCap(t *testing.T) {
 
 // durPtr returns a pointer to d, for config.Config.JWTLeeway's *time.Duration
 // field.
-func durPtr(d time.Duration) *time.Duration { return &d }
+//
+//go:fix inline
+func durPtr(d time.Duration) *time.Duration { return new(d) }
 
 // apigwOpaqueParityFixture builds the JWKS server, signing key and config
 // shared by TestApigwNoneOfDenyListOpaqueClaimParity and
@@ -634,7 +632,7 @@ func apigwOpaqueParityFixture(t *testing.T) (cfg *config.Config, privateKey *rsa
 			}},
 		}},
 		RoleSessionName:      "aws-oidc-warden",
-		JWTLeeway:            durPtr(30 * time.Second),
+		JWTLeeway:            new(30 * time.Second),
 		Cache:                &config.Cache{TTL: 10 * time.Minute},
 		AllowInsecureIssuers: true,
 	}
@@ -750,7 +748,7 @@ func TestApigwPositiveConditionMatchesOpaqueClaimVerbatim(t *testing.T) {
 			},
 		}},
 		RoleSessionName: "aws-oidc-warden",
-		JWTLeeway:       durPtr(30 * time.Second),
+		JWTLeeway:       new(30 * time.Second),
 		Cache:           &config.Cache{TTL: 10 * time.Minute},
 	}
 	require.NoError(t, cfg.Validate())

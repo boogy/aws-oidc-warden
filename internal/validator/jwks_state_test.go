@@ -198,7 +198,7 @@ func TestFetchJWKS_DiscoveredURIMemoExpiresAfterCacheTTL(t *testing.T) {
 	spec := newIssuerSpec(&config.IssuerConfig{Issuer: srv.URL})
 	ctx := context.Background()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := v.fetchJWKS(ctx, spec, true)
 		require.NoError(t, err)
 	}

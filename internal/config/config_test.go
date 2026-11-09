@@ -324,7 +324,7 @@ func TestValidate(t *testing.T) {
 			config: Config{
 				Issuers:         singleIssuer("https://issuer.com", "audience"),
 				RoleSessionName: "session",
-				JWTLeeway:       durationPtr(200 * time.Second),
+				JWTLeeway:       new(200 * time.Second),
 			},
 			expectErr: true,
 		},
@@ -444,7 +444,7 @@ func TestJWTLeewayExplicitZero(t *testing.T) {
 	cfg := Config{
 		Issuers:         singleIssuer("https://issuer.com", "audience"),
 		RoleSessionName: "session",
-		JWTLeeway:       durationPtr(0),
+		JWTLeeway:       new(time.Duration(0)),
 	}
 	require.NoError(t, cfg.Validate())
 	require.NotNil(t, cfg.JWTLeeway)
@@ -524,13 +524,13 @@ func TestFindSessionPolicy(t *testing.T) {
 			name:       "exact match",
 			subject:    "org/repo1",
 			role:       "arn:aws:iam::123456789012:role/role1",
-			wantPolicy: strPtr("policy1"),
+			wantPolicy: new("policy1"),
 		},
 		{
 			name:       "regex match",
 			subject:    "org/repo2-staging",
 			role:       "arn:aws:iam::123456789012:role/role2",
-			wantPolicy: strPtr("policy2"),
+			wantPolicy: new("policy2"),
 		},
 		{
 			name:       "no match",
@@ -736,13 +736,17 @@ func TestLoadConfigFromEnvVars(t *testing.T) {
 }
 
 // Helper function to convert string to pointer
+//
+//go:fix inline
 func strPtr(s string) *string {
-	return &s
+	return new(s)
 }
 
 // Helper function to convert time.Duration to pointer
+//
+//go:fix inline
 func durationPtr(d time.Duration) *time.Duration {
-	return &d
+	return new(d)
 }
 
 // singleIssuer builds a one-entry Issuers slice for tests that only care

@@ -30,7 +30,7 @@ type RoleEntry struct {
 }
 
 var (
-	roleEntryType      = reflect.TypeOf(RoleEntry{})
+	roleEntryType      = reflect.TypeFor[RoleEntry]()
 	roleEntrySliceType = reflect.SliceOf(roleEntryType)
 )
 

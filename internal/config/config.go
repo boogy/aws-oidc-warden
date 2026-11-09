@@ -134,7 +134,7 @@ type RoleGroupDefaults struct {
 // entry, all sharing Issuer and Defaults (Validate() does the expansion).
 type RoleGroup struct {
 	Issuer   string            `mapstructure:"issuer"   json:"issuer,omitempty"`
-	Defaults RoleGroupDefaults `mapstructure:"defaults" json:"defaults,omitempty"`
+	Defaults RoleGroupDefaults `mapstructure:"defaults" json:"defaults"`
 	Subjects []string          `mapstructure:"subjects" json:"subjects"`
 }
 
@@ -355,7 +355,7 @@ type Config struct {
 
 	// JWTValidation controls whether the service validates JWT signatures itself
 	// or trusts pre-validation by an upstream AWS service.
-	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation,omitempty"`
+	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation"`
 
 	// Hardening knobs (top-level, apply across all issuers and modes).
 	JWTLeeway            *time.Duration `mapstructure:"jwt_leeway"             json:"jwt_leeway,omitempty"`             // Clock-skew leeway for exp/iat/nbf; nil = unset (defaults to 30s in Validate); hard max 120s

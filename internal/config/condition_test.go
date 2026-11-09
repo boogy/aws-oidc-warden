@@ -951,7 +951,7 @@ func TestConditionCompileErrorsAreDeterministic(t *testing.T) {
       aaa_claim: "*invalid("
       zzz_claim: "*also_invalid("
 `
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		err := compileCondition(decodeConditions(t, conditions), nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "aaa_claim", "the lexically first bad key must always be the one reported")
