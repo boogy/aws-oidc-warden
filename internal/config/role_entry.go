@@ -180,8 +180,12 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 			return nil, wrap(fmt.Errorf("roles[%d]: %w", ri, err))
 		}
 		resolved[ri] = arns
-		for _, arn := range arns {
-			counts[strings.ToLower(arn)]++
+		lower := make([]string, len(arns))
+		for i, arn := range arns {
+			lower[i] = strings.ToLower(arn)
+		}
+		for _, arn := range slices.Compact(slices.Sorted(slices.Values(lower))) {
+			counts[arn]++
 		}
 	}
 
