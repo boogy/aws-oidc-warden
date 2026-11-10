@@ -333,7 +333,7 @@ Ceiling = the authorizing mapping's (or role's) `max_session_duration` (1h when 
 
 When several mappings grant the role, the lowest-order one wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
-A role served by `AssumeRole` accepts `durationSeconds` from 900 up to the mapping's limit, at most 3600; a request over that limit but within 1h answers 400 `duration_exceeds_cap`, and one over 1h is answered per the table above. Omitted = `session_duration` when set, else `min(3600, max_session_duration)`. Why the 1h bound: see [Why](#why).
+A role served by `AssumeRole` accepts `durationSeconds` from 900 up to the mapping's limit, at most 3600; a request over that limit but within 1h answers 400 `duration_exceeds_cap`, and one over 1h is refused as in [When the IdP is used](#when-the-idp-is-used). Omitted = `session_duration` when set, else `min(3600, max_session_duration)`. Why the 1h bound: see [Why](#why).
 
 ## Session name
 

@@ -764,16 +764,7 @@ func TestProcessRequestRouting(t *testing.T) {
 		{name: "only_tag_grant_over_1h_exceeds_cap", mutate: func(c *config.Config) { only(c); tagOnly(c) }, duration: 7200, wantErr: handler.ErrDurationExceedsCap, tagAuth: true},
 		{name: "only_off_tag_grant_uses_assume_role", mutate: tagOnly, duration: 900, wantAR: 1, wantDur: 900, tagAuth: true},
 
-		{name: "session_duration_omitted_assume_role", mutate: func(c *config.Config) { c.RoleMappings[0].SessionDuration = 30 * time.Minute }, wantAR: 1, wantDur: 1800},
 		{name: "session_duration_omitted_idp", mutate: func(c *config.Config) { c.RoleMappings[0].SessionDuration = 30 * time.Minute }, optedIn: true, wantWI: 1, wantDur: 1800},
-		{name: "session_duration_explicit_wins", mutate: func(c *config.Config) {
-			c.RoleMappings[0].SessionDuration = 30 * time.Minute
-			c.RoleMappings[0].MaxSessionDuration = 4 * time.Hour
-		}, duration: 7200, wantWI: 1, wantDur: 7200},
-		{name: "session_duration_over_1h_omitted_uses_idp", mutate: func(c *config.Config) {
-			c.RoleMappings[0].SessionDuration = 6 * time.Hour
-			c.RoleMappings[0].MaxSessionDuration = 12 * time.Hour
-		}, wantWI: 1, wantDur: 21600},
 		{name: "session_duration_over_1h_omitted_kill_switch", mutate: func(c *config.Config) {
 			c.RoleMappings[0].SessionDuration = 6 * time.Hour
 			c.RoleMappings[0].MaxSessionDuration = 12 * time.Hour
@@ -883,6 +874,7 @@ func TestSessionLifetimeOutcomeTable(t *testing.T) {
 		cells        [3]cell
 	}{
 		{"nothing set", 0, 0, [3]cell{{3600, nil}, {1800, nil}, {0, handler.ErrIdPNotPermitted}}},
+		{"session 30m", 30 * time.Minute, 0, [3]cell{{1800, nil}, {1800, nil}, {0, handler.ErrIdPNotPermitted}}},
 		{"max 30m", 0, 30 * time.Minute, [3]cell{{1800, nil}, {1800, nil}, {0, handler.ErrIdPNotPermitted}}},
 		{"max 12h", 0, 12 * time.Hour, [3]cell{{3600, nil}, {1800, nil}, {21600, nil}}},
 		{"max 12h session 2h", 2 * time.Hour, 12 * time.Hour, [3]cell{{7200, nil}, {1800, nil}, {21600, nil}}},
