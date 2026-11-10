@@ -76,7 +76,7 @@ func (r *RequestProcessor) unavailableReason() string {
 func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, role string, duration int32, sessionName, requestID string) (*IssuedCredentials, error) {
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 
-	ceiling := cmp.Or(o.decision.MaxSessionDuration(), config.IdPDefaultMaxSessionDuration)
+	ceiling := o.decision.MaxSessionDuration()
 	capSecs := int(ceiling / time.Second)
 	rec.IdPSessionCapSeconds = &capSecs
 	if err := checkCeiling(duration, ceiling); err != nil {

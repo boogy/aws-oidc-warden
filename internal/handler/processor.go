@@ -267,10 +267,7 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 func (r *RequestProcessor) issueAssumeRole(ctx context.Context, o *authzOutcome, requestedRole string, duration int32, sessionName string) (*IssuedCredentials, error) {
 	cfg, rec, log := o.cfg, o.rec, o.log
 
-	ceiling := time.Duration(utils.RoleChainingMaxSecs) * time.Second
-	if m := o.decision.MaxSessionDuration(); m > 0 && m < ceiling {
-		ceiling = m
-	}
+	ceiling := min(time.Duration(utils.RoleChainingMaxSecs)*time.Second, o.decision.MaxSessionDuration())
 	if err := checkCeiling(duration, ceiling); err != nil {
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}

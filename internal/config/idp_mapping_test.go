@@ -166,7 +166,7 @@ func TestIdPSessionCap(t *testing.T) {
 		{"mapping 30m", 30 * time.Minute, 0, role, 30 * time.Minute},
 		{"group default 6h", 0, 6 * time.Hour, grouped, 6 * time.Hour},
 		{"explicit mapping precedes group default", 2 * time.Hour, 6 * time.Hour, override, 2 * time.Hour},
-		{"no mapping matched", 0, 0, "arn:aws:iam::123456789012:role/Nope", 0},
+		{"no mapping matched", 0, 0, "arn:aws:iam::123456789012:role/Nope", time.Hour},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -179,7 +179,6 @@ func TestIdPSessionCap(t *testing.T) {
 			require.Equal(t, tt.want, cfg.Authorize(idpTestIss, "org/repo", tt.role, map[string]any{}).MaxSessionDuration())
 		})
 	}
-	require.Zero(t, Decision{}.MaxSessionDuration())
 }
 
 func TestDecisionMaxSessionDurationUsesAuthorizingMapping(t *testing.T) {
@@ -190,7 +189,6 @@ func TestDecisionMaxSessionDurationUsesAuthorizingMapping(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 	d := cfg.Authorize(idpTestIss, "org/repo", role, map[string]any{})
 	require.Equal(t, 2*time.Hour, d.MaxSessionDuration(), "lowest-order mapping wins, so a tight mapping shadows a looser one")
-	require.Zero(t, Decision{}.MaxSessionDuration())
 }
 
 func TestIdPMappingFieldsSurviveClone(t *testing.T) {

@@ -21,6 +21,7 @@ role_mappings:
       - role: "arn:aws:iam::111122223333:role/TerraformPlan"
         conditions:
           event_name: ["pull_request", "push"]
+        session_policy_file: "session-policies/terraform-plan.json"
       - role: "arn:aws:iam::111122223333:role/TerraformApply"
         conditions:
           event_name: ["push", "workflow_dispatch"]

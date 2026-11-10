@@ -43,12 +43,12 @@ Every caller uses `/verify`. The mapping that authorizes the role picks the path
 
 A request for more than 1h that cannot use the IdP is refused, never shortened:
 
-| Over 1h requested, and…                                  | Answer                        |
-| -------------------------------------------------------- | ----------------------------- |
-| no `idp` block configured                                | 400 `duration_exceeds_cap`    |
+| Over 1h requested, and…                                                        | Answer                        |
+| ------------------------------------------------------------------------------ | ----------------------------- |
+| no `idp` block configured                                                      | 400 `duration_exceeds_cap`    |
 | the mapping is not an IdP mapping (nor is any tag grant), not under `idp.only` | 403 `idp_not_permitted`       |
-| `idp.enabled: false` (kill switch)                       | 503 `idp_signing_unavailable` |
-| the `idp` block was added after startup (restart)        | 503 `idp_signing_unavailable` |
+| `idp.enabled: false` (kill switch)                                             | 503 `idp_signing_unavailable` |
+| the `idp` block was added after startup (restart)                              | 503 `idp_signing_unavailable` |
 
 Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: the kill switch and a late-added `idp` block answer 503 `idp_signing_unavailable`, and a request over the mapping's session cap (default 1h) answers 400 `duration_exceeds_cap`; `idp_not_permitted` never applies. These are checked in the order numbered below.
 
@@ -316,7 +316,7 @@ role_mappings:
 
 Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-provider).
 
-- `max_session_duration` is set per mapping (or in `role_groups[].defaults`) and applies to every role that mapping grants: 15m to 12h, default `1h`. There is no service-wide ceiling; each role's trust policy and IAM `MaxSessionDuration` are the hard limits.
+- `max_session_duration` is set per mapping (or in `role_groups[].defaults`) and applies to every role that mapping grants unless a role [sets its own](CONFIGURATION.md#per-role-settings): 15m to 12h, default `1h`. There is no service-wide ceiling; each role's trust policy and IAM `MaxSessionDuration` are the hard limits.
 - `idp` is base-only: config fragments and the mappings file cannot carry it.
 - A role in another account needs `cross_account.enabled: true` and, when `allowed_accounts` is non-empty, that account listed in it, as for `AssumeRole`; otherwise the request is refused with 403 `permission_denied`. The exchange never uses the spoke role.
 
