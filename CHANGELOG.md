@@ -22,6 +22,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`docs/ARCHITECTURE.md`**: core pipeline sequence diagram renders on GitHub again.
 
+### Dependencies
+
+- **AWS SDK for Go v2 bumps.**
+  - `github.com/aws/aws-sdk-go-v2` 1.47.5 → 1.48.0
+  - `github.com/aws/aws-sdk-go-v2/config` 1.33.13 → 1.33.18
+  - `github.com/aws/aws-sdk-go-v2/credentials` 1.20.13 → 1.21.0
+  - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.72.3 → 1.74.0
+  - `github.com/aws/aws-sdk-go-v2/service/iam` 1.64.6 → 1.65.0
+  - `github.com/aws/aws-sdk-go-v2/service/kms` 1.62.2 → 1.62.6
+  - `github.com/aws/aws-sdk-go-v2/service/s3` 1.114.6 → 1.114.10
+  - `github.com/aws/aws-sdk-go-v2/service/sts` 1.51.6 → 1.52.0
+  - `github.com/aws/smithy-go` 1.28.7 → 1.28.9
+  - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` bumps
+- `golang.org/x/sync` 0.24.0 → 0.25.0; transitive `golang.org/x/sys` 0.49.0 → 0.50.0, `golang.org/x/text` 0.43.0 → 0.44.0, `github.com/spf13/pflag` 1.0.10 → 1.1.0.
+
 ## [4.0.0] - 2026-11-02
 
 Warden-as-IdP mode lifts the 1h role-chaining cap, and role mappings can live in a separate hot-reloaded file.
