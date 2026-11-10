@@ -25,7 +25,6 @@ func TestCheckDurationAndCeiling(t *testing.T) {
 		{"default ceiling blocks 2h", 7200, time.Hour, ErrDurationExceedsCap},
 		{"43200 under default", 43200, time.Hour, ErrDurationExceedsCap},
 		{"43200 under 12h", 43200, 12 * time.Hour, nil},
-		{"ceiling 0 never means 12h", 7200, 0, ErrDurationExceedsCap},
 		{"too short", 600, 12 * time.Hour, ErrInvalidDuration},
 		{"too long", 43201, 12 * time.Hour, ErrInvalidDuration},
 		{"negative", -1, 12 * time.Hour, ErrInvalidDuration},

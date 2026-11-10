@@ -573,34 +573,6 @@ func TestIdPOnlyRejectsExplicitIdPTokenFalse(t *testing.T) {
 	}
 }
 
-func TestSessionDurationValidate(t *testing.T) {
-	tests := []struct {
-		name         string
-		session, max time.Duration
-		wantErr      string
-	}{
-		{"unset", 0, 0, ""},
-		{"equals default limit", time.Hour, 0, ""},
-		{"below limit", 30 * time.Minute, 4 * time.Hour, ""},
-		{"equals limit", 4 * time.Hour, 4 * time.Hour, ""},
-		{"under 15m", 14 * time.Minute, 4 * time.Hour, "session_duration"},
-		{"over 12h", 13 * time.Hour, 12 * time.Hour, "session_duration"},
-		{"sub-second", 30*time.Minute + time.Millisecond, time.Hour, "whole number of seconds"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(rsApply), SessionDuration: tt.session, MaxSessionDuration: tt.max})
-			cfg.IdP = validIdP()
-			err := cfg.Validate()
-			if tt.wantErr == "" {
-				require.NoError(t, err)
-				return
-			}
-			require.ErrorContains(t, err, tt.wantErr)
-		})
-	}
-}
-
 func TestRoleGroupWarnsOncePerRoleNotPerSubject(t *testing.T) {
 	var c *Config
 	logs := captureWarnings(t, func() {

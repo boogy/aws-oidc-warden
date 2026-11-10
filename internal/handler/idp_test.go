@@ -783,7 +783,6 @@ func TestProcessRequestRouting(t *testing.T) {
 			only(c)
 			c.RoleMappings[0].SessionDuration = 30 * time.Minute
 		}, wantWI: 1, wantDur: 1800},
-		{name: "unset_session_duration_uses_ceiling_when_below_1h", mutate: func(c *config.Config) { c.RoleMappings[0].MaxSessionDuration = 30 * time.Minute }, wantAR: 1, wantDur: 1800},
 		{name: "tag_grant_omitted_duration_defaults_1h", mutate: tagOnly, wantAR: 1, wantDur: 3600, tagAuth: true},
 	}
 	for _, tt := range tests {

@@ -81,25 +81,29 @@ func TestIDPTokenAllowedFollowsMapping(t *testing.T) {
 func TestMaxSessionDurationValidate(t *testing.T) {
 	const role = "arn:aws:iam::123456789012:role/R"
 	tests := []struct {
-		name    string
-		idpTok  bool
-		mapping time.Duration
-		wantErr string
+		name             string
+		idpTok           bool
+		mapping, session time.Duration
+		wantErr          string
 	}{
-		{"unset", true, 0, ""},
-		{"mapping 1h", true, time.Hour, ""},
-		{"mapping 12h", true, 12 * time.Hour, ""},
-		{"mapping 14m", true, 14 * time.Minute, "max_session_duration"},
-		{"mapping 15m", true, 15 * time.Minute, ""},
-		{"mapping 13h", true, 13 * time.Hour, "max_session_duration"},
-		{"mapping sub-second", true, time.Hour + 500*time.Millisecond, "whole number of seconds"},
-		{"mapping negative", true, -time.Hour, "max_session_duration"},
-		{"mapping without idp_token", false, 4 * time.Hour, ""},
-		{"mapping 1h without idp_token", false, time.Hour, ""},
+		{"unset", true, 0, 0, ""},
+		{"mapping 1h", true, time.Hour, 0, ""},
+		{"mapping 12h", true, 12 * time.Hour, 0, ""},
+		{"mapping 14m", true, 14 * time.Minute, 0, "max_session_duration"},
+		{"mapping 15m", true, 15 * time.Minute, 0, ""},
+		{"mapping 13h", true, 13 * time.Hour, 0, "max_session_duration"},
+		{"mapping sub-second", true, time.Hour + 500*time.Millisecond, 0, "whole number of seconds"},
+		{"mapping negative", true, -time.Hour, 0, "max_session_duration"},
+		{"mapping without idp_token", false, 4 * time.Hour, 0, ""},
+		{"mapping 1h without idp_token", false, time.Hour, 0, ""},
+		{"session equals default limit", false, 0, time.Hour, ""},
+		{"session below limit", false, 4 * time.Hour, 30 * time.Minute, ""},
+		{"session equals limit", false, 4 * time.Hour, 4 * time.Hour, ""},
+		{"session sub-second", false, time.Hour, 30*time.Minute + time.Millisecond, "whole number of seconds"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: tt.idpTok, MaxSessionDuration: tt.mapping})
+			cfg := idpMappingCfg(RoleMapping{Subject: Patterns{"org/repo"}, Roles: roleEntries(role), IDPToken: tt.idpTok, MaxSessionDuration: tt.mapping, SessionDuration: tt.session})
 			cfg.IdP = validIdP()
 			err := cfg.Validate()
 			if tt.wantErr == "" {
