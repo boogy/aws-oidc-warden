@@ -77,7 +77,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, reques
 	cfg, claims, rec, log := o.cfg, o.claims, o.rec, o.log
 	role := requestData.Role
 
-	ceiling := cmp.Or(o.decision.MaxSessionDuration(), config.IdPDefaultMaxSessionDuration)
+	ceiling := o.decision.MaxSessionDuration()
 	capSecs := int(ceiling / time.Second)
 	rec.IdPSessionCapSeconds = &capSecs
 	duration, err := resolveDuration(requestData.DurationSeconds, ceiling)
