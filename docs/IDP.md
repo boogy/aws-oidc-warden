@@ -329,7 +329,7 @@ Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-pr
 | above the ceiling                     | 400 `duration_exceeds_cap` (never clamped)    |
 | above the role's `MaxSessionDuration` | 400 `duration_exceeds_role_max`               |
 
-Ceiling = the authorizing mapping's `max_session_duration` (1h when unset); omitted = its `session_duration` when set. Both keys: [CONFIGURATION.md § Session lifetime](CONFIGURATION.md#session-lifetime).
+Ceiling = the authorizing mapping's (or role's) `max_session_duration` (1h when unset); omitted = its `session_duration` when set. Both keys: [CONFIGURATION.md § Session lifetime](CONFIGURATION.md#session-lifetime).
 
 When several mappings grant the role, the lowest-order one wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
@@ -458,13 +458,13 @@ Every response uses the standard error envelope. "Retry" means the same request 
 
 | Code                          | Status | Retry | Cause                                                                                                                                                        |
 | ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant (not under `idp.only`)                                                                                    |
+| `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant (not under `idp.only`)                                                             |
 | `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                                                                                             |
 | `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`                                                                                  |
 | `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider                                                                                          |
 | `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                                                                                                         |
 | `duration_exceeds_cap`        | 400    | No    | Above the mapping's `max_session_duration`, or over 1h with no `idp` block                                                                                   |
-| `duration_exceeds_role_max`   | 400    | No    | Requested or `session_duration` above the role's `MaxSessionDuration`                                                                                               |
+| `duration_exceeds_role_max`   | 400    | No    | Requested or `session_duration` above the role's `MaxSessionDuration`                                                                                        |
 | `invalid_session_name`        | 400    | No    | `sessionName` fails the pattern                                                                                                                              |
 | `idp_path_not_found`          | 404    | No    | Near miss of a discovery/JWKS path, or either path while `idp.enabled` is false                                                                              |
 | `method_not_allowed`          | 405    | No    | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                                    |

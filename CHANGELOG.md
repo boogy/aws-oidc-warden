@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Audit stage `idp_unavailable`** replaces `duration` on `503 idp_signing_unavailable` refusals from the kill switch or a late-added `idp` block.
+- **Audit `durationSeconds`** also appears on denies after duration resolution, as the effective value refused.
 
 ### Removed
 
