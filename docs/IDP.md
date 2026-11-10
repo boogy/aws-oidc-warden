@@ -43,12 +43,12 @@ Every caller uses `/verify`. The mapping that authorizes the role picks the path
 
 A request for more than 1h that cannot use the IdP is refused, never shortened:
 
-| Over 1h requested, and…                                  | Answer                        |
-| -------------------------------------------------------- | ----------------------------- |
-| no `idp` block configured                                | 400 `duration_exceeds_cap`    |
+| Over 1h requested, and…                                                        | Answer                        |
+| ------------------------------------------------------------------------------ | ----------------------------- |
+| no `idp` block configured                                                      | 400 `duration_exceeds_cap`    |
 | the mapping is not an IdP mapping (nor is any tag grant), not under `idp.only` | 403 `idp_not_permitted`       |
-| `idp.enabled: false` (kill switch)                       | 503 `idp_signing_unavailable` |
-| the `idp` block was added after startup (restart)        | 503 `idp_signing_unavailable` |
+| `idp.enabled: false` (kill switch)                                             | 503 `idp_signing_unavailable` |
+| the `idp` block was added after startup (restart)                              | 503 `idp_signing_unavailable` |
 
 Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: the kill switch and a late-added `idp` block answer 503 `idp_signing_unavailable`, and a request over the mapping's session cap (default 1h) answers 400 `duration_exceeds_cap`; `idp_not_permitted` never applies. These are checked in the order numbered below.
 
