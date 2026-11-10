@@ -95,9 +95,10 @@ only add tags, never redefine one
 
 That is deliberate. A silently-ignored override reads as applied, and the tag it names feeds ABAC conditions in the target role — so the config is rejected instead of drifting from what its author believes it says.
 
-Two consequences worth knowing:
+Three consequences worth knowing:
 
 - **`role_groups` defaults carry `session_tags` too**, applied to every subject the group expands to, under the same additive-only rule.
+- **A [`roles` item](CONFIGURATION.md#per-role-settings)'s `session_tags` replaces the entry's extra tags as a whole**; issuer tags still apply.
 - **A role granted by [tag-based authorization](TAG_BASED_AUTHORIZATION.md) gets the issuer spec only.** There is no authorizing mapping in that path, so there is no mapping layer to apply. If an ABAC policy depends on a tag, keep that tag at issuer level whenever tag-auth can also grant the role.
 
 > **Session tagging vs. tag-based authorization.** This page covers the STS session tags attached to every assumed-role session (for ABAC policy conditions, audit, and cost allocation). A separate, opt-in mechanism — [tag-based authorization](TAG_BASED_AUTHORIZATION.md) — lets a role's own IAM tags _grant_ the authorization decision itself (in place of `role_mappings`), which is the recommended path once you're managing authorization for hundreds/thousands of roles or need cross-account hub/spoke delegation. The two compose: an IAM-tag-authorized role still gets the same per-issuer `session_tags` attached on assumption.
