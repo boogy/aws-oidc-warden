@@ -373,7 +373,7 @@ role_groups:
 		c := base(t)
 		err := c.MergeBytes([]byte(`{"role_groups":[{"subjects":["myorg/new-repo"]}]}`), "json")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "subject and roles are required")
+		assert.Contains(t, err.Error(), "defaults.roles is required")
 	})
 
 	t.Run("role_groups entry replaces the base group", func(t *testing.T) {

@@ -1271,7 +1271,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("role_groups[%d]: subjects must not be empty", gi)
 		}
 		if len(group.Defaults.Roles) == 0 {
-			return fmt.Errorf("role_groups[%d]: subject and roles are required", gi)
+			return fmt.Errorf("role_groups[%d]: defaults.roles is required", gi)
 		}
 		pieces, err := c.expandRoles(RoleMapping{
 			Issuer:            group.Issuer,
