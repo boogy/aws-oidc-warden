@@ -696,9 +696,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("audit_required", true)
 	viper.SetDefault("session_tags_transitive", false)
 
-	// Explicitly bind all config keys to environment variables. Driven by
-	// envBindings (see below) so this list and reapplyEnvOverrides cannot
-	// drift apart.
+	// Driven by envBindings so reapplyEnvOverrides cannot drift.
 	for _, b := range envBindings {
 		if !strings.HasPrefix(b.key, "idp.") {
 			_ = viper.BindEnv(b.key)
@@ -731,10 +729,7 @@ func (c *Config) LoadConfig() error {
 		return err
 	}
 
-	// Zero-config GitHub seed: only when there is truly no configuration
-	// source at all. If a config source IS present (file found) but declares
-	// no issuers, that is a hard error below in Validate() — we never
-	// silently fall back to trusting GitHub in that case.
+	// Seed GitHub only with no config source; a file with no issuers must fail Validate(), never fall back.
 	if !configFileFound && len(c.Issuers) == 0 {
 		c.Issuers = []IssuerConfig{defaultGitHubIssuer()}
 	}
@@ -1276,8 +1271,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
 		}
 		for si, subject := range m.Subject {
-			// A repeat within one entry gates nothing new; across entries it is
-			// legal (distinct roles/conditions/policies).
+			// A repeat within one entry gates nothing new; across entries it is legal.
 			if slices.Contains(m.Subject[:si], subject) {
 				return fmt.Errorf("%s[%d]: duplicate subject %q", source, i, subject)
 			}
@@ -1677,8 +1671,7 @@ func validateRoleSessionName(name string) error {
 	return nil
 }
 
-// warnUnscopedRoleGrants warns when a role's lowest-order grant has no session_policy while a
-// higher-order grant does: FindSessionPolicy picks the lowest order, so the policy is dropped.
+// warnUnscopedRoleGrants warns when a role's lowest-order grant has no session_policy but a higher-order one does.
 func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	type grant struct{ lowest, scoped *RoleMapping }
 	grants := make(map[string]*grant)
@@ -1717,8 +1710,7 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	}
 }
 
-// warnTagAuthBypassesMappingScoping warns when tag_auth is enabled and a mapping scopes a role (policy,
-// session name, role-level conditions, or a duration limit under 1h): a tag-auth grant of the same role carries none of that.
+// warnTagAuthBypassesMappingScoping warns when tag_auth is enabled and a mapping scopes a role.
 func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
 	if tagAuth == nil || !tagAuth.Enabled {
 		return
@@ -1865,12 +1857,9 @@ func (d Decision) IDPTokenAllowed() bool {
 	return d.authorizing != nil && (d.authorizing.IDPToken || d.authorizing.MaxSessionDuration > IdPDefaultMaxSessionDuration)
 }
 
-// MaxSessionDuration is the authorizing mapping's session ceiling, 1h when unset; 0 when nothing authorized.
+// MaxSessionDuration is the authorizing mapping's session ceiling, 1h when unset or nothing authorized.
 func (d Decision) MaxSessionDuration() time.Duration {
-	if d.authorizing == nil {
-		return 0
-	}
-	if d.authorizing.MaxSessionDuration == 0 {
+	if d.authorizing == nil || d.authorizing.MaxSessionDuration == 0 {
 		return IdPDefaultMaxSessionDuration
 	}
 	return d.authorizing.MaxSessionDuration
