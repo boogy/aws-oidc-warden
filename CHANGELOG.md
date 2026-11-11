@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Dependencies
 
+- Go 1.27.3 → 1.27.4 (fixes `net/http` GO-2026-6859).
 - **AWS SDK for Go v2 bumps.**
   - `github.com/aws/aws-sdk-go-v2` 1.47.5 → 1.48.0
   - `github.com/aws/aws-sdk-go-v2/config` 1.33.13 → 1.33.18
