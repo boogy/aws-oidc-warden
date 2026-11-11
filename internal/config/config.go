@@ -740,7 +740,7 @@ func (c *Config) LoadConfig() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	// An overlay may supply the idp block; mergeBytes checks after merging.
+	// An overlay may supply the idp block; mergeOverlay checks after merging.
 	if !c.HasS3Overlay() {
 		if err := c.checkIdPOnlyEnv(); err != nil {
 			return err
@@ -768,12 +768,21 @@ func (c *Config) checkIdPOnlyEnv() error {
 
 // MergeBytes overlays the keys present in data (snake_case config schema, viper format; empty means json) onto c and re-validates.
 func (c *Config) MergeBytes(data []byte, format string) error {
-	_, err := c.mergeBytes(data, format, false, "")
-	return err
+	// A failed merge must leave c, and the index serving traffic, untouched.
+	next, err := cloneConfig(c)
+	if err != nil {
+		return fmt.Errorf("failed to copy configuration: %w", err)
+	}
+	if _, err := mergeOverlay(c, next, data, format, false, ""); err != nil {
+		return err
+	}
+	*c = *next
+	return nil
 }
 
-// mergeBytes returns the overlay's own jwt_validation.mode; a non-empty frozenMode replaces it before Validate.
-func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, frozenMode string) (string, error) {
+// mergeOverlay merges data into next, an unshared copy of the validated c, and validates it; next is garbage on error.
+// It returns the overlay's own jwt_validation.mode; a non-empty frozenMode replaces it before Validate.
+func mergeOverlay(c, next *Config, data []byte, format string, keepBaseOnly bool, frozenMode string) (string, error) {
 	if format == "" {
 		format = "json"
 	}
@@ -782,13 +791,6 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 	v.SetConfigType(format)
 	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
 		return "", fmt.Errorf("failed to parse %s configuration: %w", format, err)
-	}
-
-	// Merge into a copy: a decode or Validate failure must leave c — and the
-	// authz index still serving traffic — exactly as it was.
-	next, err := cloneConfig(c)
-	if err != nil {
-		return "", fmt.Errorf("failed to copy configuration: %w", err)
 	}
 
 	// AllKeys(), not InConfig: an explicit null must count as declared.
@@ -853,7 +855,6 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 			slog.Any("fragments", dropped))
 	}
 
-	*c = *next
 	return reloadedMode, nil
 }
 
@@ -1250,9 +1251,11 @@ func (c *Config) Validate() error {
 		if err != nil {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, subject, err)
 		}
-		m.subjectKey, m.subjectClass = classifySubject(subject)
 		// A literal subject is proven equal by its exact-bucket hit; no regexp.
-		if m.subjectClass != subjectExact {
+		if subjectMatcher.re == nil {
+			m.subjectKey, m.subjectClass = subjectMatcher.lit, subjectExact
+		} else {
+			m.subjectKey, m.subjectClass = classifySubject(subject)
 			m.compiledPattern = subjectMatcher.re
 		}
 

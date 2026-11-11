@@ -270,7 +270,7 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 
 	reloadedMode := cfg.JWTValidation.Mode
 	if p.fetch != nil {
-		if reloadedMode, err = cfg.mergeBytes(data, p.format, true, p.frozenMode); err != nil {
+		if reloadedMode, err = mergeOverlay(p.base, cfg, data, p.format, true, p.frozenMode); err != nil {
 			return fmt.Errorf("invalid configuration after reload: %w", err)
 		}
 	} else if err := cfg.Validate(); err != nil {

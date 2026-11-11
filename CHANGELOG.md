@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Breaking: tag-auth never grants a role a mapping names**: a role in any `role_mappings`/`role_groups` entry is explicit-only and its tags are never read; `config.warning` code `tag_auth_bypasses_mapping_scoping` is removed.
+- **Faster config load and reload**: an overlay reload skips a redundant config copy and literal subjects are parsed once.
 - **Audit stage `idp_unavailable`** replaces `duration` on `503 idp_signing_unavailable` refusals from the kill switch or a late-added `idp` block.
 - **Audit `durationSeconds`** also appears on denies after duration resolution, as the effective value refused.
 
