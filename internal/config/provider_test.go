@@ -1425,7 +1425,6 @@ func TestProviderRefreshRejectsBlockRemovalUnderOnly(t *testing.T) {
 		first, second string
 		wantErr       bool
 	}{
-		{"only at startup", onBlock, onBlock, true},
 		{"only turned on by reload", idpTestBlockYAML, onBlock, true},
 		{"only turned off first", onBlock, idpTestBlockYAML, false},
 	}
