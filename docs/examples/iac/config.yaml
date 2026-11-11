@@ -63,5 +63,7 @@ role_mappings:
       event_name: ["push", "workflow_dispatch"]
       ref: "refs/heads/main"
       environment: "production"
+      workflow_ref: 'octo-org/network/\.github/workflows/apply\.yml@refs/heads/main'
+    role_session_name: "terraform-apply"
     roles:
       - "arn:aws:iam::111122223333:role/NetworkApply"

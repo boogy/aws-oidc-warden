@@ -141,7 +141,8 @@ role_sets:
 # ROLE MAPPINGS — docs/CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets
 #
 #   subject              regex or list, auto-anchored (required)
-#   roles                ARNs and/or "@set" (required)
+#   roles                ARNs and/or "@set" (required); an item may be {role: ARN, <keys below>}
+#                        to override them per role (#per-role-settings)
 #   issuer               default: default_issuer
 #   conditions           claim name -> regex or list (OR); keys AND'd;
 #                        all_of / any_of / none_of nest; `claims:` for reserved names

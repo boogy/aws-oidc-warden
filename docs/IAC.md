@@ -39,7 +39,7 @@ How the worked config answers common runs:
 
 ## Variants
 
-[`examples/iac/config.yaml`](examples/iac/config.yaml) lists three, strongest first:
+[`examples/iac/config.yaml`](examples/iac/config.yaml) lists three variants:
 
 1. **All AND** (above). Use it by default.
 2. **Weaker `any_of`**: `ref` or `environment`, for teams that deploy from several branches. A run that declares only the environment is trusted as far as that environment's protection rules go.
