@@ -1,12 +1,12 @@
 # Tag-Based Authorization & Cross-Account
 
-Tag-based authorization lets a workload assume an IAM role whose **tags** authorize the request, without listing the role in `role_mappings`. The feature is opt-in (`tag_auth.enabled`, default `false`) and **additive**: explicit `role_mappings` are evaluated first; tag-based authorization is a fallback used only when no explicit mapping authorizes the requested role.
+Tag-based authorization lets a workload assume an IAM role whose **tags** authorize the request, without listing the role in `role_mappings`. The feature is opt-in (`tag_auth.enabled`, default `false`) and limited to **unmapped roles**: explicit `role_mappings` are evaluated first, and tag-based authorization is consulted only for a role that no `role_mappings` or `role_groups` entry names.
 
 Serving roles from **other AWS accounts** is configured separately via the top-level `cross_account` block. `cross_account.enabled` is a policy gate: `false` (or the block omitted) hard-blocks every cross-account operation — both role assumption and tag reads fail closed. The assume itself is always **direct**, hub → target, one hop, using the warden's own credentials; a convention-named per-account spoke role exists only to read a target role's IAM tags cross-account (`iam:GetRole`), since IAM has no resource-based policies. It works with plain `role_mappings`, with tag-auth, or both — see [Cross-account](#cross-account) and the full worked example in [examples/cross-account/](examples/cross-account/).
 
 <!-- prettier-ignore -->
 > [!CAUTION]
-> **Read [Security model & foot-guns](#security-model--foot-guns) before enabling this in production.** Tag-auth is an additive fallback: it can authorize a role *independently of* the `role_mappings` conditions you wrote to constrain it.
+> **Read [Security model & foot-guns](#security-model--foot-guns) before enabling this in production.** A tag-authorized role is scoped by its IAM tags and permissions alone: no session policy, no mapping conditions.
 
 **On this page**
 
@@ -35,7 +35,7 @@ Serving roles from **other AWS accounts** is configured separately via the top-l
 1. The workflow requests a role ARN as usual.
 2. The warden validates the OIDC token, derives the canonical **subject** (GitHub: the `repository` claim), and extracts the verified raw claims (`ref`, `actor`, …).
 3. **Explicit mappings first.** `role_mappings` is evaluated. If a mapping matches the (issuer, subject), passes its conditions, and lists the requested role, the role is authorized and tag-auth is **skipped entirely**. The mapping's session policy (if any) is applied.
-4. **Tag-auth fallback.** Only if step 3 did _not_ authorize the role, and `tag_auth.enabled` is `true`, the warden reads the requested role's IAM tags (`iam:GetRole`) and checks them against the verified issuer, subject, and claims (see [Conditions](#conditions-multi-dimensional-matching)). If they pass, the role is authorized. Tag-authorized assumptions use **no inline session policy**.
+4. **Tag-auth fallback.** Only if step 3 did _not_ authorize the role, `tag_auth.enabled` is `true`, and no mapping names the role (any issuer, any subject), the warden reads the requested role's IAM tags (`iam:GetRole`) and checks them against the verified issuer, subject, and claims (see [Conditions](#conditions-multi-dimensional-matching)). If they pass, the role is authorized. Tag-authorized assumptions use **no inline session policy**.
 5. If neither path authorizes the role, the request is denied (`ErrRoleNotPermitted`).
 
 The account ID is parsed from the requested role ARN. If the role lives in a different account than the warden (the _hub_), `cross_account.enabled` must be `true` (and the account allow-listed) or the request fails closed. When tag-auth needs to read that role's tags, the warden assumes a convention-named **spoke** role in that account for the `iam:GetRole` call only. The final `sts:AssumeRole` on the target role is always **direct**, using the warden's own (hub) credentials — the spoke is never part of the assume path. Same-account requests need no spoke at all. See [Cross-account](#cross-account).
@@ -152,31 +152,30 @@ Rules:
 
 When `tag_auth.enabled` is `true` **and** `role_mappings` is also configured, both are consulted in this order for the requested role:
 
-![Precedence: mapping first, then tag fallback](images/tag-auth-precedence.svg)
+![Precedence: mapping first, then tags for unmapped roles](images/tag-auth-precedence.svg)
 
 ```
 explicitlyAllowed = mapping matches subject AND passes conditions AND lists the requested role
+mapped            = any role_mappings / role_groups entry names the requested role
 allowed           = explicitlyAllowed
-                    OR (tag_auth.enabled AND requested role's tags authorize the claims)
+                    OR (tag_auth.enabled AND NOT mapped AND requested role's tags authorize the claims)
 deny if not allowed
 ```
 
-This is **allow-if-either**, with explicit mappings short-circuiting:
+A mapped role is **explicit-only**; tags are read only for a role no mapping names:
 
-| Explicit mapping result                                       | `tag_auth.enabled` | Role tags authorize? | Outcome              | Session policy   |
-| ------------------------------------------------------------- | ------------------ | -------------------- | -------------------- | ---------------- |
-| Authorizes the role                                           | (any)              | (not checked)        | **Allow**            | from the mapping |
-| No mapping for the subject                                    | `false`            | —                    | **Deny**             | —                |
-| No mapping for the subject                                    | `true`             | yes                  | **Allow**            | none             |
-| No mapping for the subject                                    | `true`             | no                   | **Deny**             | —                |
-| Mapping matches subject but role not listed / conditions fail | `false`            | —                    | **Deny**             | —                |
-| Mapping matches subject but role not listed / conditions fail | `true`             | yes                  | **Allow** (via tags) | none             |
-| Mapping matches subject but role not listed / conditions fail | `true`             | no                   | **Deny**             | —                |
+| Requested role                                         | `tag_auth.enabled` | Role tags authorize? | Outcome   | Session policy   |
+| ------------------------------------------------------ | ------------------ | -------------------- | --------- | ---------------- |
+| A mapping authorizes it                                | (any)              | (not read)           | **Allow** | from the mapping |
+| A mapping names it but does not authorize this request | (any)              | (not read)           | **Deny**  | —                |
+| No mapping names it                                    | `false`            | (not read)           | **Deny**  | —                |
+| No mapping names it                                    | `true`             | yes                  | **Allow** | none             |
+| No mapping names it                                    | `true`             | no                   | **Deny**  | —                |
 
 Key consequences:
 
 - A mapping that **authorizes** the role always wins and supplies the session policy. Tag-auth never overrides or tightens a mapping. The policy comes from the mapping that authorized _this role_ (subject match + conditions satisfied + grants the role); if several qualify, the first-declared wins — see the ordering foot-gun in [CONFIGURATION.md](CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets).
-- A mapping that **fails** (role not listed, or conditions not satisfied) does **not** hard-deny when tag-auth is enabled — the request falls through to the tag check. Tag-auth can therefore _broaden_ access beyond what mappings allow. If you rely on a mapping to _deny_, do not also publish matching `aow/*` tags on that role.
+- A role that **any** mapping names is explicit-only: a subject or condition that fails is a hard deny and the role's tags are never read. The check compares ARNs case-insensitively, across every issuer, after `@role_set` and `role_groups` expansion. To hand a role to tag-auth, remove it from every mapping.
 
 ---
 
@@ -264,7 +263,7 @@ With that config a role tagged `gh/subject` is reachable only by a GitHub token,
 
 Three behaviors are intentional but easy to misjudge. Review them before enabling tag-auth in production:
 
-1. **Tag-auth is an additive fallback, not a tightening.** Enabling it lets a role's `aow/*` tags authorize claims **independently of** `role_mappings` conditions. A role you constrain via a mapping (e.g. `ref: "refs/heads/main"`) can still be assumed from any branch if its tags match and it carries no matching `aow/branch` tag. **Do not rely on a mapping condition alone to _deny_ a role that also publishes matching `aow/*` tags.** See [Precedence](#precedence-mappings--tags-together).
+1. **Tag-auth never grants a mapped role.** A role named by any `role_mappings` or `role_groups` entry is explicit-only, so tags cannot widen its subject, conditions, session policy or duration limit. Under `idp.only` a tag grant is issued through the IdP like every other role, capped at 1h. See [Precedence](#precedence-mappings--tags-together).
 
 2. **`cross_account.enabled: false` (or omitted) hard-blocks all cross-account use** — both assumes and tag reads fail closed with an error; it is not a silent no-op. Once enabled, an **empty `allowed_accounts` still fails open**: the warden may assume into **any** member account. Config load only logs a warning in that case. Always populate `allowed_accounts` in production. See [Target account allow-list](#target-account-allow-list).
 

@@ -289,7 +289,7 @@ func TestPipeline_PolicyFileOwnerPin(t *testing.T) {
 	}
 }
 
-// ---------- E4: tag-auth is only a fallback, and only when enabled ----------
+// ---------- E4: tag-auth only when enabled, and never for a mapped role ----------
 
 func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
@@ -313,25 +313,30 @@ func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 		t.Error("role tags read even though the explicit mapping matched")
 	}
 
-	// tag_auth enabled: a matching tag authorizes, but with NO session policy.
 	cfg2 := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/other"}, Roles: roleEntries(role), SessionPolicy: "unrelated"}})
 	cfg2.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
 	if err := cfg2.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	rec3 := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "myorg/repo"}}
-	if _, err := vRun(t, cfg2, rec3, vE2EClaims("myorg/repo", "refs/heads/main"), role); err != nil {
-		t.Fatalf("tag-auth should allow: %v", err)
+	if _, err := vRun(t, cfg2, rec3, vE2EClaims("myorg/repo", "refs/heads/main"), role); err == nil {
+		t.Error("FAIL-OPEN: tag-auth granted a role a mapping names")
 	}
-	if rec3.gotPolicy != nil {
-		t.Errorf("POLICY LEAK: tag-authorized role inherited an unrelated mapping's policy %q", *rec3.gotPolicy)
+	if rec3.tagAuthCalled != 0 {
+		t.Error("role tags read for a role a mapping names")
+	}
+
+	unmapped := "arn:aws:iam::111111111111:role/tagged"
+	rec4 := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "myorg/repo"}}
+	if _, err := vRun(t, cfg2, rec4, vE2EClaims("myorg/repo", "refs/heads/main"), unmapped); err != nil {
+		t.Fatalf("tag-auth should allow an unmapped role: %v", err)
+	}
+	if rec4.gotPolicy != nil {
+		t.Errorf("POLICY LEAK: tag-authorized role inherited an unrelated mapping's policy %q", *rec4.gotPolicy)
 	}
 }
 
-// A multi-subject entry fans out into one effective mapping per subject, so
-// tag-auth must stay exactly where it was: unreachable for a listed subject,
-// and the unscoped fallback for one that is not listed.
-func TestSubjectListTagAuthFallbackUnaffected(t *testing.T) {
+func TestSubjectListRoleIsNeverTagAuthorized(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{{
 		Subject:       config.Patterns{"myorg/api", "myorg/web"},
@@ -350,12 +355,10 @@ func TestSubjectListTagAuthFallbackUnaffected(t *testing.T) {
 		assert.Equal(t, cfg.RoleMappings[0].SessionPolicy, *rec.gotPolicy)
 	}
 
-	// Not listed: tag-auth still grants, still without the entry's policy.
 	rec := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "myorg/batch"}}
 	_, err := vRun(t, cfg, rec, vE2EClaims("myorg/batch", "refs/heads/main"), role)
-	require.NoError(t, err, "unlisted subject should reach the tag-auth fallback")
-	assert.Equal(t, 1, rec.tagAuthCalled)
-	assert.Nil(t, rec.gotPolicy, "POLICY LEAK: tag-authorized role inherited the multi-subject entry's policy")
+	require.Error(t, err, "unlisted subject must not reach a mapped role through tag-auth")
+	assert.Zero(t, rec.tagAuthCalled)
 }
 
 // End-to-end verification that the pipeline is issuer-agnostic: a non-GitHub

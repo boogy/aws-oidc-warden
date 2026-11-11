@@ -52,7 +52,7 @@ How the worked config answers common runs:
 - **`workflow_dispatch` runs on the dispatched ref.** Anyone with write access can start it. Rely on `ref` and environment review.
 - **`workflow_ref` pins the caller workflow, not a reusable workflow it calls.** Use `job_workflow_ref` when the apply logic lives in a reusable workflow.
 - **Branch protection on main is assumed.** Protect tag refs too if conditions match them.
-- **Keep tag-auth tags off privileged roles.** [Tag-based authorization](TAG_BASED_AUTHORIZATION.md) can grant a role after a mapping's conditions denied it.
+- **Tag-auth never grants a mapped role.** A role any `role_mappings` or `role_groups` entry names is explicit-only, so [tag-based authorization](TAG_BASED_AUTHORIZATION.md) cannot grant it after its conditions denied.
 
 ## The plan role
 

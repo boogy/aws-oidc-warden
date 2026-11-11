@@ -298,7 +298,7 @@ There is deliberately no `not`, `xor`, or `n_of` operator: `all_of` / `any_of` /
 
 Everything else a mapping can specify — session policy, `role_session_name`, extra `session_tags` — then resolves through the **same** `(issuer, subject, role, conditions)` match. That is the point: a role's scoping always travels with the grant that authorized it, and can never be supplied by an unrelated mapping that merely shares the subject. Where several mappings qualify, the first-declared (config order) wins. The same rule picks `max_session_duration`, `session_duration` and `idp_token`, so an earlier broad mapping can cap a later narrow one.
 
-![How a role is authorized: union of mappings, then tag fallback, then 403](img/authorization-resolution.svg)
+![How a role is authorized: union of mappings, then tags for an unmapped role, then 403](img/authorization-resolution.svg)
 
 The target account gate runs first: a refused account gets 403 `permission_denied` whatever the mappings say.
 
@@ -455,7 +455,7 @@ These fail to load:
 - a `session_duration` above the effective `max_session_duration` (1h when unset);
 - anything the entry-level rules already reject, applied to the effective values.
 
-`config.warning` codes: `unconditional_role_beside_conditioned` (a role with no conditions beside conditioned roles) and `tag_auth_bypasses_mapping_scoping` with `scopedBy` = `session_policy`, `role_session_name`, `role_conditions` or `max_session_duration`.
+`config.warning` code: `unconditional_role_beside_conditioned` (a role with no conditions beside conditioned roles).
 
 #### Multi-subject entries share one policy
 

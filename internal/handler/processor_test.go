@@ -285,49 +285,54 @@ func TestProcessRequest_TagAuthDenies(t *testing.T) {
 	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted))
 }
 
-// TestProcessRequest_TagAuthOverridesFailedMapping documents (and locks in) the
-// additive precedence foot-gun: tag-auth is an OR-ed fallback, so a role that an
-// explicit mapping deliberately constrains (here branch=main) is still assumable
-// from a different branch when its aow/* tags match and carry no aow/branch tag.
-// Operators must not rely on a mapping constraint alone to *deny* such a role.
-func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
-	cfg := &config.Config{
-		Issuers: []config.IssuerConfig{{
-			Issuer:    testIssuer,
-			Provider:  "github",
-			Audiences: []string{"sts.amazonaws.com"},
-		}},
-		RoleSessionName: "test",
-		Cache:           &config.Cache{TTL: 0},
-		TagAuth:         &config.TagAuth{Enabled: true, TagPrefix: "aow/"},
-		RoleMappings: []config.RoleMapping{{
-			Subject:    config.Patterns{"acme/api"},
-			Roles:      roleEntries("arn:aws:iam::111111111111:role/app"),
-			Conditions: &config.Condition{Ref: config.Patterns{"main"}}, // requires ref == main
-		}},
+func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
+	const app = "arn:aws:iam::111111111111:role/app"
+	on := &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
+	mapped := func(subject string, cond *config.Condition) []config.RoleMapping {
+		return []config.RoleMapping{{Subject: config.Patterns{subject}, Roles: roleEntries(app), Conditions: cond}}
 	}
-	require.NoError(t, cfg.Validate())
-
-	// Claims are for a feature branch → the explicit mapping's branch condition
-	// fails, so the explicit path denies.
-	claims := &types.Claims{
-		Issuer: testIssuer, Subject: "acme/api",
-		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/feature",
-		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/feature"},
+	tests := []struct {
+		name     string
+		tagAuth  *config.TagAuth
+		mappings []config.RoleMapping
+		role     string
+	}{
+		{"tag auth absent", nil, nil, app},
+		{"tag auth disabled", &config.TagAuth{TagPrefix: "aow/"}, nil, app},
+		{"mapped role with failed condition", on, mapped("acme/api", &config.Condition{Ref: config.Patterns{"main"}}), app},
+		{"role mapped to another subject", on, mapped("acme/other", nil), app},
+		{"mapped role in another case", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/APP"},
 	}
-	exp := time.Now()
-	fc := &fakeConsumer{
-		tags:         map[string]string{"aow/repo": "acme/api"}, // no aow/branch → branch unchecked
-		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
-		allowAccount: true,
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Issuers: []config.IssuerConfig{{
+					Issuer:    testIssuer,
+					Provider:  "github",
+					Audiences: []string{"sts.amazonaws.com"},
+				}},
+				RoleSessionName: "test",
+				Cache:           &config.Cache{TTL: 0},
+				TagAuth:         tc.tagAuth,
+				RoleMappings:    tc.mappings,
+			}
+			require.NoError(t, cfg.Validate())
+			claims := &types.Claims{
+				Issuer: testIssuer, Subject: "acme/api",
+				Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/feature",
+				Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/feature"},
+			}
+			fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: true}
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
+			_, err := proc.ProcessRequest(context.Background(),
+				&handler.RequestData{Token: "t", Role: tc.role},
+				validator.ExtractionInput{Token: "t"},
+				"rid", slog.Default())
+			require.ErrorIs(t, err, handler.ErrRoleNotPermitted)
+			assert.Zero(t, fc.tagCalls)
+			assert.Empty(t, fc.assumed)
+		})
 	}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
-	creds, err := proc.ProcessRequest(context.Background(),
-		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
-		validator.ExtractionInput{Token: "t"},
-		"rid", slog.Default())
-	require.NoError(t, err, "tag-auth should authorize despite the failed mapping constraint")
-	assert.Equal(t, "AK", *creds.AccessKeyId)
 }
 
 // A failed IAM tag read must deny, not fall through as if the role carried no

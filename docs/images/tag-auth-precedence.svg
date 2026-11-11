@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 960 362" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="tag-auth-precedence-title tag-auth-precedence-desc" id="tag-auth-precedence-root">
-        <title id="tag-auth-precedence-title">Mappings first, tags as fallback</title>
-        <desc id="tag-auth-precedence-desc">Left-to-right flow: a mapping that grants the role allows it with mapping settings; otherwise tag_auth may allow it with no session policy; otherwise the request is denied.</desc>
+        <title id="tag-auth-precedence-title">Mappings first, tags for unmapped roles</title>
+        <desc id="tag-auth-precedence-desc">Left-to-right flow: a mapping that grants the role allows it with mapping settings; otherwise, for a role no mapping names, tag_auth may allow it with no session policy; otherwise the request is denied.</desc>
         <defs>
       <style>#tag-auth-precedence-root { --color-paper:   #f5f5f5;   
       --color-ink:     #2d3142;   
@@ -43,8 +43,8 @@
 <text x="320" y="212" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Mapping grants</text>
 <text x="320" y="228" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">this role?</text>
 <polygon points="620,156 740,216 620,276 500,216" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
-<text x="620" y="212" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">tag_auth on and</text>
-<text x="620" y="228" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">tags match?</text>
+<text x="620" y="212" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">tag_auth on, role</text>
+<text x="620" y="228" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">unmapped, match?</text>
 <rect x="800" y="184" width="136" height="64" rx="20" fill="#f5f5f5"/>
 <rect x="800" y="184" width="136" height="64" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
 <text x="868.0" y="213.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">403</text>

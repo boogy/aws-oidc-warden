@@ -116,7 +116,7 @@ A caller requests an OIDC token, POSTs it with the role ARN it wants, and export
 3. **Verify signature** — JWKS fetched cache-first, signature checked against a `kid` + `alg` + key-type pinned key.
 4. **Validate claims** — issuer re-asserted, audience (ANY-match), `exp`/`nbf`/`iat`, lifetime and age caps, `required_claims`. All fail-closed.
 5. **Derive canonical subject** — from config (`claim_mappings.subject`, or GitHub's `repository`), never self-asserted.
-6. **Authorize** — issuer-bound subject match against `role_mappings`, then auto-anchored regex `conditions`. IAM role tags can authorize as a fallback.
+6. **Authorize** — issuer-bound subject match against `role_mappings`, then auto-anchored regex `conditions`. IAM role tags can authorize a role no mapping names.
 7. **Apply session policy** — optional inline or S3 policy narrows the credentials.
 8. **Assume role** — with [STS session tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html) built from verified claims.
 9. **Audit and return** — the decision is recorded, then credentials are returned.
@@ -166,7 +166,7 @@ Full detail — crypto hardening, JWKS handling, SSRF protection: **[docs/TOKEN_
 
 So instead of one IAM role per repo (or per repo × environment), a few shared roles carry policies conditioned on the tags, and onboarding a repo becomes a config change. Unlike Pod Identity the tag vocabulary is **yours**, and only verified claims can become tags — [SESSION_TAGGING.md](docs/SESSION_TAGGING.md).
 
-**Tag-based authorization removes the config entry entirely.** A repository can assume a role authorized by **tags on the role itself**, which suits roles managed across many accounts or teams. Explicit `role_mappings` are always evaluated first; tag-auth is an additive fallback — read its [security model](docs/TAG_BASED_AUTHORIZATION.md#security-model--foot-guns) before enabling it, because it can authorize a role _independently of_ the mapping conditions you wrote to constrain it.
+**Tag-based authorization removes the config entry entirely.** A repository can assume a role authorized by **tags on the role itself**, which suits roles managed across many accounts or teams. Explicit `role_mappings` are always evaluated first, and a role any mapping names is never tag-authorized — read its [security model](docs/TAG_BASED_AUTHORIZATION.md#security-model--foot-guns) before enabling it, because a tag-authorized role gets no session policy.
 
 Serving roles in **other AWS accounts** is a separate opt-in block. Two things are commonly misread: the target role is always assumed **directly, in one hop**, with the warden's own hub credentials; and the spoke role is assumed _only_ to call `iam:GetRole` and read a member-account role's tags, never as an assume target. Both features default to `false` — [TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md), plus a worked example in [docs/examples/cross-account/](docs/examples/cross-account/).
 

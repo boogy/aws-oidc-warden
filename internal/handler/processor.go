@@ -201,7 +201,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	if explicitlyAllowed {
 		rec.MatchedVia = "explicit"
 	}
-	if !allowed && cfg.TagAuth != nil && cfg.TagAuth.Enabled {
+	if !allowed && cfg.TagAuthMayGrant(requestedRole) {
 		roleTags, terr := r.consumer.GetRoleTags(ctx, requestedRole)
 		if terr != nil {
 			logevent.Warn(ctx, log, logevent.AuthzTagAuthLookupFailure, "role tag lookup failed",

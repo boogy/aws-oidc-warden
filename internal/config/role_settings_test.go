@@ -460,24 +460,22 @@ func TestRoleEntryWarnings(t *testing.T) {
 	tests := []struct {
 		name     string
 		entry    string
-		tagAuth  bool
 		wantCode string
 		wantRole string
-		wantBy   string
 	}{
 		{"unconditional beside conditioned", `    roles:
       - "` + rsAudit + `"
       - role: "` + rsApply + `"
         conditions:
           ref: "refs/heads/main"
-`, false, "unconditional_role_beside_conditioned", rsAudit, ""},
+`, "unconditional_role_beside_conditioned", rsAudit},
 		{"unconditional role with other overrides beside conditioned", `    roles:
       - role: "` + rsAudit + `"
         role_session_name: "audit"
       - role: "` + rsApply + `"
         conditions:
           ref: "refs/heads/main"
-`, false, "unconditional_role_beside_conditioned", rsAudit, ""},
+`, "unconditional_role_beside_conditioned", rsAudit},
 		{"entry conditions cover plain role", `    conditions:
       event_name: "push"
     roles:
@@ -485,44 +483,25 @@ func TestRoleEntryWarnings(t *testing.T) {
       - role: "` + rsApply + `"
         conditions:
           ref: "refs/heads/main"
-`, false, "", "", ""},
+`, "", ""},
 		{"no role conditions at all", `    roles:
       - "` + rsAudit + `"
       - role: "` + rsApply + `"
         max_session_duration: 30m
-`, false, "", "", ""},
-		{"tag auth bypasses role conditions", `    roles:
-      - role: "` + rsApply + `"
-        conditions:
-          ref: "refs/heads/main"
-`, true, "tag_auth_bypasses_mapping_scoping", rsApply, "role_conditions"},
-		{"tag auth bypasses duration limit", `    roles:
-      - role: "` + rsApply + `"
-        max_session_duration: 15m
-`, true, "tag_auth_bypasses_mapping_scoping", rsApply, "max_session_duration"},
-		{"tag auth duration at 1h is no bypass", `    roles:
-      - role: "` + rsApply + `"
-        max_session_duration: 1h
-`, true, "", "", ""},
+`, "", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureWarnings(t, func() {
 				v := viper.New()
 				v.SetConfigType("yaml")
-				doc := rsHeader + rsMapping(tc.entry)
-				if tc.tagAuth {
-					doc += "tag_auth:\n  enabled: true\n  allowed_accounts: [\"111122223333\"]\n"
-				}
-				require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
+				require.NoError(t, v.ReadConfig(strings.NewReader(rsHeader+rsMapping(tc.entry))))
 				var c Config
 				require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
 				require.NoError(t, c.Validate())
 			})
-			codes := []string{"unconditional_role_beside_conditioned", "tag_auth_bypasses_mapping_scoping"}
-			for _, code := range codes {
-				assert.Equal(t, code == tc.wantCode, hasWarningCode(t, logs, code), code)
-			}
+			const code = "unconditional_role_beside_conditioned"
+			assert.Equal(t, code == tc.wantCode, hasWarningCode(t, logs, code))
 			if tc.wantCode == "" {
 				return
 			}
@@ -531,7 +510,6 @@ func TestRoleEntryWarnings(t *testing.T) {
 				if w.Warning == tc.wantCode {
 					found = true
 					assert.Equal(t, tc.wantRole, w.Role)
-					assert.Equal(t, tc.wantBy, w.ScopedBy)
 				}
 			}
 			assert.True(t, found)

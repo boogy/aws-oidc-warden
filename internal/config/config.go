@@ -373,6 +373,7 @@ type Config struct {
 	estimatedRolesPerMapping int                        `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
 	effective                []*RoleMapping             `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
 	index                    authzIndex                 `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
+	mappedRoles              map[string]struct{}        `mapstructure:"-" json:"-"` // lower-cased ARNs any mapping names; tag-auth never grants these
 	auditable                map[string]map[string]bool `mapstructure:"-" json:"-"` // per-issuer claim names the config references (see auditable.go)
 }
 
@@ -1369,7 +1370,12 @@ func (c *Config) Validate() error {
 		c.auditable[iss] = auditableClaimsFor(iss, &c.Issuers[i], c.effective)
 	}
 	warnUnscopedRoleGrants(c.effective)
-	warnTagAuthBypassesMappingScoping(c.TagAuth, c.effective)
+	c.mappedRoles = make(map[string]struct{})
+	for _, m := range c.effective {
+		for _, role := range m.grantedRoles {
+			c.mappedRoles[strings.ToLower(role)] = struct{}{}
+		}
+	}
 
 	// Calculate the average number of roles per mapping for more efficient memory allocation
 	totalRoles := 0
@@ -1723,43 +1729,13 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	}
 }
 
-// warnTagAuthBypassesMappingScoping warns when tag_auth is enabled and a mapping scopes a role.
-func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
-	if tagAuth == nil || !tagAuth.Enabled {
-		return
+// TagAuthMayGrant reports whether tag-auth is on and no mapping names role; a mapped role is explicit-only.
+func (c *Config) TagAuthMayGrant(role string) bool {
+	if c.TagAuth == nil || !c.TagAuth.Enabled {
+		return false
 	}
-
-	seen := make(map[string]bool)
-	for _, m := range effective {
-		scopedBy := ""
-		switch {
-		case m.SessionPolicy != "" || m.SessionPolicyFile != "":
-			scopedBy = "session_policy"
-		case m.RoleSessionName != "":
-			scopedBy = "role_session_name"
-		case m.roleConditions:
-			scopedBy = "role_conditions"
-		case m.MaxSessionDuration != 0 && m.MaxSessionDuration < IdPDefaultMaxSessionDuration:
-			scopedBy = "max_session_duration"
-		default:
-			continue
-		}
-		for _, role := range m.grantedRoles {
-			if seen[role] {
-				continue
-			}
-			seen[role] = true
-			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
-				"tag_auth is enabled and this role is scoped in role_mappings; "+
-					"a tag-auth grant of the same role carries no session policy, no "+
-					"role_session_name override, no role conditions and no max_session_duration under 1h. Remove the role's tag-auth tags, or "+
-					"accept that the tag-auth path is unscoped.",
-				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
-				slog.String("roleArn", role),
-				slog.String("scopedBy", scopedBy),
-				slog.String("subject", m.resolvedSubject))
-		}
-	}
+	_, mapped := c.mappedRoles[strings.ToLower(role)]
+	return !mapped
 }
 
 // issuerTagPrefixes indexes the per-issuer tag_prefix overrides. An issuer

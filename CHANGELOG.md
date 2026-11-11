@@ -14,10 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
 - **`example-config.yaml`** now shows per-issuer `tag_prefix`.
 - **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
-- **`config.warning` code `unconditional_role_beside_conditioned`**, and `scopedBy=role_conditions` / `max_session_duration` (under 1h) on `tag_auth_bypasses_mapping_scoping`.
+- **`config.warning` code `unconditional_role_beside_conditioned`.**
 
 ### Changed
 
+- **Breaking: tag-auth never grants a role a mapping names**: a role in any `role_mappings`/`role_groups` entry is explicit-only and its tags are never read; `config.warning` code `tag_auth_bypasses_mapping_scoping` is removed.
 - **Audit stage `idp_unavailable`** replaces `duration` on `503 idp_signing_unavailable` refusals from the kill switch or a late-added `idp` block.
 - **Audit `durationSeconds`** also appears on denies after duration resolution, as the effective value refused.
 

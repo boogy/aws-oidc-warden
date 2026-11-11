@@ -723,7 +723,7 @@ func TestProcessMintRedactsSourceIdentity(t *testing.T) {
 func TestProcessRequestRouting(t *testing.T) {
 	only := func(c *config.Config) { c.IdP.Only = true }
 	tagOnly := func(c *config.Config) {
-		c.RoleMappings[0].Subject = config.Patterns{"other/repo"}
+		c.RoleMappings[0].Roles = roleEntries("arn:aws:iam::111111111111:role/mapped")
 		c.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
 	}
 	tests := []struct {

@@ -160,7 +160,7 @@ sequenceDiagram
 
     Processor->>Processor: AuthorizeRoles(issuer, subject, claims) via owner-bucketed index
 
-    opt tag_auth.enabled and explicit match failed
+    opt tag_auth.enabled and no mapping names the role
         Processor->>Consumer: GetRoleTags(role)
         Consumer-->>Processor: role IAM tags
         Processor->>Processor: TagAuth.Authorize(tags, claims, issuer, subject)
@@ -420,7 +420,7 @@ flowchart TD
     GB -->|Allowed| H[AuthorizeRoles issuer+subject]
 
     H -->|Explicit match| N[Apply Session Policy]
-    H -->|No match| HA{tag_auth enabled?}
+    H -->|No match| HA{tag_auth enabled and role unmapped?}
     HA -->|No| I[Return 403 Error]
     HA -->|Yes| HB[GetRoleTags + TagAuth.Authorize]
     HB -->|Denied| I[Return 403 Error]
@@ -547,7 +547,7 @@ Both features are opt-in and default to `false`:
 
 | Toggle                  | Off means                                                                                              | On means                                                                |
 | ----------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `tag_auth.enabled`      | Only explicit `role_mappings` authorize                                                                | Role IAM tags authorize as a **fallback**, after mapping matching fails |
+| `tag_auth.enabled`      | Only explicit `role_mappings` authorize                                                                | Role IAM tags authorize roles that **no mapping names**                 |
 | `cross_account.enabled` | **Every** cross-account operation fails closed — assumption and tag reads, mappings and tag-auth alike | Accounts in `allowed_accounts` are reachable                            |
 
 **The one-hop rule.** Every role assumption — same-account or cross-account — goes directly from the hub's own credentials to the target role. The spoke role exists only to read tags, and is never an assume target.
