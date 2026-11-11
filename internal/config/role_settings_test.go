@@ -260,6 +260,10 @@ func TestRoleSettingLoadErrors(t *testing.T) {
       - role: "` + rsApply + `"
         session_policy_file: ""
 `, false, "session_policy_file must not be empty"},
+		{"empty role_session_name", `    roles:
+      - role: "` + rsApply + `"
+        role_session_name: ""
+`, false, "role_session_name must not be empty"},
 		{"empty session_tags", `    roles:
       - role: "` + rsApply + `"
         session_tags: {}
