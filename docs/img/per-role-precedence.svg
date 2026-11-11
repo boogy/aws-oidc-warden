@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 1064 568" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="per-role-precedence-title per-role-precedence-desc" id="per-role-precedence-root">
         <title id="per-role-precedence-title">Per-role settings: what each role gets</title>
-        <desc id="per-role-precedence-desc">Matrix of the five per-role settings for one mapping entry, showing the built-in default, the entry value, and the value each of three roles resolves to, where a role setting replaces the entry value and an entry value replaces the built-in default.</desc>
+        <desc id="per-role-precedence-desc">Matrix of the six per-role settings for one mapping entry, showing the built-in default, the entry value, and the value each of three roles resolves to, where a role setting replaces the entry value and an entry value replaces the built-in default.</desc>
         <defs>
       <style>#per-role-precedence-root { --color-paper:   #f5f5f5;   
       --color-ink:     #2d3142;   
