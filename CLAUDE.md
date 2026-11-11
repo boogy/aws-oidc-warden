@@ -4,29 +4,21 @@ Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them f
 
 Request flow: multi-issuer token validation → canonical-subject authorization (issuer-bound) → condition checking → session policy → role assumption (`internal/handler/processor.go`).
 
-This file is the map. Each package below has its own `CLAUDE.md` with the detail — open the one for the area you're touching. The conventions, security, and git rules at the bottom are shared by all packages (each subdir file `Extends` this one).
+This file is the map. Each package has a short `CLAUDE.md`: where things are, plus the rules code cannot state. Read the code and tests for everything else.
 
-## Package guide
+Keep every `CLAUDE.md` under about 40 lines. Add a line only for a rule a reader cannot get from the code or a test name; put explanation in `docs/` and history in `CHANGELOG.md`.
 
-- **`internal/handler/`** → [CLAUDE.md](internal/handler/CLAUDE.md) — core request pipeline shared by every deployment. `NewBootstrap(adapter)` wires DI (config, validator, cache, AWS consumer); `ProcessRequest()` runs the pipeline; `RequestData` + sentinel errors live in `types.go`; the per-frontend adapters (`apigateway.go` / `apigatewayv2.go` / `alb.go` / `lambdaurl.go`) differ only in event parse/serialize. _Go here when_ changing request flow, adding a frontend, or touching error→HTTP mapping.
+## Packages
 
-- **`internal/validator/`** → [CLAUDE.md](internal/validator/CLAUDE.md) — multi-issuer JWT parse + JWKS signature/claims verification (`TokenValidatorInterface`). Routes on the unverified `iss` to a per-issuer registry spec, then verifies signature → re-asserted issuer → audience (ANY-match) → time bounds → required*claims → canonical-subject normalization. Allowed algorithms only (ES/RS 256–512, never `none`). Delegated `apigw`/`alb` share the same claim-check path. \_Go here when* touching token verification, JWKS fetching, or audience handling.
+- `internal/handler/` → [CLAUDE.md](internal/handler/CLAUDE.md) — request pipeline, front-end adapters, error → HTTP mapping, audit.
+- `internal/validator/` → [CLAUDE.md](internal/validator/CLAUDE.md) — JWT/JWKS verification, claims extractors (`self`/`apigw`/`alb`).
+- `internal/config/` → [CLAUDE.md](internal/config/CLAUDE.md) — config loading, `Validate()`, subject/condition matching, tag-auth, hot reload.
+- `internal/cache/` → [CLAUDE.md](internal/cache/CLAUDE.md) — JWKS cache backends (`memory`/`dynamodb`/`s3`).
+- `internal/aws/` → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM calls, session tags, cross-account.
+- `internal/idp/` → [CLAUDE.md](internal/idp/CLAUDE.md) — warden-as-IdP signer, mint, JWKS/discovery; operator guide `docs/IDP.md`.
+- `internal/utils/` — helpers. `FormatClaimValue` is the single formatter for a claim value going to an audit record or session tag. `RedactToken` has no callers by design: tokens stay out of logs entirely.
 
-- **`internal/config/`** → [CLAUDE.md](internal/config/CLAUDE.md) — Viper config (`AOW_` env prefix > file > defaults), the `issuers[]` model, the per-issuer `session_tags` spec plus additive per-mapping extras, issuer-bound subject/condition matching over an owner-bucketed index, the boolean condition engine (`condition.go`: `all_of`/`any_of`/`none_of`, nestable), config fragments, and the remote `Provider` (lazy refresh via injected `FetchFunc`, atomic swap from a pristine base). Key methods: `AuthorizeRoles(issuer, subject, claims)`, `FindSessionPolicy(issuer, subject, role, claims)` (role- and condition-aware: the policy comes from the mapping that authorized the role), `EffectiveSessionTags(issuer, decision)` (issuer spec + the authorizing mapping's additive extras), `Validate()` (compiles anchored regex once, builds the index). _Go here when_ adding config keys, constraint logic, or remote-refresh behavior.
-
-- **`internal/cache/`** → [CLAUDE.md](internal/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects). _Go here when_ changing cache backends, TTL handling, or eviction.
-
-- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-built `[]types.Tag` (the handler runs `BuildSessionTags(ctx, rawClaims, tagSpec)` once per request from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
-
-- **`internal/idp/`** → [CLAUDE.md](internal/idp/CLAUDE.md) — optional warden-as-IdP: KMS/PEM signer, self-verified token mint, JWKS/discovery documents; the handler exchanges the minted token via unsigned `AssumeRoleWithWebIdentity`. Operator guide: `docs/IDP.md`. _Go here when_ touching minting, signing keys, or the `idp` config.
-
-## Other folders (no CLAUDE.md of their own)
-
-- `internal/utils/` — helpers. `FormatClaimValue` is the single formatter for a verified claim value on its way into an audit record or an STS session tag; both `handler.auditClaims` and `aws.BuildSessionTags` must go through it, or the documented guarantee that a claim reported in `claims` and the same claim attached as a session tag can never disagree breaks. `RedactToken` is the redaction helper to use if a log site ever needs to carry token material. No current log site does — the pipeline keeps tokens out of logs entirely rather than logging them redacted (see `ParseRequestBody`, which deliberately logs no body preview), so `RedactToken` has no callers by design.
-
-## Not in this repo
-
-No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deployment is the operator's, and the contract their IaC must satisfy lives in `docs/ARCHITECTURE.md` (§ Infrastructure as code). Don't add IaC back — document the requirement there instead.
+No infrastructure-as-code in this repo; the contract an operator's IaC must meet is in `docs/ARCHITECTURE.md`. Don't add IaC back.
 
 ## Commands
 
