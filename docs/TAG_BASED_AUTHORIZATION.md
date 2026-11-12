@@ -175,7 +175,7 @@ A mapped role is **explicit-only**; tags are read only for a role no mapping nam
 Key consequences:
 
 - A mapping that **authorizes** the role always wins and supplies the session policy. Tag-auth never overrides or tightens a mapping. The policy comes from the mapping that authorized _this role_ (subject match + conditions satisfied + grants the role); if several qualify, the first-declared wins — see the ordering foot-gun in [CONFIGURATION.md](CONFIGURATION.md#authorization-role_mappings-role_groups-role_sets).
-- A role that **any** mapping names is explicit-only: a subject or condition that fails is a hard deny and the role's tags are never read. The check compares ARNs case-insensitively, across every issuer, after `@role_set` and `role_groups` expansion. To hand a role to tag-auth, remove it from every mapping.
+- A role that **any** mapping names is explicit-only: a subject or condition that fails is a hard deny and the role's tags are never read. The check compares account and role name case-insensitively, ignoring the ARN path, across every issuer, after `@role_set` and `role_groups` expansion. To hand a role to tag-auth, remove it from every mapping.
 
 ---
 

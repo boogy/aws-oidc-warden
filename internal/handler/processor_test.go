@@ -302,6 +302,7 @@ func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
 		{"mapped role with failed condition", on, mapped("acme/api", &config.Condition{Ref: config.Patterns{"main"}}), app},
 		{"role mapped to another subject", on, mapped("acme/other", nil), app},
 		{"mapped role in another case", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/APP"},
+		{"mapped role under another path", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/x/app"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

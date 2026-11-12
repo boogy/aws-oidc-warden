@@ -373,7 +373,7 @@ type Config struct {
 	estimatedRolesPerMapping int                        `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
 	effective                []*RoleMapping             `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
 	index                    authzIndex                 `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
-	mappedRoles              map[string]struct{}        `mapstructure:"-" json:"-"` // lower-cased ARNs any mapping names; tag-auth never grants these
+	mappedRoles              map[string]struct{}        `mapstructure:"-" json:"-"` // mappedRoleKey of every role a mapping names; tag-auth never grants these
 	auditable                map[string]map[string]bool `mapstructure:"-" json:"-"` // per-issuer claim names the config references (see auditable.go)
 }
 
@@ -781,7 +781,6 @@ func (c *Config) MergeBytes(data []byte, format string) error {
 }
 
 // mergeOverlay merges data into next, an unshared copy of the validated c, and validates it; next is garbage on error.
-// It returns the overlay's own jwt_validation.mode; a non-empty frozenMode replaces it before Validate.
 func mergeOverlay(c, next *Config, data []byte, format string, keepBaseOnly bool, frozenMode string) (string, error) {
 	if format == "" {
 		format = "json"
@@ -1376,7 +1375,7 @@ func (c *Config) Validate() error {
 	c.mappedRoles = make(map[string]struct{})
 	for _, m := range c.effective {
 		for _, role := range m.grantedRoles {
-			c.mappedRoles[strings.ToLower(role)] = struct{}{}
+			c.mappedRoles[mappedRoleKey(role)] = struct{}{}
 		}
 	}
 
@@ -1737,8 +1736,17 @@ func (c *Config) TagAuthMayGrant(role string) bool {
 	if c.TagAuth == nil || !c.TagAuth.Enabled {
 		return false
 	}
-	_, mapped := c.mappedRoles[strings.ToLower(role)]
+	_, mapped := c.mappedRoles[mappedRoleKey(role)]
 	return !mapped
+}
+
+// mappedRoleKey ignores the ARN path: IAM resolves a role by account and case-insensitive name alone.
+func mappedRoleKey(role string) string {
+	account, name, err := utils.ParseRoleARN(role)
+	if err != nil {
+		return strings.ToLower(role)
+	}
+	return account + "/" + strings.ToLower(name)
 }
 
 // issuerTagPrefixes indexes the per-issuer tag_prefix overrides. An issuer
