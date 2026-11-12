@@ -448,7 +448,7 @@ Overrides replace and never intersect, so a role can be granted more widely than
 These fail to load:
 
 - an empty `conditions`, `session_policy`, `session_policy_file`, `role_session_name`, `session_tags: {}`, `max_session_duration: 0` or `session_duration: 0` on a role (a role cannot set an inherited setting to empty; move it off the entry or use a second entry);
-- a role with its own settings listed twice in one entry, including through a `@set`;
+- a role with its own settings listed twice in one entry (same account and name, any path), including through a `@set`;
 - an entry-level setting that every role overrides;
 - `idp_token: false` on a role with an effective duration over 1h;
 - `idp_token: false` on a role while `idp.only` is true;

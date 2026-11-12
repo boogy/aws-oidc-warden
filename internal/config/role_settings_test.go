@@ -291,6 +291,11 @@ func TestRoleSettingLoadErrors(t *testing.T) {
       - role: "` + rsApply + `"
         max_session_duration: 30m
 `, false, "more than once"},
+		{"duplicate override role differing in path", `    roles:
+      - "arn:aws:iam::111122223333:role/ci/Apply"
+      - role: "` + rsApply + `"
+        max_session_duration: 30m
+`, false, "more than once"},
 		{"override error names the role", `    roles:
       - "` + rsAudit + `"
       - role: "` + rsApply + `"

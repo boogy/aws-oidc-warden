@@ -728,8 +728,17 @@ func (c *Config) LoadConfig() error {
 	if err := viper.Unmarshal(c, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
-	if err := rejectUnusedKeys(viper.GetViper(), md.Unused, "config file"); err != nil {
+	if len(md.Unused) > 0 {
+		if err := rejectUnusedKeys(fileOnly(viper.GetViper()), md.Unused, "config file"); err != nil {
+			return err
+		}
+	}
+	removed, err := envFlag("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS")
+	if err != nil {
 		return err
+	}
+	if removed {
+		return errors.New("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS was removed: use AOW_SESSION_TAGS_TRANSITIVE")
 	}
 
 	// Seed GitHub only with no config source; a file with no issuers must fail Validate(), never fall back.
@@ -1117,14 +1126,6 @@ func (c *Config) Validate() error {
 			slog.String("warning", "audit_trail_inactive"))
 	}
 
-	removed, err := envFlag("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS")
-	if err != nil {
-		return err
-	}
-	if removed {
-		return errors.New("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS was removed: use AOW_SESSION_TAGS_TRANSITIVE")
-	}
-
 	if c.IdP != nil {
 		c.IdP.applyDefaults()
 		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
@@ -1373,16 +1374,12 @@ func (c *Config) Validate() error {
 	}
 	warnUnscopedRoleGrants(c.effective)
 	c.mappedRoles = make(map[string]struct{})
+	totalRoles := 0
 	for _, m := range c.effective {
+		totalRoles += len(m.grantedRoles)
 		for _, role := range m.grantedRoles {
 			c.mappedRoles[mappedRoleKey(role)] = struct{}{}
 		}
-	}
-
-	// Calculate the average number of roles per mapping for more efficient memory allocation
-	totalRoles := 0
-	for _, mapping := range c.effective {
-		totalRoles += len(mapping.grantedRoles)
 	}
 
 	if len(c.effective) > 0 {

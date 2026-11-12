@@ -190,12 +190,12 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 			return nil, wrap(fmt.Errorf("roles[%d]: %w", ri, err))
 		}
 		resolved[ri] = arns
-		lower := make([]string, len(arns))
-		for i, arn := range arns {
-			lower[i] = strings.ToLower(arn)
+		keys := make([]string, len(arns))
+		for ai, arn := range arns {
+			keys[ai] = mappedRoleKey(arn)
 		}
-		for _, arn := range slices.Compact(slices.Sorted(slices.Values(lower))) {
-			counts[arn]++
+		for _, key := range slices.Compact(slices.Sorted(slices.Values(keys))) {
+			counts[key]++
 		}
 	}
 
@@ -206,7 +206,7 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 		if e.hasOverride() {
 			overridden = append(overridden, ri)
 			for _, arn := range resolved[ri] {
-				if counts[strings.ToLower(arn)] > 1 {
+				if counts[mappedRoleKey(arn)] > 1 {
 					return nil, wrap(fmt.Errorf("role %q has its own settings and appears more than once in this entry", arn))
 				}
 			}

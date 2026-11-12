@@ -95,13 +95,26 @@ func decoderOptions(md *mapstructure.Metadata) []viper.DecoderConfigOption {
 	}
 }
 
+// fileOnly re-reads v's config file without env overrides; nil if it cannot.
+func fileOnly(v *viper.Viper) *viper.Viper {
+	f := viper.New()
+	f.SetConfigFile(v.ConfigFileUsed())
+	if err := f.ReadInConfig(); err != nil {
+		return nil
+	}
+	return f
+}
+
 // rejectUnusedKeys fails on an unclaimed nested key; an unused top-level key (e.g. YAML anchors) only warns.
+// v must not apply env overrides.
 func rejectUnusedKeys(v *viper.Viper, unused []string, source string) error {
 	unused = slices.Sorted(slices.Values(unused))
 	for _, key := range unused {
 		if key == "tag_auth.transitive_session_tags" {
-			if b, err := strconv.ParseBool(fmt.Sprint(v.Get(key))); err == nil && !b {
-				continue
+			if v != nil {
+				if b, err := strconv.ParseBool(fmt.Sprint(v.Get(key))); err == nil && !b {
+					continue
+				}
 			}
 			return fmt.Errorf("%s: %s was removed: use session_tags_transitive", source, key)
 		}

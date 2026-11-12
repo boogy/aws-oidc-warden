@@ -272,6 +272,11 @@ func TestRemovedTransitiveEnvVar(t *testing.T) {
 		_, err := loadIdPYAML(t, idpTestIssuerYAML+"tag_auth:\n  transitive_session_tags: false\n")
 		require.NoError(t, err)
 	})
+	t.Run("env false does not mask yaml true", func(t *testing.T) {
+		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")
+		_, err := loadIdPYAML(t, idpTestIssuerYAML+"tag_auth:\n  transitive_session_tags: true\n")
+		require.ErrorContains(t, err, "tag_auth.transitive_session_tags was removed")
+	})
 	t.Run("false loads", func(t *testing.T) {
 		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")
 		c, err := loadIdPYAML(t, idpTestIssuerYAML)
