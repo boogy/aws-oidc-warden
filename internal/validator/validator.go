@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -206,14 +207,12 @@ func (t *TokenValidator) rebuildSnapshot(cfg *config.Config) *snapshot {
 func (t *TokenValidator) WarmPrefetch(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, spec := range t.currentSnapshot().registry {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := t.fetchJWKS(ctx, spec, false); err != nil {
 				logevent.Warn(ctx, nil, logevent.JWKSPrefetchFailure, "JWKS warm-prefetch failed; will fetch on first request",
 					issuerAttrs(spec.Issuer, slog.String("error", err.Error()))...)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -317,11 +316,10 @@ func (t *TokenValidator) validateWith(ctx context.Context, cfg *config.Config, t
 
 // peekIssuer returns the token's unverified, exact-key iss for registry routing only.
 func peekIssuer(tokenString string) (string, error) {
-	first := strings.IndexByte(tokenString, '.')
-	if first < 0 {
+	_, rest, ok := strings.Cut(tokenString, ".")
+	if !ok {
 		return "", malformedTokenErr("token contains an invalid number of segments")
 	}
-	rest := tokenString[first+1:]
 	second := strings.IndexByte(rest, '.')
 	if second < 0 || strings.IndexByte(rest[second+1:], '.') >= 0 {
 		return "", malformedTokenErr("token contains an invalid number of segments")
@@ -354,10 +352,8 @@ func audienceMatches(tokenAudiences jwt.ClaimStrings, expected []string) bool {
 		return false
 	}
 	for _, got := range tokenAudiences {
-		for _, want := range expected {
-			if got == want {
-				return true
-			}
+		if slices.Contains(expected, got) {
+			return true
 		}
 	}
 	return false

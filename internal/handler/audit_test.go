@@ -93,7 +93,7 @@ func auditTestCfg(t *testing.T, auditRequired, logClaimValues bool) *config.Conf
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"org/repo"},
-			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogClaimValues: logClaimValues,
 		AuditRequired:  auditRequired,
@@ -110,11 +110,9 @@ func auditTestCfg(t *testing.T, auditRequired, logClaimValues bool) *config.Conf
 
 func allowClaims(subject string) *types.Claims {
 	return &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   testIssuer,
-			Subject:  subject,
-			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
-		},
+		Issuer:     testIssuer,
+		Subject:    subject,
+		Audience:   jwt.ClaimStrings{"sts.amazonaws.com"},
 		Sub:        "raw-sub-value",
 		Repository: "org/repo",
 		Ref:        "refs/heads/main",
@@ -551,11 +549,9 @@ func githubRawClaims() map[string]any {
 
 func githubClaims(subject string) *types.Claims {
 	return &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   testIssuer,
-			Subject:  subject,
-			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
-		},
+		Issuer:     testIssuer,
+		Subject:    subject,
+		Audience:   jwt.ClaimStrings{"sts.amazonaws.com"},
 		Sub:        "raw-sub-value",
 		Repository: "org/repo",
 		Ref:        "refs/heads/main",
@@ -757,19 +753,17 @@ func TestAuditClaims_GenericIssuerUsesClaimMappings(t *testing.T) {
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"group/project"},
 			Issuer:  gitlabIssuer,
-			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogClaimValues: true,
 	}
 	require.NoError(t, cfg.Validate())
 
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   gitlabIssuer,
-			Subject:  "group/project",
-			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
-		},
-		Sub: "project_path:group/project:ref:main",
+		Issuer:   gitlabIssuer,
+		Subject:  "group/project",
+		Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
+		Sub:      "project_path:group/project:ref:main",
 		Raw: map[string]any{
 			"project_path": "group/project",
 			"ref":          "main",
@@ -821,19 +815,17 @@ func TestAuditClaims_GenericIssuerRepositoryAliasIsProviderIndependent(t *testin
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"acme/api"},
 			Issuer:  genericIssuer,
-			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogClaimValues: true,
 	}
 	require.NoError(t, cfg.Validate())
 
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   genericIssuer,
-			Subject:  "acme/api",
-			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
-		},
-		Sub: "acme/api",
+		Issuer:   genericIssuer,
+		Subject:  "acme/api",
+		Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
+		Sub:      "acme/api",
 		Raw: map[string]any{
 			"repository": "acme/api",
 		},
@@ -878,19 +870,17 @@ func TestAuditClaims_AliasAppliesWhenTargetClaimIsNotEmitted(t *testing.T) {
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"acme/api"},
 			Issuer:  genericIssuer,
-			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogClaimValues: true,
 	}
 	require.NoError(t, cfg.Validate())
 
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   genericIssuer,
-			Subject:  "acme/api",
-			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
-		},
-		Sub: "acme/api",
+		Issuer:   genericIssuer,
+		Subject:  "acme/api",
+		Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
+		Sub:      "acme/api",
 		Raw: map[string]any{
 			"repository": "acme/api",
 			"repo":       "not-recorded", // excluded by claim_mappings
@@ -1159,7 +1149,7 @@ func TestAudit_RequiredAudit_StaleS3LoggerConfig_ReturnsCredentialsWithNoDurable
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"org/repo"},
-			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogToS3:       false, // default
 		AuditRequired: false, // default
@@ -1318,7 +1308,7 @@ func TestAuditClaims_GenericIssuerRecordsDecisionRelevantClaims(t *testing.T) {
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"group/project"},
 			Issuer:  genericIssuer,
-			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 			Conditions: &config.Condition{
 				Claims: map[string]config.Patterns{"groups": {"platform"}},
 				NoneOf: []*config.Condition{{
@@ -1331,12 +1321,10 @@ func TestAuditClaims_GenericIssuerRecordsDecisionRelevantClaims(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:   genericIssuer,
-			Subject:  "group/project",
-			Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
-		},
-		Sub: "group/project",
+		Issuer:   genericIssuer,
+		Subject:  "group/project",
+		Audience: jwt.ClaimStrings{"sts.amazonaws.com"},
+		Sub:      "group/project",
 		Raw: map[string]any{
 			"project_path": "group/project", // claim_mappings target
 			"project_id":   "4242",          // required_claims

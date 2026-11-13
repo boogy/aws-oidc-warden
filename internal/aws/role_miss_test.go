@@ -26,7 +26,7 @@ func newMissConsumer(m *MockAwsServiceWrapper) (*AwsConsumer, *time.Time) {
 func TestGetRoleTags_NoSuchEntityIsNegativelyCached(t *testing.T) {
 	m := new(MockAwsServiceWrapper)
 	c, clock := newMissConsumer(m)
-	nse := &iamtypes.NoSuchEntityException{Message: errStr("no such role")}
+	nse := &iamtypes.NoSuchEntityException{Message: new("no such role")}
 	m.On("GetRole", mock.Anything, mock.Anything).Return(nil, nse)
 
 	for range 3 {
@@ -49,7 +49,7 @@ func TestGetRoleTags_TransientErrorsAreNotCached(t *testing.T) {
 	}{
 		{"throttling", errors.New("Throttling: rate exceeded")},
 		{"network", errors.New("dial tcp: i/o timeout")},
-		{"service failure", &iamtypes.ServiceFailureException{Message: errStr("boom")}},
+		{"service failure", &iamtypes.ServiceFailureException{Message: new("boom")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -86,12 +86,10 @@ func TestGetRoleTags_NegativeCacheIsBounded(t *testing.T) {
 	for i := range maxRoleMisses {
 		c.roleMissCache[fmt.Sprintf("arn:aws:iam::111111111111:role/r%d", i)] = cachedMiss{err: errors.New("x"), expires: clock.Add(time.Hour)}
 	}
-	m.On("GetRole", mock.Anything, mock.Anything).Return(nil, &iamtypes.NoSuchEntityException{Message: errStr("no")}).Once()
+	m.On("GetRole", mock.Anything, mock.Anything).Return(nil, &iamtypes.NoSuchEntityException{Message: new("no")}).Once()
 
 	_, err := c.GetRoleTags(context.Background(), missRole)
 	require.Error(t, err)
 	assert.Len(t, c.roleMissCache, 1, "map is cleared when full, then holds only the new miss")
 	assert.Contains(t, c.roleMissCache, missRole)
 }
-
-func errStr(s string) *string { return &s }

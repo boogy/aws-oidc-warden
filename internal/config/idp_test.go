@@ -233,7 +233,7 @@ func TestIdPDefaultJWKSURIFollowsCustomPath(t *testing.T) {
 
 func TestIdPFingerprintIgnoresReloadableFields(t *testing.T) {
 	a, b := validIdP(), validIdP()
-	b.Enabled = false
+	b.Enabled, b.Only = false, true
 	require.Equal(t, a.Fingerprint(), b.Fingerprint())
 	b.TokenTTL = time.Minute
 	require.NotEqual(t, a.Fingerprint(), b.Fingerprint())
@@ -300,6 +300,42 @@ func TestIdPEnvOnlyAppliesToExistingBlock(t *testing.T) {
 		t.Setenv("AOW_IDP_ENABLED", "true")
 		c := &Config{}
 		reapplyEnvOverrides(c)
+		require.Nil(t, c.IdP)
+	})
+	t.Run("only env applies to existing block", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "true")
+		c, err := loadIdPYAML(t, idpTestIssuerYAML+idpTestBlockYAML)
+		require.NoError(t, err)
+		require.True(t, c.IdP.Only)
+	})
+	t.Run("only env reapplied on reload", func(t *testing.T) {
+		c, err := loadIdPYAML(t, idpTestIssuerYAML+idpTestBlockYAML)
+		require.NoError(t, err)
+		require.False(t, c.IdP.Only)
+		t.Setenv("AOW_IDP_ONLY", "true")
+		reapplyEnvOverrides(c)
+		require.True(t, c.IdP.Only)
+	})
+	t.Run("only env without block fails load", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "true")
+		_, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.ErrorContains(t, err, "AOW_IDP_ONLY")
+	})
+	t.Run("only env without block loads when an overlay may supply it", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "true")
+		c, err := loadIdPYAML(t, idpTestIssuerYAML+"s3_config_bucket: b\ns3_config_path: k.yaml\n")
+		require.NoError(t, err)
+		require.Nil(t, c.IdP)
+	})
+	t.Run("unparseable only env without block fails load", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "yes")
+		_, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.ErrorContains(t, err, "AOW_IDP_ONLY")
+	})
+	t.Run("false only env without block loads", func(t *testing.T) {
+		t.Setenv("AOW_IDP_ONLY", "false")
+		c, err := loadIdPYAML(t, idpTestIssuerYAML)
+		require.NoError(t, err)
 		require.Nil(t, c.IdP)
 	})
 	t.Run("bad duration keeps value", func(t *testing.T) {

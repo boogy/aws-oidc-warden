@@ -89,12 +89,13 @@ type RoleMapping struct {
 	Issuer             string        `mapstructure:"issuer"              json:"issuer,omitempty"`
 	SessionPolicy      string        `mapstructure:"session_policy"      json:"session_policy,omitempty"`
 	SessionPolicyFile  string        `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
-	Roles              []string      `mapstructure:"roles"               json:"roles"` // ARNs or "@role_set" aliases
+	Roles              []RoleEntry   `mapstructure:"roles"               json:"roles"` // ARNs, "@role_set" aliases, or objects with per-role settings
 	Conditions         *Condition    `mapstructure:"conditions"          json:"conditions,omitempty"`
 	RoleSessionName    string        `mapstructure:"role_session_name"   json:"role_session_name,omitempty"`
 	AllowSessionName   bool          `mapstructure:"allow_session_name"  json:"allow_session_name,omitempty"`
 	IDPToken           bool          `mapstructure:"idp_token"           json:"idp_token,omitempty"`
 	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"` // 0 = 1h
+	SessionDuration    time.Duration `mapstructure:"session_duration"    json:"session_duration,omitempty"`      // 0 = min(1h, ceiling)
 
 	// Additive to the issuer's session_tags; overlapping keys are rejected.
 	SessionTags map[string]string `mapstructure:"session_tags" json:"session_tags,omitempty"`
@@ -107,12 +108,16 @@ type RoleMapping struct {
 	order           int            `mapstructure:"-" json:"-"`
 
 	effectiveTags map[string]string `mapstructure:"-" json:"-"` // issuer spec + SessionTags; read-only, may alias the issuer's map
+
+	grantedRoles   []string `mapstructure:"-" json:"-"` // resolved role ARNs; set on effective mappings only
+	roleConditions bool     `mapstructure:"-" json:"-"` // conditions come from a role object, not the entry
+	roleLabel      string   `mapstructure:"-" json:"-"` // the role object's role, set only on its override piece
 }
 
 // RoleGroupDefaults are the fields a role_group applies uniformly to every
 // subject it expands to.
 type RoleGroupDefaults struct {
-	Roles             []string          `mapstructure:"roles"               json:"roles,omitempty"`
+	Roles             []RoleEntry       `mapstructure:"roles"               json:"roles,omitempty"`
 	Conditions        *Condition        `mapstructure:"conditions"          json:"conditions,omitempty"`
 	SessionPolicy     string            `mapstructure:"session_policy"      json:"session_policy,omitempty"`
 	SessionPolicyFile string            `mapstructure:"session_policy_file" json:"session_policy_file,omitempty"`
@@ -122,13 +127,14 @@ type RoleGroupDefaults struct {
 
 	IDPToken           bool          `mapstructure:"idp_token"                json:"idp_token,omitempty"`
 	MaxSessionDuration time.Duration `mapstructure:"max_session_duration" json:"max_session_duration,omitempty"`
+	SessionDuration    time.Duration `mapstructure:"session_duration"     json:"session_duration,omitempty"`
 }
 
 // RoleGroup is a DRY convenience: it expands to one RoleMapping per Subjects
 // entry, all sharing Issuer and Defaults (Validate() does the expansion).
 type RoleGroup struct {
 	Issuer   string            `mapstructure:"issuer"   json:"issuer,omitempty"`
-	Defaults RoleGroupDefaults `mapstructure:"defaults" json:"defaults,omitempty"`
+	Defaults RoleGroupDefaults `mapstructure:"defaults" json:"defaults"`
 	Subjects []string          `mapstructure:"subjects" json:"subjects"`
 }
 
@@ -199,11 +205,6 @@ type TagAuth struct {
 	Enabled    bool   `mapstructure:"enabled"    json:"enabled,omitempty"`
 	TagPrefix  string `mapstructure:"tag_prefix" json:"tag_prefix,omitempty"`   // default "aow/"
 	DefaultOrg string `mapstructure:"default_org" json:"default_org,omitempty"` // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
-
-	// Deprecated: use the top-level Config.SessionTagsTransitive instead.
-	// Kept only as a fallback for existing configs; see
-	// Config.TransitiveSessionTags().
-	TransitiveSessionTags bool `mapstructure:"transitive_session_tags" json:"transitive_session_tags,omitempty"`
 
 	// multiIssuer is set by Config.Validate() (len(Issuers) > 1) and gates the
 	// <prefix>issuer requirement in Authorize (no cross-issuer identity
@@ -354,7 +355,7 @@ type Config struct {
 
 	// JWTValidation controls whether the service validates JWT signatures itself
 	// or trusts pre-validation by an upstream AWS service.
-	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation,omitempty"`
+	JWTValidation JWTValidation `mapstructure:"jwt_validation" json:"jwt_validation"`
 
 	// Hardening knobs (top-level, apply across all issuers and modes).
 	JWTLeeway            *time.Duration `mapstructure:"jwt_leeway"             json:"jwt_leeway,omitempty"`             // Clock-skew leeway for exp/iat/nbf; nil = unset (defaults to 30s in Validate); hard max 120s
@@ -372,6 +373,7 @@ type Config struct {
 	estimatedRolesPerMapping int                        `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
 	effective                []*RoleMapping             `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
 	index                    authzIndex                 `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
+	mappedRoles              map[string]struct{}        `mapstructure:"-" json:"-"` // mappedRoleKey of every role a mapping names; tag-auth never grants these
 	auditable                map[string]map[string]bool `mapstructure:"-" json:"-"` // per-issuer claim names the config references (see auditable.go)
 }
 
@@ -384,6 +386,19 @@ var envKeyReplacer = strings.NewReplacer(".", "_", "-", "_")
 // key, matching viper's SetEnvPrefix("aow") + SetEnvKeyReplacer(".","_","-","_").
 func envVarName(key string) string {
 	return "AOW_" + strings.ToUpper(envKeyReplacer.Replace(key))
+}
+
+// envFlag reads a boolean env var for a load-failing check; an unparseable value is an error.
+func envFlag(name string) (bool, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", name, err)
+	}
+	return b, nil
 }
 
 // envBool parses a boolean AOW_ env value via strconv.ParseBool — the same
@@ -540,14 +555,9 @@ var envBindings = []envBinding{
 		envBool("cache.s3_cleanup", v, func(b bool) { c.Cache.S3Cleanup = b })
 	}},
 
-	// Tag-based authorization knobs. enabled/transitive_session_tags create
-	// TagAuth if nil; the rest only apply if it already exists (preserves the
-	// pre-refactor init semantics exactly).
+	// tag_prefix and default_org apply only if TagAuth already exists; enabled creates it.
 	{"tag_auth.enabled", func(c *Config, v string) {
 		envBool("tag_auth.enabled", v, func(b bool) { ensureTagAuth(c).Enabled = b })
-	}},
-	{"tag_auth.transitive_session_tags", func(c *Config, v string) {
-		envBool("tag_auth.transitive_session_tags", v, func(b bool) { ensureTagAuth(c).TransitiveSessionTags = b })
 	}},
 	{"tag_auth.tag_prefix", func(c *Config, v string) {
 		if c.TagAuth != nil {
@@ -575,6 +585,14 @@ var envBindings = []envBinding{
 	{"idp.enabled", func(c *Config, v string) {
 		if c.IdP != nil {
 			envBool("idp.enabled", v, func(b bool) { c.IdP.Enabled = b })
+		}
+	}},
+	{"idp.only", func(c *Config, v string) {
+		if c.IdP != nil {
+			// checkIdPOnlyEnv reports an unparseable value.
+			if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+				c.IdP.Only = b
+			}
 		}
 	}},
 	{"idp.issuer", func(c *Config, v string) {
@@ -671,7 +689,6 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("cache.max_local_size", cacheMaxLocalSize)
 	viper.SetDefault("tag_auth.enabled", false)
 	viper.SetDefault("tag_auth.tag_prefix", "aow/")
-	viper.SetDefault("tag_auth.transitive_session_tags", false)
 	viper.SetDefault("cross_account.enabled", false)
 	viper.SetDefault("cross_account.spoke_role_name", "aow-spoke")
 	viper.SetDefault("cross_account.spoke_session_duration", "15m")
@@ -685,9 +702,7 @@ func (c *Config) LoadConfig() error {
 	viper.SetDefault("audit_required", true)
 	viper.SetDefault("session_tags_transitive", false)
 
-	// Explicitly bind all config keys to environment variables. Driven by
-	// envBindings (see below) so this list and reapplyEnvOverrides cannot
-	// drift apart.
+	// Driven by envBindings so reapplyEnvOverrides cannot drift.
 	for _, b := range envBindings {
 		if !strings.HasPrefix(b.key, "idp.") {
 			_ = viper.BindEnv(b.key)
@@ -716,14 +731,27 @@ func (c *Config) LoadConfig() error {
 	if err := viper.Unmarshal(c, decoderOptions(&md)...); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
-	if err := rejectUnusedKeys(md.Unused, "config file"); err != nil {
+	if len(md.Unused) > 0 {
+		var f *viper.Viper
+		if slices.Contains(md.Unused, removedTransitiveKey) {
+			var err error
+			if f, err = fileOnly(viper.GetViper()); err != nil {
+				return err
+			}
+		}
+		if err := rejectUnusedKeys(f, md.Unused, "config file"); err != nil {
+			return err
+		}
+	}
+	removed, err := envFlag("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS")
+	if err != nil {
 		return err
 	}
+	if removed {
+		return errors.New("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS was removed: use AOW_SESSION_TAGS_TRANSITIVE")
+	}
 
-	// Zero-config GitHub seed: only when there is truly no configuration
-	// source at all. If a config source IS present (file found) but declares
-	// no issuers, that is a hard error below in Validate() — we never
-	// silently fall back to trusting GitHub in that case.
+	// Seed GitHub only with no config source; a file with no issuers must fail Validate(), never fall back.
 	if !configFileFound && len(c.Issuers) == 0 {
 		c.Issuers = []IssuerConfig{defaultGitHubIssuer()}
 	}
@@ -731,17 +759,48 @@ func (c *Config) LoadConfig() error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
+	// An overlay may supply the idp block; mergeOverlay checks after merging.
+	if !c.HasS3Overlay() {
+		if err := c.checkIdPOnlyEnv(); err != nil {
+			return err
+		}
+	}
 	return c.validateMappingsSplit()
+}
+
+// HasS3Overlay reports whether an S3 config overlay is configured.
+func (c *Config) HasS3Overlay() bool {
+	return c.S3ConfigBucket != "" && c.S3ConfigPath != ""
+}
+
+// checkIdPOnlyEnv rejects AOW_IDP_ONLY on a fully merged config with no idp block.
+func (c *Config) checkIdPOnlyEnv() error {
+	only, err := envFlag(envVarName("idp.only"))
+	if err != nil {
+		return err
+	}
+	if only && c.IdP == nil {
+		return fmt.Errorf("%s is true but the config has no idp block", envVarName("idp.only"))
+	}
+	return nil
 }
 
 // MergeBytes overlays the keys present in data (snake_case config schema, viper format; empty means json) onto c and re-validates.
 func (c *Config) MergeBytes(data []byte, format string) error {
-	_, err := c.mergeBytes(data, format, false, "")
-	return err
+	// A failed merge must leave c, and the index serving traffic, untouched.
+	next, err := cloneConfig(c)
+	if err != nil {
+		return fmt.Errorf("failed to copy configuration: %w", err)
+	}
+	if _, err := mergeOverlay(c, next, data, format, false, ""); err != nil {
+		return err
+	}
+	*c = *next
+	return nil
 }
 
-// mergeBytes returns the overlay's own jwt_validation.mode; a non-empty frozenMode replaces it before Validate.
-func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, frozenMode string) (string, error) {
+// mergeOverlay merges data into next, an unshared copy of the validated c, and validates it; next is garbage on error.
+func mergeOverlay(c, next *Config, data []byte, format string, keepBaseOnly bool, frozenMode string) (string, error) {
 	if format == "" {
 		format = "json"
 	}
@@ -750,13 +809,6 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 	v.SetConfigType(format)
 	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
 		return "", fmt.Errorf("failed to parse %s configuration: %w", format, err)
-	}
-
-	// Merge into a copy: a decode or Validate failure must leave c — and the
-	// authz index still serving traffic — exactly as it was.
-	next, err := cloneConfig(c)
-	if err != nil {
-		return "", fmt.Errorf("failed to copy configuration: %w", err)
 	}
 
 	// AllKeys(), not InConfig: an explicit null must count as declared.
@@ -771,7 +823,7 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 	if err := v.Unmarshal(next, decoderOptions(&md)...); err != nil {
 		return "", fmt.Errorf("failed to unmarshal configuration: %w", err)
 	}
-	if err := rejectUnusedKeys(md.Unused, "overlay"); err != nil {
+	if err := rejectUnusedKeys(v, md.Unused, "overlay"); err != nil {
 		return "", err
 	}
 
@@ -804,6 +856,9 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 		}
 		return "", err
 	}
+	if err := next.checkIdPOnlyEnv(); err != nil {
+		return "", err
+	}
 
 	if len(ignored) > 0 {
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
@@ -818,7 +873,6 @@ func (c *Config) mergeBytes(data []byte, format string, keepBaseOnly bool, froze
 			slog.Any("fragments", dropped))
 	}
 
-	*c = *next
 	return reloadedMode, nil
 }
 
@@ -920,15 +974,9 @@ func (c *Config) AuditEnforced() bool {
 	return c.AuditRequired && c.LogToS3 && c.LogBucket != ""
 }
 
-// TransitiveSessionTags reports whether session tags should be transitive:
-// either the top-level session_tags_transitive or the deprecated
-// tag_auth.transitive_session_tags being true wins (OR, not precedence) — a
-// config setting both inconsistently resolves toward the stronger guarantee.
+// TransitiveSessionTags reports whether session tags are marked transitive (session_tags_transitive).
 func (c *Config) TransitiveSessionTags() bool {
-	if c.SessionTagsTransitive {
-		return true
-	}
-	return c.TagAuth != nil && c.TagAuth.TransitiveSessionTags
+	return c.SessionTagsTransitive
 }
 
 // Validate checks if the configuration is valid.
@@ -975,12 +1023,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("issuers[%d] (%s): non-github issuers must define claim_mappings.subject", i, iss.Issuer)
 		}
 
-		// Only claim_mappings.subject's VALUE is constrained here; other keys
-		// are a supported way to add a claim to the auditable set, not rejected.
-		// Comparison is case-sensitive (map values aren't viper-folded) — safe
-		// because an IdP would need to mint a claim literally named e.g. "ISS"
-		// for the check to miss, and absent that the mapping fails to resolve
-		// a subject at all rather than yielding one.
+		// Only the subject mapping's value is constrained; other keys add auditable claims.
 		if claimName := iss.ClaimMappings["subject"]; nonIdentityClaims[claimName] {
 			return fmt.Errorf("issuers[%d] (%s): claim_mappings.subject cannot target claim %q: it is the same for every token this issuer mints (or carries no identity), so every caller would collapse onto one canonical subject", i, iss.Issuer, claimName)
 		}
@@ -1093,12 +1136,6 @@ func (c *Config) Validate() error {
 			slog.String("warning", "audit_trail_inactive"))
 	}
 
-	if c.TagAuth != nil && c.TagAuth.TransitiveSessionTags && !c.SessionTagsTransitive {
-		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
-			"tag_auth.transitive_session_tags is deprecated; use the top-level session_tags_transitive",
-			slog.String("warning", "transitive_session_tags_deprecated"))
-	}
-
 	if c.IdP != nil {
 		c.IdP.applyDefaults()
 		if err := c.IdP.validate(c.AllowInsecureIssuers, c.Issuers); err != nil {
@@ -1138,8 +1175,20 @@ func (c *Config) Validate() error {
 
 	// Rebuilt from scratch so repeated Validate() never re-expands already-expanded role_groups.
 	effectiveHint := 0
+	addHint := func(subjects int, roles []RoleEntry) {
+		pieces := 1
+		for _, e := range roles {
+			if e.hasOverride() {
+				pieces++
+			}
+		}
+		effectiveHint += subjects * pieces
+	}
 	for i := range c.RoleMappings {
-		effectiveHint += len(c.RoleMappings[i].Subject)
+		addHint(len(c.RoleMappings[i].Subject), c.RoleMappings[i].Roles)
+	}
+	for i := range c.RoleGroups {
+		addHint(len(c.RoleGroups[i].Subjects), c.RoleGroups[i].Defaults.Roles)
 	}
 	c.effective = make([]*RoleMapping, 0, effectiveHint)
 
@@ -1154,81 +1203,100 @@ func (c *Config) Validate() error {
 
 	patterns := make(regexCache)
 
-	// appendOne resolves ONE subject into an effective mapping; m is by value,
-	// so these writes are private to this element.
+	type condWarnKey struct {
+		cond  *Condition
+		where string
+		tags  string
+	}
+	warnedConds := make(map[condWarnKey]bool)
+
+	// appendOne resolves ONE subject into an effective mapping; m is by value.
 	appendOne := func(m RoleMapping, subject, source string, i int) error {
+		entry := fmt.Sprintf("%s[%d] (%s)", source, i, subject)
+		label := entry
+		if m.roleLabel != "" {
+			label += " role " + m.roleLabel
+		}
 		if m.RoleSessionName != "" {
 			if err := validateRoleSessionName(m.RoleSessionName); err != nil {
-				return fmt.Errorf("%s[%d] (%s): role_session_name: %w", source, i, subject, err)
+				return fmt.Errorf("%s: role_session_name: %w", label, err)
 			}
 		}
-		if err := validateIdPSessionCap(fmt.Sprintf("%s[%d] (%s): max_session_duration", source, i, subject), m.MaxSessionDuration); err != nil {
+		if err := validateIdPSessionCap(label+": max_session_duration", m.MaxSessionDuration); err != nil {
 			return err
 		}
+		if err := validateIdPSessionCap(label+": session_duration", m.SessionDuration); err != nil {
+			return err
+		}
+		if limit := cmp.Or(m.MaxSessionDuration, IdPDefaultMaxSessionDuration); m.SessionDuration > limit {
+			src := ""
+			if m.MaxSessionDuration == 0 {
+				src = " (default)"
+			}
+			return fmt.Errorf("%s: session_duration %s exceeds max_session_duration %s%s", label, m.SessionDuration, limit, src)
+		}
 		if m.MaxSessionDuration > IdPDefaultMaxSessionDuration && c.IdP == nil {
-			return fmt.Errorf("%s[%d] (%s): max_session_duration over 1h requires an idp block", source, i, subject)
+			return fmt.Errorf("%s: max_session_duration over 1h requires an idp block", label)
 		}
 		if m.IDPToken && c.IdP == nil {
-			return fmt.Errorf("%s[%d] (%s): idp_token requires an idp block", source, i, subject)
+			return fmt.Errorf("%s: idp_token requires an idp block", label)
 		}
 		if m.SessionPolicy != "" && m.SessionPolicyFile != "" {
-			return fmt.Errorf("%s[%d] (%s): set session_policy or session_policy_file, not both", source, i, subject)
+			return fmt.Errorf("%s: set session_policy or session_policy_file, not both", label)
 		}
 		if m.AllowSessionName && m.RoleSessionName != "" {
-			return fmt.Errorf("%s[%d] (%s): set allow_session_name or role_session_name, not both", source, i, subject)
+			return fmt.Errorf("%s: set allow_session_name or role_session_name, not both", label)
 		}
 		resolvedIssuer, err := resolveIssuer(m.Issuer)
 		if err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
+			return fmt.Errorf("%s: %w", label, err)
 		}
 		m.Issuer = resolvedIssuer
 
 		issuerTags := c.IssuerSessionTags(resolvedIssuer)
 		if err := validateSessionTagKeys(m.SessionTags); err != nil {
-			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
+			return fmt.Errorf("%s: session_tags: %w", label, err)
 		}
 		// Rejected, not ignored: a dropped override reads as applied and feeds ABAC.
 		for tagKey := range m.SessionTags {
 			if _, dup := issuerTags[tagKey]; dup {
-				return fmt.Errorf("%s[%d] (%s): session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", source, i, subject, tagKey, resolvedIssuer)
+				return fmt.Errorf("%s: session_tags key %q is already defined by issuer %q; a mapping may only add tags, never redefine one", label, tagKey, resolvedIssuer)
 			}
 		}
 		m.effectiveTags, err = mergeSessionTags(issuerTags, m.SessionTags)
 		if err != nil {
-			return fmt.Errorf("%s[%d] (%s): session_tags: %w", source, i, subject, err)
+			return fmt.Errorf("%s: session_tags: %w", label, err)
 		}
-
-		roles, err := c.resolveRoleSet(m.Roles)
-		if err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
-		}
-		if len(roles) == 0 {
-			return fmt.Errorf("%s[%d] (%s): subject and roles are required", source, i, subject)
-		}
-		m.Roles = roles
 
 		m.resolvedSubject = subject
 		subjectMatcher, err := compileAnchoredSubject(subject, patterns)
 		if err != nil {
 			return fmt.Errorf("%s[%d]: invalid subject pattern %q: %w", source, i, subject, err)
 		}
-		m.subjectKey, m.subjectClass = classifySubject(subject)
 		// A literal subject is proven equal by its exact-bucket hit; no regexp.
-		if m.subjectClass != subjectExact {
+		if subjectMatcher.re == nil {
+			m.subjectKey, m.subjectClass = subjectMatcher.lit, subjectExact
+		} else {
+			m.subjectKey, m.subjectClass = classifySubject(subject)
 			m.compiledPattern = subjectMatcher.re
 		}
 
-		// Clone into effective-private memory BEFORE compiling: compileCondition
-		// mutates *Condition in place, and one *Condition can be shared across
-		// snapshots (fragment reuse, role_group defaults) — compiling it live
-		// would race a concurrent reader and could transiently pass all conditions.
+		// Clone first: compileCondition mutates in place and a *Condition can be shared across snapshots.
+		inherited := m.Conditions
 		m.Conditions = cloneCondition(m.Conditions)
 		if err := compileCondition(m.Conditions, patterns); err != nil {
-			return fmt.Errorf("%s[%d] (%s): %w", source, i, subject, err)
+			return fmt.Errorf("%s: %w", label, err)
 		}
 
 		// Advisory only: an unknown claim name never fails authorization.
-		warnConditionKeys(m.Conditions, "conditions", fmt.Sprintf("%s[%d] (%s)", source, i, subject), withSessionTagClaims(knownClaims[m.Issuer], m.SessionTags))
+		where := entry
+		if m.roleConditions {
+			where = label
+		}
+		if k := (condWarnKey{inherited, where, unknownTagClaims(knownClaims[m.Issuer], m.SessionTags)}); !warnedConds[k] {
+			warnedConds[k] = true
+			warnConditionKeys(m.Conditions, "conditions", where, withSessionTagClaims(knownClaims[m.Issuer], m.SessionTags))
+		}
 
 		m.order = len(c.effective)
 		c.effective = append(c.effective, &m)
@@ -1241,13 +1309,20 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s[%d]: subject and roles are required", source, i)
 		}
 		for si, subject := range m.Subject {
-			// A repeat within one entry gates nothing new; across entries it is
-			// legal (distinct roles/conditions/policies).
+			// A repeat within one entry gates nothing new; across entries it is legal.
 			if slices.Contains(m.Subject[:si], subject) {
 				return fmt.Errorf("%s[%d]: duplicate subject %q", source, i, subject)
 			}
-			if err := appendOne(m, subject, source, i); err != nil {
-				return err
+		}
+		pieces, err := c.expandRoles(m, source, i)
+		if err != nil {
+			return err
+		}
+		for _, subject := range m.Subject {
+			for _, piece := range pieces {
+				if err := appendOne(piece, subject, source, i); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -1264,23 +1339,33 @@ func (c *Config) Validate() error {
 		if len(group.Subjects) == 0 {
 			return fmt.Errorf("role_groups[%d]: subjects must not be empty", gi)
 		}
-		for si, subject := range group.Subjects {
-			m := RoleMapping{
-				Subject:           Patterns{subject},
-				Issuer:            group.Issuer,
-				Roles:             group.Defaults.Roles,
-				Conditions:        group.Defaults.Conditions,
-				SessionPolicy:     group.Defaults.SessionPolicy,
-				SessionPolicyFile: group.Defaults.SessionPolicyFile,
-				RoleSessionName:   group.Defaults.RoleSessionName,
-				AllowSessionName:  group.Defaults.AllowSessionName,
-				SessionTags:       group.Defaults.SessionTags,
+		if len(group.Defaults.Roles) == 0 {
+			return fmt.Errorf("role_groups[%d]: defaults.roles is required", gi)
+		}
+		pieces, err := c.expandRoles(RoleMapping{
+			Issuer:            group.Issuer,
+			Roles:             group.Defaults.Roles,
+			Conditions:        group.Defaults.Conditions,
+			SessionPolicy:     group.Defaults.SessionPolicy,
+			SessionPolicyFile: group.Defaults.SessionPolicyFile,
+			RoleSessionName:   group.Defaults.RoleSessionName,
+			AllowSessionName:  group.Defaults.AllowSessionName,
+			SessionTags:       group.Defaults.SessionTags,
 
-				IDPToken:           group.Defaults.IDPToken,
-				MaxSessionDuration: group.Defaults.MaxSessionDuration,
-			}
-			if err := appendEffective(m, fmt.Sprintf("role_groups[%d].subjects", gi), si); err != nil {
-				return err
+			IDPToken:           group.Defaults.IDPToken,
+			MaxSessionDuration: group.Defaults.MaxSessionDuration,
+			SessionDuration:    group.Defaults.SessionDuration,
+		}, "role_groups", gi)
+		if err != nil {
+			return err
+		}
+		source := fmt.Sprintf("role_groups[%d].subjects", gi)
+		for si, subject := range group.Subjects {
+			for _, piece := range pieces {
+				piece.Subject = Patterns{subject}
+				if err := appendOne(piece, subject, source, si); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1310,12 +1395,13 @@ func (c *Config) Validate() error {
 		c.auditable[iss] = auditableClaimsFor(iss, &c.Issuers[i], c.effective)
 	}
 	warnUnscopedRoleGrants(c.effective)
-	warnTagAuthBypassesMappingScoping(c.TagAuth, c.effective)
-
-	// Calculate the average number of roles per mapping for more efficient memory allocation
+	c.mappedRoles = make(map[string]struct{})
 	totalRoles := 0
-	for _, mapping := range c.effective {
-		totalRoles += len(mapping.Roles)
+	for _, m := range c.effective {
+		totalRoles += len(m.grantedRoles)
+		for _, role := range m.grantedRoles {
+			c.mappedRoles[mappedRoleKey(role)] = struct{}{}
+		}
 	}
 
 	if len(c.effective) > 0 {
@@ -1625,22 +1711,14 @@ func validateRoleSessionName(name string) error {
 	return nil
 }
 
-// warnUnscopedRoleGrants warns when a role granted by multiple effective
-// mappings has its LOWEST-order grant carrying no session_policy while a
-// higher-order grant does — FindSessionPolicy picks lowest-order-wins, so the
-// scoped mapping's policy is silently dropped and the role assumed unscoped.
-// Reordering role_mappings can fix this, but role_mappings are always
-// appended before role_groups, so that boundary can't be fixed by reordering
-// alone. Subject overlap isn't computed (regex intersection isn't cheap);
-// sharing a role is treated as enough to warn on.
-// (TestOrderWinsAmongMappingsGrantingTheSameRole pins the selection rule.)
+// warnUnscopedRoleGrants warns when a role's lowest-order grant has no session_policy but a higher-order one does.
 func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	type grant struct{ lowest, scoped *RoleMapping }
 	grants := make(map[string]*grant)
 
 	for _, m := range effective {
 		hasPolicy := m.SessionPolicy != "" || m.SessionPolicyFile != ""
-		for _, role := range m.Roles {
+		for _, role := range m.grantedRoles {
 			key := m.Issuer + "\x00" + role
 			g, ok := grants[key]
 			if !ok {
@@ -1672,47 +1750,22 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	}
 }
 
-// warnTagAuthBypassesMappingScoping warns when a role_mapping scopes a role
-// with session_policy or role_session_name while tag_auth is enabled: if
-// AuthorizeRoles finds no matching mapping, tag-auth can still grant the same
-// role off its IAM tags, and then FindSessionPolicy/FindRoleSessionName
-// return empty — the role assumes unscoped, under the global session name.
-// Not a bypass (the identity gate still applies), but the asymmetry is
-// invisible in the config, so surface it. Over-approximates like
-// warnUnscopedRoleGrants: whether the role actually carries the tags is an
-// IAM fact this code can't see.
-func warnTagAuthBypassesMappingScoping(tagAuth *TagAuth, effective []*RoleMapping) {
-	if tagAuth == nil || !tagAuth.Enabled {
-		return
+// TagAuthMayGrant reports whether tag-auth is on and no mapping names role; a mapped role is explicit-only.
+func (c *Config) TagAuthMayGrant(role string) bool {
+	if c.TagAuth == nil || !c.TagAuth.Enabled {
+		return false
 	}
+	_, mapped := c.mappedRoles[mappedRoleKey(role)]
+	return !mapped
+}
 
-	seen := make(map[string]bool)
-	for _, m := range effective {
-		scopedBy := ""
-		switch {
-		case m.SessionPolicy != "" || m.SessionPolicyFile != "":
-			scopedBy = "session_policy"
-		case m.RoleSessionName != "":
-			scopedBy = "role_session_name"
-		default:
-			continue
-		}
-		for _, role := range m.Roles {
-			if seen[role] {
-				continue
-			}
-			seen[role] = true
-			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
-				"tag_auth is enabled and this role is scoped in role_mappings; "+
-					"a tag-auth grant of the same role carries no session policy and no "+
-					"role_session_name override. Remove the role's tag-auth tags, or "+
-					"accept that the tag-auth path is unscoped.",
-				slog.String("warning", "tag_auth_bypasses_mapping_scoping"),
-				slog.String("roleArn", role),
-				slog.String("scopedBy", scopedBy),
-				slog.String("subject", m.resolvedSubject))
-		}
+// mappedRoleKey ignores the ARN path: IAM resolves a role by account and case-insensitive name alone.
+func mappedRoleKey(role string) string {
+	account, name, err := utils.ParseRoleARN(role)
+	if err != nil {
+		return strings.ToLower(role)
 	}
+	return account + "/" + strings.ToLower(name)
 }
 
 // issuerTagPrefixes indexes the per-issuer tag_prefix overrides. An issuer
@@ -1823,15 +1876,20 @@ func (d Decision) IDPTokenAllowed() bool {
 	return d.authorizing != nil && (d.authorizing.IDPToken || d.authorizing.MaxSessionDuration > IdPDefaultMaxSessionDuration)
 }
 
-// MaxSessionDuration is the authorizing mapping's session ceiling, 1h when unset; 0 when nothing authorized.
+// MaxSessionDuration is the authorizing mapping's session ceiling, 1h when unset or nothing authorized.
 func (d Decision) MaxSessionDuration() time.Duration {
-	if d.authorizing == nil {
-		return 0
-	}
-	if d.authorizing.MaxSessionDuration == 0 {
+	if d.authorizing == nil || d.authorizing.MaxSessionDuration == 0 {
 		return IdPDefaultMaxSessionDuration
 	}
 	return d.authorizing.MaxSessionDuration
+}
+
+// SessionDuration is the authorizing mapping's configured default session length; 0 when unset or nothing authorized.
+func (d Decision) SessionDuration() time.Duration {
+	if d.authorizing == nil {
+		return 0
+	}
+	return d.authorizing.SessionDuration
 }
 
 // RoleSessionName returns the authorizing mapping's session-name override, or
@@ -1865,9 +1923,9 @@ func (c *Config) Authorize(issuer, subject, role string, claims map[string]any) 
 			return
 		}
 		d.Matched = true
-		d.Roles = append(d.Roles, mapping.Roles...)
+		d.Roles = append(d.Roles, mapping.grantedRoles...)
 
-		if role != "" && slices.Contains(mapping.Roles, role) {
+		if role != "" && slices.Contains(mapping.grantedRoles, role) {
 			if d.authorizing == nil || mapping.order < d.authorizing.order {
 				d.authorizing = mapping
 			}

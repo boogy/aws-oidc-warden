@@ -378,11 +378,11 @@ func TestConcurrentLogWrites(t *testing.T) {
 	logger.SetS3ConfigOption(s3logger.WithBatchSize(3))
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < 5; j++ {
+			for j := range 5 {
 				err := logger.BufferRecord(fmt.Appendf(nil, "concurrent log %d-%d\n", id, j))
 				assert.NoError(t, err)
 			}

@@ -13,7 +13,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -100,8 +99,8 @@ var loggingAdapters = []loggingAdapter{
 
 func TestHandlerLogging_TerminalLineInvariants(t *testing.T) {
 	okClaims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "org/repo"},
-		Repository:       "org/repo",
+		Issuer: testIssuer, Subject: "org/repo",
+		Repository: "org/repo",
 	}
 
 	type scenario struct {

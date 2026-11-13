@@ -50,6 +50,7 @@ func IsMultiRegionKMSKey(arn string) bool {
 // IdPConfig configures the optional token-minting identity provider.
 type IdPConfig struct {
 	Enabled                bool            `mapstructure:"enabled"                  json:"enabled"`
+	Only                   bool            `mapstructure:"only"                     json:"only,omitempty"`
 	Issuer                 string          `mapstructure:"issuer"                   json:"issuer"`
 	Audience               string          `mapstructure:"audience"                 json:"audience"`
 	AudienceMode           string          `mapstructure:"audience_mode"            json:"audience_mode,omitempty"`
@@ -95,7 +96,7 @@ func (c IdPConfig) IncludeSourceIdentityClaim() bool {
 
 // Fingerprint identifies the cold-start-frozen settings (everything but the live fields).
 func (c IdPConfig) Fingerprint() string {
-	c.Enabled = false
+	c.Enabled, c.Only = false, false
 	v := c.IncludeSourceIdentityClaim()
 	c.IncludeSourceIdentity = &v
 	b, _ := json.Marshal(c)

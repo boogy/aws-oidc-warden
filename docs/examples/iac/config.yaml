@@ -1,0 +1,69 @@
+####################################################################################
+# AWS OIDC Warden — Infrastructure-as-Code Example
+#
+# A read-only plan role for pull requests and a privileged apply role that only
+# trusted runs can reach. Guide: docs/IAC.md. Every other key:
+# ../example-config.yaml.
+#
+# Account used throughout: 111122223333. Org: octo-org.
+####################################################################################
+
+issuers:
+  - issuer: "https://token.actions.githubusercontent.com"
+    provider: "github"
+    audiences:
+      - "sts.amazonaws.com"
+    required_claims:
+      - "repository"
+
+role_session_name: aws-oidc-warden
+default_issuer: "https://token.actions.githubusercontent.com"
+session_policy_bucket: "aws-oidc-warden-session-policies" # for session_policy_file
+
+role_mappings:
+  # 1. Recommended: every condition AND'd. ref AND environment AND an event_name
+  #    allow-list, with the caller workflow pinned.
+  - subject: "octo-org/infra"
+    roles:
+      - role: "arn:aws:iam::111122223333:role/TerraformPlan"
+        conditions:
+          event_name: ["pull_request", "push"]
+        session_policy_file: "session-policies/terraform-plan.json"
+      - role: "arn:aws:iam::111122223333:role/TerraformApply"
+        conditions:
+          event_name: ["push", "workflow_dispatch"]
+          ref: "refs/heads/main"
+          environment: "production"
+          workflow_ref: 'octo-org/infra/\.github/workflows/apply\.yml@refs/heads/main'
+        role_session_name: "terraform-apply"
+
+  # 2. Weaker: ref OR environment, for teams that deploy from several branches.
+  #    A run that only declares the environment is trusted as far as GitHub's
+  #    environment protection rules are.
+  - subject: "octo-org/platform"
+    roles:
+      - role: "arn:aws:iam::111122223333:role/PlatformApply"
+        conditions:
+          all_of:
+            - event_name: ["push", "workflow_dispatch"]
+            - any_of:
+                - ref: "refs/heads/(main|release/.*)"
+                - environment: "production"
+
+  # 3. Equivalent two-entry form: one entry per role, for different subjects,
+  #    issuers or policies.
+  - subject: "octo-org/network"
+    conditions:
+      event_name: ["pull_request", "push"]
+    session_policy_file: "session-policies/terraform-plan.json"
+    roles:
+      - "arn:aws:iam::111122223333:role/NetworkPlan"
+  - subject: "octo-org/network"
+    conditions:
+      event_name: ["push", "workflow_dispatch"]
+      ref: "refs/heads/main"
+      environment: "production"
+      workflow_ref: 'octo-org/network/\.github/workflows/apply\.yml@refs/heads/main'
+    role_session_name: "terraform-apply"
+    roles:
+      - "arn:aws:iam::111122223333:role/NetworkApply"

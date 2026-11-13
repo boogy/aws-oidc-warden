@@ -8,7 +8,7 @@
 # Every caller POSTs to /verify with optional durationSeconds and sessionName.
 # - max_session_duration over 1h (max 12h): issued through the warden's IdP.
 # - idp_token: true: issued through the IdP at the default 1h ceiling.
-# - Neither: issued by AssumeRole, 900-3600s, default 3600; over 1h is refused.
+# - Neither: issued by AssumeRole, 900-3600s; omitted = session_duration, else min(1h, max_session_duration); over 1h is refused.
 # - Session name: the mapping's role_session_name if set, else the caller's
 #   sessionName when the mapping sets allow_session_name: true (otherwise it is
 #   ignored), else role_session_name in service.yaml.

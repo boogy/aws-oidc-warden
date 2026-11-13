@@ -149,10 +149,7 @@ func (a *AwsConsumer) assumeSpoke(ctx context.Context, cfg *gtvcfg.Config, accou
 	ca := cfg.CrossAccount
 	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ca.SpokeRoleName)
 	sessionName := "aow-broker"
-	dur := int32(ca.SpokeSessionDuration.Seconds())
-	if dur < utils.MinSTSSessionSecs {
-		dur = utils.MinSTSSessionSecs
-	}
+	dur := max(int32(ca.SpokeSessionDuration.Seconds()), utils.MinSTSSessionSecs)
 	// STS fails rather than clamps a chained session over 1h.
 	if dur > utils.RoleChainingMaxSecs {
 		logevent.Warn(ctx, nil, logevent.STSDurationClamped, "spoke_session_duration exceeds the 1h role-chaining cap; clamping",
@@ -513,8 +510,7 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 	if err != nil {
 		err = fmt.Errorf("get role %s: %w", roleName, err)
 		// Only a definitive NoSuchEntity is cached; throttling, network and AccessDenied are not.
-		var nse *iamtypes.NoSuchEntityException
-		if errors.As(err, &nse) {
+		if _, ok := errors.AsType[*iamtypes.NoSuchEntityException](err); ok {
 			a.mu.Lock()
 			if a.roleMissCache == nil || len(a.roleMissCache) >= maxRoleMisses {
 				a.roleMissCache = make(map[string]cachedMiss)

@@ -69,12 +69,10 @@ func driftJWK(kid string, pub *rsa.PublicKey) types.JSONWebKey {
 func driftSignToken(t *testing.T, key *rsa.PrivateKey, kid, issuer, audience string) string {
 	t.Helper()
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer: issuer, Subject: "owner/repo", Audience: jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-		Sub: "owner/repo", Repository: "owner/repo", Ref: "refs/heads/main",
+		Issuer: issuer, Subject: "owner/repo", Audience: jwt.ClaimStrings{audience},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		Sub:       "owner/repo", Repository: "owner/repo", Ref: "refs/heads/main",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	token.Header["kid"] = kid
@@ -174,7 +172,7 @@ func driftGenA(issuer string) *config.Config {
 		AllowInsecureIssuers: true,
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"owner/repo"},
-			Roles:   []string{driftAllowedRole},
+			Roles:   roleEntries(driftAllowedRole),
 		}},
 	}
 }
@@ -214,9 +212,9 @@ func runDrift(t *testing.T, refreshInterval time.Duration) []driftCall {
 	base := driftGenA(srv.URL)
 	require.NoError(t, base.Validate())
 
-	var refreshCount int64
+	var refreshCount atomic.Int64
 	provider := config.NewProvider(base, refreshInterval, "json", func(context.Context) ([]byte, error) {
-		n := atomic.AddInt64(&refreshCount, 1)
+		n := refreshCount.Add(1)
 		if n%2 == 0 {
 			return driftGenAJSON(srv.URL), nil
 		}
@@ -249,10 +247,10 @@ func runDrift(t *testing.T, refreshInterval time.Duration) []driftCall {
 	const itersPerWorker = 150
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < itersPerWorker; j++ {
+			for range itersPerWorker {
 				_, _ = proc.ProcessRequest(context.Background(),
 					&handler.RequestData{Token: token, Role: driftAllowedRole},
 					validator.ExtractionInput{Token: token},

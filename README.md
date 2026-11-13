@@ -116,7 +116,7 @@ A caller requests an OIDC token, POSTs it with the role ARN it wants, and export
 3. **Verify signature** — JWKS fetched cache-first, signature checked against a `kid` + `alg` + key-type pinned key.
 4. **Validate claims** — issuer re-asserted, audience (ANY-match), `exp`/`nbf`/`iat`, lifetime and age caps, `required_claims`. All fail-closed.
 5. **Derive canonical subject** — from config (`claim_mappings.subject`, or GitHub's `repository`), never self-asserted.
-6. **Authorize** — issuer-bound subject match against `role_mappings`, then auto-anchored regex `conditions`. IAM role tags can authorize as a fallback.
+6. **Authorize** — issuer-bound subject match against `role_mappings`, then auto-anchored regex `conditions`. IAM role tags can authorize a role no mapping names.
 7. **Apply session policy** — optional inline or S3 policy narrows the credentials.
 8. **Assume role** — with [STS session tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html) built from verified claims.
 9. **Audit and return** — the decision is recorded, then credentials are returned.
@@ -166,7 +166,7 @@ Full detail — crypto hardening, JWKS handling, SSRF protection: **[docs/TOKEN_
 
 So instead of one IAM role per repo (or per repo × environment), a few shared roles carry policies conditioned on the tags, and onboarding a repo becomes a config change. Unlike Pod Identity the tag vocabulary is **yours**, and only verified claims can become tags — [SESSION_TAGGING.md](docs/SESSION_TAGGING.md).
 
-**Tag-based authorization removes the config entry entirely.** A repository can assume a role authorized by **tags on the role itself**, which suits roles managed across many accounts or teams. Explicit `role_mappings` are always evaluated first; tag-auth is an additive fallback — read its [security model](docs/TAG_BASED_AUTHORIZATION.md#security-model--foot-guns) before enabling it, because it can authorize a role _independently of_ the mapping conditions you wrote to constrain it.
+**Tag-based authorization removes the config entry entirely.** A repository can assume a role authorized by **tags on the role itself**, which suits roles managed across many accounts or teams. Explicit `role_mappings` are always evaluated first, and a role any mapping names is never tag-authorized — read its [security model](docs/TAG_BASED_AUTHORIZATION.md#security-model--foot-guns) before enabling it, because a tag-authorized role gets no session policy.
 
 Serving roles in **other AWS accounts** is a separate opt-in block. Two things are commonly misread: the target role is always assumed **directly, in one hop**, with the warden's own hub credentials; and the spoke role is assumed _only_ to call `iam:GetRole` and read a member-account role's tags, never as an assume target. Both features default to `false` — [TAG_BASED_AUTHORIZATION.md](docs/TAG_BASED_AUTHORIZATION.md), plus a worked example in [docs/examples/cross-account/](docs/examples/cross-account/).
 
@@ -230,18 +230,18 @@ The failure modes that actually bite, in rough order of likelihood:
 | `500 policy_error`                | The mapping's S3 session policy could not be read (missing object, no `s3:GetObject`) or is not valid JSON                                               |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`. Transient; retry with backoff or fail over                                                            |
 | `500 audit_write_failed`          | `audit_required` is on and the S3 audit write failed. Needs `s3:PutObject` **and** `s3:PutObjectTagging` on the log bucket; `make run` has no S3 sink    |
-| `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h                                                                       |
+| `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h (not under `idp.only`)                                                |
 | `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                                                              |
 | `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                                                                     |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                                                                |
 | `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                                                                     |
 | `400 duration_exceeds_cap`        | `durationSeconds` above the mapping's `max_session_duration` (at most 1h for `AssumeRole`), or over 1h with no `idp` block                               |
-| `400 duration_exceeds_role_max`   | `durationSeconds` above the role's `MaxSessionDuration`                                                                                                  |
+| `400 duration_exceeds_role_max`   | `durationSeconds` or `session_duration` above the role's `MaxSessionDuration`                                                                            |
 | `400 invalid_session_name`        | `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                                                                     |
 | `404 idp_path_not_found`          | A near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                                                             |
 | `405 method_not_allowed`          | Not `GET`/`HEAD` on a discovery/JWKS path                                                                                                                |
 | `500 idp_token_too_large`         | Minted token or packed policy over the STS limit; reduce session tags                                                                                    |
-| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h                                                                                |
+| `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h, or for any request under `idp.only`                                           |
 | `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the minted token expired                                                             |
 | Cache misses / throttling         | DynamoDB needs a TTL attribute configured; S3 needs read/write; raise `max_local_size` for high traffic                                                  |
 | Cross-account failures            | `cross_account.enabled: true`, spoke role exists in the member account and trusts the hub, `iam:GetRole` granted, account listed in `allowed_accounts`   |

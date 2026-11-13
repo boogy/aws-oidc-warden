@@ -46,7 +46,7 @@ The building blocks in `mappings.yaml`:
 - **`role_mappings`**: one grant per entry. `subject` may be a list; each element gets the same roles and conditions.
 - **`role_groups`**: many subjects, one shared `defaults` block. Use it for fleets of repos with identical access.
 - **Session policies** (`session_policy`, `session_policy_file`): narrow what one mapping's session may do. The session gets the intersection of the role's permissions and the policy, so one broad role can serve several callers with different scopes. `session_policy` is inline JSON; `session_policy_file` is a key in `session_policy_bucket`. Set one per mapping. They apply to `AssumeRole` and IdP-issued sessions alike.
-- **IdP fields**: `max_session_duration` over 1h, or `idp_token: true`, issue a mapping's roles through the warden's IdP. Otherwise the mapping gets `AssumeRole`, capped at 1h.
+- **IdP fields**: `max_session_duration` over 1h, or `idp_token: true`, issue a mapping's roles through the warden's IdP. Otherwise the mapping gets `AssumeRole`, capped at 1h, unless `idp.only` routes every request through the IdP.
 
 ## What each caller gets
 

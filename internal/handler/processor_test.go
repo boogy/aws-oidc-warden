@@ -22,7 +22,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/handler"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,7 +54,7 @@ func staticProviderMode(t *testing.T, mode string) *config.Provider {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"org/repo"},
-			Roles:   []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 	}
 	if mode == "alb" {
@@ -83,10 +82,10 @@ func mockConsumer(t *testing.T) *fakeConsumer {
 func TestProcessRequest_DelegatedMode(t *testing.T) {
 	// extractor returns fixed claims without touching a token (delegated/apigw mode)
 	ex := &fixedExtractor{claims: &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "org/repo"},
-		Repository:       "org/repo",
-		Ref:              "refs/heads/main",
-		Actor:            "octocat",
+		Issuer: testIssuer, Subject: "org/repo",
+		Repository: "org/repo",
+		Ref:        "refs/heads/main",
+		Actor:      "octocat",
 	}}
 	proc := handler.NewRequestProcessor(staticProvider(t), mockConsumer(t), ex, nil, "test")
 	creds, err := proc.ProcessRequest(
@@ -244,8 +243,8 @@ func baseTagCfg(t *testing.T) *config.Config {
 func TestProcessRequest_TagAuthAllows(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 		// Raw mirrors what normalizeClaims populates in production (the verified
 		// raw claim set); tag-auth/condition matching reads from it, not from the
 		// typed struct fields.
@@ -272,8 +271,8 @@ func TestProcessRequest_TagAuthAllows(t *testing.T) {
 func TestProcessRequest_TagAuthDenies(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
 	}
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/other"}, allowAccount: true}
@@ -286,49 +285,55 @@ func TestProcessRequest_TagAuthDenies(t *testing.T) {
 	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted))
 }
 
-// TestProcessRequest_TagAuthOverridesFailedMapping documents (and locks in) the
-// additive precedence foot-gun: tag-auth is an OR-ed fallback, so a role that an
-// explicit mapping deliberately constrains (here branch=main) is still assumable
-// from a different branch when its aow/* tags match and carry no aow/branch tag.
-// Operators must not rely on a mapping constraint alone to *deny* such a role.
-func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
-	cfg := &config.Config{
-		Issuers: []config.IssuerConfig{{
-			Issuer:    testIssuer,
-			Provider:  "github",
-			Audiences: []string{"sts.amazonaws.com"},
-		}},
-		RoleSessionName: "test",
-		Cache:           &config.Cache{TTL: 0},
-		TagAuth:         &config.TagAuth{Enabled: true, TagPrefix: "aow/"},
-		RoleMappings: []config.RoleMapping{{
-			Subject:    config.Patterns{"acme/api"},
-			Roles:      []string{"arn:aws:iam::111111111111:role/app"},
-			Conditions: &config.Condition{Ref: config.Patterns{"main"}}, // requires ref == main
-		}},
+func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
+	const app = "arn:aws:iam::111111111111:role/app"
+	on := &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
+	mapped := func(subject string, cond *config.Condition) []config.RoleMapping {
+		return []config.RoleMapping{{Subject: config.Patterns{subject}, Roles: roleEntries(app), Conditions: cond}}
 	}
-	require.NoError(t, cfg.Validate())
-
-	// Claims are for a feature branch → the explicit mapping's branch condition
-	// fails, so the explicit path denies.
-	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/feature",
-		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/feature"},
+	tests := []struct {
+		name     string
+		tagAuth  *config.TagAuth
+		mappings []config.RoleMapping
+		role     string
+	}{
+		{"tag auth absent", nil, nil, app},
+		{"tag auth disabled", &config.TagAuth{TagPrefix: "aow/"}, nil, app},
+		{"mapped role with failed condition", on, mapped("acme/api", &config.Condition{Ref: config.Patterns{"main"}}), app},
+		{"role mapped to another subject", on, mapped("acme/other", nil), app},
+		{"mapped role in another case", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/APP"},
+		{"mapped role under another path", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/x/app"},
 	}
-	exp := time.Now()
-	fc := &fakeConsumer{
-		tags:         map[string]string{"aow/repo": "acme/api"}, // no aow/branch → branch unchecked
-		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
-		allowAccount: true,
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Issuers: []config.IssuerConfig{{
+					Issuer:    testIssuer,
+					Provider:  "github",
+					Audiences: []string{"sts.amazonaws.com"},
+				}},
+				RoleSessionName: "test",
+				Cache:           &config.Cache{TTL: 0},
+				TagAuth:         tc.tagAuth,
+				RoleMappings:    tc.mappings,
+			}
+			require.NoError(t, cfg.Validate())
+			claims := &types.Claims{
+				Issuer: testIssuer, Subject: "acme/api",
+				Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/feature",
+				Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/feature"},
+			}
+			fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: true}
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
+			_, err := proc.ProcessRequest(context.Background(),
+				&handler.RequestData{Token: "t", Role: tc.role},
+				validator.ExtractionInput{Token: "t"},
+				"rid", slog.Default())
+			require.ErrorIs(t, err, handler.ErrRoleNotPermitted)
+			assert.Zero(t, fc.tagCalls)
+			assert.Empty(t, fc.assumed)
+		})
 	}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
-	creds, err := proc.ProcessRequest(context.Background(),
-		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
-		validator.ExtractionInput{Token: "t"},
-		"rid", slog.Default())
-	require.NoError(t, err, "tag-auth should authorize despite the failed mapping constraint")
-	assert.Equal(t, "AK", *creds.AccessKeyId)
 }
 
 // A failed IAM tag read must deny, not fall through as if the role carried no
@@ -337,8 +342,8 @@ func TestProcessRequest_TagAuthOverridesFailedMapping(t *testing.T) {
 func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
 	}
 	exp := time.Now()
@@ -371,8 +376,8 @@ func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 func TestProcessRequest_TagAuthAuditRecordsMatchedVia(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
 	}
 	exp := time.Now()
@@ -405,8 +410,8 @@ func TestProcessRequest_TagAuthAuditRecordsMatchedVia(t *testing.T) {
 func TestProcessRequest_AccountNotAllowed(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 	}
 	// allowAccount defaults to false → target account is denied.
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}}
@@ -422,8 +427,8 @@ func TestProcessRequest_AccountNotAllowed(t *testing.T) {
 func TestProcessRequest_AccountCheckError(t *testing.T) {
 	cfg := baseTagCfg(t)
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 	}
 	// Infra error must take precedence over the allow/deny bool and map to a 5xx
 	// (ErrAssumeRoleFailed), never a 403 (ErrAccountNotAllowed).
@@ -456,8 +461,8 @@ func TestProcessRequest_AccountNotAllowed_CrossAccountNil(t *testing.T) {
 	}
 	require.NoError(t, cfg.Validate())
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 	}
 	// allowAccount defaults to false → target account is denied even though tags would match.
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}}
@@ -488,8 +493,8 @@ func TestProcessRequest_AccountCheckError_CrossAccountNil(t *testing.T) {
 	}
 	require.NoError(t, cfg.Validate())
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 	}
 	fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccountErr: errors.New("infra fail")}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
@@ -520,7 +525,7 @@ func sessionNameCfg(t *testing.T, override string) *config.Config {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject:         config.Patterns{"org/repo"},
-			Roles:           []string{"arn:aws:iam::123456789012:role/MyRole"},
+			Roles:           roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 			RoleSessionName: override,
 		}},
 	}
@@ -584,12 +589,12 @@ func TestAssumeRole_SessionNameComesFromAuthorizingMapping(t *testing.T) {
 				// Declared first and matches the subject, but does not grant
 				// the requested role.
 				Subject:         config.Patterns{"org/repo"},
-				Roles:           []string{"arn:aws:iam::123456789012:role/OtherRole"},
+				Roles:           roleEntries("arn:aws:iam::123456789012:role/OtherRole"),
 				RoleSessionName: "wrong-name",
 			},
 			{
 				Subject:         config.Patterns{"org/repo"},
-				Roles:           []string{"arn:aws:iam::123456789012:role/MyRole"},
+				Roles:           roleEntries("arn:aws:iam::123456789012:role/MyRole"),
 				RoleSessionName: "right-name",
 			},
 		},
@@ -712,8 +717,8 @@ func TestProcessRequest_AssumeRoleAccountNotAllowed(t *testing.T) {
 	fc, _ := assumeFailingProc(t, fmt.Errorf("%w: arn:aws:iam::111111111111:role/app", gtvaws.ErrAccountNotAllowed))
 	sink := &fakeAuditSink{}
 	proc := handler.NewRequestProcessor(config.NewStaticProvider(baseTagCfg(t)), fc, &tagModeExtractor{&types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
 	}}, sink, "test")
 	_, err := proc.ProcessRequest(context.Background(),
@@ -743,8 +748,8 @@ func assumeFailingProc(t *testing.T, assumeErr error) (*fakeConsumer, *handler.R
 	t.Helper()
 	cfg := baseTagCfg(t)
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "acme/api"},
-		Repository:       "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+		Issuer: testIssuer, Subject: "acme/api",
+		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
 		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
 	}
 	fc := &fakeConsumer{
@@ -767,11 +772,11 @@ func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject:     config.Patterns{"acme/api"},
-			Roles:       []string{"arn:aws:iam::111111111111:role/app"},
+			Roles:       roleEntries("arn:aws:iam::111111111111:role/app"),
 			SessionTags: map[string]string{"tier": "environment"},
 		}, {
 			Subject: config.Patterns{"acme/web"},
-			Roles:   []string{"arn:aws:iam::111111111111:role/web"},
+			Roles:   roleEntries("arn:aws:iam::111111111111:role/web"),
 		}},
 		LogClaimValues: true,
 	}
@@ -787,9 +792,9 @@ func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 	} {
 		t.Run(tc.subject, func(t *testing.T) {
 			claims := &types.Claims{
-				RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: tc.subject},
-				Repository:       tc.subject,
-				Raw:              map[string]any{"repository": tc.subject, "environment": "prod"},
+				Issuer: testIssuer, Subject: tc.subject,
+				Repository: tc.subject,
+				Raw:        map[string]any{"repository": tc.subject, "environment": "prod"},
 			}
 			fc := &fakeConsumer{
 				assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
