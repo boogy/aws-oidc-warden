@@ -729,7 +729,11 @@ func (c *Config) LoadConfig() error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 	if len(md.Unused) > 0 {
-		if err := rejectUnusedKeys(fileOnly(viper.GetViper()), md.Unused, "config file"); err != nil {
+		f, err := fileOnly(viper.GetViper())
+		if err != nil {
+			return err
+		}
+		if err := rejectUnusedKeys(f, md.Unused, "config file"); err != nil {
 			return err
 		}
 	}
@@ -1166,7 +1170,13 @@ func (c *Config) Validate() error {
 	// Rebuilt from scratch so repeated Validate() never re-expands already-expanded role_groups.
 	effectiveHint := 0
 	for i := range c.RoleMappings {
-		effectiveHint += len(c.RoleMappings[i].Subject)
+		pieces := 1
+		for _, e := range c.RoleMappings[i].Roles {
+			if e.hasOverride() {
+				pieces++
+			}
+		}
+		effectiveHint += len(c.RoleMappings[i].Subject) * pieces
 	}
 	c.effective = make([]*RoleMapping, 0, effectiveHint)
 
