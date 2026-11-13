@@ -269,8 +269,13 @@ func TestRemovedTransitiveEnvVar(t *testing.T) {
 	})
 	t.Run("yaml and env false loads", func(t *testing.T) {
 		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")
-		_, err := loadIdPYAML(t, idpTestIssuerYAML+"tag_auth:\n  transitive_session_tags: false\n")
+		var err error
+		out := captureWarnings(t, func() {
+			_, err = loadIdPYAML(t, idpTestIssuerYAML+"tag_auth:\n  transitive_session_tags: false\n")
+		})
 		require.NoError(t, err)
+		assert.True(t, hasWarningCode(t, out, "removed_config_key"))
+		assert.False(t, hasWarningCode(t, out, "unknown_config_key"))
 	})
 	t.Run("env false does not mask yaml true", func(t *testing.T) {
 		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")

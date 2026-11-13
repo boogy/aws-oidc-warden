@@ -94,11 +94,13 @@ func fileOnly(v *viper.Viper) (*viper.Viper, error) {
 	return f, nil
 }
 
-// rejectUnusedKeys fails on an unclaimed nested key; unused top-level keys only warn. v must not apply env overrides.
+const removedTransitiveKey = "tag_auth.transitive_session_tags"
+
+// rejectUnusedKeys fails on an unclaimed nested key; unused top-level keys only warn. v is read only for removedTransitiveKey and must not apply env overrides.
 func rejectUnusedKeys(v *viper.Viper, unused []string, source string) error {
 	unused = slices.Sorted(slices.Values(unused))
 	for _, key := range unused {
-		if key == "tag_auth.transitive_session_tags" {
+		if key == removedTransitiveKey {
 			if b, err := strconv.ParseBool(fmt.Sprint(v.Get(key))); err == nil && !b {
 				continue
 			}
@@ -109,6 +111,13 @@ func rejectUnusedKeys(v *viper.Viper, unused []string, source string) error {
 		}
 	}
 	for _, key := range unused {
+		if key == removedTransitiveKey {
+			logevent.Warn(context.Background(), nil, logevent.ConfigWarning, "removed config key is ignored: use session_tags_transitive",
+				slog.String("warning", "removed_config_key"),
+				slog.String("key", key),
+				slog.String("source", source))
+			continue
+		}
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning, "unknown top-level config key is ignored",
 			slog.String("warning", "unknown_config_key"),
 			slog.String("key", key),

@@ -589,7 +589,10 @@ var envBindings = []envBinding{
 	}},
 	{"idp.only", func(c *Config, v string) {
 		if c.IdP != nil {
-			envBool("idp.only", v, func(b bool) { c.IdP.Only = b })
+			// checkIdPOnlyEnv reports an unparseable value.
+			if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+				c.IdP.Only = b
+			}
 		}
 	}},
 	{"idp.issuer", func(c *Config, v string) {
@@ -729,9 +732,12 @@ func (c *Config) LoadConfig() error {
 		return fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 	if len(md.Unused) > 0 {
-		f, err := fileOnly(viper.GetViper())
-		if err != nil {
-			return err
+		var f *viper.Viper
+		if slices.Contains(md.Unused, removedTransitiveKey) {
+			var err error
+			if f, err = fileOnly(viper.GetViper()); err != nil {
+				return err
+			}
 		}
 		if err := rejectUnusedKeys(f, md.Unused, "config file"); err != nil {
 			return err
@@ -1169,14 +1175,20 @@ func (c *Config) Validate() error {
 
 	// Rebuilt from scratch so repeated Validate() never re-expands already-expanded role_groups.
 	effectiveHint := 0
-	for i := range c.RoleMappings {
+	addHint := func(subjects int, roles []RoleEntry) {
 		pieces := 1
-		for _, e := range c.RoleMappings[i].Roles {
+		for _, e := range roles {
 			if e.hasOverride() {
 				pieces++
 			}
 		}
-		effectiveHint += len(c.RoleMappings[i].Subject) * pieces
+		effectiveHint += subjects * pieces
+	}
+	for i := range c.RoleMappings {
+		addHint(len(c.RoleMappings[i].Subject), c.RoleMappings[i].Roles)
+	}
+	for i := range c.RoleGroups {
+		addHint(len(c.RoleGroups[i].Subjects), c.RoleGroups[i].Defaults.Roles)
 	}
 	c.effective = make([]*RoleMapping, 0, effectiveHint)
 

@@ -8,6 +8,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 )
 
 func FuzzIsUniversalIsSound(f *testing.F) {
@@ -101,6 +104,37 @@ func FuzzParseFragmentOnlyAllowedKeys(f *testing.F) {
 			if !fragmentAllowedKeys[strings.ToLower(k)] {
 				t.Fatalf("fragment accepted base-only key %q", k)
 			}
+		}
+	})
+}
+
+func FuzzTagAuthMayGrantMappedRole(f *testing.F) {
+	for _, seed := range []string{
+		"arn:aws:iam::123456789012:role/Name",
+		"arn:aws:iam::123456789012:role/ci/team/NAME",
+		"arn:aws-cn:iam:us-east-1:123456789012:role/name",
+		"arn:aws:iam::123456789012:role/Name2",
+		"arn:aws:iam::210987654321:role/Name",
+		"arn:aws:iam::123456789012:role/Name/",
+	} {
+		f.Add(seed)
+	}
+	const iss = "https://issuer0.example.com"
+	cfg := &Config{
+		Issuers:         []IssuerConfig{{Issuer: iss, Provider: "github", Audiences: []string{"aud"}}},
+		RoleSessionName: "test",
+		TagAuth:         &TagAuth{Enabled: true},
+		RoleMappings:    []RoleMapping{{Issuer: iss, Subject: Patterns{"org/repo"}, Roles: roleEntries("arn:aws:iam::123456789012:role/Name")}},
+	}
+	require.NoError(f, cfg.Validate())
+	f.Fuzz(func(t *testing.T, role string) {
+		account, name, err := utils.ParseRoleARN(role)
+		if err != nil {
+			return
+		}
+		mapped := account == "123456789012" && strings.ToLower(name) == "name"
+		if cfg.TagAuthMayGrant(role) == mapped {
+			t.Fatalf("TagAuthMayGrant(%q) = %v for account %q name %q", role, !mapped, account, name)
 		}
 	})
 }

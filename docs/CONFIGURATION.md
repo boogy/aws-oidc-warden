@@ -28,7 +28,7 @@ Three sources, in **increasing** precedence:
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]
-> The service config file and S3 overlay **ignore unknown top-level keys** with only a `config.warning` (`warning=unknown_config_key`); unknown nested keys are rejected, except the user-chosen keys of map-valued fields (`role_sets` names, claim names under `conditions:`, `session_tags`, `claim_mappings`); `config_fragments`/`mappings_file` reject any top-level key other than `default_issuer`, `role_sets`, `role_mappings`, `role_groups`. A typo'd or renamed top-level key configures nothing while appearing to work, and [`cmd/validate`](#validating-a-config) still exits 0 on it — check its output for that warning before deploying.
+> The service config file and S3 overlay **ignore unknown top-level keys** with only a `config.warning` (`warning=unknown_config_key`); unknown nested keys are rejected, except the removed `tag_auth.transitive_session_tags: false` (ignored, `warning=removed_config_key`) and the user-chosen keys of map-valued fields (`role_sets` names, claim names under `conditions:`, `session_tags`, `claim_mappings`); `config_fragments`/`mappings_file` reject any top-level key other than `default_issuer`, `role_sets`, `role_mappings`, `role_groups`. A typo'd or renamed top-level key configures nothing while appearing to work, and [`cmd/validate`](#validating-a-config) still exits 0 on it — check its output for that warning before deploying.
 
 ## The issuer model
 

@@ -1405,7 +1405,10 @@ func TestProviderRefreshOnlyEnv(t *testing.T) {
 			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
 			t.Setenv("AOW_IDP_ONLY", tt.env)
 			if tt.firstErr {
-				require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+				out := captureWarnings(t, func() {
+					require.ErrorContains(t, p.Refresh(context.Background()), "AOW_IDP_ONLY")
+				})
+				assert.NotContains(t, out, "invalid env var, skipping")
 				return
 			}
 			require.NoError(t, p.Refresh(context.Background()))

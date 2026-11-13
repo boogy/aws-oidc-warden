@@ -15,7 +15,7 @@ This file is a map plus the rules code cannot state. Read the source and the nam
 ## Rules
 
 - Compile regex only in `Validate()`, never per request. Subjects and conditions go through `regexCache.anchor`; do not add a second path.
-- Clone a `*Condition` before compiling it (`appendEffective`, by value) and keep `cloneCondition` deep: a shared node is transiently empty, and empty means pass. `TestHotReloadConditionRace`, `TestHotReloadNestedConditionRace`.
+- Clone a `*Condition` before compiling it (`appendOne`, by value) and keep `cloneCondition` deep: a shared node is transiently empty, and empty means pass. `TestHotReloadConditionRace`, `TestHotReloadNestedConditionRace`.
 - `valueMatches` is the only reading of a claim value, in both polarities, via `utils.FormatClaimValue`. `TestNoneOfReadsNonStringClaimValues`.
 - An ambiguous claim name (case-folded collision) denies the whole evaluation, not the leaf. `TestExactHitDoesNotResolveACollision`.
 - Index bucketing must be sound: classify from the parse tree, never the pattern text. `TestIndexParity`.

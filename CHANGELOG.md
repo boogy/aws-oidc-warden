@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Removed
 
-- **Breaking: `tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`; the key or env var set to true (or an unparseable env value) fails the load; `false` is ignored.
+- **Breaking: `tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`; the key or env var set to true (or an unparseable env value) fails the load; `false` is ignored with a `removed_config_key` warning.
 
 ### Fixed
 
