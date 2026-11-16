@@ -296,13 +296,14 @@ func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
 		tagAuth  *config.TagAuth
 		mappings []config.RoleMapping
 		role     string
+		skipped  bool
 	}{
-		{"tag auth absent", nil, nil, app},
-		{"tag auth disabled", &config.TagAuth{TagPrefix: "aow/"}, nil, app},
-		{"mapped role with failed condition", on, mapped("acme/api", &config.Condition{Ref: config.Patterns{"main"}}), app},
-		{"role mapped to another subject", on, mapped("acme/other", nil), app},
-		{"mapped role in another case", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/APP"},
-		{"mapped role under another path", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/x/app"},
+		{"tag auth absent", nil, nil, app, false},
+		{"tag auth disabled", &config.TagAuth{TagPrefix: "aow/"}, nil, app, false},
+		{"mapped role with failed condition", on, mapped("acme/api", &config.Condition{Ref: config.Patterns{"main"}}), app, true},
+		{"role mapped to another subject", on, mapped("acme/other", nil), app, true},
+		{"mapped role in another case", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/APP", true},
+		{"mapped role under another path", on, mapped("acme/other", nil), "arn:aws:iam::111111111111:role/x/app", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -324,7 +325,8 @@ func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
 				Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/feature"},
 			}
 			fc := &fakeConsumer{tags: map[string]string{"aow/repo": "acme/api"}, allowAccount: true}
-			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
+			sink := &fakeAuditSink{}
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, sink, "test")
 			_, err := proc.ProcessRequest(context.Background(),
 				&handler.RequestData{Token: "t", Role: tc.role},
 				validator.ExtractionInput{Token: "t"},
@@ -332,6 +334,7 @@ func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
 			require.ErrorIs(t, err, handler.ErrRoleNotPermitted)
 			assert.Zero(t, fc.tagCalls)
 			assert.Empty(t, fc.assumed)
+			assert.Equal(t, tc.skipped, strings.Contains(sink.last(t)["reason"].(string), "tag-auth is not consulted"))
 		})
 	}
 }

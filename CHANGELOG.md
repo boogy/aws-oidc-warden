@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Faster config load and reload**: an overlay reload skips a redundant config copy and literal subjects are parsed once.
 - **Audit stage `idp_unavailable`** replaces `duration` on `503 idp_signing_unavailable` refusals from the kill switch or a late-added `idp` block.
 - **Audit `durationSeconds`** also appears on denies after duration resolution, as the effective value refused.
+- **Audit deny `reason`** says when tag-auth was not consulted because a mapping names the role.
 
 ### Removed
 
@@ -30,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **`docs/ARCHITECTURE.md`**: core pipeline sequence diagram renders on GitHub again.
+- **`condition_unknown_claim`** is no longer repeated per role when roles differ only in session-tag claims the condition does not name.
 - **Boolean `AOW_` env values are no longer trimmed** on reload, so a padded value (`" true"`) is rejected on every path, as it already was at boot.
 
 ### Dependencies

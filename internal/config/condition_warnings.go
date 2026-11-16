@@ -84,16 +84,36 @@ func withSessionTagClaims(known map[string]bool, tags map[string]string) map[str
 	return out
 }
 
-// unknownTagClaims lists, sorted, the tag claims outside known: the only part of tags that changes the warning set.
-func unknownTagClaims(known map[string]bool, tags map[string]string) string {
+// unknownTagClaims lists, sorted, the tag claims outside known that cond names: the only part of tags that changes the warning set.
+func unknownTagClaims(known map[string]bool, tags map[string]string, cond *Condition) string {
 	var out []string
 	for _, claim := range tags {
-		if known != nil && !known[claim] {
+		if known != nil && !known[claim] && conditionNamesClaim(cond, claim) {
 			out = append(out, claim)
 		}
 	}
 	slices.Sort(out)
 	return strings.Join(slices.Compact(out), ",")
+}
+
+func conditionNamesClaim(cond *Condition, claim string) bool {
+	if cond == nil {
+		return false
+	}
+	if _, ok := cond.Claims[claim]; ok {
+		return true
+	}
+	if _, ok := cond.ExplicitClaims[claim]; ok {
+		return true
+	}
+	for _, group := range [][]*Condition{cond.AllOf, cond.AnyOf, cond.NoneOf} {
+		for _, child := range group {
+			if conditionNamesClaim(child, claim) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // warnConditionKeys walks a whole condition tree warning once per unknown

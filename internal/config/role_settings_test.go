@@ -599,6 +599,12 @@ func TestInheritedConditionTypoWarnsOncePerSubject(t *testing.T) {
       - role: "` + rsPlan + `"
         role_session_name: "plan"
 `, 1},
+		{"unknown-claim tags the condition does not name do not split the warning", "evnet_name", `
+      - role: "` + rsApply + `"
+        session_tags: {one: "custom_one"}
+      - role: "` + rsPlan + `"
+        session_tags: {two: "custom_two"}
+`, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			doc := `

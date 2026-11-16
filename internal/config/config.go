@@ -1289,7 +1289,7 @@ func (c *Config) Validate() error {
 		if m.roleConditions {
 			where = label
 		}
-		if k := (condWarnKey{inherited, where, unknownTagClaims(knownClaims[m.Issuer], m.SessionTags)}); !warnedConds[k] {
+		if k := (condWarnKey{inherited, where, unknownTagClaims(knownClaims[m.Issuer], m.SessionTags, m.Conditions)}); !warnedConds[k] {
 			warnedConds[k] = true
 			warnConditionKeys(m.Conditions, "conditions", where, withSessionTagClaims(knownClaims[m.Issuer], m.SessionTags))
 		}
