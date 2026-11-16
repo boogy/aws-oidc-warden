@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **`docs/ARCHITECTURE.md`**: core pipeline sequence diagram renders on GitHub again.
+- **Boolean `AOW_` env values are no longer trimmed** on reload, so a padded value (`" true"`) is rejected on every path, as it already was at boot.
 
 ### Dependencies
 

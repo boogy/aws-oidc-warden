@@ -54,7 +54,7 @@ func staticProviderMode(t *testing.T, mode string) *config.Provider {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"org/repo"},
-			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+			Roles:   handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 	}
 	if mode == "alb" {
@@ -289,7 +289,7 @@ func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
 	const app = "arn:aws:iam::111111111111:role/app"
 	on := &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
 	mapped := func(subject string, cond *config.Condition) []config.RoleMapping {
-		return []config.RoleMapping{{Subject: config.Patterns{subject}, Roles: roleEntries(app), Conditions: cond}}
+		return []config.RoleMapping{{Subject: config.Patterns{subject}, Roles: handler.RoleEntries(app), Conditions: cond}}
 	}
 	tests := []struct {
 		name     string
@@ -525,7 +525,7 @@ func sessionNameCfg(t *testing.T, override string) *config.Config {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject:         config.Patterns{"org/repo"},
-			Roles:           roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+			Roles:           handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 			RoleSessionName: override,
 		}},
 	}
@@ -589,12 +589,12 @@ func TestAssumeRole_SessionNameComesFromAuthorizingMapping(t *testing.T) {
 				// Declared first and matches the subject, but does not grant
 				// the requested role.
 				Subject:         config.Patterns{"org/repo"},
-				Roles:           roleEntries("arn:aws:iam::123456789012:role/OtherRole"),
+				Roles:           handler.RoleEntries("arn:aws:iam::123456789012:role/OtherRole"),
 				RoleSessionName: "wrong-name",
 			},
 			{
 				Subject:         config.Patterns{"org/repo"},
-				Roles:           roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+				Roles:           handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 				RoleSessionName: "right-name",
 			},
 		},
@@ -772,11 +772,11 @@ func TestProcessRequest_MappingSessionTagsReachAssumeRole(t *testing.T) {
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject:     config.Patterns{"acme/api"},
-			Roles:       roleEntries("arn:aws:iam::111111111111:role/app"),
+			Roles:       handler.RoleEntries("arn:aws:iam::111111111111:role/app"),
 			SessionTags: map[string]string{"tier": "environment"},
 		}, {
 			Subject: config.Patterns{"acme/web"},
-			Roles:   roleEntries("arn:aws:iam::111111111111:role/web"),
+			Roles:   handler.RoleEntries("arn:aws:iam::111111111111:role/web"),
 		}},
 		LogClaimValues: true,
 	}

@@ -9,3 +9,6 @@ func roleEntries(arns ...string) []config.RoleEntry {
 	}
 	return out
 }
+
+// RoleEntries exports roleEntries to the handler_test package.
+var RoleEntries = roleEntries

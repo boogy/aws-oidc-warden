@@ -143,8 +143,8 @@ func TestPipeline_ScopedPolicyReachesSTS(t *testing.T) {
 	priv := "arn:aws:iam::111111111111:role/privileged"
 	broad := "arn:aws:iam::111111111111:role/broad"
 	cfg := vE2ECfg(t, []config.RoleMapping{
-		{Subject: config.Patterns{"myorg/.*"}, Roles: roleEntries(broad)},
-		{Subject: config.Patterns{"myorg/repo"}, Roles: roleEntries(priv), SessionPolicy: `{"scoped":true}`},
+		{Subject: config.Patterns{"myorg/.*"}, Roles: handler.RoleEntries(broad)},
+		{Subject: config.Patterns{"myorg/repo"}, Roles: handler.RoleEntries(priv), SessionPolicy: `{"scoped":true}`},
 	})
 	rec := &vRecorder{allowAccount: true}
 	if _, err := vRun(t, cfg, rec, vE2EClaims("myorg/repo", "refs/heads/main"), priv); err != nil {
@@ -163,7 +163,7 @@ func TestPipeline_ScopedPolicyReachesSTS(t *testing.T) {
 func TestPipeline_DenyPathsNeverReachSTS(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{{
-		Subject: config.Patterns{"myorg/repo"}, Roles: roleEntries(role),
+		Subject: config.Patterns{"myorg/repo"}, Roles: handler.RoleEntries(role),
 		Conditions: &config.Condition{Ref: config.Patterns{"refs/heads/main"}},
 	}})
 
@@ -212,7 +212,7 @@ func TestPipeline_DenyPathsNeverReachSTS(t *testing.T) {
 func TestPipeline_PolicyFileFailureDenies(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{
-		{Subject: config.Patterns{"myorg/repo"}, Roles: roleEntries(role), SessionPolicyFile: "scoped.json"},
+		{Subject: config.Patterns{"myorg/repo"}, Roles: handler.RoleEntries(role), SessionPolicyFile: "scoped.json"},
 	})
 
 	// S3 read fails -> deny, no assumption.
@@ -268,7 +268,7 @@ func TestPipeline_PolicyFileOwnerPin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := vE2ECfg(t, []config.RoleMapping{
-				{Subject: config.Patterns{"myorg/repo"}, Roles: roleEntries(role), SessionPolicyFile: "scoped.json"},
+				{Subject: config.Patterns{"myorg/repo"}, Roles: handler.RoleEntries(role), SessionPolicyFile: "scoped.json"},
 			})
 			cfg.SessionPolicyBucketOwner = tt.owner
 			rec := &vRecorder{allowAccount: true, s3Body: tt.body, s3Err: tt.s3Err}
@@ -293,7 +293,7 @@ func TestPipeline_PolicyFileOwnerPin(t *testing.T) {
 
 func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
-	cfg := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/repo"}, Roles: roleEntries(role)}})
+	cfg := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/repo"}, Roles: handler.RoleEntries(role)}})
 
 	// tag_auth disabled (default): role tags must never be consulted.
 	rec := &vRecorder{allowAccount: true, tags: map[string]string{"aow/subject": "evil/repo"}}
@@ -313,7 +313,7 @@ func TestPipeline_TagAuthIsFallbackOnly(t *testing.T) {
 		t.Error("role tags read even though the explicit mapping matched")
 	}
 
-	cfg2 := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/other"}, Roles: roleEntries(role), SessionPolicy: "unrelated"}})
+	cfg2 := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/other"}, Roles: handler.RoleEntries(role), SessionPolicy: "unrelated"}})
 	cfg2.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
 	if err := cfg2.Validate(); err != nil {
 		t.Fatal(err)
@@ -340,7 +340,7 @@ func TestSubjectListRoleIsNeverTagAuthorized(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{{
 		Subject:       config.Patterns{"myorg/api", "myorg/web"},
-		Roles:         roleEntries(role),
+		Roles:         handler.RoleEntries(role),
 		SessionPolicy: `{"Version":"2012-10-17","Statement":[]}`,
 	}})
 	cfg.TagAuth = &config.TagAuth{Enabled: true, TagPrefix: "aow/"}
@@ -427,7 +427,7 @@ func TestGenericIssuer_AllowPathReachesSTSWithPolicyAndTags(t *testing.T) {
 	cfg := gE2ECfg(t, []config.RoleMapping{{
 		Subject: config.Patterns{"acme/platform/api"},
 		Issuer:  gE2EIssuer,
-		Roles:   roleEntries(role),
+		Roles:   handler.RoleEntries(role),
 		Conditions: &config.Condition{
 			Claims: map[string]config.Patterns{"pipeline_source": {"push", "web"}},
 		},
@@ -455,7 +455,7 @@ func TestGenericIssuer_ConditionOnIssuerClaimDenies(t *testing.T) {
 	cfg := gE2ECfg(t, []config.RoleMapping{{
 		Subject: config.Patterns{"acme/platform/api"},
 		Issuer:  gE2EIssuer,
-		Roles:   roleEntries(role),
+		Roles:   handler.RoleEntries(role),
 		Conditions: &config.Condition{
 			Claims: map[string]config.Patterns{"pipeline_source": {"push"}},
 		},
@@ -476,7 +476,7 @@ func TestGenericIssuer_ArrayClaimConditionGatesEndToEnd(t *testing.T) {
 	cfg := gE2ECfg(t, []config.RoleMapping{{
 		Subject:    config.Patterns{"acme/platform/api"},
 		Issuer:     gE2EIssuer,
-		Roles:      roleEntries(role),
+		Roles:      handler.RoleEntries(role),
 		Conditions: &config.Condition{Claims: map[string]config.Patterns{"groups": {"platform-admins"}}},
 	}})
 
@@ -516,7 +516,7 @@ func TestGenericIssuer_SubjectDoesNotCrossIssuerBoundary(t *testing.T) {
 		RoleSessionName: "aow",
 		// Granted to the GitHub issuer ONLY.
 		RoleMappings: []config.RoleMapping{{
-			Subject: config.Patterns{"acme/platform"}, Issuer: vE2EIssuer, Roles: roleEntries(role),
+			Subject: config.Patterns{"acme/platform"}, Issuer: vE2EIssuer, Roles: handler.RoleEntries(role),
 		}},
 	}
 	require.NoError(t, cfg.Validate())
@@ -708,7 +708,7 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 
 	t.Run("github issuer carries subject and the populated github fields", func(t *testing.T) {
 		role := "arn:aws:iam::111111111111:role/app"
-		cfg := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/repo"}, Roles: roleEntries(role)}})
+		cfg := vE2ECfg(t, []config.RoleMapping{{Subject: config.Patterns{"myorg/repo"}, Roles: handler.RoleEntries(role)}})
 		var buf bytes.Buffer
 		log := slog.New(slog.NewJSONHandler(&buf, nil))
 
@@ -742,7 +742,7 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 	t.Run("generic issuer carries subject and omits the github fields", func(t *testing.T) {
 		role := "arn:aws:iam::111111111111:role/app"
 		cfg := gE2ECfg(t, []config.RoleMapping{
-			{Subject: config.Patterns{"mygroup/myproject"}, Roles: roleEntries(role), Issuer: gE2EIssuer},
+			{Subject: config.Patterns{"mygroup/myproject"}, Roles: handler.RoleEntries(role), Issuer: gE2EIssuer},
 		})
 		var buf bytes.Buffer
 		log := slog.New(slog.NewJSONHandler(&buf, nil))
@@ -772,7 +772,7 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 		granted := "arn:aws:iam::111111111111:role/app"
 		other := "arn:aws:iam::111111111111:role/forbidden"
 		cfg := gE2ECfg(t, []config.RoleMapping{
-			{Subject: config.Patterns{"mygroup/myproject"}, Roles: roleEntries(granted), Issuer: gE2EIssuer},
+			{Subject: config.Patterns{"mygroup/myproject"}, Roles: handler.RoleEntries(granted), Issuer: gE2EIssuer},
 		})
 		var buf bytes.Buffer
 		log := slog.New(slog.NewJSONHandler(&buf, nil))
@@ -801,7 +801,7 @@ func TestRequestLogIdentity_SubjectAlwaysPresent_GitHubFieldsOnlyWhenPopulated(t
 func TestPipeline_PolicyFileJSONAcceptSet(t *testing.T) {
 	role := "arn:aws:iam::111111111111:role/deploy"
 	cfg := vE2ECfg(t, []config.RoleMapping{
-		{Subject: config.Patterns{"myorg/repo"}, Roles: roleEntries(role), SessionPolicyFile: "scoped.json"},
+		{Subject: config.Patterns{"myorg/repo"}, Roles: handler.RoleEntries(role), SessionPolicyFile: "scoped.json"},
 	})
 	tests := []struct {
 		name    string

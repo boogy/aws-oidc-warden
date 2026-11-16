@@ -93,7 +93,7 @@ func auditTestCfg(t *testing.T, auditRequired, logClaimValues bool) *config.Conf
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"org/repo"},
-			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+			Roles:   handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogClaimValues: logClaimValues,
 		AuditRequired:  auditRequired,
@@ -753,7 +753,7 @@ func TestAuditClaims_GenericIssuerUsesClaimMappings(t *testing.T) {
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"group/project"},
 			Issuer:  gitlabIssuer,
-			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+			Roles:   handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogClaimValues: true,
 	}
@@ -815,7 +815,7 @@ func TestAuditClaims_GenericIssuerRepositoryAliasIsProviderIndependent(t *testin
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"acme/api"},
 			Issuer:  genericIssuer,
-			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+			Roles:   handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogClaimValues: true,
 	}
@@ -870,7 +870,7 @@ func TestAuditClaims_AliasAppliesWhenTargetClaimIsNotEmitted(t *testing.T) {
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"acme/api"},
 			Issuer:  genericIssuer,
-			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+			Roles:   handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogClaimValues: true,
 	}
@@ -1149,7 +1149,7 @@ func TestAudit_RequiredAudit_StaleS3LoggerConfig_ReturnsCredentialsWithNoDurable
 		Cache:           &config.Cache{TTL: 0},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"org/repo"},
-			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+			Roles:   handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 		}},
 		LogToS3:       false, // default
 		AuditRequired: false, // default
@@ -1308,7 +1308,7 @@ func TestAuditClaims_GenericIssuerRecordsDecisionRelevantClaims(t *testing.T) {
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"group/project"},
 			Issuer:  genericIssuer,
-			Roles:   roleEntries("arn:aws:iam::123456789012:role/MyRole"),
+			Roles:   handler.RoleEntries("arn:aws:iam::123456789012:role/MyRole"),
 			Conditions: &config.Condition{
 				Claims: map[string]config.Patterns{"groups": {"platform"}},
 				NoneOf: []*config.Condition{{

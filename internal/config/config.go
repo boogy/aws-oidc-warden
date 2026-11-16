@@ -390,7 +390,7 @@ func envVarName(key string) string {
 
 // envFlag reads a boolean env var for a load-failing check; an unparseable value is an error.
 func envFlag(name string) (bool, error) {
-	v := strings.TrimSpace(os.Getenv(name))
+	v := os.Getenv(name)
 	if v == "" {
 		return false, nil
 	}
@@ -401,13 +401,9 @@ func envFlag(name string) (bool, error) {
 	return b, nil
 }
 
-// envBool parses a boolean AOW_ env value via strconv.ParseBool — the same
-// parser viper's cast.ToBool uses at boot, so the two paths can't disagree on
-// a value. On a parse error it warns and leaves the current value untouched
-// rather than defaulting false: these knobs default to true, and a typo must
-// not silently disable a security control.
+// envBool parses a boolean AOW_ env value untrimmed, matching boot; a parse error warns and keeps the current value.
 func envBool(key, v string, set func(bool)) {
-	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	b, err := strconv.ParseBool(v)
 	if err != nil {
 		warnInvalidEnv(envVarName(key), v, err)
 		return
@@ -590,7 +586,7 @@ var envBindings = []envBinding{
 	{"idp.only", func(c *Config, v string) {
 		if c.IdP != nil {
 			// checkIdPOnlyEnv reports an unparseable value.
-			if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
+			if b, err := strconv.ParseBool(v); err == nil {
 				c.IdP.Only = b
 			}
 		}
