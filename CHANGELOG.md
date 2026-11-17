@@ -39,11 +39,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Go 1.27.3 → 1.27.4 (fixes `net/http` GO-2026-6859).
 - **AWS SDK for Go v2 bumps.**
   - `github.com/aws/aws-sdk-go-v2` 1.47.5 → 1.48.0
-  - `github.com/aws/aws-sdk-go-v2/config` 1.33.13 → 1.33.18
-  - `github.com/aws/aws-sdk-go-v2/credentials` 1.20.13 → 1.21.0
+  - `github.com/aws/aws-sdk-go-v2/config` 1.33.13 → 1.33.19
+  - `github.com/aws/aws-sdk-go-v2/credentials` 1.20.13 → 1.21.1
   - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.72.3 → 1.74.0
   - `github.com/aws/aws-sdk-go-v2/service/iam` 1.64.6 → 1.66.0
-  - `github.com/aws/aws-sdk-go-v2/service/kms` 1.62.2 → 1.62.6
+  - `github.com/aws/aws-sdk-go-v2/service/kms` 1.62.2 → 1.63.0
   - `github.com/aws/aws-sdk-go-v2/service/s3` 1.114.6 → 1.114.10
   - `github.com/aws/aws-sdk-go-v2/service/sts` 1.51.6 → 1.52.0
   - `github.com/aws/smithy-go` 1.28.7 → 1.28.9
