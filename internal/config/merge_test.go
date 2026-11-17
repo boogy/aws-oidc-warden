@@ -376,6 +376,13 @@ role_groups:
 		assert.Contains(t, err.Error(), "defaults.roles is required")
 	})
 
+	t.Run("role_groups invalid role entry error names defaults.roles", func(t *testing.T) {
+		c := base(t)
+		err := c.MergeBytes([]byte(`{"role_groups":[{"subjects":["myorg/new-repo"],"defaults":{"roles":["not-an-arn"]}}]}`), "json")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "role_groups[0]: defaults.roles[0]:")
+	})
+
 	t.Run("role_groups entry replaces the base group", func(t *testing.T) {
 		c := base(t)
 		require.NoError(t, c.MergeBytes([]byte(`{"role_groups":[{"subjects":["myorg/new-repo"],"defaults":{"roles":["arn:aws:iam::111111111111:role/NewRole"]}}]}`), "json"))

@@ -1310,7 +1310,7 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("%s[%d]: duplicate subject %q", source, i, subject)
 			}
 		}
-		pieces, err := c.expandRoles(m, source, i)
+		pieces, err := c.expandRoles(m, source, i, "roles")
 		if err != nil {
 			return err
 		}
@@ -1351,7 +1351,7 @@ func (c *Config) Validate() error {
 			IDPToken:           group.Defaults.IDPToken,
 			MaxSessionDuration: group.Defaults.MaxSessionDuration,
 			SessionDuration:    group.Defaults.SessionDuration,
-		}, "role_groups", gi)
+		}, "role_groups", gi, "defaults.roles")
 		if err != nil {
 			return err
 		}
@@ -1746,9 +1746,14 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 	}
 }
 
+// TagAuthOn reports whether tag-based authorization is enabled.
+func (c *Config) TagAuthOn() bool {
+	return c.TagAuth != nil && c.TagAuth.Enabled
+}
+
 // TagAuthMayGrant reports whether tag-auth is on and no mapping names role; a mapped role is explicit-only.
 func (c *Config) TagAuthMayGrant(role string) bool {
-	if c.TagAuth == nil || !c.TagAuth.Enabled {
+	if !c.TagAuthOn() {
 		return false
 	}
 	_, mapped := c.mappedRoles[mappedRoleKey(role)]

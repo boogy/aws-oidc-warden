@@ -217,7 +217,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 	if !allowed {
 		rec.Stage = "authorize"
 		rec.Reason = "role not allowed for this subject or its conditions are not met"
-		if cfg.TagAuth != nil && cfg.TagAuth.Enabled && !mayTagAuth {
+		if cfg.TagAuthOn() && !mayTagAuth {
 			rec.Reason = "role is named by a mapping, so tag-auth is not consulted; no mapping allowed it for this subject or its conditions"
 		}
 		denyAttrs := []slog.Attr{slog.Any("allowedRoles", roles)}

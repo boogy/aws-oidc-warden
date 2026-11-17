@@ -174,7 +174,7 @@ func (m RoleMapping) entrySets() [groupCount]bool {
 }
 
 // expandRoles resolves m.Roles into effective mappings: one per role with overrides, one for the rest.
-func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping, error) {
+func (c *Config) expandRoles(m RoleMapping, source string, i int, rolesField string) ([]RoleMapping, error) {
 	wrap := func(err error) error {
 		return fmt.Errorf("%s[%d]: %w", source, i, err)
 	}
@@ -183,11 +183,11 @@ func (c *Config) expandRoles(m RoleMapping, source string, i int) ([]RoleMapping
 	counts := make(map[string]int)
 	for ri, e := range m.Roles {
 		if err := e.validate(); err != nil {
-			return nil, wrap(fmt.Errorf("roles[%d]: %w", ri, err))
+			return nil, wrap(fmt.Errorf("%s[%d]: %w", rolesField, ri, err))
 		}
 		arns, err := c.resolveRoleSet([]string{e.Role})
 		if err != nil {
-			return nil, wrap(fmt.Errorf("roles[%d]: %w", ri, err))
+			return nil, wrap(fmt.Errorf("%s[%d]: %w", rolesField, ri, err))
 		}
 		resolved[ri] = arns
 		keys := make([]string, len(arns))
