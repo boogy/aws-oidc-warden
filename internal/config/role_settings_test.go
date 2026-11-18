@@ -549,6 +549,7 @@ func TestShadowedRoleGrantWarnings(t *testing.T) {
 		{"overlapping grant behind a disjoint one", grant("acme/api", "") + grant("acme/.*", "") + grant("acme/app", max30), []string{shadowed}},
 		{"unscoped grant outranks scoped", grant("acme/.*", "") + grant("acme/app", policy), []string{shadowed, unscoped}},
 		{"unscoped distinct literal", grant("acme/api", "") + grant("acme/app", policy), nil},
+		{"shadowed scoped grant behind a disjoint scoped one", grant("acme/app", "") + grant("acme/api", policy) + grant("acme/app", policy), []string{shadowed, unscoped}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

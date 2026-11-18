@@ -33,7 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`docs/ARCHITECTURE.md`**: core pipeline sequence diagram renders on GitHub again.
 - **`condition_unknown_claim`** is no longer repeated per role when roles differ only in session-tag claims the condition does not name.
-- **`unscoped_mapping_outranks_scoped`** no longer fires between two different literal subjects, which never match the same token.
+- **`unscoped_mapping_outranks_scoped`** no longer fires between two different literal subjects, and checks every scoped grant, not only the first.
 - **Boolean `AOW_` env values are no longer trimmed** on reload, so a padded value (`" true"`) is rejected on every path, as it already was at boot.
 
 ### Dependencies

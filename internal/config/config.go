@@ -1715,10 +1715,12 @@ func warnShadowedRoleGrants(effective []*RoleMapping) {
 
 	for key, pieces := range grants {
 		issuer, role, _ := strings.Cut(key, "\x00")
-		var shadowed, shadowing, scoped *RoleMapping
+		var shadowed, shadowing, scoped, unscoped *RoleMapping
 		for _, m := range pieces {
 			if (m.SessionPolicy != "" || m.SessionPolicyFile != "") && (scoped == nil || m.order < scoped.order) {
-				scoped = m
+				if w := winningGrant(pieces, m); w != m {
+					scoped, unscoped = m, w
+				}
 			}
 			if m.roleLabel == "" || (shadowed != nil && m.order >= shadowed.order) {
 				continue
@@ -1737,17 +1739,14 @@ func warnShadowedRoleGrants(effective []*RoleMapping) {
 				slog.String("winningSubject", shadowing.resolvedSubject),
 				slog.String("ignoredOverrideSubject", shadowed.resolvedSubject))
 		}
-		if scoped == nil {
-			continue
-		}
-		if w := winningGrant(pieces, scoped); w != scoped {
+		if scoped != nil {
 			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 				"role is granted by an unscoped mapping that outranks a scoped one; "+
 					"the session policy will NOT be applied when both match",
 				slog.String("warning", "unscoped_mapping_outranks_scoped"),
 				slog.String("issuer", issuer),
 				slog.String("roleArn", role),
-				slog.String("winningSubject", w.resolvedSubject),
+				slog.String("winningSubject", unscoped.resolvedSubject),
 				slog.String("ignoredPolicySubject", scoped.resolvedSubject))
 		}
 	}
