@@ -1748,7 +1748,7 @@ func (c *Config) TagAuthOn() bool {
 
 // TagAuthMayGrant reports whether tag-auth is on and no mapping names role; a mapped role is explicit-only.
 func (c *Config) TagAuthMayGrant(role string) bool {
-	if !c.TagAuthOn() {
+	if !c.TagAuthOn() || c.mappedRoles == nil {
 		return false
 	}
 	_, mapped := c.mappedRoles[mappedRoleKey(role)]

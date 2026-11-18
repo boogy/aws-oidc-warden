@@ -795,3 +795,8 @@ func TestTagAuth_PerIssuerTagPrefixSurvivesRemoteReload(t *testing.T) {
 	// one config cannot race a request reading it through another.
 	assert.NotSame(t, c.TagAuth, clone.TagAuth)
 }
+
+func TestTagAuthMayGrantDeniesUnvalidatedConfig(t *testing.T) {
+	c := &Config{TagAuth: &TagAuth{Enabled: true}}
+	assert.False(t, c.TagAuthMayGrant("arn:aws:iam::123456789012:role/deploy"))
+}
