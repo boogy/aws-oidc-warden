@@ -970,11 +970,6 @@ func (c *Config) AuditEnforced() bool {
 	return c.AuditRequired && c.LogToS3 && c.LogBucket != ""
 }
 
-// TransitiveSessionTags reports whether session tags are marked transitive (session_tags_transitive).
-func (c *Config) TransitiveSessionTags() bool {
-	return c.SessionTagsTransitive
-}
-
 // Validate checks if the configuration is valid.
 func (c *Config) Validate() error {
 	if len(c.Issuers) == 0 {

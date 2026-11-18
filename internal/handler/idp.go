@@ -105,7 +105,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, role s
 		SourceIdentity: sourceIdentity,
 		Tags:           tags,
 	}
-	if cfg.TransitiveSessionTags() {
+	if cfg.SessionTagsTransitive {
 		req.TransitiveKeys = aws.TransitiveKeys(req.Tags)
 	}
 

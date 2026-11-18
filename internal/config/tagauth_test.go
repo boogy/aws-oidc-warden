@@ -251,7 +251,7 @@ func TestTransitiveSessionTagsKeys(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, c.TransitiveSessionTags())
+			assert.Equal(t, tc.want, c.SessionTagsTransitive)
 		})
 	}
 }
@@ -286,7 +286,7 @@ func TestRemovedTransitiveEnvVar(t *testing.T) {
 		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")
 		c, err := loadIdPYAML(t, idpTestIssuerYAML)
 		require.NoError(t, err)
-		assert.False(t, c.TransitiveSessionTags())
+		assert.False(t, c.SessionTagsTransitive)
 	})
 }
 
@@ -335,7 +335,7 @@ func TestSessionTagsTransitive_DefaultsOff(t *testing.T) {
 
 	c := &Config{}
 	require.NoError(t, c.LoadConfig())
-	assert.False(t, c.TransitiveSessionTags(),
+	assert.False(t, c.SessionTagsTransitive,
 		"default stays off so upgrades cannot break a role-chaining target")
 }
 
@@ -358,7 +358,7 @@ func TestSessionTagsTransitive_ExplicitTrueSurvivesClone(t *testing.T) {
 
 	clone, err := cloneConfig(cfg)
 	require.NoError(t, err)
-	assert.True(t, clone.TransitiveSessionTags(),
+	assert.True(t, clone.SessionTagsTransitive,
 		"an operator who opted in must not silently lose it on a config refresh")
 }
 
