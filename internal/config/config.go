@@ -739,8 +739,13 @@ func (c *Config) LoadConfig() error {
 			return err
 		}
 	}
-	if removed, err := envFlag("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS"); err != nil || removed {
-		return errors.Join(err, errors.New("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS was removed: use AOW_SESSION_TAGS_TRANSITIVE"))
+	if removed, err := envFlag(removedTransitiveEnv); err != nil || removed {
+		return errors.Join(err, errors.New(removedTransitiveEnv+" was removed: use AOW_SESSION_TAGS_TRANSITIVE"))
+	} else if os.Getenv(removedTransitiveEnv) != "" {
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning, "removed config key is ignored: use AOW_SESSION_TAGS_TRANSITIVE",
+			slog.String("warning", "removed_config_key"),
+			slog.String("key", removedTransitiveEnv),
+			slog.String("source", "environment"))
 	}
 
 	// Seed GitHub only with no config source; a file with no issuers must fail Validate(), never fall back.
@@ -1381,7 +1386,7 @@ func (c *Config) Validate() error {
 		iss := c.Issuers[i].Issuer
 		c.auditable[iss] = auditableClaimsFor(iss, &c.Issuers[i], c.effective)
 	}
-	warnUnscopedRoleGrants(c.effective)
+	warnShadowedRoleGrants(c.effective)
 	c.mappedRoles = make(map[string]struct{})
 	totalRoles := 0
 	for _, m := range c.effective {
@@ -1698,9 +1703,9 @@ func validateRoleSessionName(name string) error {
 	return nil
 }
 
-// warnUnscopedRoleGrants warns when a role's lowest-order grant has no session_policy but a higher-order one does.
-func warnUnscopedRoleGrants(effective []*RoleMapping) {
-	type grant struct{ lowest, scoped *RoleMapping }
+// warnShadowedRoleGrants warns when a role's lowest-order grant hides a higher-order grant's session_policy or per-role settings.
+func warnShadowedRoleGrants(effective []*RoleMapping) {
+	type grant struct{ lowest, scoped, override *RoleMapping }
 	grants := make(map[string]*grant)
 
 	for _, m := range effective {
@@ -1718,14 +1723,27 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 			if hasPolicy && (g.scoped == nil || m.order < g.scoped.order) {
 				g.scoped = m
 			}
+			if m.roleLabel != "" && (g.override == nil || m.order < g.override.order) {
+				g.override = m
+			}
 		}
 	}
 
 	for key, g := range grants {
-		if g.scoped == nil || g.lowest == nil || g.lowest == g.scoped {
+		issuer, role, _ := strings.Cut(key, "\x00")
+		if g.override != nil && g.override != g.lowest && !sameRoleSettings(g.lowest, g.override) {
+			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+				"role is granted by an earlier mapping that outranks a later role object; "+
+					"the role object's settings will NOT be applied when both match",
+				slog.String("warning", "role_override_shadowed"),
+				slog.String("issuer", issuer),
+				slog.String("roleArn", role),
+				slog.String("winningSubject", g.lowest.resolvedSubject),
+				slog.String("ignoredOverrideSubject", g.override.resolvedSubject))
+		}
+		if g.scoped == nil || g.lowest == g.scoped {
 			continue
 		}
-		issuer, role, _ := strings.Cut(key, "\x00")
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 			"role is granted by an unscoped mapping that outranks a scoped one; "+
 				"the session policy will NOT be applied when both match",
@@ -1735,6 +1753,14 @@ func warnUnscopedRoleGrants(effective []*RoleMapping) {
 			slog.String("winningSubject", g.lowest.resolvedSubject),
 			slog.String("ignoredPolicySubject", g.scoped.resolvedSubject))
 	}
+}
+
+// sameRoleSettings reports whether a and b scope an assumed role identically.
+func sameRoleSettings(a, b *RoleMapping) bool {
+	return a.SessionPolicy == b.SessionPolicy && a.SessionPolicyFile == b.SessionPolicyFile &&
+		a.RoleSessionName == b.RoleSessionName && a.AllowSessionName == b.AllowSessionName &&
+		a.MaxSessionDuration == b.MaxSessionDuration && a.SessionDuration == b.SessionDuration &&
+		a.IDPToken == b.IDPToken && maps.Equal(a.SessionTags, b.SessionTags)
 }
 
 // TagAuthOn reports whether tag-based authorization is enabled.

@@ -282,11 +282,14 @@ func TestRemovedTransitiveEnvVar(t *testing.T) {
 		_, err := loadIdPYAML(t, idpTestIssuerYAML+"tag_auth:\n  transitive_session_tags: true\n")
 		require.ErrorContains(t, err, "tag_auth.transitive_session_tags was removed")
 	})
-	t.Run("false loads", func(t *testing.T) {
+	t.Run("env false loads with warning", func(t *testing.T) {
 		t.Setenv("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS", "false")
-		c, err := loadIdPYAML(t, idpTestIssuerYAML)
+		var c *Config
+		var err error
+		out := captureWarnings(t, func() { c, err = loadIdPYAML(t, idpTestIssuerYAML) })
 		require.NoError(t, err)
 		assert.False(t, c.SessionTagsTransitive)
+		assert.True(t, hasWarningCode(t, out, "removed_config_key"))
 	})
 }
 

@@ -94,7 +94,10 @@ func fileOnly(v *viper.Viper) (*viper.Viper, error) {
 	return f, nil
 }
 
-const removedTransitiveKey = "tag_auth.transitive_session_tags"
+const (
+	removedTransitiveKey = "tag_auth.transitive_session_tags"
+	removedTransitiveEnv = "AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS"
+)
 
 // rejectUnusedKeys fails on an unclaimed nested key; top-level ones only warn. v must not apply env overrides.
 func rejectUnusedKeys(v *viper.Viper, unused []string, source string) error {

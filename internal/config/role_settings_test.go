@@ -522,6 +522,34 @@ func TestRoleEntryWarnings(t *testing.T) {
 	}
 }
 
+func TestRoleOverrideShadowedWarning(t *testing.T) {
+	const plain = "  - subject: \"acme/.*\"\n    roles: [\"" + rsAudit + "\"]\n"
+	const override = "  - subject: \"acme/app\"\n    roles:\n      - role: \"" + rsAudit + "\"\n        max_session_duration: 30m\n"
+	const sameOverride = "  - subject: \"acme/api\"\n    roles:\n      - role: \"" + rsAudit + "\"\n        max_session_duration: 30m\n"
+	tests := []struct {
+		name     string
+		mappings string
+		want     bool
+	}{
+		{"plain grant outranks role object", plain + override, true},
+		{"role object first", override + plain, false},
+		{"identical role objects", override + sameOverride, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureWarnings(t, func() {
+				v := viper.New()
+				v.SetConfigType("yaml")
+				require.NoError(t, v.ReadConfig(strings.NewReader(rsHeader+"role_mappings:\n"+tc.mappings)))
+				var c Config
+				require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
+				require.NoError(t, c.Validate())
+			})
+			assert.Equal(t, tc.want, hasWarningCode(t, logs, "role_override_shadowed"))
+		})
+	}
+}
+
 func TestIdPOnlyRejectsExplicitIdPTokenFalse(t *testing.T) {
 	const falseRole = `    roles:
       - "` + rsAudit + `"

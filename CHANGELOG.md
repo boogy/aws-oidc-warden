@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`example-config.yaml`** now shows per-issuer `tag_prefix`.
 - **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
 - **`config.warning` code `unconditional_role_beside_conditioned`.**
+- **`config.warning` code `role_override_shadowed`**: an earlier mapping granting the same role hides a later role object's settings.
 
 ### Changed
 
@@ -26,7 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Removed
 
-- **Breaking: `tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`; the key or env var set to true (or an unparseable env value) fails the load; the key set to `false` is ignored with a `removed_config_key` warning.
+- **Breaking: `tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`; the key or env var set to true (or an unparseable env value) fails the load; the key or env var set to `false` is ignored with a `removed_config_key` warning.
 
 ### Fixed
 
