@@ -739,12 +739,8 @@ func (c *Config) LoadConfig() error {
 			return err
 		}
 	}
-	removed, err := envFlag("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS")
-	if err != nil {
-		return err
-	}
-	if removed {
-		return errors.New("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS was removed: use AOW_SESSION_TAGS_TRANSITIVE")
+	if removed, err := envFlag("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS"); err != nil || removed {
+		return errors.Join(err, errors.New("AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS was removed: use AOW_SESSION_TAGS_TRANSITIVE"))
 	}
 
 	// Seed GitHub only with no config source; a file with no issuers must fail Validate(), never fall back.
