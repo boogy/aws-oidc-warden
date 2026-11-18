@@ -1705,7 +1705,10 @@ func validateRoleSessionName(name string) error {
 
 // warnShadowedRoleGrants warns when a role's lowest-order grant hides a higher-order grant's session_policy or per-role settings.
 func warnShadowedRoleGrants(effective []*RoleMapping) {
-	type grant struct{ lowest, scoped, override *RoleMapping }
+	type grant struct {
+		lowest, scoped *RoleMapping
+		overrides      []*RoleMapping
+	}
 	grants := make(map[string]*grant)
 
 	for _, m := range effective {
@@ -1723,15 +1726,21 @@ func warnShadowedRoleGrants(effective []*RoleMapping) {
 			if hasPolicy && (g.scoped == nil || m.order < g.scoped.order) {
 				g.scoped = m
 			}
-			if m.roleLabel != "" && (g.override == nil || m.order < g.override.order) {
-				g.override = m
+			if m.roleLabel != "" {
+				g.overrides = append(g.overrides, m)
 			}
 		}
 	}
 
 	for key, g := range grants {
 		issuer, role, _ := strings.Cut(key, "\x00")
-		if g.override != nil && g.override != g.lowest && !sameRoleSettings(g.lowest, g.override) {
+		var shadowed *RoleMapping
+		for _, o := range g.overrides {
+			if o != g.lowest && !sameRoleSettings(g.lowest, o) && (shadowed == nil || o.order < shadowed.order) {
+				shadowed = o
+			}
+		}
+		if shadowed != nil {
 			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 				"role is granted by an earlier mapping that outranks a later role object; "+
 					"the role object's settings will NOT be applied when both match",
@@ -1739,7 +1748,7 @@ func warnShadowedRoleGrants(effective []*RoleMapping) {
 				slog.String("issuer", issuer),
 				slog.String("roleArn", role),
 				slog.String("winningSubject", g.lowest.resolvedSubject),
-				slog.String("ignoredOverrideSubject", g.override.resolvedSubject))
+				slog.String("ignoredOverrideSubject", shadowed.resolvedSubject))
 		}
 		if g.scoped == nil || g.lowest == g.scoped {
 			continue

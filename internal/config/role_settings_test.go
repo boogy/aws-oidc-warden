@@ -534,6 +534,7 @@ func TestRoleOverrideShadowedWarning(t *testing.T) {
 		{"plain grant outranks role object", plain + override, true},
 		{"role object first", override + plain, false},
 		{"identical role objects", override + sameOverride, false},
+		{"role object outranks a different role object", override + strings.Replace(sameOverride, "30m", "45m", 1), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
