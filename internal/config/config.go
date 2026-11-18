@@ -1703,41 +1703,28 @@ func validateRoleSessionName(name string) error {
 	return nil
 }
 
-// warnShadowedRoleGrants warns when a role's lowest-order grant hides a higher-order grant's session_policy or per-role settings.
+// warnShadowedRoleGrants warns when an earlier grant that can match the same subject hides a later grant's session_policy or per-role settings.
 func warnShadowedRoleGrants(effective []*RoleMapping) {
-	type grant struct {
-		lowest, scoped *RoleMapping
-		overrides      []*RoleMapping
-	}
-	grants := make(map[string]*grant)
-
+	grants := make(map[string][]*RoleMapping)
 	for _, m := range effective {
-		hasPolicy := m.SessionPolicy != "" || m.SessionPolicyFile != ""
 		for _, role := range m.grantedRoles {
 			key := m.Issuer + "\x00" + role
-			g, ok := grants[key]
-			if !ok {
-				g = &grant{}
-				grants[key] = g
-			}
-			if g.lowest == nil || m.order < g.lowest.order {
-				g.lowest = m
-			}
-			if hasPolicy && (g.scoped == nil || m.order < g.scoped.order) {
-				g.scoped = m
-			}
-			if m.roleLabel != "" {
-				g.overrides = append(g.overrides, m)
-			}
+			grants[key] = append(grants[key], m)
 		}
 	}
 
-	for key, g := range grants {
+	for key, pieces := range grants {
 		issuer, role, _ := strings.Cut(key, "\x00")
-		var shadowed *RoleMapping
-		for _, o := range g.overrides {
-			if o != g.lowest && !sameRoleSettings(g.lowest, o) && (shadowed == nil || o.order < shadowed.order) {
-				shadowed = o
+		var shadowed, shadowing, scoped *RoleMapping
+		for _, m := range pieces {
+			if (m.SessionPolicy != "" || m.SessionPolicyFile != "") && (scoped == nil || m.order < scoped.order) {
+				scoped = m
+			}
+			if m.roleLabel == "" || (shadowed != nil && m.order >= shadowed.order) {
+				continue
+			}
+			if w := winningGrant(pieces, m); w != m && !sameRoleSettings(w, m) {
+				shadowed, shadowing = m, w
 			}
 		}
 		if shadowed != nil {
@@ -1747,21 +1734,39 @@ func warnShadowedRoleGrants(effective []*RoleMapping) {
 				slog.String("warning", "role_override_shadowed"),
 				slog.String("issuer", issuer),
 				slog.String("roleArn", role),
-				slog.String("winningSubject", g.lowest.resolvedSubject),
+				slog.String("winningSubject", shadowing.resolvedSubject),
 				slog.String("ignoredOverrideSubject", shadowed.resolvedSubject))
 		}
-		if g.scoped == nil || g.lowest == g.scoped {
+		if scoped == nil {
 			continue
 		}
-		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
-			"role is granted by an unscoped mapping that outranks a scoped one; "+
-				"the session policy will NOT be applied when both match",
-			slog.String("warning", "unscoped_mapping_outranks_scoped"),
-			slog.String("issuer", issuer),
-			slog.String("roleArn", role),
-			slog.String("winningSubject", g.lowest.resolvedSubject),
-			slog.String("ignoredPolicySubject", g.scoped.resolvedSubject))
+		if w := winningGrant(pieces, scoped); w != scoped {
+			logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+				"role is granted by an unscoped mapping that outranks a scoped one; "+
+					"the session policy will NOT be applied when both match",
+				slog.String("warning", "unscoped_mapping_outranks_scoped"),
+				slog.String("issuer", issuer),
+				slog.String("roleArn", role),
+				slog.String("winningSubject", w.resolvedSubject),
+				slog.String("ignoredPolicySubject", scoped.resolvedSubject))
+		}
 	}
+}
+
+// winningGrant returns the lowest-order piece that can match a subject m matches; m itself if none outranks it.
+func winningGrant(pieces []*RoleMapping, m *RoleMapping) *RoleMapping {
+	w := m
+	for _, p := range pieces {
+		if p.order < w.order && !subjectsDisjoint(p, m) {
+			w = p
+		}
+	}
+	return w
+}
+
+// subjectsDisjoint reports whether no subject can match both a and b: two different exact literals.
+func subjectsDisjoint(a, b *RoleMapping) bool {
+	return a.subjectClass == subjectExact && b.subjectClass == subjectExact && a.subjectKey != b.subjectKey
 }
 
 // sameRoleSettings reports whether a and b scope an assumed role identically.

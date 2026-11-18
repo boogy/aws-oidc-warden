@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -522,19 +523,32 @@ func TestRoleEntryWarnings(t *testing.T) {
 	}
 }
 
-func TestRoleOverrideShadowedWarning(t *testing.T) {
-	const plain = "  - subject: \"acme/.*\"\n    roles: [\"" + rsAudit + "\"]\n"
-	const override = "  - subject: \"acme/app\"\n    roles:\n      - role: \"" + rsAudit + "\"\n        max_session_duration: 30m\n"
-	const sameOverride = "  - subject: \"acme/api\"\n    roles:\n      - role: \"" + rsAudit + "\"\n        max_session_duration: 30m\n"
+func TestShadowedRoleGrantWarnings(t *testing.T) {
+	grant := func(subject, settings string) string {
+		if settings == "" {
+			return "  - subject: \"" + subject + "\"\n    roles: [\"" + rsAudit + "\"]\n"
+		}
+		return "  - subject: \"" + subject + "\"\n    roles:\n      - role: \"" + rsAudit + "\"\n        " + settings + "\n"
+	}
+	const (
+		max30  = "max_session_duration: 30m"
+		max45  = "max_session_duration: 45m"
+		policy = `session_policy: '{"Version":"2012-10-17","Statement":[]}'`
+	)
+	const shadowed, unscoped = "role_override_shadowed", "unscoped_mapping_outranks_scoped"
 	tests := []struct {
 		name     string
 		mappings string
-		want     bool
+		want     []string
 	}{
-		{"plain grant outranks role object", plain + override, true},
-		{"role object first", override + plain, false},
-		{"identical role objects", override + sameOverride, false},
-		{"role object outranks a different role object", override + strings.Replace(sameOverride, "30m", "45m", 1), true},
+		{"plain grant outranks role object", grant("acme/.*", "") + grant("acme/app", max30), []string{shadowed}},
+		{"role object first", grant("acme/app", max30) + grant("acme/.*", ""), nil},
+		{"identical role objects", grant("acme/.*", max30) + grant("acme/app", max30), nil},
+		{"role object outranks a different role object", grant("acme/.*", max30) + grant("acme/app", max45), []string{shadowed}},
+		{"distinct literal subjects", grant("acme/api", "") + grant("acme/app", max30), nil},
+		{"overlapping grant behind a disjoint one", grant("acme/api", "") + grant("acme/.*", "") + grant("acme/app", max30), []string{shadowed}},
+		{"unscoped grant outranks scoped", grant("acme/.*", "") + grant("acme/app", policy), []string{shadowed, unscoped}},
+		{"unscoped distinct literal", grant("acme/api", "") + grant("acme/app", policy), nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -546,8 +560,29 @@ func TestRoleOverrideShadowedWarning(t *testing.T) {
 				require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
 				require.NoError(t, c.Validate())
 			})
-			assert.Equal(t, tc.want, hasWarningCode(t, logs, "role_override_shadowed"))
+			for _, code := range []string{shadowed, unscoped} {
+				assert.Equal(t, slices.Contains(tc.want, code), hasWarningCode(t, logs, code), code)
+			}
 		})
+	}
+}
+
+func TestSameRoleSettingsCoversEveryGroup(t *testing.T) {
+	str, yes, d := "x", true, time.Hour
+	fixtures := []RoleEntry{
+		{SessionPolicy: &str},
+		{RoleSessionName: &str},
+		{MaxSessionDuration: &d},
+		{SessionDuration: &d},
+		{IDPToken: &yes},
+		{SessionTags: map[string]string{"k": "v"}},
+	}
+	require.Len(t, fixtures, int(groupCount)-1, "add a fixture for the new override group")
+	var base RoleMapping
+	for _, e := range fixtures {
+		g := e.overrides()
+		got := e.overlay(base)
+		assert.False(t, sameRoleSettings(&base, &got), "group %v", g)
 	}
 }
 
