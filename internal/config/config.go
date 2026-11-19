@@ -1741,10 +1741,10 @@ func (c *grantClass) differing(m *RoleMapping) *RoleMapping {
 	return c.firstDiff
 }
 
-// grantIndex answers outranker in O(1) for the grants of one role; only two different exact literals are provably disjoint.
+// grantIndex answers outranker for the grants of one role; patterns are assumed to overlap, a literal is tested against each.
 type grantIndex struct {
-	all, pattern grantClass
-	same         map[sameSubject]*grantClass
+	pieces, patterns []*RoleMapping
+	same, reach      map[sameSubject]*grantClass
 }
 
 // sameSubject is an exact literal, or a pattern's text: grants with equal keys match the same subjects.
@@ -1762,11 +1762,10 @@ func sameSubjectOf(p *RoleMapping) sameSubject {
 
 // newGrantIndex indexes pieces, which ascend by order.
 func newGrantIndex(pieces []*RoleMapping) grantIndex {
-	g := grantIndex{same: make(map[sameSubject]*grantClass)}
+	g := grantIndex{pieces: pieces, same: make(map[sameSubject]*grantClass), reach: make(map[sameSubject]*grantClass)}
 	for _, p := range pieces {
-		g.all.add(p)
 		if p.subjectClass != subjectExact {
-			g.pattern.add(p)
+			g.patterns = append(g.patterns, p)
 		}
 		c := g.same[sameSubjectOf(p)]
 		if c == nil {
@@ -1781,14 +1780,11 @@ func newGrantIndex(pieces []*RoleMapping) grantIndex {
 // outranker returns the lowest-order grant pick selects that can win a subject m matches; nil if none.
 func (g grantIndex) outranker(m *RoleMapping, pick func(*grantClass) *RoleMapping) *RoleMapping {
 	same := g.same[sameSubjectOf(m)]
-	var w *RoleMapping
+	w := pick(g.reachOf(m))
 	if m.subjectClass == subjectExact {
-		w = pick(&g.pattern)
 		if s := pick(same); w == nil || (s != nil && s.order < w.order) {
 			w = s
 		}
-	} else {
-		w = pick(&g.all)
 	}
 	// An unconditional grant of m's exact subject wins every subject m matches, so nothing after it does.
 	limit := m.order
@@ -1799,6 +1795,30 @@ func (g grantIndex) outranker(m *RoleMapping, pick func(*grantClass) *RoleMappin
 		return w
 	}
 	return nil
+}
+
+// reachOf returns the grants that can match a subject m matches, other than m's own literal; built once per subject.
+func (g grantIndex) reachOf(m *RoleMapping) *grantClass {
+	k := sameSubjectOf(m)
+	if c := g.reach[k]; c != nil {
+		return c
+	}
+	c := &grantClass{}
+	if m.subjectClass == subjectExact {
+		for _, p := range g.patterns {
+			if p.compiledPattern.MatchString(m.subjectKey) {
+				c.add(p)
+			}
+		}
+	} else {
+		for _, p := range g.pieces {
+			if p.subjectClass != subjectExact || m.compiledPattern.MatchString(p.subjectKey) {
+				c.add(p)
+			}
+		}
+	}
+	g.reach[k] = c
+	return c
 }
 
 // sameRoleSettings reports whether a and b scope an assumed role identically.
