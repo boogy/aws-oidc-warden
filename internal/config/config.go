@@ -1672,7 +1672,8 @@ func warnShadowedRoleGrants(effective []*RoleMapping) {
 		}
 	}
 
-	for key, pieces := range grants {
+	for _, key := range utils.SortedKeys(grants) {
+		pieces := grants[key]
 		if len(pieces) < 2 {
 			continue
 		}
