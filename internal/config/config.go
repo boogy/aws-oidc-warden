@@ -1786,10 +1786,13 @@ func (g grantIndex) outranker(m *RoleMapping, pick func(*grantClass) *RoleMappin
 			w = s
 		}
 	}
-	// An unconditional grant of m's exact subject wins every subject m matches, so nothing after it does.
+	// An unconditional grant of m's exact subject, or a matching pattern for a literal m, wins every subject m matches.
 	limit := m.order
 	if same.cover != nil {
 		limit = min(limit, same.cover.order+1)
+	}
+	if rc := g.reachOf(m).cover; m.subjectClass == subjectExact && rc != nil {
+		limit = min(limit, rc.order+1)
 	}
 	if w != nil && w.order < limit {
 		return w

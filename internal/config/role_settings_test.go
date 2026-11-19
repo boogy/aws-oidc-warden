@@ -562,6 +562,7 @@ func TestShadowedRoleGrantWarnings(t *testing.T) {
 		{"unscoped grant outranks scoped", grant("acme/.*", "") + grant("acme/app", policy), []string{shadowed, unscoped}},
 		{"unscoped distinct literal", grant("acme/api", "") + grant("acme/app", policy), nil},
 		{"literal outside an earlier pattern", grant("other/.*", "") + grant("acme/app", max30), nil},
+		{"unconditional matching pattern covers later literal grants", grant("acme/.*", max30) + grant("acme/app", "") + grant("acme/app", max30), nil},
 		{"pattern not matching an earlier literal", grant("other/app", "") + grant("acme/.*", max30), nil},
 		{"literal behind a non-matching then a matching pattern", grant("other/.*", "") + grant("acme/.*", "") + grant("acme/app", max30), []string{shadowed}},
 		{"shadowed scoped grant behind a disjoint scoped one", grant("acme/app", "") + grant("acme/api", policy) + grant("acme/app", policy), []string{shadowed, unscoped}},
