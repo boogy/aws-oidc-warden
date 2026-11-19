@@ -309,6 +309,9 @@ func (p *Provider) refreshLocked(ctx context.Context) error {
 	if prevOnly && cfg.IdP == nil {
 		return errors.New("reload removes the idp block while idp.only is true: set only: false first")
 	}
+	if only && p.idpFrozen && p.frozenIdP == nil {
+		return errors.New("reload sets idp.only but no idp was built at startup: restart to apply")
+	}
 	p.current.Store(cfg)
 	p.fragments = nextFragments
 	p.overlaySum, p.built = sum, true

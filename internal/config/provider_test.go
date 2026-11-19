@@ -1420,16 +1420,21 @@ func TestProviderRefreshOnlyEnv(t *testing.T) {
 	}
 }
 
-func TestProviderRefreshRejectsBlockRemovalUnderOnly(t *testing.T) {
+func TestProviderRefreshRejectsUnservableIdPOnly(t *testing.T) {
+	const removed = "log_level: info\n"
 	onBlock := strings.Replace(idpTestBlockYAML, "  enabled: true\n", "  enabled: true\n  only: true\n", 1)
 	require.NotEqual(t, idpTestBlockYAML, onBlock)
+	offFirst := strings.Replace(onBlock, "  only: true\n", "  only: false\n", 1)
 	tests := []struct {
-		name          string
-		first, second string
-		wantErr       bool
+		name    string
+		first   string
+		next    []string
+		wantErr bool
 	}{
-		{"only turned on by reload", idpTestBlockYAML, onBlock, true},
-		{"only turned off first", onBlock, idpTestBlockYAML, false},
+		{"block removed after only turned on by reload", idpTestBlockYAML, []string{onBlock, removed}, true},
+		{"block removed after only turned off", onBlock, []string{idpTestBlockYAML, removed}, false},
+		{"only added without a startup idp", removed, []string{onBlock}, true},
+		{"only turned on after the block was added", removed, []string{offFirst, onBlock}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1437,10 +1442,12 @@ func TestProviderRefreshRejectsBlockRemovalUnderOnly(t *testing.T) {
 			p := NewProvider(baseConfig(t), time.Minute, "yaml", func(context.Context) ([]byte, error) { return body, nil })
 			require.NoError(t, p.Refresh(context.Background()))
 			p.FreezeIdP(p.Get().IdP)
-			body = []byte(tt.second)
-			require.NoError(t, p.Refresh(context.Background()))
-
-			body = []byte("log_level: info\n")
+			for _, next := range tt.next[:len(tt.next)-1] {
+				body = []byte(next)
+				require.NoError(t, p.Refresh(context.Background()))
+			}
+			prev := p.Get()
+			body = []byte(tt.next[len(tt.next)-1])
 			err := p.Refresh(context.Background())
 			if !tt.wantErr {
 				require.NoError(t, err)
@@ -1448,7 +1455,7 @@ func TestProviderRefreshRejectsBlockRemovalUnderOnly(t *testing.T) {
 				return
 			}
 			require.ErrorContains(t, err, "idp.only")
-			require.True(t, p.Get().IdP.Only)
+			require.Same(t, prev, p.Get())
 		})
 	}
 }
@@ -1476,7 +1483,6 @@ func TestProviderRefreshLogsIdPBlockRemovedAndRestored(t *testing.T) {
 }
 
 func TestProviderRefreshLogsIdPOnlyFlip(t *testing.T) {
-	const removed = "log_level: info\n"
 	onBlock := strings.Replace(idpTestBlockYAML, "  enabled: true\n", "  enabled: true\n  only: true\n", 1)
 	require.NotEqual(t, idpTestBlockYAML, onBlock)
 	tests := []struct {
@@ -1488,7 +1494,6 @@ func TestProviderRefreshLogsIdPOnlyFlip(t *testing.T) {
 		{name: "enable", first: idpTestBlockYAML, next: onBlock, want: true, wantLog: true},
 		{name: "disable", first: onBlock, next: idpTestBlockYAML, wantLog: true},
 		{name: "unchanged", first: onBlock, next: onBlock, want: true},
-		{name: "block added after startup", first: removed, next: onBlock, want: true, wantLog: true},
 		{name: "cold start", first: idpTestBlockYAML, next: onBlock, noFreeze: true, want: true},
 	}
 	for _, tt := range tests {

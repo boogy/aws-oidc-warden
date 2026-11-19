@@ -50,7 +50,7 @@ A request for more than 1h that cannot use the IdP is refused, never shortened:
 | `idp.enabled: false` (kill switch)                                             | 503 `idp_signing_unavailable` |
 | the `idp` block was added after startup (restart)                              | 503 `idp_signing_unavailable` |
 
-Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: the kill switch and a late-added `idp` block answer 503 `idp_signing_unavailable`, and a request over the mapping's session cap (default 1h) answers 400 `duration_exceeds_cap`; `idp_not_permitted` never applies. These are checked in the order numbered below.
+Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: the kill switch answers 503 `idp_signing_unavailable`, and a request over the mapping's session cap (default 1h) answers 400 `duration_exceeds_cap`; `idp_not_permitted` never applies. These are checked in the order numbered below.
 
 ![Credential path and refusals for a role that is already authorized](img/idp-routing.svg)
 
@@ -58,13 +58,13 @@ Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: 
 
 `idp.only: true` (env `AOW_IDP_ONLY`, default `false`) is for deployments where every target role trusts only the warden's IAM OIDC provider. Every authorized request, short ones and tag grants included, goes through the IdP regardless of `idp_token` or the duration.
 
-- It never falls back to `AssumeRole`. With the IdP unusable (`idp.enabled: false`, or the block added after startup) every request answers 503 `idp_signing_unavailable`, with the audit reason `idp.only but idp disabled` or `idp.only but idp added after startup`.
+- It never falls back to `AssumeRole`. With `idp.enabled: false` every request answers 503 `idp_signing_unavailable`, with the audit reason `idp.only but idp disabled`.
 - `only: true` with `enabled: false` loads; it is the kill switch plus the guarantee that nothing bypasses the IdP.
 - The limit is still `max_session_duration` (1h when unset, so a tag grant is capped at 1h); over it answers 400 `duration_exceeds_cap`. See [Session lifetime](CONFIGURATION.md#session-lifetime).
 - `idp_token: false` on a `roles` item is a load error while `only` is true; at mapping or `role_groups` level it is indistinguishable from unset and is ignored.
 - `only` is live like `enabled`. To leave IdP-only mode, set `only: false`.
 - A reload that removes the whole `idp` block while `only` is true is rejected and the running config stays; set `only: false` first. A cold start has no running config to compare: it loads the config as it then stands.
-- A reload that adds `only` while no `idp` block existed at startup is accepted and fails closed: warm environments answer 503 until Lambda recycles them, while cold starts build the IdP. Ship `idp` and `only` in a function deploy, which cold-starts every environment, not a remote config push.
+- A reload that sets `only` while no `idp` block existed at startup is rejected and the running config stays: no IdP was built to serve it. Ship `idp` and `only` in a function deploy, which cold-starts every environment, not a remote config push.
 - `AOW_IDP_ONLY=true` with no `idp` block once every layer is merged fails the load, and a reload that removes the block is rejected; an unparseable value always fails. Set it in the environment, not only in the S3 overlay, to hold every cold start to IdP-only.
 
 ## Flow
