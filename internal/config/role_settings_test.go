@@ -535,21 +535,35 @@ func TestShadowedRoleGrantWarnings(t *testing.T) {
 		max45  = "max_session_duration: 45m"
 		policy = `session_policy: '{"Version":"2012-10-17","Statement":[]}'`
 	)
+	entry := func(subject string, scoped bool) string {
+		out := "  - subject: " + subject + "\n"
+		if scoped {
+			out += "    " + policy + "\n"
+		}
+		return out + "    roles: [\"" + rsAudit + "\"]\n"
+	}
 	const shadowed, unscoped = "role_override_shadowed", "unscoped_mapping_outranks_scoped"
 	tests := []struct {
 		name     string
 		mappings string
 		want     []string
 	}{
+		{"exact grant outranks a later pattern's role object", grant("acme/app", "") + grant("acme/.*", max30), []string{shadowed}},
+		{"identically scoped overlapping entries", entry(`"acme/.*"`, true) + entry(`"acme/app"`, true), nil},
+		{"overlapping subjects of one scoped entry", entry(`["acme/.*", "acme/app"]`, true), nil},
 		{"plain grant outranks role object", grant("acme/.*", "") + grant("acme/app", max30), []string{shadowed}},
 		{"role object first", grant("acme/app", max30) + grant("acme/.*", ""), nil},
 		{"identical role objects", grant("acme/.*", max30) + grant("acme/app", max30), nil},
 		{"role object outranks a different role object", grant("acme/.*", max30) + grant("acme/app", max45), []string{shadowed}},
 		{"distinct literal subjects", grant("acme/api", "") + grant("acme/app", max30), nil},
 		{"overlapping grant behind a disjoint one", grant("acme/api", "") + grant("acme/.*", "") + grant("acme/app", max30), []string{shadowed}},
+		{"same-settings literal first hides a broad plain grant's role-object outranker", grant("acme/app", max30) + grant("acme/.*", "") + grant("acme/.*", max30), []string{shadowed}},
+		{"unconditional same-subject grant covers a later differing grant", grant("acme/.*", max30) + grant("acme/.*", "") + grant("acme/.*", max30), nil},
 		{"unscoped grant outranks scoped", grant("acme/.*", "") + grant("acme/app", policy), []string{shadowed, unscoped}},
 		{"unscoped distinct literal", grant("acme/api", "") + grant("acme/app", policy), nil},
 		{"shadowed scoped grant behind a disjoint scoped one", grant("acme/app", "") + grant("acme/api", policy) + grant("acme/app", policy), []string{shadowed, unscoped}},
+		{"unscoped grant behind a narrower scoped one", entry(`"acme/app"`, true) + entry(`"acme/.*"`, false) + entry(`"acme/.*"`, true), []string{unscoped}},
+		{"unscoped grant behind a conditioned scoped one", entry("\"acme/.*\"\n    conditions: {ref: \"main\"}", true) + entry(`"acme/.*"`, false) + entry(`"acme/.*"`, true), []string{unscoped}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -566,6 +580,70 @@ func TestShadowedRoleGrantWarnings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScopedPairDoesNotHideUnscopedOutranker(t *testing.T) {
+	const policy = `session_policy: '{"Version":"2012-10-17","Statement":[]}'`
+	entry := func(subject string, scoped bool) string {
+		out := "  - subject: " + subject + "\n"
+		if scoped {
+			out += "    " + policy + "\n"
+		}
+		return out + "    roles: [\"" + rsAudit + "\"]\n"
+	}
+	logs := captureWarnings(t, func() {
+		v := viper.New()
+		v.SetConfigType("yaml")
+		doc := rsHeader + "role_mappings:\n" + entry("acme/app", true) + entry("acme/app", true) + entry("acme/x", false) + entry("acme/x", true)
+		require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
+		var c Config
+		require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
+		require.NoError(t, c.Validate())
+	})
+	var winners []string
+	for _, w := range parseWarnLines(t, logs) {
+		if w.Warning == "unscoped_mapping_outranks_scoped" {
+			winners = append(winners, w.Winning)
+		}
+	}
+	assert.Equal(t, []string{"acme/x"}, winners)
+}
+
+func TestImplicitIssuerCountIsPerSubjectNotPerRoleObject(t *testing.T) {
+	doc := `
+issuers:
+  - issuer: "` + vIss + `"
+    provider: "generic"
+    audiences: ["aud"]
+    claim_mappings: {subject: "sub"}
+  - issuer: "https://iss.example/b"
+    provider: "generic"
+    audiences: ["aud"]
+    claim_mappings: {subject: "sub"}
+default_issuer: "` + vIss + `"
+role_session_name: "test"
+role_mappings:
+  - subject: ["acme/a", "acme/b"]
+    roles:
+      - "` + rsAudit + `"
+      - {role: "` + rsApply + `", max_session_duration: 30m}
+      - {role: "` + rsPlan + `", max_session_duration: 20m}
+`
+	logs := captureWarnings(t, func() {
+		v := viper.New()
+		v.SetConfigType("yaml")
+		require.NoError(t, v.ReadConfig(strings.NewReader(doc)))
+		var c Config
+		require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
+		require.NoError(t, c.Validate())
+	})
+	var counts []int
+	for _, w := range parseWarnLines(t, logs) {
+		if w.Warning == "mappings_bound_to_default_issuer" {
+			counts = append(counts, w.Count)
+		}
+	}
+	assert.Equal(t, []int{2}, counts)
 }
 
 func TestSameRoleSettingsCoversEveryGroup(t *testing.T) {

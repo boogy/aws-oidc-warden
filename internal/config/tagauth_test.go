@@ -386,6 +386,8 @@ type warnLine struct {
 	Key       string `json:"key"`
 	Role      string `json:"roleArn"`
 	Subject   string `json:"subject"`
+	Winning   string `json:"winningSubject"`
+	Count     int    `json:"mappingCount"`
 }
 
 // parseWarnLines parses captureWarnings' output, one JSON object per line.

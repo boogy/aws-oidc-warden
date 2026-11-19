@@ -54,10 +54,9 @@ var (
 	// dimension suffix still fits inside IAM's 128-char key limit.
 	tagPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9_.:/=+@-]{1,64}$`)
 
-	// nonIdentityClaims are claims claim_mappings.subject may never target:
-	// each is either identical for every token (iss, aud) or carries no
-	// identity (exp, nbf, iat), so using one collapses every caller to one
-	// subject. "sub" is deliberately not listed — it's the normal mapping.
+	// nonIdentityClaims may never be claim_mappings.subject targets: each is
+	// constant across tokens (iss, aud) or carries no identity (exp, nbf, iat).
+	// "sub" is deliberately absent.
 	nonIdentityClaims = map[string]bool{
 		"iss": true, "aud": true, "exp": true, "nbf": true, "iat": true,
 	}
@@ -138,11 +137,9 @@ type RoleGroup struct {
 	Subjects []string          `mapstructure:"subjects" json:"subjects"`
 }
 
-// IssuerConfig describes one trusted OIDC issuer: where its keys live, what
-// audiences it may present, how its raw claims map to the canonical
-// authorization surface (subject/conditions/session tags), and which claims
-// must be present. The engine is provider-neutral; only `provider: github`
-// gets native struct unmarshal, everything else is mapped-only.
+// IssuerConfig describes one trusted OIDC issuer: key source, audiences, claim
+// mapping to the canonical authorization surface, and required claims.
+// Only `provider: github` gets native struct unmarshal; others are mapped-only.
 type IssuerConfig struct {
 	Issuer   string `mapstructure:"issuer"   json:"issuer"`             // Issuer is the exact `iss` claim value trusted for this entry
 	Provider string `mapstructure:"provider" json:"provider,omitempty"` // "github" (native unmarshal) or "generic" (mapped-only, default)
@@ -197,10 +194,8 @@ type Cache struct {
 	S3Cleanup     bool          `mapstructure:"s3_cleanup"     json:"s3_cleanup,omitempty"`     // S3 cleanup flag (if using S3 cache). Deletes expired objects discovered on read (not a bulk sweep).
 }
 
-// TagAuth enables tag-based role authorization: a role may be assumed when its
-// IAM tags authorize the request's OIDC claims, without an explicit
-// role_mappings entry. Cross-account transport (the per-account spoke role)
-// is configured separately in CrossAccount.
+// TagAuth authorizes a role by its IAM tags without a role_mappings entry.
+// Cross-account transport is configured separately in CrossAccount.
 type TagAuth struct {
 	Enabled    bool   `mapstructure:"enabled"    json:"enabled,omitempty"`
 	TagPrefix  string `mapstructure:"tag_prefix" json:"tag_prefix,omitempty"`   // default "aow/"
@@ -216,13 +211,9 @@ type TagAuth struct {
 	prefixByIssuer map[string]string `mapstructure:"-" json:"-"`
 }
 
-// CrossAccount is a policy gate for member-account role assumption: Enabled
-// false (or nil) hard-blocks every cross-account operation (AssumeRole and,
-// for tag_auth, the IAM tag read) — fail closed. Assumption is always direct
-// hub->target, one hop, using the warden's own credentials. SpokeRoleName/
-// ExternalID/SpokeSessionDuration configure a separate hub->spoke hop used
-// only so tag_auth can read a target role's IAM tags cross-account — never to
-// assume the target role itself. Independent of tag_auth.
+// CrossAccount gates member-account role assumption: Enabled false/nil blocks
+// every cross-account operation (fail closed). Assumption is direct hub->target;
+// the spoke hop is only for tag_auth's IAM tag read, never to assume the target.
 type CrossAccount struct {
 	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
 	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
@@ -238,10 +229,8 @@ type CrossAccount struct {
 // or trusts pre-validation by an upstream AWS service.
 type JWTValidation struct {
 	// Mode is one of "self" (default), "apigw", or "alb".
-	// "self"  — full signature + claims verification by this service.
-	// "apigw" — trust API Gateway HTTP API v2 JWT Authorizer; extract claims
-	//            from event.requestContext.authorizer.jwt.claims.
-	// "alb"   — trust ALB OIDC; verify ALB-signed x-amzn-oidc-data JWT (ES256).
+	// "self" verifies signature+claims here; "apigw" trusts the API Gateway JWT
+	// Authorizer; "alb" verifies the ALB-signed x-amzn-oidc-data JWT (ES256).
 	Mode string `mapstructure:"mode" json:"mode,omitempty"`
 
 	// ALBExpectedSigner is the ARN of the ALB allowed to sign OIDC data.
@@ -259,35 +248,27 @@ type Config struct {
 	S3SessionPolicyBucket string `mapstructure:"session_policy_bucket" json:"session_policy_bucket,omitempty"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
 	RoleSessionName       string `mapstructure:"role_session_name"     json:"role_session_name"`               // RoleSessionName is the name of the role session
 
-	// DefaultIssuer is the issuer inherited by a role_mapping/role_group that
-	// doesn't set its own `issuer`. Only meaningful (and required to resolve
-	// to a real issuer) when more than one issuer is configured; with a
-	// single issuer, mappings implicitly bind to it regardless.
+	// DefaultIssuer is inherited by a role_mapping/role_group without its own
+	// `issuer`. Required to resolve to a real issuer only when more than one is
+	// configured; with a single issuer, mappings bind to it implicitly.
 	DefaultIssuer string `mapstructure:"default_issuer" json:"default_issuer,omitempty"`
 
 	// RoleSets are named ARN lists referenced from a mapping/group's `roles`
 	// as "@name", resolved at Validate() before the requested-role gate.
 	RoleSets map[string][]string `mapstructure:"role_sets" json:"role_sets,omitempty"`
 
-	// RoleMappings is the literal, explicit set of subject-to-role bindings.
-	// RoleGroups is a DRY convenience expanding to additional RoleMappings.
-	// Neither is mutated by Validate(); the fully resolved/expanded set used
-	// by AuthorizeRoles/FindSessionPolicy lives in the unexported `effective`.
+	// RoleMappings/RoleGroups are never mutated by Validate(); the expanded set
+	// used by AuthorizeRoles/FindSessionPolicy lives in the unexported `effective`.
 	RoleMappings []RoleMapping `mapstructure:"role_mappings" json:"role_mappings,omitempty"`
 	RoleGroups   []RoleGroup   `mapstructure:"role_groups"   json:"role_groups,omitempty"`
 
-	// ConfigReloadInterval, when > 0, enables periodic hot-reload of the S3
-	// configuration (S3ConfigBucket/S3ConfigPath) without redeploying. The
-	// reload is lazy/per-request: the config is refetched at most once per
-	// interval. 0 (default) disables reloading. Requires an S3 config source.
+	// ConfigReloadInterval > 0 enables lazy per-request hot-reload of the S3 config,
+	// refetched at most once per interval. 0 disables; requires an S3 config source.
 	ConfigReloadInterval time.Duration `mapstructure:"config_reload_interval" json:"config_reload_interval,omitempty"`
 
-	// ConfigFragments lists additional sources — S3 URIs (e.g.
-	// "s3://bucket/key") or local filesystem paths — merged into the combined
-	// role_mappings/role_groups/role_sets/default_issuer set on top of the
-	// base config (see fragments.go, provider.go). Base-only: a fragment can
-	// never set this field itself; enforced by the fragment merge allowlist,
-	// not by this field's type.
+	// ConfigFragments lists S3 URIs or local paths merged on top of the base config
+	// (see fragments.go, provider.go). Base-only: the fragment merge allowlist,
+	// not this field's type, stops a fragment from setting it.
 	ConfigFragments []string `mapstructure:"config_fragments" json:"config_fragments,omitempty"`
 
 	// MappingsFile is a local path or s3:// URI of the role-mappings file (fragment #0); base-only.
@@ -302,14 +283,9 @@ type Config struct {
 	// SessionPolicyBucketOwner is sent as ExpectedBucketOwner on session_policy_file reads; base-only.
 	SessionPolicyBucketOwner string `mapstructure:"session_policy_bucket_owner" json:"session_policy_bucket_owner,omitempty"`
 
-	// ConfigFragmentChecksums optionally pins an expected integrity value
-	// (etag, or sha256 content hash for local paths) per config_fragments
-	// entry; a mismatch on fetch is rejected. Unpinned entries use their etag
-	// only for reload change-detection.
-	//
-	// A LIST, not a map keyed by URI: viper lower-cases and dot-splits config
-	// keys, so a URI containing "." (any *.yaml path) would corrupt as a map
-	// key. As a VALUE it passes through untouched.
+	// ConfigFragmentChecksums pins an etag (or sha256 for local paths) per
+	// config_fragments entry; a mismatch is rejected. Unpinned entries use etag only
+	// for change-detection. A list, not a map: viper splits keys on "." and would corrupt URIs.
 	ConfigFragmentChecksums []FragmentChecksum `mapstructure:"config_fragment_checksums" json:"config_fragment_checksums,omitempty"`
 
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
@@ -326,21 +302,14 @@ type Config struct {
 	// LogClaimValues (default on) controls whether claim values and session tag values appear in logs and audit records.
 	LogClaimValues bool `mapstructure:"log_claim_values" json:"log_claim_values,omitempty"`
 
-	// AuditRequired, when true, makes the audit trail a hard dependency of the
-	// request: the audit record for an allow decision must be durably written
-	// before credentials are returned, and a write failure (allow or deny)
-	// denies the request instead of logging-and-continuing. Requires
-	// log_to_s3 + log_bucket (enforced below) since those are what make the
-	// audit sink capable of persisting anything.
+	// AuditRequired makes a durable audit write a precondition: allow records must
+	// persist before credentials return, and any write failure denies the request.
+	// Requires log_to_s3 + log_bucket (enforced below).
 	AuditRequired bool `mapstructure:"audit_required" json:"audit_required,omitempty"`
 
-	// SessionTagsTransitive marks every AssumeRole session tag transitive, so
-	// identity survives further role chaining. Top-level (not under
-	// tag_auth) because it applies on every request regardless of tag-auth.
-	// Defaults to false for upgrade safety — transitive tags are immutable
-	// downstream, so a target role that re-tags with the same keys would
-	// start failing. Recommended to enable: without it, ABAC policies past
-	// the first hop can't see the caller's identity.
+	// SessionTagsTransitive marks every session tag transitive. Top-level because it
+	// applies regardless of tag-auth. Default false for upgrade safety: transitive
+	// tags are immutable downstream, so a role re-tagging the same keys would fail.
 	SessionTagsTransitive bool `mapstructure:"session_tags_transitive" json:"session_tags_transitive,omitempty"`
 
 	// TagAuth enables tag-based authorization (IAM role tags authorize claims).
@@ -366,10 +335,8 @@ type Config struct {
 	JWKSRefetchCooldown  time.Duration  `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
 	AllowInsecureIssuers bool           `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
 
-	// Performance optimization / resolved authorization state - not serialized.
-	// Rebuilt fresh by Validate() every time (from RoleMappings/RoleGroups/
-	// RoleSets), so Validate() stays idempotent and safe to call repeatedly
-	// (e.g. after a hot-reload clone).
+	// Resolved authorization state, not serialized. Rebuilt by every Validate()
+	// so it stays idempotent (e.g. after a hot-reload clone).
 	estimatedRolesPerMapping int                        `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
 	effective                []*RoleMapping             `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
 	index                    authzIndex                 `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
@@ -922,10 +889,8 @@ func lostFragmentPins(prev, next *Config) []string {
 	return dropped
 }
 
-// reapplyEnvOverrides re-applies AOW_* environment variables onto c after a
-// remote-config merge, enforcing env > S3 config > file precedence. MergeBytes
-// uses a fresh viper.Viper without the AOW_* bindings set up by LoadConfig, so
-// env-var overrides are otherwise silently clobbered by S3 payload values.
+// reapplyEnvOverrides re-applies AOW_* env vars after a remote-config merge to
+// keep env > S3 config > file precedence; MergeBytes' fresh viper lacks the bindings.
 func reapplyEnvOverrides(c *Config) {
 	// Ensure Cache is non-nil before applying cache knobs (matches prior
 	// behavior: the old code unconditionally created c.Cache here).
@@ -962,11 +927,9 @@ func (c *Config) LeewayOrDefault() time.Duration {
 	return *c.JWTLeeway
 }
 
-// AuditEnforced reports whether the durable, fail-closed audit contract is
-// actually in force (audit_required AND a write destination configured).
-// Derived per call, not cached, so a hot reload that later supplies
-// log_to_s3/log_bucket re-engages it without restating audit_required.
-// Callers gating credential issuance must use this, never AuditRequired.
+// AuditEnforced reports whether the fail-closed audit contract is in force
+// (audit_required AND a write destination). Derived per call so a hot reload
+// re-engages it. Callers gating credentials must use this, never AuditRequired.
 func (c *Config) AuditEnforced() bool {
 	return c.AuditRequired && c.LogToS3 && c.LogBucket != ""
 }
@@ -1035,10 +998,8 @@ func (c *Config) Validate() error {
 	if c.RoleSessionName == "" {
 		return errors.New("role session name is required")
 	}
-	// A global override is an operator-set value like any per-mapping one, so
-	// it gets the same boot-time rejection instead of falling through to the
-	// runtime sanitizer, which would silently reshape it into a different
-	// CloudTrail identity (see validateRoleSessionName).
+	// Global overrides get the same boot-time rejection as per-mapping ones,
+	// not the runtime sanitizer (see validateRoleSessionName).
 	if err := validateRoleSessionName(c.RoleSessionName); err != nil {
 		return fmt.Errorf("role_session_name: %w", err)
 	}
@@ -1142,11 +1103,11 @@ func (c *Config) Validate() error {
 	if len(c.Issuers) == 1 {
 		soleIssuer = c.Issuers[0].Issuer
 	}
-	// implicitlyBound counts mappings that got their issuer from default_issuer
-	// rather than declaring one, while more than one issuer is configured — see
-	// the warning emitted after the effective set is built.
-	implicitlyBound := 0
-	resolveIssuer := func(explicit string) (string, error) {
+	// implicitlyBound holds the entry+subject pairs that got their issuer from
+	// default_issuer rather than declaring one, while more than one issuer is
+	// configured — see the warning emitted after the effective set is built.
+	implicitlyBound := make(map[string]bool)
+	resolveIssuer := func(explicit, entry string) (string, error) {
 		switch {
 		case explicit != "":
 			if !seenIssuers[explicit] {
@@ -1155,7 +1116,7 @@ func (c *Config) Validate() error {
 			return explicit, nil
 		case c.DefaultIssuer != "":
 			if len(c.Issuers) > 1 {
-				implicitlyBound++
+				implicitlyBound[entry] = true
 			}
 			return c.DefaultIssuer, nil
 		case soleIssuer != "":
@@ -1239,7 +1200,7 @@ func (c *Config) Validate() error {
 		if m.AllowSessionName && m.RoleSessionName != "" {
 			return fmt.Errorf("%s: set allow_session_name or role_session_name, not both", label)
 		}
-		resolvedIssuer, err := resolveIssuer(m.Issuer)
+		resolvedIssuer, err := resolveIssuer(m.Issuer, entry)
 		if err != nil {
 			return fmt.Errorf("%s: %w", label, err)
 		}
@@ -1363,12 +1324,12 @@ func (c *Config) Validate() error {
 	}
 
 	// mergeFragment guards fragments against re-homing implicit grants; the primary overlay only warns.
-	if implicitlyBound > 0 {
+	if len(implicitlyBound) > 0 {
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
 			"mappings are bound to default_issuer while multiple issuers are configured; "+
 				"set an explicit issuer on each mapping to pin it",
 			slog.String("warning", "mappings_bound_to_default_issuer"),
-			slog.Int("mappingCount", implicitlyBound),
+			slog.Int("mappingCount", len(implicitlyBound)),
 			slog.String("defaultIssuer", c.DefaultIssuer),
 			slog.Int("issuerCount", len(c.Issuers)))
 	}
@@ -1688,11 +1649,9 @@ func mergeSessionTags(issuerTags, extra map[string]string) (map[string]string, e
 	return merged, nil
 }
 
-// validateRoleSessionName rejects a session name STS would refuse or the
-// runtime sanitizer would reshape. Rejects rather than sanitizes: this value
-// becomes an identity (assumed-role ARN, aws:userid, CloudTrail, IAM
-// conditions on sts:RoleSessionName), so a silently-mangled name is a mystery
-// to debug later instead of a config error caught at boot.
+// validateRoleSessionName rejects a session name STS would refuse or the runtime
+// sanitizer would reshape: it becomes an identity (ARN, CloudTrail, IAM
+// conditions), so a mangled name must be a boot-time config error.
 func validateRoleSessionName(name string) error {
 	if len(name) < 2 || len(name) > utils.MaxSTSNameLen {
 		return fmt.Errorf("must be 2-%d characters, got %d", utils.MaxSTSNameLen, len(name))
@@ -1714,18 +1673,22 @@ func warnShadowedRoleGrants(effective []*RoleMapping) {
 	}
 
 	for key, pieces := range grants {
+		if len(pieces) < 2 {
+			continue
+		}
 		issuer, role, _ := strings.Cut(key, "\x00")
+		idx := newGrantIndex(pieces)
 		var shadowed, shadowing, scoped, unscoped *RoleMapping
 		for _, m := range pieces {
-			if (m.SessionPolicy != "" || m.SessionPolicyFile != "") && (scoped == nil || m.order < scoped.order) {
-				if w := winningGrant(pieces, m); w != m {
+			if (m.SessionPolicy != "" || m.SessionPolicyFile != "") && scoped == nil {
+				if w := idx.outranker(m, func(c *grantClass) *RoleMapping { return c.unscoped }); w != nil {
 					scoped, unscoped = m, w
 				}
 			}
-			if m.roleLabel == "" || (shadowed != nil && m.order >= shadowed.order) {
+			if m.roleLabel == "" || shadowed != nil {
 				continue
 			}
-			if w := winningGrant(pieces, m); w != m && !sameRoleSettings(w, m) {
+			if w := idx.outranker(m, func(c *grantClass) *RoleMapping { return c.differing(m) }); w != nil {
 				shadowed, shadowing = m, w
 			}
 		}
@@ -1752,20 +1715,90 @@ func warnShadowedRoleGrants(effective []*RoleMapping) {
 	}
 }
 
-// winningGrant returns the lowest-order piece that can match a subject m matches; m itself if none outranks it.
-func winningGrant(pieces []*RoleMapping, m *RoleMapping) *RoleMapping {
-	w := m
-	for _, p := range pieces {
-		if p.order < w.order && !subjectsDisjoint(p, m) {
-			w = p
-		}
+// grantClass keeps, of grants added in ascending order, the first, the first with other settings than it, the first unscoped and the first unconditional.
+type grantClass struct{ first, firstDiff, unscoped, cover *RoleMapping }
+
+func (c *grantClass) add(p *RoleMapping) {
+	switch {
+	case c.first == nil:
+		c.first = p
+	case c.firstDiff == nil && !sameRoleSettings(c.first, p):
+		c.firstDiff = p
 	}
-	return w
+	if c.unscoped == nil && p.SessionPolicy == "" && p.SessionPolicyFile == "" {
+		c.unscoped = p
+	}
+	if c.cover == nil && p.Conditions == nil {
+		c.cover = p
+	}
 }
 
-// subjectsDisjoint reports whether no subject can match both a and b: two different exact literals.
-func subjectsDisjoint(a, b *RoleMapping) bool {
-	return a.subjectClass == subjectExact && b.subjectClass == subjectExact && a.subjectKey != b.subjectKey
+// differing returns the class's lowest-order grant whose settings differ from m's, or nil.
+func (c *grantClass) differing(m *RoleMapping) *RoleMapping {
+	if c.first != nil && !sameRoleSettings(c.first, m) {
+		return c.first
+	}
+	return c.firstDiff
+}
+
+// grantIndex answers outranker in O(1) for the grants of one role; only two different exact literals are provably disjoint.
+type grantIndex struct {
+	all, pattern grantClass
+	same         map[sameSubject]*grantClass
+}
+
+// sameSubject is an exact literal, or a pattern's text: grants with equal keys match the same subjects.
+type sameSubject struct {
+	literal bool
+	key     string
+}
+
+func sameSubjectOf(p *RoleMapping) sameSubject {
+	if p.subjectClass == subjectExact {
+		return sameSubject{true, p.subjectKey}
+	}
+	return sameSubject{false, p.resolvedSubject}
+}
+
+// newGrantIndex indexes pieces, which ascend by order.
+func newGrantIndex(pieces []*RoleMapping) grantIndex {
+	g := grantIndex{same: make(map[sameSubject]*grantClass)}
+	for _, p := range pieces {
+		g.all.add(p)
+		if p.subjectClass != subjectExact {
+			g.pattern.add(p)
+		}
+		c := g.same[sameSubjectOf(p)]
+		if c == nil {
+			c = &grantClass{}
+			g.same[sameSubjectOf(p)] = c
+		}
+		c.add(p)
+	}
+	return g
+}
+
+// outranker returns the lowest-order grant pick selects that can win a subject m matches; nil if none.
+func (g grantIndex) outranker(m *RoleMapping, pick func(*grantClass) *RoleMapping) *RoleMapping {
+	same := g.same[sameSubjectOf(m)]
+	var w *RoleMapping
+	if m.subjectClass == subjectExact {
+		w = pick(&g.pattern)
+		if s := pick(same); w == nil || (s != nil && s.order < w.order) {
+			w = s
+		}
+	} else {
+		w = pick(&g.all)
+	}
+	// An unconditional grant of m's exact subject wins every subject m matches, so nothing after it does.
+	limit := m.order
+	if same.cover != nil {
+		limit = min(limit, same.cover.order+1)
+	}
+	if w != nil && w.order < limit {
+		return w
+	}
+	return nil
 }
 
 // sameRoleSettings reports whether a and b scope an assumed role identically.
@@ -1827,10 +1860,8 @@ func (c *Config) issuerConfig(issuer string) *IssuerConfig {
 	return nil
 }
 
-// IssuerSessionTags returns the session_tags spec (STS tag key -> raw claim
-// name) configured for issuer, or nil if issuer is not configured or has no
-// session_tags. The spec actually attached at assumption time is
-// EffectiveSessionTags, which adds the authorizing mapping's tags on top.
+// IssuerSessionTags returns the session_tags spec (STS key -> claim name) for
+// issuer, or nil. EffectiveSessionTags adds the authorizing mapping's tags.
 func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 	if iss := c.issuerConfig(issuer); iss != nil {
 		return iss.SessionTags
@@ -1865,12 +1896,9 @@ func (c *Config) FindRoleSessionName(issuer, subject, role string, claims map[st
 	return c.Authorize(issuer, subject, role, claims).RoleSessionName()
 }
 
-// AuthorizeRoles evaluates every role_mapping/role_group entry bound to
-// issuer whose subject pattern matches subject and whose conditions (if any)
-// are satisfied by claims, and returns the union of their roles. The returned
-// bool is true only when at least one mapping fully matched (subject pattern
-// AND conditions); a subject that matches a pattern but fails that mapping's
-// conditions does not count unless another mapping fully matches.
+// AuthorizeRoles returns the union of roles from every mapping bound to issuer
+// whose subject pattern AND conditions match. The bool is true only when at
+// least one mapping fully matched (pattern match alone does not count).
 func (c *Config) AuthorizeRoles(issuer, subject string, claims map[string]any) (bool, []string) {
 	d := c.Authorize(issuer, subject, "", claims)
 	return d.Matched, d.Roles
