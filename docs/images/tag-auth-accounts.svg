@@ -1,51 +1,78 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="760" height="480" viewBox="0 0 760 480" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L8,3 L0,6 Z" fill="#5f6368"/>
-    </marker>
-  </defs>
-  <rect x="0" y="0" width="760" height="480" fill="#ffffff"/>
-  <text x="380" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Target account allow-list gate</text>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 672" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="tag-auth-accounts-title tag-auth-accounts-desc" id="tag-auth-accounts-root">
+        <title id="tag-auth-accounts-title">Target account gate</title>
+        <desc id="tag-auth-accounts-desc">Flowchart: the account in the role ARN continues if it is the hub; otherwise cross_account must be enabled and allowed_accounts must be empty or list it, or the request ends in 403.</desc>
+        <defs>
+      <style>#tag-auth-accounts-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #tag-auth-accounts-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #tag-auth-accounts-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#tag-auth-accounts-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="tag-auth-accounts-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="tag-auth-accounts-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="tag-auth-accounts-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
 
-  <!-- R1: Request includes role ARN (blue process) -->
-  <rect x="140" y="58" width="300" height="44" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
-  <text x="290" y="85" text-anchor="middle" font-size="13" fill="#202124">Request includes role ARN</text>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
 
-  <!-- Arrow R1 → R2 -->
-  <line x1="290" y1="102" x2="290" y2="138" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <path d="M480 68 L480 92" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-accounts-arrow)"/>
+<path d="M480 140 L480 160" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-accounts-arrow)"/>
+<path d="M480 272 L480 296" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-accounts-arrow)"/>
+<path d="M480 408 L480 432" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-accounts-arrow)"/>
+<path d="M650 216 L764 216" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-accounts-arrow)"/>
+<path d="M650 488 L764 488" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-accounts-arrow)"/>
+<path d="M310 352 L196 352" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-accounts-arrow)"/>
+<path d="M310 488 L196 488" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-accounts-arrow)"/>
+<rect x="486" y="282" width="20.799999999999997" height="14" rx="2" fill="#f5f5f5"/>
+<text x="490" y="292" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.0">NO</text>
+<rect x="486" y="418" width="27.2" height="14" rx="2" fill="#f5f5f5"/>
+<text x="490" y="428" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.0">YES</text>
+<rect x="662" y="198" width="27.2" height="14" rx="2" fill="#f5f5f5"/>
+<text x="666" y="208" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.0">YES</text>
+<rect x="662" y="470" width="27.2" height="14" rx="2" fill="#f5f5f5"/>
+<text x="666" y="480" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.0">YES</text>
+<rect x="216" y="334" width="20.799999999999997" height="14" rx="2" fill="#f5f5f5"/>
+<text x="220" y="344" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.0">NO</text>
+<rect x="216" y="470" width="20.799999999999997" height="14" rx="2" fill="#f5f5f5"/>
+<text x="220" y="480" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.0">NO</text>
+<rect x="360" y="24" width="240" height="44" rx="20" fill="#f5f5f5"/>
+<rect x="360" y="24" width="240" height="44" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="480.0" y="50.55" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Requested role ARN</text>
+<rect x="360" y="92" width="240" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="480.0" y="120.55" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Parse the account ID</text>
+<polygon points="480,160 650,216 480,272 310,216" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="480" y="212" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Hub</text>
+<text x="480" y="228" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">account?</text>
+<polygon points="480,296 650,352 480,408 310,352" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="480" y="348" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">cross_account</text>
+<text x="480" y="364" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">enabled?</text>
+<polygon points="480,432 650,488 480,544 310,488" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="480" y="484" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">allowed_accounts</text>
+<text x="480" y="500" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">empty or lists it?</text>
+<rect x="24" y="312" width="172" height="216" rx="20" fill="#f5f5f5"/>
+<rect x="24" y="312" width="172" height="216" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="110.0" y="417.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">403</text>
+<text x="110.0" y="432.05" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">permission_denied</text>
+<rect x="764" y="176" width="172" height="352" rx="20" fill="#f5f5f5"/>
+<rect x="764" y="176" width="172" height="352" rx="20" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="850.0" y="349.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Continue</text>
+<text x="850.0" y="364.05" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">to authorization</text>
+<line x1="24" y1="568" x2="936" y2="568" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="24" y="586" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.6">LEGEND</text>
+<rect x="24" y="600" width="24" height="14" rx="7" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="56" y="610" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Start or end</text>
+<rect x="151.28" y="600" width="24" height="14" rx="3" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="183.28" y="610" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Step</text>
+<polygon points="231.04000000000002,607 243.04000000000002,600 255.04000000000002,607 243.04000000000002,614" fill="#ffffff" stroke="#2d3142"/>
+<text x="263.04" y="610" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Decision</text>
+<text x="24" y="632" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">An empty allowed_accounts permits every account, so set it in production.</text>
+<text x="24" y="648" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">allowed_accounts IDs that are not 12 digits fail at config load.</text>
 
-  <!-- R2: Parse account ID from ARN (blue process) -->
-  <rect x="140" y="140" width="300" height="44" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
-  <text x="290" y="163" text-anchor="middle" font-size="13" fill="#202124">Parse account ID from role ARN</text>
-
-  <!-- Arrow R2 → R3 -->
-  <line x1="290" y1="184" x2="290" y2="224" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-
-  <!-- R3: Decision (amber) -->
-  <rect x="140" y="226" width="300" height="78" rx="8" fill="#fef7e0" stroke="#f9ab00"/>
-  <text x="290" y="250" text-anchor="middle" font-size="13" fill="#202124">account == hub account</text>
-  <text x="290" y="268" text-anchor="middle" font-size="13" fill="#202124">OR allowed_accounts is empty</text>
-  <text x="290" y="286" text-anchor="middle" font-size="13" fill="#202124">OR account in allowed_accounts?</text>
-
-  <!-- Arrow R3 → ALLOW (Yes, right branch) -->
-  <line x1="440" y1="265" x2="506" y2="265" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="472" y="257" font-size="12" font-weight="600" fill="#137333">Yes</text>
-
-  <!-- ALLOW box (green) -->
-  <rect x="508" y="236" width="218" height="58" rx="8" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="617" y="261" text-anchor="middle" font-size="13" font-weight="600" fill="#137333">Continue</text>
-  <text x="617" y="279" text-anchor="middle" font-size="12" fill="#137333">tag-auth / mapping</text>
-
-  <!-- Arrow R3 → DENY (No, down) -->
-  <line x1="290" y1="304" x2="290" y2="372" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="300" y="342" font-size="12" font-weight="600" fill="#c5221f">No</text>
-
-  <!-- DENY box (red) -->
-  <rect x="165" y="374" width="250" height="48" rx="8" fill="#fce8e6" stroke="#ea4335"/>
-  <text x="290" y="398" text-anchor="middle" font-size="14" font-weight="600" fill="#c5221f">403 ErrAccountNotAllowed</text>
-  <text x="290" y="414" text-anchor="middle" font-size="11" fill="#c5221f">request rejected</text>
-
-  <!-- Bottom note -->
-  <rect x="30" y="444" width="700" height="26" rx="5" fill="#f8f9fa" stroke="#dadce0"/>
-  <text x="380" y="461" text-anchor="middle" font-size="11" fill="#5f6368">Hub account always allowed  ·  empty allowed_accounts = any account permitted  ·  non-12-digit IDs rejected at config load</text>
-</svg>
+      </svg>

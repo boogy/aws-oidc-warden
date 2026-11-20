@@ -95,7 +95,7 @@ The mode also changes **what the caller sends on the wire** — because it chang
 3. Scoped parser        build a parser pinned to this issuer: alg allow-list, exp required, iat, leeway
 4. Signature verify     fetch this issuer's JWKS (cache-first), select the key by kid+alg+type, verify
 4b. Re-assert issuer    the verified iss must still equal the spec used (guards a mid-call hot reload)
-6–10. Claim checks       sub, iat, exp, nbf, lifetime/age caps, audience ANY-match, required_claims
+6–9. Claim checks        sub, iat, exp, nbf, lifetime/age caps, audience ANY-match, required_claims
 10. Normalize           derive canonical Subject + raw-claims map via the provider adapter
 ```
 
@@ -242,29 +242,29 @@ All optional, top-level, hot-reloadable (except `allow_insecure_issuers`, which 
 
 Validation failures propagate as sentinel errors mapped to HTTP status by the frontend adapters (`internal/handler/errors.go`):
 
-| Condition                                                                                                          | Sentinel                      | HTTP | `errorCode`                   |
-| ------------------------------------------------------------------------------------------------------------------ | ----------------------------- | ---- | ----------------------------- |
-| Empty/oversized token, bad role, malformed JSON                                                                    | `ErrTokenTooLarge`, …         | 400  | `invalid_request`             |
-| Unknown issuer, bad signature, expired, missing claim, audience mismatch                                           | `ErrTokenValidationFailed`    | 401  | `token_invalid`               |
-| Role not permitted / account not allowed                                                                           | `ErrRoleNotPermitted`         | 403  | `permission_denied`           |
-| Session policy read error                                                                                          | `ErrSessionPolicyAccess`      | 500  | `policy_error`                |
-| AssumeRole refused by AWS (`AccessDenied`)                                                                         | `ErrAssumeRoleDenied`         | 403  | `assume_role_denied`          |
-| AssumeRole failed for any other reason                                                                             | `ErrAssumeRoleFailed`         | 500  | `assume_role_failed`          |
-| Required audit write failed (`audit_required=true`)                                                                | `ErrAuditWriteFailed`         | 500  | `audit_write_failed`          |
-| Role mappings older than `mappings_max_stale` (retryable)                                                          | `ErrConfigStale`              | 503  | `config_stale`                |
-| IdP mode: over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h                                    | `ErrIdPNotPermitted`          | 403  | `idp_not_permitted`           |
-| IdP mode: `subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                  | `ErrIdPSubjectInvalid`        | 403  | `idp_subject_invalid`         |
-| IdP mode: the source identity could not be derived (missing claim) or overflowed with `reject`                     | `ErrIdPSourceIdentityInvalid` | 403  | `idp_source_identity_invalid` |
-| IdP mode: STS refused the minted token: fix the role trust policy or the IAM OIDC provider                         | `ErrIdPExchangeDenied`        | 403  | `idp_exchange_denied`         |
-| IdP mode: `durationSeconds` outside 900..43200                                                                     | `ErrInvalidDuration`          | 400  | `invalid_duration`            |
-| `durationSeconds` above the mapping's `max_session_duration` (1h for `AssumeRole`), or over 1h with no `idp` block | `ErrDurationExceedsCap`       | 400  | `duration_exceeds_cap`        |
-| IdP mode: `durationSeconds` above the role's `MaxSessionDuration`                                                  | `ErrDurationExceedsRoleMax`   | 400  | `duration_exceeds_role_max`   |
-| IdP mode: `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                     | `ErrInvalidSessionName`       | 400  | `invalid_session_name`        |
-| IdP mode: a near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false             | `ErrIdPPathNotFound`          | 404  | `idp_path_not_found`          |
-| IdP mode: not `GET`/`HEAD` on a discovery/JWKS path                                                                | `ErrMethodNotAllowed`         | 405  | `method_not_allowed`          |
-| IdP mode: minted token or packed policy over the STS limit; reduce session tags or the session policy              | `ErrIdPTokenTooLarge`         | 500  | `idp_token_too_large`         |
-| IdP mode: KMS signing unavailable or throttled; also the kill-switch answer over 1h                                | `ErrIdPUnavailable`           | 503  | `idp_signing_unavailable`     |
-| IdP mode: STS could not reach the IdP discovery or JWKS document, or reported the minted token expired             | `ErrIdPExchangeUnavailable`   | 503  | `idp_exchange_unavailable`    |
+| Condition                                                                                                                | Sentinel                      | HTTP | `errorCode`                   |
+| ------------------------------------------------------------------------------------------------------------------------ | ----------------------------- | ---- | ----------------------------- |
+| Empty/oversized token, bad role, malformed JSON                                                                          | `ErrTokenTooLarge`, …         | 400  | `invalid_request`             |
+| Unknown issuer, bad signature, expired, missing claim, audience mismatch                                                 | `ErrTokenValidationFailed`    | 401  | `token_invalid`               |
+| Role not permitted / account not allowed                                                                                 | `ErrRoleNotPermitted`         | 403  | `permission_denied`           |
+| Session policy read error                                                                                                | `ErrSessionPolicyAccess`      | 500  | `policy_error`                |
+| AssumeRole refused by AWS (`AccessDenied`)                                                                               | `ErrAssumeRoleDenied`         | 403  | `assume_role_denied`          |
+| AssumeRole failed for any other reason                                                                                   | `ErrAssumeRoleFailed`         | 500  | `assume_role_failed`          |
+| Required audit write failed (`audit_required=true`)                                                                      | `ErrAuditWriteFailed`         | 500  | `audit_write_failed`          |
+| Role mappings older than `mappings_max_stale` (retryable)                                                                | `ErrConfigStale`              | 503  | `config_stale`                |
+| IdP mode: over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h (not under `idp.only`)       | `ErrIdPNotPermitted`          | 403  | `idp_not_permitted`           |
+| IdP mode: `subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                        | `ErrIdPSubjectInvalid`        | 403  | `idp_subject_invalid`         |
+| IdP mode: the source identity could not be derived (missing claim) or overflowed with `reject`                           | `ErrIdPSourceIdentityInvalid` | 403  | `idp_source_identity_invalid` |
+| IdP mode: STS refused the minted token: fix the role trust policy or the IAM OIDC provider                               | `ErrIdPExchangeDenied`        | 403  | `idp_exchange_denied`         |
+| IdP mode: `durationSeconds` outside 900..43200                                                                           | `ErrInvalidDuration`          | 400  | `invalid_duration`            |
+| `durationSeconds` above the mapping's `max_session_duration` (1h for `AssumeRole`), or over 1h with no `idp` block       | `ErrDurationExceedsCap`       | 400  | `duration_exceeds_cap`        |
+| IdP mode: `durationSeconds` or `session_duration` above the role's `MaxSessionDuration`                                  | `ErrDurationExceedsRoleMax`   | 400  | `duration_exceeds_role_max`   |
+| IdP mode: `sessionName` is not 2-64 characters of `[\w+=,.@-]`                                                           | `ErrInvalidSessionName`       | 400  | `invalid_session_name`        |
+| IdP mode: a near miss of a configured discovery/JWKS path, or either path while `idp.enabled` is false                   | `ErrIdPPathNotFound`          | 404  | `idp_path_not_found`          |
+| IdP mode: not `GET`/`HEAD` on a discovery/JWKS path                                                                      | `ErrMethodNotAllowed`         | 405  | `method_not_allowed`          |
+| IdP mode: minted token or packed policy over the STS limit; reduce session tags or the session policy                    | `ErrIdPTokenTooLarge`         | 500  | `idp_token_too_large`         |
+| IdP mode: KMS signing unavailable or throttled; also the kill-switch answer over 1h, or for any request under `idp.only` | `ErrIdPUnavailable`           | 503  | `idp_signing_unavailable`     |
+| IdP mode: STS could not reach the IdP discovery or JWKS document, or reported the minted token expired                   | `ErrIdPExchangeUnavailable`   | 503  | `idp_exchange_unavailable`    |
 
 ---
 

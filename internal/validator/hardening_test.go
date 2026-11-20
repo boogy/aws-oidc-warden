@@ -237,7 +237,7 @@ func TestFetchJWKS_SingleflightCollapsesConcurrentFetches(t *testing.T) {
 	const workers = 20
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
 			_, err := v.Validate(context.Background(), token)
@@ -311,13 +311,11 @@ func TestTokenValidationFlow(t *testing.T) {
 
 	// Create claims
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    issuer,
-			Subject:   repository,
-			Audience:  jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
+		Issuer:    issuer,
+		Subject:   repository,
+		Audience:  jwt.ClaimStrings{audience},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		// Sub (depth-0) is what actually marshals to "sub" -- it shadows
 		// RegisteredClaims.Subject above for JSON purposes.
 		Sub:                  repository,
@@ -424,13 +422,11 @@ func TestValidate_RejectsAlgorithmsOutsideTheAllowlist(t *testing.T) {
 
 	newClaims := func() *types.Claims {
 		return &types.Claims{
-			RegisteredClaims: jwt.RegisteredClaims{
-				Issuer:    issuer,
-				Subject:   "owner/repo",
-				Audience:  jwt.ClaimStrings{audience},
-				ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
-				IssuedAt:  jwt.NewNumericDate(time.Now()),
-			},
+			Issuer:          issuer,
+			Subject:         "owner/repo",
+			Audience:        jwt.ClaimStrings{audience},
+			ExpiresAt:       jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+			IssuedAt:        jwt.NewNumericDate(time.Now()),
 			Sub:             "owner/repo",
 			Repository:      "owner/repo",
 			RepositoryOwner: "owner",

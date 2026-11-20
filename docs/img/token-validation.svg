@@ -1,102 +1,105 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 828" width="1000" height="828" font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif" role="img" aria-label="AWS OIDC Warden token validation pipeline (self mode)">
-  <title>AWS OIDC Warden — Token Validation Pipeline (self mode)</title>
-  <defs>
-    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
-    </marker>
-    <marker id="arrowRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
-    </marker>
-  </defs>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 752" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="token-validation-title token-validation-desc" id="token-validation-root">
+        <title id="token-validation-title">Token validation pipeline</title>
+        <desc id="token-validation-desc">Vertical pipeline of the self-mode token validation steps from the length guard to normalization; any failed step denies the request with 400 or 401 and issues no credentials.</desc>
+        <defs>
+      <style>#token-validation-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #token-validation-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #token-validation-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#token-validation-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="token-validation-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="token-validation-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="token-validation-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
 
-  <!-- card -->
-  <rect x="8" y="8" width="984" height="812" rx="14" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5"/>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
 
-  <!-- title -->
-  <text x="336" y="42" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">Token Validation Pipeline</text>
-  <text x="336" y="66" text-anchor="middle" font-size="13" fill="#64748b">Self mode — fail-closed: every step must pass, any failure denies</text>
+        <path d="M334 68 L334 88" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M334 136 L334 152" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M334 200 L334 216" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M334 264 L334 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M334 328 L334 344" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M334 392 L334 408" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M334 456 L334 472" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M334 520 L334 536" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M334 584 L334 600" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<path d="M644 112 L668 112" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M644 176 L668 176" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M644 240 L668 240" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M644 304 L668 304" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M644 368 L668 368" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M644 432 L668 432" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M644 496 L668 496" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M644 560 L668 560" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M668 112 L668 560" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<path d="M668 336 L760 336" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#token-validation-arrow)"/>
+<rect x="672" y="318" width="78.39999999999999" height="14" rx="2" fill="#f5f5f5"/>
+<text x="676" y="328" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.0">ANY FAILURE</text>
+<rect x="154" y="24" width="360" height="44" rx="20" fill="#f5f5f5"/>
+<rect x="154" y="24" width="360" height="44" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="334.0" y="50.55" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Incoming OIDC token and requested role</text>
+<rect x="24" y="88" width="620" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="38" y="117" fill="#4f5d75" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">0</text>
+<text x="84" y="108" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Length guard</text>
+<text x="84" y="124" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">reject above max_token_bytes (default 8 KB), before any parsing</text>
+<rect x="24" y="152" width="620" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="38" y="181" fill="#4f5d75" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">1</text>
+<text x="84" y="172" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Unverified iss peek</text>
+<text x="84" y="188" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">read iss for routing only, never for identity or authorization</text>
+<rect x="24" y="216" width="620" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="38" y="245" fill="#4f5d75" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">2</text>
+<text x="84" y="236" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Registry lookup</text>
+<text x="84" y="252" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">exact issuer match; an unknown issuer denies with no JWKS fetch</text>
+<rect x="24" y="280" width="620" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="38" y="309" fill="#4f5d75" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">3</text>
+<text x="84" y="300" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Scoped parser</text>
+<text x="84" y="316" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">pinned to the issuer: alg allow-list ES/RS 256-512, exp required</text>
+<rect x="24" y="344" width="620" height="48" rx="6" fill="#f5f5f5"/>
+<rect x="24" y="344" width="620" height="48" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="38" y="373" fill="#bf4520" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">4</text>
+<text x="84" y="364" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Verify signature</text>
+<text x="84" y="380" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">JWKS cache-first; key by kid+alg+type; RSA 2048+; EC curve fits alg</text>
+<rect x="24" y="408" width="620" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="38" y="437" fill="#4f5d75" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">4b</text>
+<text x="84" y="428" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Re-assert issuer</text>
+<text x="84" y="444" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">verified iss must still equal the matched spec (hot-reload guard)</text>
+<rect x="24" y="472" width="620" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="38" y="501" fill="#4f5d75" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">6-9</text>
+<text x="84" y="492" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Claim checks</text>
+<text x="84" y="508" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">sub, iat, exp, nbf, lifetime and age caps, audience, required_claims</text>
+<rect x="24" y="536" width="620" height="48" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="38" y="565" fill="#4f5d75" font-size="11" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">10</text>
+<text x="84" y="556" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Normalize</text>
+<text x="84" y="572" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">derive canonical Subject and raw claims via the provider adapter</text>
+<rect x="154" y="600" width="360" height="48" rx="20" fill="#f5f5f5"/>
+<rect x="154" y="600" width="360" height="48" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="334.0" y="621.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Verified claims</text>
+<text x="334.0" y="636.05" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">on to authorization, then credentials</text>
+<rect x="760" y="232" width="176" height="208" rx="12" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="848" y="260" fill="#2d3142" font-size="14" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Deny</text>
+<text x="848" y="276" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">no partial credentials</text>
+<text x="848" y="312" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">400</text>
+<text x="848" y="328" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">invalid_request</text>
+<text x="848" y="343" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">empty or oversized</text>
+<text x="848" y="376" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">401</text>
+<text x="848" y="392" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">token_invalid</text>
+<text x="848" y="407" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">every other failure</text>
+<line x1="24" y1="664" x2="936" y2="664" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="24" y="682" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.6">LEGEND</text>
+<rect x="24" y="696" width="24" height="14" rx="7" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="56" y="706" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Start or end</text>
+<rect x="151.28" y="696" width="24" height="14" rx="3" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="183.28" y="706" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Check</text>
+<rect x="236.98000000000002" y="696" width="24" height="14" rx="3" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="268.98" y="706" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">The check everything after it relies on</text>
+<text x="24" y="728" fill="#4f5d75" font-size="11" font-family="'Geist', system-ui, sans-serif">Delegated modes (apigw, alb) skip steps 1-4b of this pipeline and join the same claim checks at step 6.</text>
 
-  <!-- vertical spine arrows -->
-  <g stroke="#64748b" stroke-width="2" marker-end="url(#arrow)" fill="none">
-    <line x1="336" y1="136" x2="336" y2="149"/>
-    <line x1="336" y1="206" x2="336" y2="223"/>
-    <line x1="336" y1="280" x2="336" y2="297"/>
-    <line x1="336" y1="354" x2="336" y2="371"/>
-    <line x1="336" y1="428" x2="336" y2="445"/>
-    <line x1="336" y1="502" x2="336" y2="519"/>
-    <line x1="336" y1="576" x2="336" y2="593"/>
-    <line x1="336" y1="650" x2="336" y2="667"/>
-    <line x1="336" y1="724" x2="336" y2="759"/>
-  </g>
-
-  <!-- dashed deny connectors (unlabeled, short, horizontal) -->
-  <g stroke="#dc2626" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arrowRed)" fill="none" opacity="0.8">
-    <line x1="616" y1="178" x2="679" y2="178"/>
-    <line x1="616" y1="252" x2="679" y2="252"/>
-    <line x1="616" y1="326" x2="679" y2="326"/>
-    <line x1="616" y1="400" x2="679" y2="400"/>
-    <line x1="616" y1="474" x2="679" y2="474"/>
-    <line x1="616" y1="548" x2="679" y2="548"/>
-    <line x1="616" y1="622" x2="679" y2="622"/>
-    <line x1="616" y1="696" x2="679" y2="696"/>
-  </g>
-
-  <!-- input pill -->
-  <rect x="56" y="96" width="560" height="40" rx="20" fill="#0f172a"/>
-  <text x="336" y="121" text-anchor="middle" font-size="14" font-weight="600" fill="#ffffff">Incoming OIDC token  ·  requested role ARN</text>
-
-  <!-- stage boxes -->
-  <!-- S1 -->
-  <rect x="56" y="150" width="560" height="56" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-  <text x="74" y="174" font-size="14" font-weight="700" fill="#0f172a">0 · Length guard</text>
-  <text x="74" y="193" font-size="11.5" fill="#475569">Reject if larger than max_token_bytes (8 KB) — before any parsing</text>
-  <!-- S2 -->
-  <rect x="56" y="224" width="560" height="56" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-  <text x="74" y="248" font-size="14" font-weight="700" fill="#0f172a">1 · Unverified iss peek</text>
-  <text x="74" y="267" font-size="11.5" fill="#475569">Read iss for routing only — never trusted for identity or authz</text>
-  <!-- S3 -->
-  <rect x="56" y="298" width="560" height="56" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-  <text x="74" y="322" font-size="14" font-weight="700" fill="#0f172a">2 · Registry lookup</text>
-  <text x="74" y="341" font-size="11.5" fill="#475569">Exact-match iss → issuer spec · unknown issuer denies (no fetch)</text>
-  <!-- S4 -->
-  <rect x="56" y="372" width="560" height="56" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-  <text x="74" y="396" font-size="14" font-weight="700" fill="#0f172a">3 · Issuer-scoped parser</text>
-  <text x="74" y="415" font-size="11.5" fill="#475569">Algorithm allow-list RS/ES 256–512 · never none or HS*</text>
-  <!-- S5 (crypto highlight) -->
-  <rect x="56" y="446" width="560" height="56" rx="8" fill="#eef2ff" stroke="#4f46e5" stroke-width="2"/>
-  <text x="74" y="470" font-size="14" font-weight="700" fill="#312e81">4 · Verify signature</text>
-  <text x="74" y="489" font-size="11.5" fill="#3730a3">JWKS cache-first · key pinned by kid + alg + type · RSA ≥ 2048 / EC on-curve</text>
-  <!-- S6 -->
-  <rect x="56" y="520" width="560" height="56" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-  <text x="74" y="544" font-size="14" font-weight="700" fill="#0f172a">4b · Re-assert issuer</text>
-  <text x="74" y="563" font-size="11.5" fill="#475569">Verified iss must still equal the matched spec (hot-reload guard)</text>
-  <!-- S7 -->
-  <rect x="56" y="594" width="560" height="56" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-  <text x="74" y="618" font-size="14" font-weight="700" fill="#0f172a">6–9 · Claim checks</text>
-  <text x="74" y="637" font-size="11.5" fill="#475569">sub · iat · exp · nbf · lifetime/age · audience ANY-match · required_claims</text>
-  <!-- S8 -->
-  <rect x="56" y="668" width="560" height="56" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5"/>
-  <text x="74" y="692" font-size="14" font-weight="700" fill="#0f172a">10 · Normalize</text>
-  <text x="74" y="711" font-size="11.5" fill="#475569">Derive canonical Subject (never self-asserted) + raw claims map</text>
-
-  <!-- output pill -->
-  <rect x="56" y="760" width="560" height="40" rx="20" fill="#16a34a"/>
-  <text x="336" y="785" text-anchor="middle" font-size="14" font-weight="600" fill="#ffffff">Verified claims  →  authorization  →  STS AssumeRole</text>
-
-  <!-- deny rail -->
-  <rect x="680" y="150" width="296" height="574" rx="10" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
-  <text x="828" y="300" text-anchor="middle" font-size="16" font-weight="700" fill="#991b1b">DENY — fail-closed</text>
-  <text x="828" y="332" text-anchor="middle" font-size="12" fill="#b91c1c">Any failed check stops the</text>
-  <text x="828" y="350" text-anchor="middle" font-size="12" fill="#b91c1c">pipeline immediately.</text>
-  <text x="828" y="368" text-anchor="middle" font-size="12" fill="#b91c1c">No partial credentials.</text>
-  <line x1="712" y1="400" x2="944" y2="400" stroke="#fca5a5" stroke-width="1"/>
-  <text x="828" y="438" text-anchor="middle" font-size="12.5" font-weight="600" fill="#991b1b">400 · invalid_request</text>
-  <text x="828" y="462" text-anchor="middle" font-size="12.5" font-weight="600" fill="#991b1b">401 · token_invalid</text>
-  <text x="828" y="486" text-anchor="middle" font-size="12.5" font-weight="600" fill="#991b1b">403 · permission_denied</text>
-  <text x="828" y="510" text-anchor="middle" font-size="12.5" font-weight="600" fill="#991b1b">500 · audit_write_failed *</text>
-  <text x="828" y="536" text-anchor="middle" font-size="10.5" font-style="italic" fill="#b91c1c">* only when audit_required = true</text>
-
-  <!-- footnote -->
-  <text x="336" y="758" text-anchor="middle" font-size="10.5" fill="#94a3b8"></text>
-  <text x="500" y="815" text-anchor="middle" font-size="11" fill="#94a3b8">Delegated modes (apigw / alb) skip steps 1–4 (upstream verifies the signature) and enter the same checks at step 6.</text>
-</svg>
+      </svg>

@@ -66,7 +66,7 @@ func TestRefetch_LimiterFloodCannotPinStaleKeySetAfterRotation(t *testing.T) {
 	served = &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k-new", &newKey.PublicKey)}}
 
 	// Attacker exhausts the limiter with distinct never-before-seen kids.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		_, aerr := v.Validate(context.Background(), signToken(t, oldKey, fmt.Sprintf("bogus-%d", i), srv.URL, "aud"))
 		require.Error(t, aerr, "bogus kid %d must never validate", i)
 	}
@@ -189,7 +189,7 @@ func TestRefetch_DeniedRefetchNeverAcceptsAgainstStaleKeySet(t *testing.T) {
 	// A token signed by the REVOKED key must now fail, and must keep failing
 	// however many times it is retried (no limiter state can resurrect it).
 	revoked := signToken(t, oldKey, "k-old", srv.URL, "aud")
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		advance(90 * time.Second) // clear both cooldown windows each round
 		_, rerr := v.Validate(context.Background(), revoked)
 		require.Error(t, rerr, "revoked key must never validate (attempt %d)", i)
@@ -214,13 +214,11 @@ func jwkFromKey(kid string, pub *rsa.PublicKey) types.JSONWebKey {
 func signToken(t *testing.T, key *rsa.PrivateKey, kid, issuer, audience string) string {
 	t.Helper()
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    issuer,
-			Subject:   "owner/repo",
-			Audience:  jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
+		Issuer:    issuer,
+		Subject:   "owner/repo",
+		Audience:  jwt.ClaimStrings{audience},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		// Sub (depth-0) is what actually marshals to the "sub" JWT claim --
 		// it shadows RegisteredClaims.Subject for JSON purposes (see
 		// types.Claims doc comment). Set both so intent is clear even though
@@ -392,13 +390,11 @@ func ecJwkFromKey(kid string, pub *ecdsa.PublicKey) types.JSONWebKey {
 func signTokenEC(t *testing.T, key *ecdsa.PrivateKey, kid, issuer, audience string) string {
 	t.Helper()
 	claims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    issuer,
-			Subject:   "owner/repo",
-			Audience:  jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
+		Issuer:    issuer,
+		Subject:   "owner/repo",
+		Audience:  jwt.ClaimStrings{audience},
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(10 * time.Minute)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		// Sub (depth-0) is what actually marshals to "sub" -- see signToken.
 		Sub:        "owner/repo",
 		Repository: "owner/repo",
@@ -473,10 +469,10 @@ func TestValidate_ConcurrentHotSwap_Race(t *testing.T) {
 	const workers = 16
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 50; j++ {
+			for range 50 {
 				// Results are intentionally not asserted per-iteration: which
 				// config a given call observes is a race by construction.
 				// -race is what proves the swap itself is safe.
@@ -533,7 +529,7 @@ func TestFetchJWKS_InitiatorCancellationDoesNotAbortSharedFetch(t *testing.T) {
 	require.NoError(t, err)
 	jwks := &types.JWKS{Keys: []types.JSONWebKey{jwkFromKey("k1", &key.PublicKey)}}
 
-	var jwksHits int32
+	var jwksHits atomic.Int32
 	release := make(chan struct{})
 	requestStarted := make(chan struct{}, 1)
 
@@ -545,7 +541,7 @@ func TestFetchJWKS_InitiatorCancellationDoesNotAbortSharedFetch(t *testing.T) {
 				JwksURI string `json:"jwks_uri"`
 			}{Issuer: "http://" + r.Host, JwksURI: fmt.Sprintf("http://%s/jwks", r.Host)})
 		case "/jwks":
-			atomic.AddInt32(&jwksHits, 1)
+			jwksHits.Add(1)
 			select {
 			case requestStarted <- struct{}{}:
 			default:
@@ -578,7 +574,7 @@ func TestFetchJWKS_InitiatorCancellationDoesNotAbortSharedFetch(t *testing.T) {
 		err  error
 	}
 	results := make(chan result, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		go func() {
 			j, err := v.FetchJWKS(context.Background(), srv.URL)
 			results <- result{j, err}
@@ -587,7 +583,7 @@ func TestFetchJWKS_InitiatorCancellationDoesNotAbortSharedFetch(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let the waiters join the in-flight singleflight call
 	close(release)
 
-	for i := 0; i < n; i++ {
+	for range n {
 		r := <-results
 		require.NoError(t, r.err, "a waiter with a live ctx must not see the initiator's cancellation")
 		require.NotNil(t, r.jwks)
@@ -595,7 +591,7 @@ func TestFetchJWKS_InitiatorCancellationDoesNotAbortSharedFetch(t *testing.T) {
 	}
 	<-initiatorDone
 
-	assert.Equal(t, int32(1), atomic.LoadInt32(&jwksHits),
+	assert.Equal(t, int32(1), jwksHits.Load(),
 		"exactly one upstream JWKS fetch must occur despite N+1 concurrent callers")
 }
 
@@ -691,7 +687,7 @@ func TestValidate_FailedJWKSFetchIsNotRetriedWithinWindow(t *testing.T) {
 	v, advance := clockedValidator(cfg, cache.NewMemoryCache())
 	token := signToken(t, key, "k1", srv.URL, "aud")
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		_, err = v.Validate(context.Background(), token)
 		require.Error(t, err)
 	}

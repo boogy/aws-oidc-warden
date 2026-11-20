@@ -48,7 +48,6 @@ tag_auth:
   enabled: false
   tag_prefix: "aow/"
   default_org: null
-  transitive_session_tags: false
 
 cross_account:
   enabled: false

@@ -1,64 +1,63 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="290" viewBox="0 0 1060 290" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L8,3 L0,6 Z" fill="#5f6368"/>
-    </marker>
-  </defs>
-  <rect x="0" y="0" width="1060" height="290" fill="#ffffff"/>
-  <text x="530" y="28" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Role chaining &amp; transitive session tags</text>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="tag-auth-transitive-title tag-auth-transitive-desc" id="tag-auth-transitive-root">
+        <title id="tag-auth-transitive-title">Session tags across a role chain</title>
+        <desc id="tag-auth-transitive-desc">Two rows: with session_tags_transitive true the warden marks session tags transitive on the direct assume of the target role, so a further role keeps them; with false they are dropped on the next hop.</desc>
+        <defs>
+      <style>#tag-auth-transitive-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #tag-auth-transitive-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #tag-auth-transitive-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#tag-auth-transitive-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="tag-auth-transitive-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="tag-auth-transitive-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="tag-auth-transitive-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
 
-  <!-- Node 1: Warden (hub) — blue -->
-  <rect x="20" y="58" width="150" height="58" rx="8" fill="#e8f0fe" stroke="#4285f4"/>
-  <text x="95" y="81" text-anchor="middle" font-size="13" fill="#202124">Warden</text>
-  <text x="95" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(hub)</text>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
 
-  <!-- Arrow 1 Warden → spoke -->
-  <line x1="170" y1="87" x2="265" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="215" y="70" text-anchor="middle" font-size="10" fill="#5f6368">AssumeRole</text>
-  <text x="215" y="82" text-anchor="middle" font-size="10" fill="#5f6368">spoke</text>
+        <path d="M264 80 L360 80" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-transitive-arrow)"/>
+<path d="M600 80 L696 80" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#tag-auth-transitive-arrow-accent)"/>
+<path d="M264 200 L360 200" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-transitive-arrow)"/>
+<path d="M600 200 L696 200" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-transitive-arrow)"/>
+<rect x="276.0" y="62" width="72.0" height="14" rx="2" fill="#f5f5f5"/>
+<text x="312" y="72" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="1.0">ASSUMEROLE</text>
+<rect x="612.0" y="62" width="72.0" height="14" rx="2" fill="#f5f5f5"/>
+<text x="648" y="72" fill="#bf4520" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="1.0">ASSUMEROLE</text>
+<rect x="276.0" y="182" width="72.0" height="14" rx="2" fill="#f5f5f5"/>
+<text x="312" y="192" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="1.0">ASSUMEROLE</text>
+<rect x="612.0" y="182" width="72.0" height="14" rx="2" fill="#f5f5f5"/>
+<text x="648" y="192" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="1.0">ASSUMEROLE</text>
+<text x="24" y="34" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.2">SESSION_TAGS_TRANSITIVE: TRUE</text>
+<rect x="24" y="44" width="240" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="144.0" y="77.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Warden</text>
+<text x="144.0" y="92.05" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">hub credentials</text>
+<rect x="360" y="44" width="240" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="480.0" y="77.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Target role</text>
+<text x="480.0" y="92.05" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">tags set, marked transitive</text>
+<rect x="696" y="44" width="240" height="72" rx="6" fill="#f5f5f5"/>
+<rect x="696" y="44" width="240" height="72" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="816.0" y="77.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Further role</text>
+<text x="816.0" y="92.05" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">tags kept, immutable</text>
+<text x="24" y="154" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="1.2">SESSION_TAGS_TRANSITIVE: FALSE (DEFAULT)</text>
+<rect x="24" y="164" width="240" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="144.0" y="197.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Warden</text>
+<text x="144.0" y="212.05" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">hub credentials</text>
+<rect x="360" y="164" width="240" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="480.0" y="197.05" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Target role</text>
+<text x="480.0" y="212.05" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">tags set</text>
+<rect x="696" y="164" width="240" height="72" rx="6" fill="#f5f5f5" stroke="#2d3142" stroke-width="1" stroke-dasharray="3 3" stroke-opacity="0.30"/>
+<text x="816" y="194" fill="#5a6580" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600" text-anchor="middle">Further role</text>
+<text x="816" y="210" fill="#5a6580" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">session tags dropped</text>
+<line x1="24" y1="256" x2="936" y2="256" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="24" y="280" fill="#4f5d75" font-size="11.5" font-family="'Geist', system-ui, sans-serif">The warden assumes the target role directly, in one hop. A hub role session caps AssumeRole at 1h.</text>
+<text x="24" y="298" fill="#4f5d75" font-size="11.5" font-family="'Geist', system-ui, sans-serif">The spoke role is not in this chain: it only reads role tags, carries no session tags, and is cached per account.</text>
+<text x="24" y="316" fill="#4f5d75" font-size="11.5" font-family="'Geist', system-ui, sans-serif">Session tags need sts:TagSession for the hub execution role in the target's trust policy.</text>
 
-  <!-- Node 2: aow-spoke — amber -->
-  <rect x="265" y="58" width="180" height="58" rx="8" fill="#fef7e0" stroke="#f9ab00"/>
-  <text x="355" y="81" text-anchor="middle" font-size="13" fill="#202124">aow-spoke</text>
-  <text x="355" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(cached, UNTAGGED)</text>
-
-  <!-- Arrow 2 spoke → target -->
-  <line x1="445" y1="87" x2="540" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="492" y="70" text-anchor="middle" font-size="10" fill="#5f6368">AssumeRole</text>
-  <text x="492" y="82" text-anchor="middle" font-size="10" fill="#5f6368">target + tags</text>
-
-  <!-- Node 3: Target role — green -->
-  <rect x="540" y="58" width="190" height="58" rx="8" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="635" y="81" text-anchor="middle" font-size="13" fill="#202124">Target role</text>
-  <text x="635" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(issuer session tags set)</text>
-
-  <!-- Arrow 3 target → further -->
-  <line x1="730" y1="87" x2="825" y2="87" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrow)"/>
-  <text x="777" y="70" text-anchor="middle" font-size="10" fill="#5f6368">further</text>
-  <text x="777" y="82" text-anchor="middle" font-size="10" fill="#5f6368">chaining</text>
-
-  <!-- Node 4: Further role — green -->
-  <rect x="825" y="58" width="210" height="58" rx="8" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="930" y="81" text-anchor="middle" font-size="13" fill="#202124">Further role</text>
-  <text x="930" y="98" text-anchor="middle" font-size="11" fill="#5f6368">(tags propagate, immutable)</text>
-
-  <!-- Annotation chip under node 2 -->
-  <rect x="265" y="130" width="180" height="40" rx="5" fill="#fff8e1" stroke="#f9ab00"/>
-  <text x="355" y="146" text-anchor="middle" font-size="11" fill="#5f6368">shared/cached per account;</text>
-  <text x="355" y="162" text-anchor="middle" font-size="11" fill="#5f6368">never carries per-repo tags</text>
-
-  <!-- Annotation chip under node 3 -->
-  <rect x="540" y="130" width="190" height="40" rx="5" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="635" y="146" text-anchor="middle" font-size="11" fill="#5f6368">all attached tag keys</text>
-  <text x="635" y="162" text-anchor="middle" font-size="11" fill="#5f6368">marked transitive on this hop</text>
-
-  <!-- Annotation chip under node 4 -->
-  <rect x="825" y="130" width="210" height="40" rx="5" fill="#e6f4ea" stroke="#34a853"/>
-  <text x="930" y="146" text-anchor="middle" font-size="11" fill="#5f6368">immutable — cannot be</text>
-  <text x="930" y="162" text-anchor="middle" font-size="11" fill="#5f6368">overridden downstream</text>
-
-  <!-- Bottom note -->
-  <rect x="20" y="204" width="1020" height="52" rx="6" fill="#f8f9fa" stroke="#dadce0"/>
-  <text x="530" y="224" text-anchor="middle" font-size="12" fill="#5f6368">Chained session capped at 1 h  ·  Spoke session intentionally untagged (shared/cached per account; per-repo tags would bleed across repos)</text>
-  <text x="530" y="242" text-anchor="middle" font-size="12" fill="#5f6368">Enable only when the target role chains further and repo ABAC must hold at the downstream role  ·  Requires sts:TagSession on target trust</text>
-</svg>
+      </svg>

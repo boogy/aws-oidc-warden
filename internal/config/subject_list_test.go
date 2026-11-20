@@ -76,7 +76,7 @@ func TestSubjectListKeepsCommasInRegexes(t *testing.T) {
 func TestSubjectListExpandsToOneMappingPerSubject(t *testing.T) {
 	cfg := vcfg(t, []RoleMapping{{
 		Subject:    Patterns{"acme/app", "acme/api"},
-		Roles:      []string{slRole},
+		Roles:      roleEntries(slRole),
 		Conditions: &Condition{Ref: Patterns{"refs/heads/main"}},
 	}})
 
@@ -121,8 +121,8 @@ func TestSubjectScalarAndListAreEquivalent(t *testing.T) {
 // orders are contiguous and a later entry can never outrank an earlier one.
 func TestSubjectListPreservesDeclarationOrder(t *testing.T) {
 	cfg := vcfg(t, []RoleMapping{
-		{Subject: Patterns{"acme/a", "acme/b", "acme/c"}, Roles: []string{slRole}, SessionPolicy: "first"},
-		{Subject: Patterns{"acme/b"}, Roles: []string{slRole}, SessionPolicy: "second"},
+		{Subject: Patterns{"acme/a", "acme/b", "acme/c"}, Roles: roleEntries(slRole), SessionPolicy: "first"},
+		{Subject: Patterns{"acme/b"}, Roles: roleEntries(slRole), SessionPolicy: "second"},
 	})
 
 	require.Len(t, cfg.effective, 4)
@@ -140,7 +140,7 @@ func TestSubjectListPreservesDeclarationOrder(t *testing.T) {
 func TestSubjectListIsIndexedPerElement(t *testing.T) {
 	cfg := vcfg(t, []RoleMapping{{
 		Subject: Patterns{"acme/api", "acme/svc-.*", "a/b|c/d"},
-		Roles:   []string{slRole},
+		Roles:   roleEntries(slRole),
 	}})
 
 	for _, subject := range []string{"acme/api", "acme/svc-1", "a/b", "c/d", "acme/nope", "other/x"} {
@@ -156,7 +156,7 @@ func TestSubjectListIsIndexedPerElement(t *testing.T) {
 // Repeated validation must neither mutate nor re-expand it.
 func TestSubjectListDoesNotMutateDeclaredConfig(t *testing.T) {
 	declared := Patterns{"acme/b", "acme/a"}
-	cfg := vcfg(t, []RoleMapping{{Subject: declared, Roles: []string{slRole}}})
+	cfg := vcfg(t, []RoleMapping{{Subject: declared, Roles: roleEntries(slRole)}})
 
 	before := len(cfg.effective)
 	require.NoError(t, cfg.Validate())
@@ -189,7 +189,7 @@ func TestSubjectListRejectsEmptyAndWildcardElements(t *testing.T) {
 				Issuers:         singleIssuer(vIss, "aud"),
 				DefaultIssuer:   vIss,
 				RoleSessionName: "test",
-				RoleMappings:    []RoleMapping{{Subject: tc.subject, Roles: []string{slRole}}},
+				RoleMappings:    []RoleMapping{{Subject: tc.subject, Roles: roleEntries(slRole)}},
 			}
 			require.Error(t, cfg.Validate())
 		})
@@ -201,7 +201,7 @@ func TestSubjectListRejectsDuplicateElements(t *testing.T) {
 		Issuers:         singleIssuer(vIss, "aud"),
 		DefaultIssuer:   vIss,
 		RoleSessionName: "test",
-		RoleMappings:    []RoleMapping{{Subject: Patterns{"acme/app", "acme/app"}, Roles: []string{slRole}}},
+		RoleMappings:    []RoleMapping{{Subject: Patterns{"acme/app", "acme/app"}, Roles: roleEntries(slRole)}},
 	}
 	err := dup.Validate()
 	require.Error(t, err)
@@ -214,8 +214,8 @@ func TestSubjectListRejectsDuplicateElements(t *testing.T) {
 		DefaultIssuer:   vIss,
 		RoleSessionName: "test",
 		RoleMappings: []RoleMapping{
-			{Subject: Patterns{"acme/app"}, Roles: []string{slRole}},
-			{Subject: Patterns{"acme/app"}, Roles: []string{"arn:aws:iam::111111111111:role/other"}},
+			{Subject: Patterns{"acme/app"}, Roles: roleEntries(slRole)},
+			{Subject: Patterns{"acme/app"}, Roles: roleEntries("arn:aws:iam::111111111111:role/other")},
 		},
 	}
 	require.NoError(t, cross.Validate())
@@ -227,7 +227,7 @@ func TestSubjectListSharesInlineSessionPolicy(t *testing.T) {
 	const policy = `{"Version":"2012-10-17","Statement":[]}`
 	cfg := vcfg(t, []RoleMapping{{
 		Subject:       Patterns{"acme/app", "acme/api"},
-		Roles:         []string{slRole},
+		Roles:         roleEntries(slRole),
 		SessionPolicy: policy,
 	}})
 
@@ -244,7 +244,7 @@ func TestSubjectListSharesInlineSessionPolicy(t *testing.T) {
 func TestSubjectListSharesSessionPolicyFile(t *testing.T) {
 	cfg := vcfg(t, []RoleMapping{{
 		Subject:           Patterns{"acme/app", "acme/api"},
-		Roles:             []string{slRole},
+		Roles:             roleEntries(slRole),
 		SessionPolicyFile: "policies/shared.json",
 	}})
 
@@ -259,7 +259,7 @@ func TestSubjectListSharesSessionPolicyFile(t *testing.T) {
 func TestSubjectListSharesRoleSessionName(t *testing.T) {
 	cfg := vcfg(t, []RoleMapping{{
 		Subject:         Patterns{"acme/app", "acme/api"},
-		Roles:           []string{slRole},
+		Roles:           roleEntries(slRole),
 		RoleSessionName: "acme-team",
 	}})
 
@@ -275,7 +275,7 @@ func TestSubjectListPolicyIsRoleAndConditionScoped(t *testing.T) {
 	const other = "arn:aws:iam::111111111111:role/other"
 	cfg := vcfg(t, []RoleMapping{{
 		Subject:       Patterns{"acme/app", "acme/api"},
-		Roles:         []string{slRole},
+		Roles:         roleEntries(slRole),
 		SessionPolicy: "scoped",
 		Conditions:    &Condition{Ref: Patterns{"refs/heads/main"}},
 	}})
@@ -298,7 +298,7 @@ func TestSubjectListPolicyIsRoleAndConditionScoped(t *testing.T) {
 func TestSubjectListSurvivesJSONClone(t *testing.T) {
 	orig := vcfg(t, []RoleMapping{{
 		Subject:       Patterns{"acme/app", "acme/api"},
-		Roles:         []string{slRole},
+		Roles:         roleEntries(slRole),
 		SessionPolicy: "cloned",
 	}})
 

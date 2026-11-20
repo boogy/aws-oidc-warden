@@ -29,7 +29,7 @@ const tagIssuer = "https://token.actions.githubusercontent.com"
 func TestEffectiveSessionTags_MappingExtendsIssuerSpec(t *testing.T) {
 	cfg := tagCfg(RoleMapping{
 		Subject:     Patterns{"acme/api"},
-		Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+		Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 		SessionTags: map[string]string{"tier": "environment"},
 	})
 	require.NoError(t, cfg.Validate())
@@ -50,7 +50,7 @@ func TestEffectiveSessionTags_MappingExtendsIssuerSpec(t *testing.T) {
 func TestEffectiveSessionTags_DoesNotMutateIssuerSpec(t *testing.T) {
 	cfg := tagCfg(RoleMapping{
 		Subject:     Patterns{"acme/api"},
-		Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+		Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 		SessionTags: map[string]string{"tier": "environment"},
 	})
 	require.NoError(t, cfg.Validate())
@@ -67,7 +67,7 @@ func TestEffectiveSessionTags_DoesNotMutateIssuerSpec(t *testing.T) {
 func TestEffectiveSessionTags_NoAuthorizingMappingGetsIssuerSpecOnly(t *testing.T) {
 	cfg := tagCfg(RoleMapping{
 		Subject:     Patterns{"acme/api"},
-		Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+		Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 		SessionTags: map[string]string{"tier": "environment"},
 	})
 	require.NoError(t, cfg.Validate())
@@ -84,12 +84,12 @@ func TestEffectiveSessionTags_ExtrasDoNotLeakAcrossMappings(t *testing.T) {
 	cfg := tagCfg(
 		RoleMapping{
 			Subject:     Patterns{"acme/api"},
-			Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+			Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 			SessionTags: map[string]string{"tier": "environment"},
 		},
 		RoleMapping{
 			Subject: Patterns{"acme/web"},
-			Roles:   []string{"arn:aws:iam::123456789012:role/web"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/web"),
 		},
 	)
 	require.NoError(t, cfg.Validate())
@@ -122,7 +122,7 @@ func TestValidate_MappingSessionTagsAreAdditiveOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tagCfg(RoleMapping{
 				Subject:     Patterns{"acme/api"},
-				Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+				Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 				SessionTags: tc.tags,
 			})
 			err := cfg.Validate()
@@ -143,7 +143,7 @@ func TestValidate_RoleGroupDefaultsCarrySessionTags(t *testing.T) {
 	cfg.RoleGroups = []RoleGroup{{
 		Subjects: Patterns{"acme/api", "acme/web"},
 		Defaults: RoleGroupDefaults{
-			Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+			Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 			SessionTags: map[string]string{"tier": "environment"},
 		},
 	}}
@@ -163,7 +163,7 @@ func TestValidate_RoleGroupDefaultsRejectIssuerKeyCollision(t *testing.T) {
 	cfg.RoleGroups = []RoleGroup{{
 		Subjects: Patterns{"acme/api"},
 		Defaults: RoleGroupDefaults{
-			Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+			Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 			SessionTags: map[string]string{"actor": "repository_owner"},
 		},
 	}}
@@ -194,7 +194,7 @@ func TestEffectiveSessionTags_IssuerWithoutOwnTags(t *testing.T) {
 		Cache:           &Cache{TTL: 0},
 		RoleMappings: []RoleMapping{{
 			Subject:     Patterns{"acme/api"},
-			Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+			Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 			SessionTags: map[string]string{"tier": "environment"},
 		}},
 	}
@@ -211,7 +211,7 @@ func TestEffectiveSessionTags_IssuerWithoutOwnTags(t *testing.T) {
 func TestAuditableClaims_CoversMappingSessionTags(t *testing.T) {
 	cfg := tagCfg(RoleMapping{
 		Subject:     Patterns{"acme/api"},
-		Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+		Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 		SessionTags: map[string]string{"tier": "environment"},
 	})
 	require.NoError(t, cfg.Validate())
@@ -224,7 +224,7 @@ func TestAuditableClaims_CoversMappingSessionTags(t *testing.T) {
 func TestValidate_SessionTagLimits(t *testing.T) {
 	tags := func(n int) map[string]string {
 		m := make(map[string]string, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			m[fmt.Sprintf("k%d", i)] = "environment"
 		}
 		return m
@@ -248,7 +248,7 @@ func TestValidate_SessionTagLimits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := tagCfg(RoleMapping{
 				Subject:     Patterns{"acme/api"},
-				Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+				Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 				SessionTags: tc.mapping,
 			})
 			cfg.Issuers[0].SessionTags = tc.issuerTags
@@ -267,7 +267,7 @@ func TestValidate_SessionTagLimits(t *testing.T) {
 func TestEffectiveSessionTags_ReturnsPrecomputedUnion(t *testing.T) {
 	cfg := tagCfg(RoleMapping{
 		Subject:     Patterns{"acme/api"},
-		Roles:       []string{"arn:aws:iam::123456789012:role/app"},
+		Roles:       roleEntries("arn:aws:iam::123456789012:role/app"),
 		SessionTags: map[string]string{"tier": "environment"},
 	})
 	require.NoError(t, cfg.Validate())

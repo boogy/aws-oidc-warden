@@ -39,6 +39,9 @@ var ConfigIdPReloadIgnored = newEvent("config.idp.reload_ignored")
 // ConfigIdPEnabledChanged is emitted when a reload flips the live idp.enabled kill switch of a built IdP, counting a missing idp block as disabled (Warn).
 var ConfigIdPEnabledChanged = newEvent("config.idp.enabled_changed")
 
+// ConfigIdPOnlyChanged is emitted when a reload flips idp.only, including a block added after startup (Warn).
+var ConfigIdPOnlyChanged = newEvent("config.idp.only_changed")
+
 // ConfigIdPIssuerCollision is emitted when a reload's inbound issuers conflict with the frozen IdP config (Error).
 var ConfigIdPIssuerCollision = newEvent("config.idp.issuer_collision")
 

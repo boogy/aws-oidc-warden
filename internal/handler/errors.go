@@ -75,7 +75,7 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		*statusCode = http.StatusBadRequest
 	case errors.Is(err, ErrDurationExceedsRoleMax):
 		errCode = "duration_exceeds_role_max"
-		errMsg = "durationSeconds exceeds the role's MaxSessionDuration"
+		errMsg = "session duration (requested or mapping default) exceeds the role's MaxSessionDuration"
 		*statusCode = http.StatusBadRequest
 	case errors.Is(err, ErrInvalidSessionName):
 		errCode = "invalid_session_name"

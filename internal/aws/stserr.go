@@ -19,8 +19,7 @@ var deniedCodes = map[string]struct{}{
 
 // STSErrorCode returns the AWS API error code, or "" for non-API errors.
 func STSErrorCode(err error) string {
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		return apiErr.ErrorCode()
 	}
 	return ""

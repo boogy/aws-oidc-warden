@@ -148,8 +148,8 @@ func (s *AwsServiceWrapper) GetS3Object(ctx context.Context, bucket, key string,
 // objectSize is the full object size from a ranged response's Content-Range, else its ContentLength.
 func objectSize(out *s3.GetObjectOutput) int64 {
 	cr := aws.ToString(out.ContentRange)
-	if i := strings.LastIndexByte(cr, '/'); i >= 0 {
-		if n, err := strconv.ParseInt(cr[i+1:], 10, 64); err == nil {
+	if _, after, ok := strings.CutLast(cr, "/"); ok {
+		if n, err := strconv.ParseInt(after, 10, 64); err == nil {
 			return n
 		}
 	}

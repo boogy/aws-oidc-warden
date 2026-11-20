@@ -168,7 +168,7 @@ func (l *localSources) GetS3Object(ctx context.Context, bucket, key string) (io.
 }
 
 func overlayURI(c *config.Config) string {
-	if c.S3ConfigBucket == "" || c.S3ConfigPath == "" {
+	if !c.HasS3Overlay() {
 		return ""
 	}
 	return s3URI(c.S3ConfigBucket, c.S3ConfigPath)

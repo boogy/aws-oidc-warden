@@ -111,8 +111,7 @@ func TestGithubClaimFieldsCoverClaimsStruct(t *testing.T) {
 		names = append(names, f.name)
 	}
 	typ := reflect.TypeFor[types.Claims]()
-	for i := range typ.NumField() {
-		sf := typ.Field(i)
+	for sf := range typ.Fields() {
 		tag, _, _ := strings.Cut(sf.Tag.Get("json"), ",")
 		if sf.Anonymous || tag == "" || tag == "-" || tag == "sub" || sf.Type.Kind() != reflect.String {
 			continue

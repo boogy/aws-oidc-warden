@@ -154,7 +154,7 @@ func TestRefetchLimiter_FloodOfDistinctBogusKidsBoundedByIssuerBackstop(t *testi
 	l := newRefetchLimiter(clock, time.Minute)
 
 	allowed := 0
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if l.allow("issuer-a", fmt.Sprintf("bogus-kid-%d", i)) {
 			allowed++
 		}
@@ -204,7 +204,7 @@ func TestALBKeyCache_OverflowClearsMap(t *testing.T) {
 	require.NoError(t, err)
 	key := &priv.PublicKey
 
-	for i := 0; i < maxALBKeyCacheEntries; i++ {
+	for i := range maxALBKeyCacheEntries {
 		c.set(fmt.Sprintf("kid-%d", i), key)
 	}
 	assert.Equal(t, maxALBKeyCacheEntries, len(c.entries), "cache should be exactly at capacity")
@@ -277,7 +277,7 @@ func TestKeyMemo_RestoreUnderReusedKidReplacesEntryWithoutGrowing(t *testing.T) 
 
 func TestKeyMemo_SizeBoundClearsOnOverflow(t *testing.T) {
 	m := newKeyMemo()
-	for i := 0; i < maxKeyMemoEntries; i++ {
+	for i := range maxKeyMemoEntries {
 		m.store("iss", rsaJWK(fmt.Sprintf("k%d", i), "n", "AQAB"), i)
 	}
 	assert.EqualValues(t, maxKeyMemoEntries, m.size.Load())
@@ -724,15 +724,13 @@ func TestALBKeyCache_ConcurrentGetSet(t *testing.T) {
 	require.NoError(t, err)
 	var c albKeyCache
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 200; j++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
 				c.set("k", &priv.PublicKey)
 				c.get("k")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }
