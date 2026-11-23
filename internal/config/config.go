@@ -307,9 +307,7 @@ type Config struct {
 	// Requires log_to_s3 + log_bucket (enforced below).
 	AuditRequired bool `mapstructure:"audit_required" json:"audit_required,omitempty"`
 
-	// SessionTagsTransitive marks every session tag transitive. Top-level because it
-	// applies regardless of tag-auth. Default false for upgrade safety: transitive
-	// tags are immutable downstream, so a role re-tagging the same keys would fail.
+	// SessionTagsTransitive marks every session tag transitive; transitive tags are immutable downstream.
 	SessionTagsTransitive bool `mapstructure:"session_tags_transitive" json:"session_tags_transitive,omitempty"`
 
 	// TagAuth enables tag-based authorization (IAM role tags authorize claims).
@@ -1103,9 +1101,7 @@ func (c *Config) Validate() error {
 	if len(c.Issuers) == 1 {
 		soleIssuer = c.Issuers[0].Issuer
 	}
-	// implicitlyBound holds the entry+subject pairs that got their issuer from
-	// default_issuer rather than declaring one, while more than one issuer is
-	// configured — see the warning emitted after the effective set is built.
+	// entry+subject pairs bound by default_issuer while several issuers exist.
 	implicitlyBound := make(map[string]bool)
 	resolveIssuer := func(explicit, entry string) (string, error) {
 		switch {
@@ -1129,11 +1125,16 @@ func (c *Config) Validate() error {
 	// Rebuilt from scratch so repeated Validate() never re-expands already-expanded role_groups.
 	effectiveHint := 0
 	addHint := func(subjects int, roles []RoleEntry) {
-		pieces := 1
+		pieces, plain := 0, false
 		for _, e := range roles {
 			if e.hasOverride() {
 				pieces++
+			} else {
+				plain = true
 			}
+		}
+		if plain {
+			pieces++
 		}
 		effectiveHint += subjects * pieces
 	}
