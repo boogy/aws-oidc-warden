@@ -1115,7 +1115,7 @@ func (c *Config) Validate() error {
 	}
 
 	// Rebuilt from scratch so repeated Validate() never re-expands already-expanded role_groups.
-	c.effective = make([]*RoleMapping, 0, len(c.RoleMappings)+len(c.RoleGroups))
+	c.effective = nil
 
 	// Claim vocabulary per issuer, for the unknown-claim warning below.
 	knownClaims := make(map[string]map[string]bool, len(c.Issuers))
