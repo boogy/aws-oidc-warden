@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -109,17 +110,17 @@ func (r RoleEntry) hasOverride() bool {
 func (r RoleEntry) validate() error {
 	switch {
 	case r.SessionPolicy != nil && *r.SessionPolicy == "":
-		return fmt.Errorf("session_policy must not be empty")
+		return errors.New("session_policy must not be empty")
 	case r.SessionPolicyFile != nil && *r.SessionPolicyFile == "":
-		return fmt.Errorf("session_policy_file must not be empty")
+		return errors.New("session_policy_file must not be empty")
 	case r.RoleSessionName != nil && *r.RoleSessionName == "":
-		return fmt.Errorf("role_session_name must not be empty")
+		return errors.New("role_session_name must not be empty")
 	case r.MaxSessionDuration != nil && *r.MaxSessionDuration == 0:
-		return fmt.Errorf("max_session_duration must not be 0")
+		return errors.New("max_session_duration must not be 0")
 	case r.SessionDuration != nil && *r.SessionDuration == 0:
-		return fmt.Errorf("session_duration must not be 0")
+		return errors.New("session_duration must not be 0")
 	case r.SessionTags != nil && len(r.SessionTags) == 0:
-		return fmt.Errorf("session_tags must not be empty")
+		return errors.New("session_tags must not be empty")
 	}
 	return nil
 }
