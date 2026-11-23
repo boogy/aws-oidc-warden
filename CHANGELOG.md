@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
 - **`config.warning` code `unconditional_role_beside_conditioned`.**
 - **`config.warning` code `role_override_shadowed`**: an earlier mapping granting the same role hides a later role object's settings.
+- **`config.warning` code `role_arn_alias`**: one issuer grants the same IAM role under ARNs differing in path or case.
 
 ### Changed
 

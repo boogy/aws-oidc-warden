@@ -586,6 +586,46 @@ func TestShadowedRoleGrantWarnings(t *testing.T) {
 	}
 }
 
+func TestRoleARNAliasWarning(t *testing.T) {
+	const issB = "https://iss.example/b"
+	header := strings.Replace(rsHeader, "default_issuer:", `  - issuer: "`+issB+`"
+    provider: "generic"
+    audiences: ["aud"]
+    claim_mappings: {subject: "sub"}
+default_issuer:`, 1)
+	grant := func(subject, role, issuer string) string {
+		out := "  - subject: \"" + subject + "\"\n    roles: [\"" + role + "\"]\n"
+		if issuer != "" {
+			out += "    issuer: \"" + issuer + "\"\n"
+		}
+		return out
+	}
+	tests := []struct {
+		name     string
+		mappings string
+		want     bool
+	}{
+		{"same spelling twice", grant("acme/a", rsAudit, "") + grant("acme/b", rsAudit, ""), false},
+		{"path variant", grant("acme/a", rsAudit, "") + grant("acme/b", "arn:aws:iam::111122223333:role/ci/Audit", ""), true},
+		{"case variant", grant("acme/a", rsAudit, "") + grant("acme/b", "arn:aws:iam::111122223333:role/audit", ""), true},
+		{"same name in another account", grant("acme/a", rsAudit, "") + grant("acme/b", "arn:aws:iam::444455556666:role/Audit", ""), false},
+		{"path variant under another issuer", grant("acme/a", rsAudit, "") + grant("acme/b", "arn:aws:iam::111122223333:role/ci/Audit", issB), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureWarnings(t, func() {
+				v := viper.New()
+				v.SetConfigType("yaml")
+				require.NoError(t, v.ReadConfig(strings.NewReader(header+"role_mappings:\n"+tc.mappings)))
+				var c Config
+				require.NoError(t, v.Unmarshal(&c, decoderOptions(nil)...))
+				require.NoError(t, c.Validate())
+			})
+			assert.Equal(t, tc.want, hasWarningCode(t, logs, "role_arn_alias"))
+		})
+	}
+}
+
 func TestScopedPairDoesNotHideUnscopedOutranker(t *testing.T) {
 	const policy = `session_policy: '{"Version":"2012-10-17","Statement":[]}'`
 	entry := func(subject string, scoped bool) string {

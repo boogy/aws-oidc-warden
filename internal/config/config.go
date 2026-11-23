@@ -1312,6 +1312,7 @@ func (c *Config) Validate() error {
 		c.auditable[iss] = auditableClaimsFor(iss, &c.Issuers[i], c.effective)
 	}
 	warnShadowedRoleGrants(c.effective)
+	warnRoleARNAliases(c.effective)
 	c.mappedRoles = make(map[string]struct{})
 	totalRoles := 0
 	for _, m := range c.effective {
@@ -1622,6 +1623,31 @@ func validateRoleSessionName(name string) error {
 		return fmt.Errorf("%q contains characters STS does not accept; allowed: letters, digits, and +=,.@-_ (note: \"/\" is not allowed, so a repository name cannot be used verbatim)", name)
 	}
 	return nil
+}
+
+// warnRoleARNAliases warns when one issuer grants the same IAM role under differently spelled ARNs (path or case).
+func warnRoleARNAliases(effective []*RoleMapping) {
+	spellings := make(map[string]map[string]struct{})
+	for _, m := range effective {
+		for _, role := range m.grantedRoles {
+			key := m.Issuer + "\x00" + mappedRoleKey(role)
+			if spellings[key] == nil {
+				spellings[key] = make(map[string]struct{})
+			}
+			spellings[key][role] = struct{}{}
+		}
+	}
+	for _, key := range utils.SortedKeys(spellings) {
+		if len(spellings[key]) < 2 {
+			continue
+		}
+		issuer, _, _ := strings.Cut(key, "\x00")
+		logevent.Warn(context.Background(), nil, logevent.ConfigWarning,
+			"one IAM role is granted under several ARN spellings; each is a separate grant with its own settings",
+			slog.String("warning", "role_arn_alias"),
+			slog.String("issuer", issuer),
+			slog.Any("roleArns", utils.SortedKeys(spellings[key])))
+	}
 }
 
 // warnShadowedRoleGrants warns when an earlier grant that can match the same subject hides a later grant's session_policy or per-role settings.
