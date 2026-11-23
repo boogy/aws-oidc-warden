@@ -313,15 +313,6 @@ func TestCrossAccount_DefaultsNormalizedOnValidate(t *testing.T) {
 	assert.Equal(t, "15m0s", c.CrossAccount.SpokeSessionDuration.String())
 }
 
-// TestSessionTagsTransitive_DefaultsOff pins that an unconfigured deploy
-// boots with transitivity off, so upgrading to the top-level key cannot
-// silently break a target role that re-tags with the same keys while
-// chaining.
-
-// TestSessionTagsTransitive_DefaultsOff pins that an unconfigured deploy
-// boots with transitivity off, so upgrading to the top-level key cannot
-// silently break a target role that re-tags with the same keys while
-// chaining.
 func TestSessionTagsTransitive_DefaultsOff(t *testing.T) {
 	viper.Reset()
 	once = sync.Once{}
@@ -342,15 +333,6 @@ func TestSessionTagsTransitive_DefaultsOff(t *testing.T) {
 		"default stays off so upgrades cannot break a role-chaining target")
 }
 
-// TestSessionTagsTransitive_ExplicitTrueSurvivesClone pins that an operator's
-// explicit opt-in survives the JSON round-trip cloneConfig performs on every
-// remote/hot-reload refresh (omitempty is safe here only because the zero
-// value and the default agree).
-
-// TestSessionTagsTransitive_ExplicitTrueSurvivesClone pins that an operator's
-// explicit opt-in survives the JSON round-trip cloneConfig performs on every
-// remote/hot-reload refresh (omitempty is safe here only because the zero
-// value and the default agree).
 func TestSessionTagsTransitive_ExplicitTrueSurvivesClone(t *testing.T) {
 	cfg := &Config{
 		Issuers:               singleIssuer("https://issuer.com", "aud"),

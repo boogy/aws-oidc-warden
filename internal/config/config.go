@@ -244,9 +244,7 @@ type Config struct {
 	S3SessionPolicyBucket string `mapstructure:"session_policy_bucket" json:"session_policy_bucket,omitempty"` // S3SessionPolicyBucket is the S3 bucket where the session policy file is stored
 	RoleSessionName       string `mapstructure:"role_session_name"     json:"role_session_name"`               // RoleSessionName is the name of the role session
 
-	// DefaultIssuer is inherited by a role_mapping/role_group without its own
-	// `issuer`. Required to resolve to a real issuer only when more than one is
-	// configured; with a single issuer, mappings bind to it implicitly.
+	// DefaultIssuer is inherited by a role_mapping/role_group without its own `issuer`.
 	DefaultIssuer string `mapstructure:"default_issuer" json:"default_issuer,omitempty"`
 
 	// RoleSets are named ARN lists referenced from a mapping/group's `roles`
@@ -277,9 +275,7 @@ type Config struct {
 	// SessionPolicyBucketOwner is sent as ExpectedBucketOwner on session_policy_file reads; base-only.
 	SessionPolicyBucketOwner string `mapstructure:"session_policy_bucket_owner" json:"session_policy_bucket_owner,omitempty"`
 
-	// ConfigFragmentChecksums pins an etag (or sha256 for local paths) per
-	// config_fragments entry; a mismatch is rejected. Unpinned entries use etag only
-	// for change-detection. A list, not a map: viper splits keys on "." and would corrupt URIs.
+	// ConfigFragmentChecksums is a list, not a map: viper splits keys on "." and would corrupt URIs.
 	ConfigFragmentChecksums []FragmentChecksum `mapstructure:"config_fragment_checksums" json:"config_fragment_checksums,omitempty"`
 
 	// Logging configuration directly to S3 (duplicates cloudwatch logs)
@@ -296,9 +292,7 @@ type Config struct {
 	// LogClaimValues (default on) controls whether claim values and session tag values appear in logs and audit records.
 	LogClaimValues bool `mapstructure:"log_claim_values" json:"log_claim_values,omitempty"`
 
-	// AuditRequired makes a durable audit write a precondition: allow records must
-	// persist before credentials return, and any write failure denies the request.
-	// Requires log_to_s3 + log_bucket (enforced below).
+	// AuditRequired denies a request whose audit write fails; requires log_to_s3 + log_bucket.
 	AuditRequired bool `mapstructure:"audit_required" json:"audit_required,omitempty"`
 
 	// SessionTagsTransitive marks every session tag transitive; transitive tags are immutable downstream.
@@ -1286,7 +1280,6 @@ func (c *Config) Validate() error {
 		source := fmt.Sprintf("role_groups[%d].subjects", gi)
 		for si, subject := range group.Subjects {
 			for _, piece := range pieces {
-				piece.Subject = Patterns{subject}
 				if err := appendOne(piece, subject, source, si); err != nil {
 					return err
 				}
