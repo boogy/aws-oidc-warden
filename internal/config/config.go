@@ -54,9 +54,7 @@ var (
 	// dimension suffix still fits inside IAM's 128-char key limit.
 	tagPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9_.:/=+@-]{1,64}$`)
 
-	// nonIdentityClaims may never be claim_mappings.subject targets: each is
-	// constant across tokens (iss, aud) or carries no identity (exp, nbf, iat).
-	// "sub" is deliberately absent.
+	// nonIdentityClaims may never be claim_mappings.subject targets; "sub" is deliberately absent.
 	nonIdentityClaims = map[string]bool{
 		"iss": true, "aud": true, "exp": true, "nbf": true, "iat": true,
 	}
@@ -211,9 +209,7 @@ type TagAuth struct {
 	prefixByIssuer map[string]string `mapstructure:"-" json:"-"`
 }
 
-// CrossAccount gates member-account role assumption: Enabled false/nil blocks
-// every cross-account operation (fail closed). Assumption is direct hub->target;
-// the spoke hop is only for tag_auth's IAM tag read, never to assume the target.
+// CrossAccount gates member-account role assumption; Enabled false/nil fails closed.
 type CrossAccount struct {
 	Enabled              bool          `mapstructure:"enabled"                json:"enabled,omitempty"`
 	SpokeRoleName        string        `mapstructure:"spoke_role_name"        json:"spoke_role_name,omitempty"`        // default "aow-spoke"
@@ -266,9 +262,7 @@ type Config struct {
 	// refetched at most once per interval. 0 disables; requires an S3 config source.
 	ConfigReloadInterval time.Duration `mapstructure:"config_reload_interval" json:"config_reload_interval,omitempty"`
 
-	// ConfigFragments lists S3 URIs or local paths merged on top of the base config
-	// (see fragments.go, provider.go). Base-only: the fragment merge allowlist,
-	// not this field's type, stops a fragment from setting it.
+	// ConfigFragments lists S3 URIs or local paths merged on top of the base config; base-only.
 	ConfigFragments []string `mapstructure:"config_fragments" json:"config_fragments,omitempty"`
 
 	// MappingsFile is a local path or s3:// URI of the role-mappings file (fragment #0); base-only.
@@ -925,9 +919,7 @@ func (c *Config) LeewayOrDefault() time.Duration {
 	return *c.JWTLeeway
 }
 
-// AuditEnforced reports whether the fail-closed audit contract is in force
-// (audit_required AND a write destination). Derived per call so a hot reload
-// re-engages it. Callers gating credentials must use this, never AuditRequired.
+// AuditEnforced reports audit_required with a write destination; gate credentials on this, not AuditRequired.
 func (c *Config) AuditEnforced() bool {
 	return c.AuditRequired && c.LogToS3 && c.LogBucket != ""
 }
@@ -1123,31 +1115,9 @@ func (c *Config) Validate() error {
 	}
 
 	// Rebuilt from scratch so repeated Validate() never re-expands already-expanded role_groups.
-	effectiveHint := 0
-	addHint := func(subjects int, roles []RoleEntry) {
-		pieces, plain := 0, false
-		for _, e := range roles {
-			if e.hasOverride() {
-				pieces++
-			} else {
-				plain = true
-			}
-		}
-		if plain {
-			pieces++
-		}
-		effectiveHint += subjects * pieces
-	}
-	for i := range c.RoleMappings {
-		addHint(len(c.RoleMappings[i].Subject), c.RoleMappings[i].Roles)
-	}
-	for i := range c.RoleGroups {
-		addHint(len(c.RoleGroups[i].Subjects), c.RoleGroups[i].Defaults.Roles)
-	}
-	c.effective = make([]*RoleMapping, 0, effectiveHint)
+	c.effective = make([]*RoleMapping, 0, len(c.RoleMappings)+len(c.RoleGroups))
 
-	// Claim vocabulary per issuer, for the unknown-claim warning below. Built
-	// once here rather than per mapping.
+	// Claim vocabulary per issuer, for the unknown-claim warning below.
 	knownClaims := make(map[string]map[string]bool, len(c.Issuers))
 	for i := range c.Issuers {
 		if known := knownClaimsFor(&c.Issuers[i]); known != nil {
@@ -1650,9 +1620,7 @@ func mergeSessionTags(issuerTags, extra map[string]string) (map[string]string, e
 	return merged, nil
 }
 
-// validateRoleSessionName rejects a session name STS would refuse or the runtime
-// sanitizer would reshape: it becomes an identity (ARN, CloudTrail, IAM
-// conditions), so a mangled name must be a boot-time config error.
+// validateRoleSessionName rejects a session name STS would refuse or the runtime sanitizer would reshape.
 func validateRoleSessionName(name string) error {
 	if len(name) < 2 || len(name) > utils.MaxSTSNameLen {
 		return fmt.Errorf("must be 2-%d characters, got %d", utils.MaxSTSNameLen, len(name))
