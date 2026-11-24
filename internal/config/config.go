@@ -316,8 +316,7 @@ type Config struct {
 	JWKSRefetchCooldown  time.Duration  `mapstructure:"jwks_refetch_cooldown"  json:"jwks_refetch_cooldown,omitempty"`  // Minimum interval between forced JWKS refetches per (issuer,kid); default 60s
 	AllowInsecureIssuers bool           `mapstructure:"allow_insecure_issuers" json:"allow_insecure_issuers,omitempty"` // Dev-only: permit http:// issuer/jwks_uri
 
-	// Resolved authorization state, not serialized. Rebuilt by every Validate()
-	// so it stays idempotent (e.g. after a hot-reload clone).
+	// Rebuilt by every Validate() so a hot-reload clone stays idempotent.
 	estimatedRolesPerMapping int                        `mapstructure:"-" json:"-"` // Calculated during Validate for efficient memory allocation
 	effective                []*RoleMapping             `mapstructure:"-" json:"-"` // fully resolved: issuer bound, role_sets expanded, patterns compiled
 	index                    authzIndex                 `mapstructure:"-" json:"-"` // per-issuer owner-bucketed index over effective (see index.go)
@@ -976,8 +975,7 @@ func (c *Config) Validate() error {
 	if c.RoleSessionName == "" {
 		return errors.New("role session name is required")
 	}
-	// Global overrides get the same boot-time rejection as per-mapping ones,
-	// not the runtime sanitizer (see validateRoleSessionName).
+	// Rejected at boot like per-mapping names, not left to the runtime sanitizer.
 	if err := validateRoleSessionName(c.RoleSessionName); err != nil {
 		return fmt.Errorf("role_session_name: %w", err)
 	}
