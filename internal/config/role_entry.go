@@ -52,6 +52,9 @@ func roleEntryHookFunc() mapstructure.DecodeHookFuncType {
 		case string:
 			return map[string]any{"role": v}, nil
 		case map[string]any:
+			if _, ok := v["role"]; !ok {
+				return nil, errors.New("role object has no `role` key")
+			}
 			for _, key := range slices.Sorted(maps.Keys(v)) {
 				if v[key] == nil {
 					return nil, fmt.Errorf("role setting %q is present but empty", key)
@@ -98,12 +101,8 @@ func (r RoleEntry) overrides() [groupCount]bool {
 }
 
 func (r RoleEntry) hasOverride() bool {
-	for _, set := range r.overrides() {
-		if set {
-			return true
-		}
-	}
-	return false
+	o := r.overrides()
+	return slices.Contains(o[:], true)
 }
 
 // validate rejects a present-but-empty override; allow_session_name: false is not empty and clears an inherited name.

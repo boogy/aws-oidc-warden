@@ -135,9 +135,7 @@ type RoleGroup struct {
 	Subjects []string          `mapstructure:"subjects" json:"subjects"`
 }
 
-// IssuerConfig describes one trusted OIDC issuer: key source, audiences, claim
-// mapping to the canonical authorization surface, and required claims.
-// Only `provider: github` gets native struct unmarshal; others are mapped-only.
+// IssuerConfig is one trusted OIDC issuer; only `provider: github` gets native claim unmarshal.
 type IssuerConfig struct {
 	Issuer   string `mapstructure:"issuer"   json:"issuer"`             // Issuer is the exact `iss` claim value trusted for this entry
 	Provider string `mapstructure:"provider" json:"provider,omitempty"` // "github" (native unmarshal) or "generic" (mapped-only, default)
@@ -224,9 +222,7 @@ type CrossAccount struct {
 // JWTValidation controls whether the service validates JWT signatures itself
 // or trusts pre-validation by an upstream AWS service.
 type JWTValidation struct {
-	// Mode is one of "self" (default), "apigw", or "alb".
-	// "self" verifies signature+claims here; "apigw" trusts the API Gateway JWT
-	// Authorizer; "alb" verifies the ALB-signed x-amzn-oidc-data JWT (ES256).
+	// Mode is "self" (default), "apigw" or "alb"; see docs/CONFIGURATION.md.
 	Mode string `mapstructure:"mode" json:"mode,omitempty"`
 
 	// ALBExpectedSigner is the ARN of the ALB allowed to sign OIDC data.
@@ -256,8 +252,7 @@ type Config struct {
 	RoleMappings []RoleMapping `mapstructure:"role_mappings" json:"role_mappings,omitempty"`
 	RoleGroups   []RoleGroup   `mapstructure:"role_groups"   json:"role_groups,omitempty"`
 
-	// ConfigReloadInterval > 0 enables lazy per-request hot-reload of the S3 config,
-	// refetched at most once per interval. 0 disables; requires an S3 config source.
+	// ConfigReloadInterval > 0 refetches the S3 config at most once per interval; 0 disables.
 	ConfigReloadInterval time.Duration `mapstructure:"config_reload_interval" json:"config_reload_interval,omitempty"`
 
 	// ConfigFragments lists S3 URIs or local paths merged on top of the base config; base-only.
@@ -694,7 +689,7 @@ func (c *Config) LoadConfig() error {
 	}
 	if removed, err := envFlag(removedTransitiveEnv); err != nil || removed {
 		return errors.Join(err, errors.New(removedTransitiveEnv+" was removed: use AOW_SESSION_TAGS_TRANSITIVE"))
-	} else if os.Getenv(removedTransitiveEnv) != "" {
+	} else if _, set := os.LookupEnv(removedTransitiveEnv); set {
 		logevent.Warn(context.Background(), nil, logevent.ConfigWarning, "removed config key is ignored: use AOW_SESSION_TAGS_TRANSITIVE",
 			slog.String("warning", "removed_config_key"),
 			slog.String("key", removedTransitiveEnv),
@@ -875,8 +870,7 @@ func lostFragmentPins(prev, next *Config) []string {
 	return dropped
 }
 
-// reapplyEnvOverrides re-applies AOW_* env vars after a remote-config merge to
-// keep env > S3 config > file precedence; MergeBytes' fresh viper lacks the bindings.
+// reapplyEnvOverrides restores env > S3 > file precedence after a merge; MergeBytes' fresh viper lacks the bindings.
 func reapplyEnvOverrides(c *Config) {
 	// Ensure Cache is non-nil before applying cache knobs (matches prior
 	// behavior: the old code unconditionally created c.Cache here).
@@ -1872,8 +1866,7 @@ func (c *Config) issuerConfig(issuer string) *IssuerConfig {
 	return nil
 }
 
-// IssuerSessionTags returns the session_tags spec (STS key -> claim name) for
-// issuer, or nil. EffectiveSessionTags adds the authorizing mapping's tags.
+// IssuerSessionTags returns issuer's session_tags spec (STS key -> claim name), or nil.
 func (c *Config) IssuerSessionTags(issuer string) map[string]string {
 	if iss := c.issuerConfig(issuer); iss != nil {
 		return iss.SessionTags
@@ -1908,9 +1901,7 @@ func (c *Config) FindRoleSessionName(issuer, subject, role string, claims map[st
 	return c.Authorize(issuer, subject, role, claims).RoleSessionName()
 }
 
-// AuthorizeRoles returns the union of roles from every mapping bound to issuer
-// whose subject pattern AND conditions match. The bool is true only when at
-// least one mapping fully matched (pattern match alone does not count).
+// AuthorizeRoles returns the roles of every issuer-bound mapping whose subject and conditions match; false if none does.
 func (c *Config) AuthorizeRoles(issuer, subject string, claims map[string]any) (bool, []string) {
 	d := c.Authorize(issuer, subject, "", claims)
 	return d.Matched, d.Roles

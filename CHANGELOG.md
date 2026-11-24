@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Per-role settings** in `role_mappings` and `role_groups`: a `roles` item can override any entry setting except `subject` and `issuer`.
+- **Per-role settings** in `role_mappings` and `role_groups`: a `roles` item can override any entry setting except `subject` and `issuer`. A role object without a `role` key is a load error.
 - **`idp.only`** (`AOW_IDP_ONLY`): issue every credential through the IdP, never `AssumeRole`. A reload that flips it logs `config.idp.only_changed`; one that leaves it without a startup-built IdP is rejected.
 - **`session_duration`** per mapping, group defaults and role: the default length when the caller omits `durationSeconds`; `max_session_duration` stays the limit.
 - **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
