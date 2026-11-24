@@ -197,9 +197,7 @@ type TagAuth struct {
 	TagPrefix  string `mapstructure:"tag_prefix" json:"tag_prefix,omitempty"`   // default "aow/"
 	DefaultOrg string `mapstructure:"default_org" json:"default_org,omitempty"` // prepended to bare aow/repo tag values: "api" -> "<default_org>/api"
 
-	// multiIssuer is set by Config.Validate() (len(Issuers) > 1) and gates the
-	// <prefix>issuer requirement in Authorize (no cross-issuer identity
-	// collision via tag-auth). Not serialized; always recomputed.
+	// multiIssuer is set by Validate() and requires the <prefix>issuer tag in Authorize.
 	multiIssuer bool `mapstructure:"-" json:"-"`
 
 	// prefixByIssuer indexes the per-issuer TagPrefix overrides, rebuilt by
@@ -1320,11 +1318,8 @@ func (c *Config) Validate() error {
 		c.estimatedRolesPerMapping = 4 // Default if no mappings
 	}
 
-	// Normalize tag-auth defaults so the feature works even when Config is built
-	// directly (e.g. in tests) without going through viper defaults.
+	// Normalize tag-auth defaults for a Config built without viper defaults.
 	if c.TagAuth != nil {
-		// multiIssuer gates the <prefix>issuer requirement in TagAuth.Authorize
-		// (no cross-issuer identity collision via tag-auth).
 		c.TagAuth.multiIssuer = len(c.Issuers) > 1
 
 		if c.TagAuth.DefaultOrg != "" && strings.ContainsAny(c.TagAuth.DefaultOrg, "/ \t\n\r") {
