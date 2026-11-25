@@ -45,7 +45,7 @@ issuers:
       ref-type: "ref_type"
       actor: "actor"
       event-name: "event_name"
-    tag_prefix: "gh/" # GitHub tokens read gh/subject, gh/ref, ... from role IAM tags
+    # tag_prefix: "gh/" # own tag namespace; unset uses tag_auth.tag_prefix ("aow/")
 
   - issuer: "https://gitlab.com"
     provider: "generic"
@@ -59,7 +59,7 @@ issuers:
       project: "project_path"
       ref: "ref"
       ref-type: "ref_type"
-    tag_prefix: "gl/" # GitLab tokens read gl/subject, gl/ref, ...
+    # tag_prefix: "gl/"
 
 ## STS session name, 2-64 chars of [\w+=,.@-] (no "/"). Order: mapping's
 ## role_session_name, else caller's sessionName if allow_session_name, else this.

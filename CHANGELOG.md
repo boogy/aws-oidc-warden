@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`idp.only`** (`AOW_IDP_ONLY`): issue every credential through the IdP, never `AssumeRole`. A reload that flips it logs `config.idp.only_changed`; one that leaves it without a startup-built IdP is rejected.
 - **`session_duration`** per mapping, group defaults and role: the default length when the caller omits `durationSeconds`; `max_session_duration` stays the limit.
 - **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
-- **`example-config.yaml`** now shows per-issuer `tag_prefix`.
+- **`example-config.yaml`** shows per-role settings, `session_duration` and `idp.only`; per-issuer `tag_prefix` stays commented out so tag-auth keeps `aow/`.
 - **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
 - **`config.warning` code `unconditional_role_beside_conditioned`.**
 - **`config.warning` code `role_override_shadowed`**: an earlier mapping granting the same role hides a later role object's settings.

@@ -4,7 +4,7 @@ Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them f
 
 Request flow: multi-issuer token validation → canonical-subject authorization (issuer-bound) → condition checking → session policy → role assumption (`internal/handler/processor.go`).
 
-This file is the map; each package `CLAUDE.md` holds rules code cannot state. Keep every `CLAUDE.md` under about 40 lines: explanation goes in `docs/`, history in `CHANGELOG.md`.
+This file is the map; each package `CLAUDE.md` holds rules code cannot state. Keep every `CLAUDE.md` short (root about 60 lines, package files about 40): explanation goes in `docs/`, history in `CHANGELOG.md`.
 
 ## Packages
 
