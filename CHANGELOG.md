@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-25
+
+Roles in a mapping can carry their own settings, `idp.only` routes every credential through the IdP, and `session_duration` sets the default session length.
+
+**Breaking:** tag-auth no longer grants a role any mapping names (configs that logged `tag_auth_bypasses_mapping_scoping` on 4.0.0 are affected), and `tag_auth.transitive_session_tags` is removed (a true value fails to load; use `session_tags_transitive`).
+
 ### Added
 
 - **Per-role settings** in `role_mappings` and `role_groups`: a `roles` item can override any entry setting except `subject` and `issuer`. A role object without a `role` key is a load error.
@@ -58,6 +64,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - transitive `golang.org/x/sys` 0.49.0 → 0.50.0
   - transitive `golang.org/x/text` 0.43.0 → 0.44.0
   - transitive `github.com/spf13/pflag` 1.0.10 → 1.1.0
+- **CI action bumps.**
+  - `actions/setup-go` 7.0.0 → 7.1.0
+  - `docker/login-action` 4.7.0 → 4.8.0
+  - `github/codeql-action` (`init`/`autobuild`/`analyze`) 4.39.1 → 4.39.3
+  - `sigstore/cosign-installer` 4.1.2 → 4.1.3
 
 ## [4.0.0] - 2026-11-02
 
@@ -889,7 +900,8 @@ Multi-issuer, any-provider release with provider-neutral canonical **subject** a
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v5.0.0...HEAD
+[5.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.2...v4.0.0
 [3.5.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.1...v3.5.2
 [3.5.1]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.0...v3.5.1
