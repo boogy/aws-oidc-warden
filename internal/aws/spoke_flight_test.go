@@ -52,15 +52,13 @@ func TestSpokeCredsFor_ConcurrentCallersShareOneAssume(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make(chan error, n)
 		for range n {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				p, err := c.spokeCredsFor(context.Background(), "222222222222")
 				if err == nil && p == nil {
 					err = assert.AnError
 				}
 				errs <- err
-			}()
+			})
 		}
 		<-g.entered
 		synctest.Wait()

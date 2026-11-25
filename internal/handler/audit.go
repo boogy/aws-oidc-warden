@@ -284,10 +284,9 @@ func (rec *auditRecord) setIdentity(cfg *config.Config, claims *gtypes.Claims) {
 }
 
 // setGrant records the issued session shared by the AssumeRole and IdP paths.
-func (rec *auditRecord) setGrant(cfg *config.Config, role, sessionName string, durationSeconds int, policyRef string, tags []ststypes.Tag, expiry *time.Time) {
+func (rec *auditRecord) setGrant(cfg *config.Config, role, sessionName string, policyRef string, tags []ststypes.Tag, expiry *time.Time) {
 	rec.GrantedRole = role
 	rec.SessionName = sessionName
-	rec.DurationSeconds = durationSeconds
 	rec.SessionPolicyRef = policyRef
 	rec.SessionTagKeys = sessionTagKeyNames(tags)
 	if cfg.LogClaimValues {

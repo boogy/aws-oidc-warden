@@ -1,6 +1,7 @@
 package logevent
 
 import (
+	"slices"
 	"sort"
 	"testing"
 )
@@ -62,13 +63,7 @@ func TestNewEvent_DerivesOutcomeAndRegisters(t *testing.T) {
 		t.Errorf("AuthzDecision.outcome = %q, want empty until WithOutcome is applied", AuthzDecision.outcome)
 	}
 
-	found := false
-	for _, e := range All() {
-		if e == CacheHit {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(All(), CacheHit)
 	if !found {
 		t.Error("All() does not contain CacheHit, want every category var registered")
 	}

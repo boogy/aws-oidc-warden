@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
@@ -25,8 +26,7 @@ func buildGitHubClaimNames() map[string]bool {
 	names := make(map[string]bool, 32)
 	var walk func(reflect.Type)
 	walk = func(t reflect.Type) {
-		for i := range t.NumField() {
-			f := t.Field(i)
+		for f := range t.Fields() {
 			if f.Anonymous && f.Type.Kind() == reflect.Struct {
 				walk(f.Type)
 				continue
@@ -37,7 +37,7 @@ func buildGitHubClaimNames() map[string]bool {
 			}
 		}
 	}
-	walk(reflect.TypeOf(types.Claims{}))
+	walk(reflect.TypeFor[types.Claims]())
 
 	// Claims GitHub issues that types.Claims does not model as a field.
 	for _, extra := range []string{"environment", "enterprise", "enterprise_id", "issuer_scope"} {
@@ -82,6 +82,38 @@ func withSessionTagClaims(known map[string]bool, tags map[string]string) map[str
 		out[claim] = true
 	}
 	return out
+}
+
+// unknownTagClaims lists, sorted, the tag claims outside known that cond names: the only part of tags that changes the warning set.
+func unknownTagClaims(known map[string]bool, tags map[string]string, cond *Condition) string {
+	var out []string
+	for _, claim := range tags {
+		if known != nil && !known[claim] && conditionNamesClaim(cond, claim) {
+			out = append(out, claim)
+		}
+	}
+	slices.Sort(out)
+	return strings.Join(slices.Compact(out), ",")
+}
+
+func conditionNamesClaim(cond *Condition, claim string) bool {
+	if cond == nil {
+		return false
+	}
+	if _, ok := cond.Claims[claim]; ok {
+		return true
+	}
+	if _, ok := cond.ExplicitClaims[claim]; ok {
+		return true
+	}
+	for _, group := range [][]*Condition{cond.AllOf, cond.AnyOf, cond.NoneOf} {
+		for _, child := range group {
+			if conditionNamesClaim(child, claim) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // warnConditionKeys walks a whole condition tree warning once per unknown

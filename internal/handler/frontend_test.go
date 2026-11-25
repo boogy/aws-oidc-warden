@@ -19,7 +19,6 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/validator"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,10 +46,10 @@ func TestAwsApiGatewayV2_Handler_ExtractsClaims(t *testing.T) {
 	// Use a fixed extractor so claims are returned directly without token validation.
 	// This isolates the adapter's routing logic from the extractor implementation.
 	ex := &fixedExtractor{claims: &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: testIssuer, Subject: "org/repo"},
-		Repository:       "org/repo",
-		Ref:              "refs/heads/main",
-		Actor:            "octocat",
+		Issuer: testIssuer, Subject: "org/repo",
+		Repository: "org/repo",
+		Ref:        "refs/heads/main",
+		Actor:      "octocat",
 	}}
 
 	h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex, nil)
@@ -263,7 +262,7 @@ func TestALBHandler_NoXFF_OmitsEmptySourceIPKeys(t *testing.T) {
 	assert.Equal(t, 401, resp.StatusCode)
 
 	lines := 0
-	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		if line == "" {
 			continue
 		}

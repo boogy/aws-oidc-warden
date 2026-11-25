@@ -109,8 +109,7 @@ tag_auth:
 # exactly where a target role is most likely to chain to another role, and a
 # non-transitive session tag is dropped at that hop — every ABAC policy past
 # it would stop seeing which repo/actor originally made the request. Top-level
-# and independent of tag_auth (the deprecated tag_auth.transitive_session_tags
-# still works as a fallback for existing configs).
+# and independent of tag_auth.
 session_tags_transitive: true
 
 ####################################################################################

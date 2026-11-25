@@ -67,8 +67,8 @@ func classifySubject(pattern string) (key string, class subjectClass) {
 		return "", subjectAny
 	}
 	if prefix, ok := literalOf(re.Sub[0]); ok {
-		if i := strings.IndexByte(prefix, '/'); i >= 0 {
-			return prefix[:i], subjectOwner
+		if before, _, ok := strings.Cut(prefix, "/"); ok {
+			return before, subjectOwner
 		}
 	}
 	return "", subjectAny
@@ -77,8 +77,8 @@ func classifySubject(pattern string) (key string, class subjectClass) {
 // ownerOf returns the "owner" segment of subject (everything before the first
 // '/'), or subject itself if there is no '/'.
 func ownerOf(subject string) string {
-	if i := strings.IndexByte(subject, '/'); i >= 0 {
-		return subject[:i]
+	if before, _, ok := strings.Cut(subject, "/"); ok {
+		return before
 	}
 	return subject
 }

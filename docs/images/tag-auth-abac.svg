@@ -1,39 +1,64 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="860" height="310" viewBox="0 0 860 310" font-family="Segoe UI, Helvetica, Arial, sans-serif">
-  <defs>
-    <marker id="arrowA" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L8,3 L0,6 Z" fill="#5f6368"/>
-    </marker>
-  </defs>
-  <rect x="0" y="0" width="860" height="310" fill="#ffffff"/>
-  <text x="430" y="30" text-anchor="middle" font-size="18" font-weight="600" fill="#202124">Session tags → ABAC on downstream resources</text>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 952 324" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="tag-auth-abac-title tag-auth-abac-desc" id="tag-auth-abac-root">
+        <title id="tag-auth-abac-title">Session tags carry identity downstream</title>
+        <desc id="tag-auth-abac-desc">Three panels: verified claims become STS session tags through the issuer session_tags spec, and a downstream policy condition reads aws:PrincipalTag/repo on every call.</desc>
+        <defs>
+      <style>#tag-auth-abac-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #tag-auth-abac-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #tag-auth-abac-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#tag-auth-abac-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="tag-auth-abac-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="tag-auth-abac-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="tag-auth-abac-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
 
-  <!-- Box 1: assumed session -->
-  <rect x="40" y="78" width="250" height="176" rx="8" fill="#ffffff" stroke="#4285f4"/>
-  <rect x="40" y="78" width="250" height="28" rx="8" fill="#4285f4"/>
-  <rect x="40" y="92" width="250" height="14" fill="#4285f4"/>
-  <text x="165" y="97" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Assumed session (STS)</text>
-  <text x="58" y="130" font-size="12" fill="#202124" font-family="Consolas, monospace">repo        = "api"</text>
-  <text x="58" y="154" font-size="12" fill="#202124" font-family="Consolas, monospace">repo-owner  = "acme"</text>
-  <text x="58" y="178" font-size="12" fill="#202124" font-family="Consolas, monospace">ref         = "refs/heads/main"</text>
-  <text x="58" y="202" font-size="12" fill="#202124" font-family="Consolas, monospace">event-name  = "push"</text>
-  <text x="58" y="226" font-size="12" fill="#202124" font-family="Consolas, monospace">actor       = "deploy-bot"</text>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
 
-  <!-- arrow -->
-  <text x="425" y="150" text-anchor="middle" font-size="12" fill="#5f6368">tags travel with every API call</text>
-  <line x1="290" y1="166" x2="558" y2="166" stroke="#5f6368" stroke-width="1.5" marker-end="url(#arrowA)"/>
+        <path d="M272 134 L352 134" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#tag-auth-abac-arrow)"/>
+<path d="M600 134 L680 134" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#tag-auth-abac-arrow-accent)"/>
+<rect x="295.2" y="116" width="33.599999999999994" height="14" rx="2" fill="#f5f5f5"/>
+<text x="312" y="126" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="1.0">SPEC</text>
+<rect x="604.0" y="116" width="72.0" height="14" rx="2" fill="#f5f5f5"/>
+<text x="640" y="126" fill="#bf4520" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="1.0">EVERY CALL</text>
+<rect x="24" y="28" width="248" height="212" rx="8" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="38" y="52" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Verified claims</text>
+<line x1="24" y1="64" x2="272" y2="64" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="38.0" y="88" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">repository: acme/api</text>
+<text x="38.0" y="114" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">repository_owner: acme</text>
+<text x="38.0" y="140" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">ref: refs/heads/main</text>
+<text x="38.0" y="166" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">ref_type: branch</text>
+<text x="38.0" y="192" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">event_name: push</text>
+<text x="38.0" y="218" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">actor: deploy-bot</text>
+<rect x="352" y="28" width="248" height="212" rx="8" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="366" y="52" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">STS session tags</text>
+<line x1="352" y1="64" x2="600" y2="64" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<rect x="358" y="73" width="236" height="22" rx="4" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="366.0" y="88" fill="#bf4520" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">repo = acme/api</text>
+<text x="366.0" y="114" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">repo-owner = acme</text>
+<text x="366.0" y="140" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">ref = refs/heads/main</text>
+<text x="366.0" y="166" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">ref-type = branch</text>
+<text x="366.0" y="192" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">event-name = push</text>
+<text x="366.0" y="218" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">actor = deploy-bot</text>
+<rect x="680" y="28" width="248" height="212" rx="8" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="694" y="52" fill="#2d3142" font-size="13" font-family="'Geist', system-ui, sans-serif" font-weight="600">Downstream policy</text>
+<line x1="680" y1="64" x2="928" y2="64" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="694.0" y="88" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">"Condition": {</text>
+<text x="706.6" y="114" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">"StringEquals": {</text>
+<text x="719.2" y="140" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">"aws:PrincipalTag/repo":</text>
+<rect x="686" y="151" width="236" height="22" rx="4" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="731.8" y="166" fill="#bf4520" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace" font-weight="600">"acme/api"</text>
+<text x="706.6" y="192" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">}</text>
+<text x="694.0" y="218" fill="#4f5d75" font-size="10.5" font-family="'Geist Mono', ui-monospace, monospace">}</text>
+<line x1="24" y1="264" x2="928" y2="264" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.12"/>
+<text x="24" y="288" fill="#4f5d75" font-size="11.5" font-family="'Geist', system-ui, sans-serif">The issuer's session_tags spec picks the tag keys; this is the standard GitHub spec.</text>
+<text x="24" y="306" fill="#4f5d75" font-size="11.5" font-family="'Geist', system-ui, sans-serif">Access follows the calling repo, with no per-repo policy to write.</text>
 
-  <!-- Box 2: resource policy -->
-  <rect x="560" y="78" width="270" height="176" rx="8" fill="#ffffff" stroke="#34a853"/>
-  <rect x="560" y="78" width="270" height="28" rx="8" fill="#34a853"/>
-  <rect x="560" y="92" width="270" height="14" fill="#34a853"/>
-  <text x="695" y="97" text-anchor="middle" font-size="13" font-weight="600" fill="#ffffff">Resource / SCP policy condition</text>
-  <text x="576" y="130" font-size="12" fill="#202124" font-family="Consolas, monospace">"Condition": {</text>
-  <text x="588" y="152" font-size="12" fill="#202124" font-family="Consolas, monospace">"StringEquals": {</text>
-  <text x="600" y="174" font-size="12" fill="#202124" font-family="Consolas, monospace">"aws:PrincipalTag/repo":</text>
-  <text x="612" y="196" font-size="12" fill="#1a73e8" font-family="Consolas, monospace">"api"</text>
-  <text x="588" y="218" font-size="12" fill="#202124" font-family="Consolas, monospace">}</text>
-  <text x="576" y="240" font-size="12" fill="#202124" font-family="Consolas, monospace">}</text>
-
-  <!-- caption -->
-  <text x="430" y="288" text-anchor="middle" font-size="12.5" fill="#5f6368">Downstream access is automatically scoped to the workflow's own repo/ref — no per-repo policy needed.</text>
-</svg>
+      </svg>

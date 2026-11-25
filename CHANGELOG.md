@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Per-role settings** in `role_mappings` and `role_groups`: a `roles` item can override any entry setting except `subject` and `issuer`. A role object without a `role` key is a load error.
+- **`idp.only`** (`AOW_IDP_ONLY`): issue every credential through the IdP, never `AssumeRole`. A reload that flips it logs `config.idp.only_changed`; one that leaves it without a startup-built IdP is rejected.
+- **`session_duration`** per mapping, group defaults and role: the default length when the caller omits `durationSeconds`; `max_session_duration` stays the limit.
+- **`docs/IAC.md`** and `docs/examples/iac/`: plan from pull requests, apply only from trusted runs.
+- **`example-config.yaml`** shows per-role settings, `session_duration` and `idp.only`; per-issuer `tag_prefix` stays commented out so tag-auth keeps `aow/`.
+- **Docs diagrams** for per-role precedence, authorization, conditions, IdP routing and IaC; existing SVGs redrawn and corrected.
+- **`config.warning` code `unconditional_role_beside_conditioned`.**
+- **`config.warning` code `role_override_shadowed`**: an earlier mapping granting the same role hides a later role object's settings.
+- **`config.warning` code `role_arn_alias`**: one issuer grants the same IAM role under ARNs differing in path or case.
+
+### Changed
+
+- **Breaking: tag-auth never grants a role a mapping names** (matched by account and name, any path).
+- **Faster config load and reload**: an overlay reload skips a redundant config copy and literal subjects are parsed once.
+- **Audit stage `idp_unavailable`** replaces `duration` on `503 idp_signing_unavailable` refusals from the kill switch or a late-added `idp` block.
+- **Audit `durationSeconds`** also appears on denies after duration resolution, as the effective value refused.
+- **Audit deny `reason`** says when tag-auth was not consulted because a mapping names the role.
+
+### Removed
+
+- **Breaking: `tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive`; a true or unparseable value fails the load, `false` warns.
+- **`config.warning` code `tag_auth_bypasses_mapping_scoping`**, obsolete now that tag-auth skips mapped roles.
+
+### Fixed
+
+- **`docs/ARCHITECTURE.md`**: core pipeline sequence diagram renders on GitHub again.
+- **`condition_unknown_claim`** is no longer repeated per role when roles differ only in session-tag claims the condition does not name.
+- **`unscoped_mapping_outranks_scoped`** fires only when the unscoped subject can match the scoped one, and checks every scoped grant.
+- **`mappings_bound_to_default_issuer`** counts entry subjects, not the per-role settings each one expands to.
+- **Boolean `AOW_` env values are no longer trimmed** on reload, so a padded value (`" true"`) is rejected on every path, as it already was at boot.
+
+### Dependencies
+
+- Go 1.27.3 → 1.27.4 (fixes `net/http` GO-2026-6859).
+- **AWS SDK for Go v2 bumps.**
+  - `github.com/aws/aws-sdk-go-v2` 1.47.5 → 1.48.0
+  - `github.com/aws/aws-sdk-go-v2/config` 1.33.13 → 1.33.21
+  - `github.com/aws/aws-sdk-go-v2/credentials` 1.20.13 → 1.21.3
+  - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.72.3 → 1.74.1
+  - `github.com/aws/aws-sdk-go-v2/service/iam` 1.64.6 → 1.68.0
+  - `github.com/aws/aws-sdk-go-v2/service/kms` 1.62.2 → 1.63.0
+  - `github.com/aws/aws-sdk-go-v2/service/s3` 1.114.6 → 1.116.0
+  - `github.com/aws/aws-sdk-go-v2/service/sts` 1.51.6 → 1.53.0
+  - `github.com/aws/smithy-go` 1.28.7 → 1.28.10
+  - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` bumps
+- **Other module bumps.**
+  - `golang.org/x/sync` 0.24.0 → 0.25.0
+  - transitive `golang.org/x/sys` 0.49.0 → 0.50.0
+  - transitive `golang.org/x/text` 0.43.0 → 0.44.0
+  - transitive `github.com/spf13/pflag` 1.0.10 → 1.1.0
+
 ## [4.0.0] - 2026-11-02
 
 Warden-as-IdP mode lifts the 1h role-chaining cap, and role mappings can live in a separate hot-reloaded file.

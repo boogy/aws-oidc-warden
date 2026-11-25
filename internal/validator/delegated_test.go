@@ -89,13 +89,11 @@ func TestSelfDelegatedParity(t *testing.T) {
 
 	// --- self mode: sign + full verification ---
 	selfClaims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    issuer,
-			Subject:   repository,
-			Audience:  jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(exp),
-			IssuedAt:  jwt.NewNumericDate(iat),
-		},
+		Issuer:          issuer,
+		Subject:         repository,
+		Audience:        jwt.ClaimStrings{audience},
+		ExpiresAt:       jwt.NewNumericDate(exp),
+		IssuedAt:        jwt.NewNumericDate(iat),
 		Sub:             repository,
 		Actor:           "testuser",
 		Repository:      repository,
@@ -223,13 +221,11 @@ func TestSelfDelegatedParityMultiIssuer(t *testing.T) {
 
 	// --- self mode: sign + full verification ---
 	selfClaims := &types.Claims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    issuer,
-			Subject:   repository,
-			Audience:  jwt.ClaimStrings{audience},
-			ExpiresAt: jwt.NewNumericDate(exp),
-			IssuedAt:  jwt.NewNumericDate(iat),
-		},
+		Issuer:          issuer,
+		Subject:         repository,
+		Audience:        jwt.ClaimStrings{audience},
+		ExpiresAt:       jwt.NewNumericDate(exp),
+		IssuedAt:        jwt.NewNumericDate(iat),
 		Sub:             repository,
 		Actor:           "testuser",
 		Repository:      repository,
@@ -581,10 +577,6 @@ func TestTokenSizeCap(t *testing.T) {
 	}
 }
 
-// durPtr returns a pointer to d, for config.Config.JWTLeeway's *time.Duration
-// field.
-func durPtr(d time.Duration) *time.Duration { return &d }
-
 // apigwOpaqueParityFixture builds the JWKS server, signing key and config
 // shared by TestApigwNoneOfDenyListOpaqueClaimParity and
 // TestApigwPositiveConditionMatchesOpaqueClaimVerbatim.
@@ -628,13 +620,13 @@ func apigwOpaqueParityFixture(t *testing.T) (cfg *config.Config, privateKey *rsa
 		}},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"grp/prj"},
-			Roles:   []string{"arn:aws:iam::123456789012:role/deploy"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/deploy"),
 			Conditions: &config.Condition{NoneOf: []*config.Condition{
 				{Claims: map[string]config.Patterns{"groups": {"break-glass"}}},
 			}},
 		}},
 		RoleSessionName:      "aws-oidc-warden",
-		JWTLeeway:            durPtr(30 * time.Second),
+		JWTLeeway:            new(30 * time.Second),
 		Cache:                &config.Cache{TTL: 10 * time.Minute},
 		AllowInsecureIssuers: true,
 	}
@@ -744,13 +736,13 @@ func TestApigwPositiveConditionMatchesOpaqueClaimVerbatim(t *testing.T) {
 		}},
 		RoleMappings: []config.RoleMapping{{
 			Subject: config.Patterns{"grp/prj"},
-			Roles:   []string{"arn:aws:iam::123456789012:role/deploy"},
+			Roles:   roleEntries("arn:aws:iam::123456789012:role/deploy"),
 			Conditions: &config.Condition{
 				Claims: map[string]config.Patterns{"groups": {regexp.QuoteMeta("[break-glass]")}},
 			},
 		}},
 		RoleSessionName: "aws-oidc-warden",
-		JWTLeeway:       durPtr(30 * time.Second),
+		JWTLeeway:       new(30 * time.Second),
 		Cache:           &config.Cache{TTL: 10 * time.Minute},
 	}
 	require.NoError(t, cfg.Validate())

@@ -1,68 +1,46 @@
 # AWS OIDC Warden
 
-Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS AssumeRole. Runs as a Lambda behind multiple front-ends, or as a local HTTP server.
+Go service that validates OIDC tokens (e.g. GitHub Actions) and exchanges them for short-lived AWS credentials via STS. Runs as a Lambda behind multiple front-ends, or as a local HTTP server.
 
 Request flow: multi-issuer token validation → canonical-subject authorization (issuer-bound) → condition checking → session policy → role assumption (`internal/handler/processor.go`).
 
-This file is the map. Each package below has its own `CLAUDE.md` with the detail — open the one for the area you're touching. The conventions, security, and git rules at the bottom are shared by all packages (each subdir file `Extends` this one).
+This file is the map; each package `CLAUDE.md` holds rules code cannot state. Keep every `CLAUDE.md` short (root about 60 lines, package files about 40): explanation goes in `docs/`, history in `CHANGELOG.md`.
 
-## Package guide
+## Packages
 
-- **`internal/handler/`** → [CLAUDE.md](internal/handler/CLAUDE.md) — core request pipeline shared by every deployment. `NewBootstrap(adapter)` wires DI (config, validator, cache, AWS consumer); `ProcessRequest()` runs the pipeline; `RequestData` + sentinel errors live in `types.go`; the per-frontend adapters (`apigateway.go` / `apigatewayv2.go` / `alb.go` / `lambdaurl.go`) differ only in event parse/serialize. _Go here when_ changing request flow, adding a frontend, or touching error→HTTP mapping.
+- `internal/handler/` → [CLAUDE.md](internal/handler/CLAUDE.md) — request pipeline, front-end adapters, error → HTTP mapping, audit.
+- `internal/validator/` → [CLAUDE.md](internal/validator/CLAUDE.md) — JWT/JWKS verification, claims extractors (`self`/`apigw`/`alb`).
+- `internal/config/` → [CLAUDE.md](internal/config/CLAUDE.md) — config loading, `Validate()`, subject/condition matching, tag-auth, hot reload.
+- `internal/cache/` → [CLAUDE.md](internal/cache/CLAUDE.md) — JWKS cache backends (`memory`/`dynamodb`/`s3`).
+- `internal/aws/` → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM calls, session tags, cross-account.
+- `internal/idp/` → [CLAUDE.md](internal/idp/CLAUDE.md) — warden-as-IdP signer, mint, JWKS/discovery; operator guide `docs/IDP.md`.
+- `internal/utils/` — `FormatClaimValue` is the single formatter for claim values in audit records and session tags. `RedactToken` has no callers by design.
 
-- **`internal/validator/`** → [CLAUDE.md](internal/validator/CLAUDE.md) — multi-issuer JWT parse + JWKS signature/claims verification (`TokenValidatorInterface`). Routes on the unverified `iss` to a per-issuer registry spec, then verifies signature → re-asserted issuer → audience (ANY-match) → time bounds → required*claims → canonical-subject normalization. Allowed algorithms only (ES/RS 256–512, never `none`). Delegated `apigw`/`alb` share the same claim-check path. \_Go here when* touching token verification, JWKS fetching, or audience handling.
-
-- **`internal/config/`** → [CLAUDE.md](internal/config/CLAUDE.md) — Viper config (`AOW_` env prefix > file > defaults), the `issuers[]` model, the per-issuer `session_tags` spec plus additive per-mapping extras, issuer-bound subject/condition matching over an owner-bucketed index, the boolean condition engine (`condition.go`: `all_of`/`any_of`/`none_of`, nestable), config fragments, and the remote `Provider` (lazy refresh via injected `FetchFunc`, atomic swap from a pristine base). Key methods: `AuthorizeRoles(issuer, subject, claims)`, `FindSessionPolicy(issuer, subject, role, claims)` (role- and condition-aware: the policy comes from the mapping that authorized the role), `EffectiveSessionTags(issuer, decision)` (issuer spec + the authorizing mapping's additive extras), `Validate()` (compiles anchored regex once, builds the index). _Go here when_ adding config keys, constraint logic, or remote-refresh behavior.
-
-- **`internal/cache/`** → [CLAUDE.md](internal/cache/CLAUDE.md) — multi-tier JWKS cache behind one `Cache` interface. `NewCache(cfg)` selects `memory` (LRU, default), `dynamodb` (persistent/shared, production), or `s3` (large/cold objects). _Go here when_ changing cache backends, TTL handling, or eviction.
-
-- **`internal/aws/`** → [CLAUDE.md](internal/aws/CLAUDE.md) — STS/S3/IAM via AWS SDK v2 behind `AwsConsumerInterface`. `AssumeRole` takes the caller-built `[]types.Tag` (the handler runs `BuildSessionTags(ctx, rawClaims, tagSpec)` once per request from the issuer's `session_tags` spec) and attaches them as ABAC session tags; clients are built once in `service_wrapper.go`. _Go here when_ touching AssumeRole, session tagging, S3 reads, or IAM calls.
-
-- **`internal/idp/`** → [CLAUDE.md](internal/idp/CLAUDE.md) — optional warden-as-IdP: KMS/PEM signer, self-verified token mint, JWKS/discovery documents; the handler exchanges the minted token via unsigned `AssumeRoleWithWebIdentity`. Operator guide: `docs/IDP.md`. _Go here when_ touching minting, signing keys, or the `idp` config.
-
-## Other folders (no CLAUDE.md of their own)
-
-- `internal/utils/` — helpers. `FormatClaimValue` is the single formatter for a verified claim value on its way into an audit record or an STS session tag; both `handler.auditClaims` and `aws.BuildSessionTags` must go through it, or the documented guarantee that a claim reported in `claims` and the same claim attached as a session tag can never disagree breaks. `RedactToken` is the redaction helper to use if a log site ever needs to carry token material. No current log site does — the pipeline keeps tokens out of logs entirely rather than logging them redacted (see `ParseRequestBody`, which deliberately logs no body preview), so `RedactToken` has no callers by design.
-
-## Not in this repo
-
-No infrastructure-as-code: no `deploy/`, no OpenTofu, no CloudFormation. Deployment is the operator's, and the contract their IaC must satisfy lives in `docs/ARCHITECTURE.md` (§ Infrastructure as code). Don't add IaC back — document the requirement there instead.
+No IaC in this repo; the contract an operator's IaC must meet is in `docs/ARCHITECTURE.md`.
 
 ## Commands
 
-- `make check` — fmt + lint + vuln + test. Run before every commit.
-- `make test` / `make test-coverage` — tests / HTML coverage.
-- `make run` — local server on 127.0.0.1:8080 with `docs/examples/example-config.yaml`.
-- `make build-lambda` — all Lambda variants (ARM64). Binary must be named `bootstrap`.
+`make check` (fmt + lint + vuln + `-race` test) before every commit · `make run` (local server, example config) · `make build-lambda` (ARM64, binary `bootstrap`) · `make fuzz FUZZTIME=…`.
 
 ## Conventions
 
-- Follow effective-Go idioms; log through `internal/logevent` with a catalog event (static `msg`, camelCase `slog.Attr` attrs) — never `log/slog` directly or `fmt.Print`. A new event needs a `docs/LOGGING.md` catalog row.
-- Comments are short and rare: one line, only for a constraint the code cannot state itself. No paragraphs, no narration of what the code does, no rationale essays — that belongs in `CHANGELOG.md`, the PR, or `docs/`. Trim over-long comments in any file you touch.
-- Use interfaces for testability (`AwsConsumerInterface`, `TokenValidatorInterface`); table-driven tests.
-- Sentinel errors in `internal/handler/types.go`, mapped to HTTP status by `classifyError` (`internal/handler/errors.go`).
-- Config precedence: env vars > YAML > defaults.
-- Maintain a clean, up-to-date `CHANGELOG.md`: one phrase per entry, at most two or three sentences for complex topics; detail goes in `docs/`.
+- Log through `internal/logevent` with a catalog event (static `msg`, camelCase attrs), never `log/slog` or `fmt.Print`; a new event needs a `docs/LOGGING.md` row.
+- Comments: one line, rare, only for a constraint the code cannot state. Trim over-long comments in files you touch.
+- Sentinel errors in `internal/handler/types.go`, mapped to HTTP status by `classifyError`. Config precedence: env > YAML > defaults.
+- `CHANGELOG.md`: one phrase per entry, two or three sentences max.
 
 ## Testing
 
-A test exists only if it guards a security invariant, a documented contract, or a fixed regression. Before adding one, name the bug it would catch.
-
-- No tests of getters, defaults, constructors, mocks, or the standard library. No always-skipped tests.
-- Table-driven by default; a near-duplicate test is a new table row.
+- A test must guard a security invariant, documented contract, or fixed regression; prove it by breaking the guarded code. Table-driven; a near-duplicate is a new row.
 - No `time.Sleep`: inject a clock (`config.WithClock`) or use `testing/synctest`.
-- Prove a new test: break the code it guards and confirm it fails, then restore.
-- Untrusted-input parsers and security gates get a `Fuzz*` target with a property (differential oracle or invariant), not just "no panic". Commit fuzz-found inputs under `testdata/fuzz/` as regressions. `make fuzz FUZZTIME=…`.
-- `make test` runs with `-race`.
+- Untrusted-input parsers and security gates get a `Fuzz*` target with a property, not just "no panic"; commit found inputs under `testdata/fuzz/`.
 
 ## Security
 
-- Never log full tokens/credentials — redact via `internal/utils`.
-- Validate JWT signature, issuer, audience, expiration.
-- Subject patterns and conditions are auto-anchored regex (`^(?:...)$`); keep patterns specific. A pattern that provably matches every string (`.*`, `.+`, `(?s).*`, `[\s\S]*`, `(.*)`, `^.*$`, `a|.*`) is **rejected by `Validate()`** for both (shared `isUniversal` parse-tree check); it is sound for what it accepts, not complete, so keep patterns specific anyway. Conditions at the same level are AND'd; `all_of`/`any_of`/`none_of` groups nest inside for richer logic (capped at 5 levels / 64 nodes, enforced in `Validate()`).
-- Validate JSON and bound reads (`io.LimitReader`) before processing external input.
-- Never commit credentials/secrets. Sign commits and tags. Do not add a Claude co-author.
+- Never log tokens or credentials. Validate JWT signature, issuer, audience, expiration. Bound external reads (`io.LimitReader`).
+- Subject and condition patterns are auto-anchored; `Validate()` rejects universal patterns (`isUniversal`) and caps condition trees at 5 levels / 64 nodes. Keep patterns specific.
+- Never commit secrets. Sign commits and tags. No Claude co-author.
 
 ## Git
 
-Branch from `main` (`feature/…`, `fix/…`). Conventional Commits. PRs need passing CI (test, lint, security scan). Ask before editing `docs/examples/example-config.yaml` with real values, force-pushing, or changing CI workflows.
+Branch from `main` (`feature/…`, `fix/…`), Conventional Commits. Ask before editing `docs/examples/example-config.yaml` with real values, force-pushing, or changing CI workflows.
