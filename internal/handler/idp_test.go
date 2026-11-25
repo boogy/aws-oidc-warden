@@ -765,11 +765,20 @@ func TestProcessRequestRouting(t *testing.T) {
 		{name: "only_off_tag_grant_uses_assume_role", mutate: tagOnly, duration: 900, wantAR: 1, wantDur: 900, tagAuth: true},
 
 		{name: "session_duration_omitted_idp", mutate: func(c *config.Config) { c.RoleMappings[0].SessionDuration = 30 * time.Minute }, optedIn: true, wantWI: 1, wantDur: 1800},
-		{name: "session_duration_over_1h_omitted_kill_switch", mutate: func(c *config.Config) {
+		{name: "session_duration_over_1h_omitted_kill_switch_caps_1h", mutate: func(c *config.Config) {
 			c.RoleMappings[0].SessionDuration = 6 * time.Hour
 			c.RoleMappings[0].MaxSessionDuration = 12 * time.Hour
 			c.IdP.Enabled = false
-		}, wantErr: handler.ErrIdPUnavailable, wantDur: 21600},
+		}, wantAR: 1, wantDur: 3600},
+		{name: "session_duration_over_1h_explicit_kill_switch_unavailable", mutate: func(c *config.Config) {
+			c.RoleMappings[0].SessionDuration = 6 * time.Hour
+			c.RoleMappings[0].MaxSessionDuration = 12 * time.Hour
+			c.IdP.Enabled = false
+		}, duration: 21600, wantErr: handler.ErrIdPUnavailable, wantDur: 21600},
+		{name: "session_duration_over_1h_omitted_no_service_unavailable", mutate: func(c *config.Config) {
+			c.RoleMappings[0].SessionDuration = 6 * time.Hour
+			c.RoleMappings[0].MaxSessionDuration = 12 * time.Hour
+		}, noSvc: true, wantErr: handler.ErrIdPUnavailable, wantDur: 21600},
 		{name: "session_duration_only_sends_exchange_value", mutate: func(c *config.Config) {
 			only(c)
 			c.RoleMappings[0].SessionDuration = 30 * time.Minute

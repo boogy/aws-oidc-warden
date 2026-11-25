@@ -15,6 +15,9 @@ var IdPKeyLoadFailure = newEvent("idp.key.load.failure")
 // IdPKeyInsecureSource is emitted at boot for a file-backed key (Warn).
 var IdPKeyInsecureSource = newEvent("idp.key.insecure_source")
 
+// IdPDefaultDurationCapped is emitted when an omitted durationSeconds is capped at 1h because idp.enabled is false (Warn).
+var IdPDefaultDurationCapped = newEvent("idp.default_duration.capped")
+
 // IdPUnavailable is emitted when an IdP endpoint answers 503 because keys are not loaded (Warn).
 var IdPUnavailable = newEvent("idp.unavailable")
 

@@ -241,6 +241,11 @@ func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *Requ
 		return nil, r.refuse(ctx, o, "duration", "invalid or excessive duration", "Duration refused", err)
 	}
 	requested := cmp.Or(requestData.DurationSeconds, defaultDuration(o.decision))
+	if requestData.DurationSeconds == 0 && requested > utils.RoleChainingMaxSecs && o.cfg.IdP != nil && !o.cfg.IdP.Enabled && !o.cfg.IdP.Only {
+		logevent.Warn(ctx, o.log, logevent.IdPDefaultDurationCapped, "default session duration capped while IdP disabled",
+			slog.Int("sessionDurationSeconds", int(requested)), slog.Int("durationSeconds", utils.RoleChainingMaxSecs))
+		requested = utils.RoleChainingMaxSecs
+	}
 	o.rec.DurationSeconds = int(requested)
 	useIdP, reason, err := r.selectIdP(o.cfg, o.decision, requested)
 	if errors.Is(err, ErrIdPUnavailable) {
