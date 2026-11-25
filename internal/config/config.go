@@ -278,8 +278,6 @@ type Config struct {
 	Cache     *Cache `mapstructure:"cache"      json:"cache,omitempty"`      // CacheConfig is the cache configuration
 
 	// LogLevel is the slog level name (debug/info/warn/error); default "info".
-	// Validated (not merely parsed) in Validate() so an unknown value fails
-	// config load rather than silently falling back at first use.
 	LogLevel string `mapstructure:"log_level" json:"log_level,omitempty"`
 
 	// LogClaimValues (default on) controls whether claim values and session tag values appear in logs and audit records.
@@ -322,9 +320,7 @@ type Config struct {
 	auditable                map[string]map[string]bool `mapstructure:"-" json:"-"` // per-issuer claim names the config references (see auditable.go)
 }
 
-// envKeyReplacer mirrors the SetEnvKeyReplacer configured on viper in
-// LoadConfig, so envVarName can derive the same AOW_ env var name viper would
-// bind for a given config key.
+// envKeyReplacer must match the SetEnvKeyReplacer configured in LoadConfig.
 var envKeyReplacer = strings.NewReplacer(".", "_", "-", "_")
 
 // envVarName derives the AOW_ environment variable name for a config/viper
@@ -415,17 +411,13 @@ func warnInvalidEnv(key, value string, err error) {
 		slog.String("key", key), slog.String("value", value), slog.String("error", err.Error()))
 }
 
-// envBinding ties one AOW_ environment knob to both viper's file-load binding
-// (LoadConfig) and the manual re-apply after a remote-config merge
-// (reapplyEnvOverrides), so the two paths cannot drift.
+// envBinding is one AOW_ env knob, bound at load and re-applied after a remote-config merge.
 type envBinding struct {
 	key   string                    // config/viper key, e.g. "tag_auth.enabled"
 	apply func(c *Config, v string) // parse v (a non-empty env value) and assign; encodes any parent-struct init
 }
 
-// envBindings is the single source of truth for every AOW_ environment-
-// variable knob: LoadConfig binds each key to viper, and reapplyEnvOverrides
-// re-applies each after a remote/S3 config merge (env > S3 > file precedence).
+// envBindings lists every AOW_ env knob.
 var envBindings = []envBinding{
 	// Core settings (plain strings).
 	{"role_session_name", func(c *Config, v string) { c.RoleSessionName = v }},
@@ -829,9 +821,7 @@ var baseOnlyStrings = []struct {
 	{"session_policy_bucket_owner", func(c *Config) *string { return &c.SessionPolicyBucketOwner }},
 }
 
-// clearOnDeclare zeroes a declared slice of structs before decoding, because
-// mapstructure decodes element i onto the struct already at index i and an
-// omitted field would inherit the displaced entry's value.
+// clearOnDeclare zeroes a declared slice before decoding; mapstructure would merge element i onto the old struct.
 var clearOnDeclare = map[string]func(*Config, *viper.Viper){
 	"issuers":                   func(c *Config, _ *viper.Viper) { c.Issuers = nil },
 	"role_mappings":             func(c *Config, _ *viper.Viper) { c.RoleMappings = nil },
@@ -851,9 +841,7 @@ var clearOnDeclare = map[string]func(*Config, *viper.Viper){
 	},
 }
 
-// lostFragmentPins returns fragments still listed after a merge that were
-// pinned before it and are not pinned now — dropping a grant fails closed,
-// dropping an integrity pin does not.
+// lostFragmentPins returns fragments still listed after a merge whose checksum pin was dropped.
 func lostFragmentPins(prev, next *Config) []string {
 	var dropped []string
 	for _, p := range prev.ConfigFragmentChecksums {
@@ -869,8 +857,6 @@ func lostFragmentPins(prev, next *Config) []string {
 
 // reapplyEnvOverrides restores env > S3 > file precedence after a merge; MergeBytes' fresh viper lacks the bindings.
 func reapplyEnvOverrides(c *Config) {
-	// Ensure Cache is non-nil before applying cache knobs (matches prior
-	// behavior: the old code unconditionally created c.Cache here).
 	if c.Cache == nil {
 		c.Cache = &Cache{}
 	}
