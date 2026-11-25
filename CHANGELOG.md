@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- **Breaking: tag-auth never grants a role a mapping names**: a role in any `role_mappings`/`role_groups` entry is explicit-only (matched by account and name, any path) and its tags are never read; `config.warning` code `tag_auth_bypasses_mapping_scoping` is removed.
+- **Breaking: tag-auth never grants a role a mapping names** (matched by account and name, any path).
 - **Faster config load and reload**: an overlay reload skips a redundant config copy and literal subjects are parsed once.
 - **Audit stage `idp_unavailable`** replaces `duration` on `503 idp_signing_unavailable` refusals from the kill switch or a late-added `idp` block.
 - **Audit `durationSeconds`** also appears on denies after duration resolution, as the effective value refused.
@@ -28,13 +28,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Removed
 
-- **Breaking: `tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive` / `AOW_SESSION_TAGS_TRANSITIVE`. Setting it true (or an unparseable env value) fails the load; `false` logs a `removed_config_key` warning.
+- **Breaking: `tag_auth.transitive_session_tags` / `AOW_TAG_AUTH_TRANSITIVE_SESSION_TAGS`**: use `session_tags_transitive`; a true or unparseable value fails the load, `false` warns.
+- **`config.warning` code `tag_auth_bypasses_mapping_scoping`**, obsolete now that tag-auth skips mapped roles.
 
 ### Fixed
 
 - **`docs/ARCHITECTURE.md`**: core pipeline sequence diagram renders on GitHub again.
 - **`condition_unknown_claim`** is no longer repeated per role when roles differ only in session-tag claims the condition does not name.
-- **`unscoped_mapping_outranks_scoped`** no longer fires between two different literal subjects, a literal and a pattern that does not match it, or when only scoped grants can outrank, and checks every scoped grant, not only the first.
+- **`unscoped_mapping_outranks_scoped`** fires only when the unscoped subject can match the scoped one, and checks every scoped grant.
 - **`mappings_bound_to_default_issuer`** counts entry subjects, not the per-role settings each one expands to.
 - **Boolean `AOW_` env values are no longer trimmed** on reload, so a padded value (`" true"`) is rejected on every path, as it already was at boot.
 
