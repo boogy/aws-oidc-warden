@@ -52,7 +52,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `github.com/aws/aws-sdk-go-v2/service/sts` 1.51.6 → 1.53.0
   - `github.com/aws/smithy-go` 1.28.7 → 1.28.9
   - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` bumps
-- `golang.org/x/sync` 0.24.0 → 0.25.0; transitive `golang.org/x/sys` 0.49.0 → 0.50.0, `golang.org/x/text` 0.43.0 → 0.44.0, `github.com/spf13/pflag` 1.0.10 → 1.1.0.
+- **Other module bumps.**
+  - `golang.org/x/sync` 0.24.0 → 0.25.0
+  - transitive `golang.org/x/sys` 0.49.0 → 0.50.0
+  - transitive `golang.org/x/text` 0.43.0 → 0.44.0
+  - transitive `github.com/spf13/pflag` 1.0.10 → 1.1.0
 
 ## [4.0.0] - 2026-11-02
 
