@@ -51,7 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `github.com/aws/aws-sdk-go-v2/service/kms` 1.62.2 → 1.63.0
   - `github.com/aws/aws-sdk-go-v2/service/s3` 1.114.6 → 1.116.0
   - `github.com/aws/aws-sdk-go-v2/service/sts` 1.51.6 → 1.53.0
-  - `github.com/aws/smithy-go` 1.28.7 → 1.28.9
+  - `github.com/aws/smithy-go` 1.28.7 → 1.28.10
   - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` bumps
 - **Other module bumps.**
   - `golang.org/x/sync` 0.24.0 → 0.25.0
