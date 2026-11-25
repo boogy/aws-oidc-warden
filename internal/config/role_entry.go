@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
+	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/go-viper/mapstructure/v2"
 )
 
@@ -55,7 +55,7 @@ func roleEntryHookFunc() mapstructure.DecodeHookFuncType {
 			if _, ok := v["role"]; !ok {
 				return nil, errors.New("role object has no `role` key")
 			}
-			for _, key := range slices.Sorted(maps.Keys(v)) {
+			for _, key := range utils.SortedKeys(v) {
 				if v[key] == nil {
 					return nil, fmt.Errorf("role setting %q is present but empty", key)
 				}
