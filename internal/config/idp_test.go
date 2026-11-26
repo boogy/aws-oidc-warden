@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,6 +106,11 @@ func TestIdPValidate(t *testing.T) {
 			c.SigningKeys[0].KMSKeyID = idpMRKARN
 			c.KMSAllowedRegions = []string{"us-east-1"}
 		}, wantErr: "eu-west-1"},
+		{name: "mrk replica of listed key rejected", mutate: func(c *IdPConfig) {
+			c.SigningKeys[0].KMSKeyID = idpMRKARN
+			c.SigningKeys = append(c.SigningKeys, IdPSigningKey{KMSKeyID: strings.Replace(idpMRKARN, "eu-west-1", "us-east-1", 1), Algorithm: "RS256", Status: IdPKeyVerifyOnly})
+			c.KMSAllowedRegions = []string{"eu-west-1", "us-east-1"}
+		}, wantErr: "replica"},
 		{name: "kms mrk wrong length rejected", mutate: func(c *IdPConfig) {
 			c.SigningKeys[0].KMSKeyID = "arn:aws:kms:eu-west-1:111122223333:key/mrk-0123456789abcdef"
 			c.KMSAllowedRegions = []string{"eu-west-1"}
