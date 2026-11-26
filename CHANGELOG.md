@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - In `alb` mode a failed public-key lookup is memoized for 5s and concurrent lookups share one fetch, instead of one outbound request per request carrying an unknown `kid`.
 - The `alb` extractor itself rejects a token when `alb_expected_signer` is unset, instead of relying on `Validate()` alone.
 - Cached spoke credentials are keyed by account, `spoke_role_name` and `external_id`, so a reload that changes either assumes the new spoke role instead of reusing old credentials.
+- The spoke credential cache holds one entry per account, so superseded credentials are replaced on the account's next lookup instead of kept for the process lifetime, and an assume that a reload overtakes is not cached.
 
 ## [5.0.0] - 2026-11-25
 

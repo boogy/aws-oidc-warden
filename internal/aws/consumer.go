@@ -35,6 +35,7 @@ type AwsConsumerInterface interface {
 
 // cachedCreds holds spoke credentials for an account until shortly before expiry.
 type cachedCreds struct {
+	key      string
 	provider aws.CredentialsProvider
 	expires  time.Time
 }
@@ -53,7 +54,7 @@ type AwsConsumer struct {
 	configSource  func() *gtvcfg.Config // live-config getter; nil falls back to Config
 	now           func() time.Time
 	mu            sync.Mutex
-	spokeCache    map[string]cachedCreds // keyed by spokeCacheKey
+	spokeCache    map[string]cachedCreds // keyed by account
 	spokeFlight   singleflight.Group     // keyed by spokeCacheKey
 	roleTagCache  map[string]cachedTags  // keyed by role ARN
 	roleMissCache map[string]cachedMiss  // keyed by role ARN
@@ -117,9 +118,9 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 
 	key := spokeCacheKey(account, cfg.CrossAccount)
 	a.mu.Lock()
-	c, ok := a.spokeCache[key]
+	c, ok := a.spokeCache[account]
 	a.mu.Unlock()
-	if ok && a.now().Before(c.expires) {
+	if ok && c.key == key && a.now().Before(c.expires) {
 		return c.provider, nil
 	}
 
@@ -127,9 +128,9 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 	flightCtx := context.WithoutCancel(ctx)
 	ch := a.spokeFlight.DoChan(key, func() (any, error) {
 		a.mu.Lock()
-		c, ok := a.spokeCache[key]
+		c, ok := a.spokeCache[account]
 		a.mu.Unlock()
-		if ok && a.now().Before(c.expires) {
+		if ok && c.key == key && a.now().Before(c.expires) {
 			return c.provider, nil
 		}
 		return a.assumeSpoke(flightCtx, cfg, account, key)
@@ -150,7 +151,7 @@ func spokeCacheKey(account string, ca *gtvcfg.CrossAccount) string {
 	return account + "\x00" + ca.SpokeRoleName + "\x00" + ca.ExternalID
 }
 
-// assumeSpoke assumes the convention-named spoke role in account and caches the result under key.
+// assumeSpoke assumes the convention-named spoke role in account and caches it unless a reload has superseded key.
 func (a *AwsConsumer) assumeSpoke(ctx context.Context, cfg *gtvcfg.Config, account, key string) (aws.CredentialsProvider, error) {
 	ca := cfg.CrossAccount
 	spokeArn := fmt.Sprintf("arn:aws:iam::%s:role/%s", account, ca.SpokeRoleName)
@@ -193,7 +194,9 @@ func (a *AwsConsumer) assumeSpoke(ctx context.Context, cfg *gtvcfg.Config, accou
 		slog.Time("expires", expires))
 
 	a.mu.Lock()
-	a.spokeCache[key] = cachedCreds{provider: provider, expires: expires}
+	if live := a.cfg(); live != nil && live.CrossAccount != nil && spokeCacheKey(account, live.CrossAccount) == key {
+		a.spokeCache[account] = cachedCreds{key: key, provider: provider, expires: expires}
+	}
 	a.mu.Unlock()
 	return provider, nil
 }
