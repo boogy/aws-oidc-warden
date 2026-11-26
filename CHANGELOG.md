@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Documentation
 
-- Architecture and request-pipeline diagrams; all doc images live in `docs/img/`.
+- Architecture, request-pipeline, JWKS cache and IdP flow diagrams replace the Mermaid diagrams; all doc images live in `docs/img/`.
 
 ## [5.0.0] - 2026-11-25
 

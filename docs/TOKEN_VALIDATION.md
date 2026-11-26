@@ -270,24 +270,9 @@ Validation failures propagate as sentinel errors mapped to HTTP status by the fr
 
 ## 11. Sequence (self mode)
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Caller (CI job)
-    participant V as Validator
-    participant K as JWKS cache / IdP
-    C->>V: token + role
-    V->>V: length guard (max_token_bytes)
-    V->>V: unverified iss peek (routing only)
-    V->>V: registry lookup (exact iss) — unknown ⇒ deny
-    V->>K: JWKS (cache-first, singleflight, discovery if needed)
-    K-->>V: keys (≤20, RSA≥2048 / EC on-curve)
-    V->>V: select key by kid+alg+type, verify signature
-    V->>V: re-assert verified iss == spec
-    V->>V: sub/iat/exp/nbf, lifetime/age, audience ANY-match, required_claims
-    V->>V: normalize ⇒ canonical Subject + raw claims
-    V-->>C: verified claims → authorization
-```
+The end-to-end pipeline is the diagram under the table of contents. Key lookup and rotation recovery ([§5](#5-jwks-retrieval)):
+
+![JWKS cache and key rotation](img/jwks-cache.svg)
 
 ---
 

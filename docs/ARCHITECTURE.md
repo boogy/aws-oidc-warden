@@ -85,65 +85,7 @@ OIDC Client → HTTP Server → AWS OIDC Warden
 
 ### 2. Core Processing Pipeline
 
-Sequence for `self` mode issuing through `AssumeRole`; the stale gate, audit-on-deny and IdP path are in the [Request Processing Flow](#1-request-processing-flow):
-
-```mermaid
-sequenceDiagram
-    participant Client as GitHub Actions
-    participant Handler as Request Handler
-    participant Processor as Request Processor
-    participant Validator as Token Validator
-    participant Cache as Cache Layer
-    participant JWKS as Issuer JWKS
-    participant Consumer as AWS Consumer
-    participant STS as AWS STS
-
-    Client->>Handler: POST /verify {token, role}
-    Handler->>Processor: ProcessRequest()
-
-    Processor->>Validator: Validate(ctx, token)
-    Validator->>Validator: Peek unverified iss (routing only)
-    Validator->>Validator: Registry lookup: spec = registry[iss]
-    Note over Validator: unknown issuer -> deny, no fetch
-    Validator->>Cache: Get JWKS for this issuer
-
-    alt Cache Miss
-        Cache->>JWKS: SSRF-hardened fetch (per issuer)
-        JWKS-->>Cache: Return JWKS
-        Cache-->>Validator: Return JWKS
-    else Cache Hit
-        Cache-->>Validator: Return cached JWKS
-    end
-
-    Validator->>Validator: Verify signature (kid+alg+use pinned)
-    Validator->>Validator: Re-assert verified iss == spec
-    Validator->>Validator: Bounds (exp/iat/nbf, leeway, lifetime/age), audience, required_claims
-    Validator->>Validator: normalize -> canonical subject + raw claims
-    Validator-->>Processor: Return claims {issuer, subject, raw}
-
-    Processor->>Consumer: IsTargetAccountAllowed(role)
-    Consumer-->>Processor: allowed / denied
-
-    Processor->>Processor: AuthorizeRoles(issuer, subject, claims) via owner-bucketed index
-
-    opt tag_auth.enabled and no mapping names the role
-        Processor->>Consumer: GetRoleTags(role)
-        Consumer-->>Processor: role IAM tags
-        Processor->>Processor: TagAuth.Authorize(tags, claims, issuer, subject)
-    end
-
-    Note over Processor: requested role must be in the matched mapping's roles
-    Processor->>Processor: Resolve session policy (inline or S3)
-    Processor->>Processor: BuildSessionTags (once, also feeds the audit record)
-    Processor->>Consumer: AssumeRole(role, ..., built session tags)
-
-    Consumer->>STS: AssumeRole with per-issuer session tags
-    STS-->>Consumer: Return credentials
-    Consumer-->>Processor: Return credentials
-    Processor->>Processor: Audit record (allow) — durable before return if audit_required
-    Processor-->>Handler: Return credentials
-    Handler-->>Client: HTTP 200 + credentials
-```
+The full pipeline, including the stale gate, audit-on-deny and the IdP path, is the [Request Processing Flow](#1-request-processing-flow) diagram; token checks in `self` mode are in [Token Validation Security](#1-token-validation-security).
 
 ## JWT Validation Modes
 
@@ -413,18 +355,9 @@ type Condition struct {
 
 ### 3. Caching Strategy
 
-One backend is selected at startup by `cache.type`; the remote backends keep a small local in-memory layer in front of their store:
+One backend is selected at startup by `cache.type`: `memory` (LRU), or `dynamodb`/`s3` with a small local in-memory layer in front of the store. Every backend follows the same lookup:
 
-```mermaid
-flowchart LR
-    A[Token Validation] --> B{Backend selected by cache.type}
-    B -->|memory| C[LRU in-memory cache]
-    B -->|dynamodb| D[Local memo layer → DynamoDB table]
-    B -->|s3| E[Local memo layer → S3 objects]
-    C & D & E -->|hit| F[Return cached JWKS]
-    C & D & E -->|miss| G[SSRF-hardened fetch from issuer]
-    G --> H[Store with cache.ttl → return]
-```
+![JWKS cache and key rotation](img/jwks-cache.svg)
 
 **Cache TTL Strategy:**
 
@@ -444,22 +377,9 @@ Details in [TOKEN_VALIDATION.md](TOKEN_VALIDATION.md).
 
 ### 2. Subject-Based Authorization
 
-```mermaid
-flowchart TD
-    A[Validated Token Claims] --> B[Derive Canonical Subject]
-    B --> C{Find Matching Subject Pattern<br/>issuer-bound, owner-bucketed index}
-    C -->|No Match| D[Access Denied]
-    C -->|Match Found| E[Load Conditions]
-    E --> F{Every claim key at this level<br/>matches? AND}
-    F -->|Any failed| G[Access Denied]
-    F -->|All passed| H{all_of groups<br/>every child satisfied?}
-    H -->|No| G
-    H -->|Yes| I{any_of groups<br/>at least one child satisfied?}
-    I -->|No| G
-    I -->|Yes| J{none_of groups<br/>no child satisfied?}
-    J -->|No| G
-    J -->|Yes| K[Authorization Granted]
-```
+![Authorization resolution](img/authorization-resolution.svg)
+
+Conditions on the matched mapping are an AND of claim keys plus `all_of`/`any_of`/`none_of` groups; see [Boolean logic in conditions](CONFIGURATION.md#boolean-logic-in-conditions) for a traced example.
 
 No claim is privileged or evaluated in a fixed order: every key under `conditions` is looked up by its own name and AND'd with the rest, and the group nodes recurse through the same walk (`satisfiesConditionsWith` in `internal/config/condition.go`). `ref`, `event_name`, `workflow_ref` and `ref_type` are named fields only for discoverability — they take the same generic path as `project_path` or any other issuer's claim.
 

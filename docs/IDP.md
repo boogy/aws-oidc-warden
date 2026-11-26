@@ -69,23 +69,7 @@ Under [`idp.only`](#idp-only-mode) every authorized request takes the IdP path: 
 
 ## Flow
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Caller (CI job)
-    participant W as Warden
-    participant K as KMS
-    participant S as STS
-    participant H as Discovery/JWKS host
-
-    C->>W: POST /verify {token, role, durationSeconds?, sessionName?}
-    W->>W: Validate inbound token, authorize (the authorizing mapping selects the IdP)
-    W->>K: kms:Sign (minted token, self-verified before use)
-    W->>S: AssumeRoleWithWebIdentity (unsigned, minted token)
-    S->>H: GET discovery + JWKS
-    S-->>W: Credentials
-    W-->>C: Credentials + issuer, roleArn, sessionName, sourceIdentity, durationSeconds, tokenId
-```
+![Warden-as-IdP credential flow](img/idp-flow.svg)
 
 The minted token never leaves the warden and is never logged or returned. Its claims come only from warden config and the verified inbound identity; inbound claims are never copied.
 
