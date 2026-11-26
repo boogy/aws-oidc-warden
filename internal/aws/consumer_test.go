@@ -1177,3 +1177,52 @@ func TestAssumeRoleNoClampIAMUser(t *testing.T) {
 		assert.Equal(t, int32(7200), *captured.DurationSeconds)
 	})
 }
+
+func TestSpokeCredsFor_ReloadedSpokeSettingsReassume(t *testing.T) {
+	base := gtvcfg.CrossAccount{Enabled: true, SpokeRoleName: "aow-spoke", ExternalID: "ext-1", SpokeSessionDuration: 15 * time.Minute}
+	cases := []struct {
+		name       string
+		reload     func(*gtvcfg.CrossAccount)
+		wantRole   string
+		wantExtID  string
+		wantAssume int
+	}{
+		{"unchanged settings reuse the cache", func(*gtvcfg.CrossAccount) {}, "aow-spoke", "ext-1", 1},
+		{"new spoke role name reassumes", func(ca *gtvcfg.CrossAccount) { ca.SpokeRoleName = "aow-spoke-v2" }, "aow-spoke-v2", "ext-1", 2},
+		{"new external id reassumes", func(ca *gtvcfg.CrossAccount) { ca.ExternalID = "ext-2" }, "aow-spoke", "ext-2", 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := new(MockAwsServiceWrapper)
+			m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
+			exp := time.Now().Add(time.Hour)
+			var calls []*sts.AssumeRoleInput
+			m.On("AssumeRole", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				calls = append(calls, args.Get(1).(*sts.AssumeRoleInput))
+			}).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+				AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
+				SessionToken: aws.String("ST"), Expiration: &exp,
+			}}, nil)
+
+			ca := base
+			live := &gtvcfg.Config{CrossAccount: &ca}
+			c := NewAwsConsumer(live)
+			c.AWS = m
+			c.SetConfigSource(func() *gtvcfg.Config { return live })
+
+			_, err := c.spokeCredsFor(context.Background(), "222222222222")
+			require.NoError(t, err)
+
+			reloaded := base
+			tc.reload(&reloaded)
+			live = &gtvcfg.Config{CrossAccount: &reloaded}
+			_, err = c.spokeCredsFor(context.Background(), "222222222222")
+			require.NoError(t, err)
+
+			require.Len(t, calls, tc.wantAssume)
+			last := calls[len(calls)-1]
+			assert.Equal(t, "arn:aws:iam::222222222222:role/"+tc.wantRole, *last.RoleArn)
+			assert.Equal(t, tc.wantExtID, *last.ExternalId)
+		})
+	}
+}

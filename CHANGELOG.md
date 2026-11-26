@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Base64-encoded request bodies (`isBase64Encoded`) from Lambda URL, API Gateway and ALB are decoded instead of rejected as invalid JSON.
 - A tag-auth role tag read failure is recorded as such in the audit `reason` instead of as a subject mismatch.
 - Lambda URL and API Gateway responses carry their own copy of the default headers, as ALB already did, instead of the shared map.
+- Cached spoke credentials are keyed by account, `spoke_role_name` and `external_id`, so a reload that changes either assumes the new spoke role instead of reusing old credentials.
 
 ## [5.0.0] - 2026-11-25
 
