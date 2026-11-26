@@ -75,14 +75,12 @@ func (h *AwsApiGatewayV2) createRequestContext(ctx context.Context, event events
 
 // newResponse builds this frontend's response type from a status and body.
 func (h *AwsApiGatewayV2) newResponse(statusCode int, body string) events.APIGatewayV2HTTPResponse {
-	return events.APIGatewayV2HTTPResponse{StatusCode: statusCode, Headers: ResponseHeaders, Body: body}
+	return h.newResponseWithHeaders(statusCode, body, nil)
 }
 
-// newResponseWithHeaders is newResponse with extra headers overlaid on ResponseHeaders.
+// newResponseWithHeaders builds a response with extra headers overlaid on a copy of ResponseHeaders.
 func (h *AwsApiGatewayV2) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.APIGatewayV2HTTPResponse {
-	resp := h.newResponse(statusCode, body)
-	resp.Headers = mergeHeaders(extra)
-	return resp
+	return events.APIGatewayV2HTTPResponse{StatusCode: statusCode, Headers: mergeHeaders(extra), Body: body}
 }
 
 // WithIdP enables the IdP routes and returns the handler.

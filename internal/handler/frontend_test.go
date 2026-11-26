@@ -591,3 +591,16 @@ func TestALBHandler_ALBModeMissingHeaderDenies(t *testing.T) {
 	assert.Equal(t, 401, resp.StatusCode)
 	assert.Zero(t, fc.assumeCalls, "no credentials may be issued without the ALB header")
 }
+
+func TestFrontendResponseHeadersAreCopied(t *testing.T) {
+	for _, fe := range idpFrontends() {
+		t.Run(fe.name, func(t *testing.T) {
+			send := fe.build(t, staticProvider(t), mockConsumer(t), &captureExtractor{}, nil)
+			r := send("POST", "/", "")
+			require.Equal(t, 400, r.status)
+			r.headers["Cache-Control"] = "public"
+			assert.Equal(t, "no-store", handler.ResponseHeaders["Cache-Control"], "a response mutated the shared ResponseHeaders map")
+			handler.ResponseHeaders["Cache-Control"] = "no-store"
+		})
+	}
+}

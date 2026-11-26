@@ -78,18 +78,12 @@ func (h *AwsLambdaUrl) unmarshalRequestData(event events.LambdaFunctionURLReques
 
 // newResponse builds this frontend's response type from a status and body.
 func (h *AwsLambdaUrl) newResponse(statusCode int, body string) events.LambdaFunctionURLResponse {
-	return events.LambdaFunctionURLResponse{
-		StatusCode: statusCode,
-		Headers:    ResponseHeaders,
-		Body:       body,
-	}
+	return h.newResponseWithHeaders(statusCode, body, nil)
 }
 
-// newResponseWithHeaders is newResponse with extra headers overlaid on ResponseHeaders.
+// newResponseWithHeaders builds a response with extra headers overlaid on a copy of ResponseHeaders.
 func (h *AwsLambdaUrl) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.LambdaFunctionURLResponse {
-	resp := h.newResponse(statusCode, body)
-	resp.Headers = mergeHeaders(extra)
-	return resp
+	return events.LambdaFunctionURLResponse{StatusCode: statusCode, Headers: mergeHeaders(extra), Body: body}
 }
 
 // WithIdP enables the IdP routes and returns the handler.
