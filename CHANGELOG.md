@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - An `idp.signing_keys[].file` that is a named pipe is rejected instead of hanging key load.
 - Two regional ARNs of the same multi-region key in `idp.signing_keys` are a load error instead of a 503 on every key load.
 - Base64-encoded request bodies (`isBase64Encoded`) from Lambda URL, API Gateway and ALB are decoded instead of rejected as invalid JSON.
+- A tag-auth role tag read failure is recorded as such in the audit `reason` instead of as a subject mismatch.
 - Lambda URL and API Gateway responses carry their own copy of the default headers, as ALB already did, instead of the shared map.
 
 ## [5.0.0] - 2026-11-25
