@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Lambda URL and API Gateway responses carry their own copy of the default headers, as ALB already did, instead of the shared map.
 - A numeric claim at or above 2^53 no longer matches a condition or tag-auth pattern and fires a `none_of` veto, instead of matching a rounded neighbour.
 - In `alb` mode a failed public-key lookup is memoized for 5s and concurrent lookups share one fetch, instead of one outbound request per request carrying an unknown `kid`.
+- The `alb` extractor itself rejects a token when `alb_expected_signer` is unset, instead of relying on `Validate()` alone.
 
 ## [5.0.0] - 2026-11-25
 

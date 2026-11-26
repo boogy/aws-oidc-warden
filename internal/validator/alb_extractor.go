@@ -117,8 +117,8 @@ func (c *albKeyCache) fail(kid string, err error) {
 }
 
 // ALBExtractor verifies the ALB-signed x-amzn-oidc-data JWT (ES256) and
-// extracts GitHub OIDC claims. If expectedSigner is non-empty, the JWT
-// header's "signer" field must match exactly (prevents cross-ALB injection).
+// extracts GitHub OIDC claims. The JWT header's "signer" field must equal
+// alb_expected_signer exactly (prevents cross-ALB injection).
 // Re-validates issuer and every other claim self mode checks through the same
 // checkAndNormalizeClaims path Validate() uses — ALB signs the token itself,
 // so only signature trust differs from self mode.
@@ -204,8 +204,11 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 	}
 
 	expectedSigner := cfg.JWTValidation.ALBExpectedSigner
+	if expectedSigner == "" {
+		return nil, fmt.Errorf("jwt_validation.alb_expected_signer is not set")
+	}
 	signer, _ := unverified.Header["signer"].(string)
-	if expectedSigner != "" && signer != expectedSigner {
+	if signer != expectedSigner {
 		return nil, fmt.Errorf("ALB JWT signer mismatch: got %q, want %q", signer, expectedSigner)
 	}
 
