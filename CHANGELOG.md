@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- With `idp.enabled: false`, an omitted `durationSeconds` over a `session_duration` above 1h gets 1h through `AssumeRole` instead of 503.
+
 ## [5.0.0] - 2026-11-25
 
 Roles in a mapping can carry their own settings, `idp.only` routes every credential through the IdP, and `session_duration` sets the default session length.
