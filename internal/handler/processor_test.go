@@ -360,7 +360,8 @@ func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, nil, "test")
+	sink := &fakeAuditSink{}
+	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, sink, "test")
 	_, err := proc.ProcessRequest(context.Background(),
 		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
 		validator.ExtractionInput{Token: "t"},
@@ -371,6 +372,7 @@ func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 	assert.Empty(t, fc.assumed, "FAIL-OPEN: credentials minted after the role-tag read failed")
 	assert.Contains(t, buf.String(), `"eventType":"authz.tag_auth.lookup_failure"`, "the read failure must be visible in the log stream")
 	assert.Contains(t, buf.String(), "AccessDenied: iam:GetRole", "the underlying AWS error must be reported")
+	assert.Equal(t, "tag-auth role tag lookup failed", sink.last(t)["reason"], "audit must not blame the subject for an IAM read failure")
 }
 
 // The audit record must attribute a tag-authorized grant to tag-auth, not to an
