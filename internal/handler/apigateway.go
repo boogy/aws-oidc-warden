@@ -81,7 +81,11 @@ func (h *AwsApiGateway) createRequestContext(ctx context.Context, event events.A
 }
 
 func (h *AwsApiGateway) unmarshalRequestData(event events.APIGatewayProxyRequest) (*RequestData, error) {
-	return ParseRequestBody(event.Body)
+	body, err := eventBody(event.Body, event.IsBase64Encoded)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRequestBody(body)
 }
 
 // newResponse builds this frontend's response type from a status and body.

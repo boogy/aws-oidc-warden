@@ -55,7 +55,7 @@ func (h *AwsApplicationLoadBalancer) Handler(ctx context.Context, event events.A
 		return resp, nil
 	}
 
-	requestData, input, err := h.parseRequest(event.Body, headers)
+	requestData, input, err := h.parseRequest(event, headers)
 	if err != nil {
 		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
 		return h.respondError(ctx, err, http.StatusBadRequest)
@@ -88,7 +88,11 @@ func (h *AwsApplicationLoadBalancer) createRequestContext(ctx context.Context, h
 }
 
 // parseRequest picks the extraction path from the configured mode, never from header presence.
-func (h *AwsApplicationLoadBalancer) parseRequest(body string, headers map[string]string) (*RequestData, validator.ExtractionInput, error) {
+func (h *AwsApplicationLoadBalancer) parseRequest(event events.ALBTargetGroupRequest, headers map[string]string) (*RequestData, validator.ExtractionInput, error) {
+	body, err := eventBody(event.Body, event.IsBase64Encoded)
+	if err != nil {
+		return nil, validator.ExtractionInput{}, err
+	}
 	if !h.albMode {
 		data, err := ParseRequestBody(body)
 		if err != nil {

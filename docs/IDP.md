@@ -322,18 +322,18 @@ Full key reference: [CONFIGURATION.md](CONFIGURATION.md#idp-optional-identity-pr
 
 ## Session duration
 
-| Request `durationSeconds`             | Result                                        |
-| ------------------------------------- | --------------------------------------------- |
-| omitted                               | `session_duration`, else `min(3600, ceiling)` |
-| outside 900..43200                    | 400 `invalid_duration`                        |
-| above the ceiling                     | 400 `duration_exceeds_cap` (never clamped)    |
-| above the role's `MaxSessionDuration` | 400 `duration_exceeds_role_max`               |
+| Request `durationSeconds`             | Result                                                                        |
+| ------------------------------------- | ----------------------------------------------------------------------------- |
+| omitted                               | `session_duration` (1h while `idp.enabled: false`), else `min(3600, ceiling)` |
+| outside 900..43200                    | 400 `invalid_duration`                                                        |
+| above the ceiling                     | 400 `duration_exceeds_cap` (never clamped)                                    |
+| above the role's `MaxSessionDuration` | 400 `duration_exceeds_role_max`                                               |
 
 Ceiling = the authorizing mapping's (or role's) `max_session_duration` (1h when unset); omitted = its `session_duration` when set. Both keys: [CONFIGURATION.md § Session lifetime](CONFIGURATION.md#session-lifetime).
 
 When several mappings grant the role, the lowest-order one wins. Set the role's `MaxSessionDuration` at least as high as the longest session you intend to allow.
 
-A role served by `AssumeRole` accepts `durationSeconds` from 900 up to the mapping's limit, at most 3600; a request over that limit but within 1h answers 400 `duration_exceeds_cap`, and one over 1h is refused as in [When the IdP is used](#when-the-idp-is-used). Omitted = `session_duration` when set, else `min(3600, max_session_duration)`. Why the 1h bound: see [Why](#why).
+A role served by `AssumeRole` accepts `durationSeconds` from 900 up to the mapping's limit, at most 3600; a request over that limit but within 1h answers 400 `duration_exceeds_cap`, and one over 1h is refused as in [When the IdP is used](#when-the-idp-is-used). Omitted = `session_duration` when set (1h while `idp.enabled: false`), else `min(3600, max_session_duration)`. Why the 1h bound: see [Why](#why).
 
 ## Session name
 

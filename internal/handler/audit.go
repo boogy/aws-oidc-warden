@@ -15,8 +15,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/validator"
 )
 
-// AuditSink persists one JSON record per decision; a nil sink is safe.
-// WriteRecord is synchronous and can fail the request closed; BufferRecord is best-effort and batched.
+// AuditSink persists one JSON record per decision: WriteRecord can fail the request closed, BufferRecord is best-effort.
 type AuditSink interface {
 	WriteRecord(ctx context.Context, record []byte) error
 	BufferRecord(record []byte) error
@@ -65,14 +64,12 @@ type auditRecord struct {
 	SessionNameSource        string `json:"sessionNameSource,omitempty"`
 	RequestedSessionName     string `json:"requestedSessionName,omitempty"`
 
-	// SessionTagKeys (names) are always safe to record. SessionTags (values)
-	// only when LogClaimValues is on and a role was actually granted.
+	// SessionTags values are recorded only with LogClaimValues and a granted role; keys always.
 	SessionTagKeys   []string          `json:"sessionTagKeys,omitempty"`
 	SessionTags      map[string]string `json:"sessionTags,omitempty"`
 	SessionPolicyRef string            `json:"sessionPolicyRef,omitempty"`
 
-	// Claims: full verified claim set for GitHub issuers, mapped claims
-	// otherwise. Populated only when LogClaimValues is on.
+	// Claims is set only with LogClaimValues: all verified claims for GitHub issuers, mapped claims otherwise.
 	Claims map[string]string `json:"claims,omitempty"`
 
 	Expiry *time.Time `json:"expiry,omitempty"`
@@ -111,14 +108,12 @@ func (rec *auditRecord) effectiveReason(logClaimValues bool) string {
 	return stageSummary(rec.Stage)
 }
 
-// reasonAttr returns the deny reason as the standardized "error" log attr,
-// gated identically to the durable record.
+// reasonAttr returns the deny reason as the "error" log attr, gated like the durable record.
 func (rec *auditRecord) reasonAttr(logClaimValues bool) slog.Attr {
 	return slog.String("error", rec.effectiveReason(logClaimValues))
 }
 
-// stageSummary is the claim-free replacement for an error-derived reason: it
-// names the stage that failed and nothing about the identity that failed it.
+// stageSummary is the claim-free stand-in for an error-derived reason: it names only the failed stage.
 func stageSummary(stage string) string {
 	switch stage {
 	case "extract":
@@ -241,8 +236,7 @@ func (r *RequestProcessor) recordDecision(ctx context.Context, log *slog.Logger,
 	return nil
 }
 
-// finalizeDeny records a deny decision and returns origErr, folding in
-// ErrAuditWriteFailed (visible via errors.Is) if the audit write itself failed.
+// finalizeDeny records a deny and returns origErr, joined with ErrAuditWriteFailed if the write failed.
 func (r *RequestProcessor) finalizeDeny(ctx context.Context, log *slog.Logger, cfg *config.Config, rec *auditRecord, origErr error) error {
 	rec.Decision = "deny"
 	if auditErr := r.recordDecision(ctx, log, cfg, rec); auditErr != nil {
@@ -357,8 +351,7 @@ func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) ma
 			continue
 		}
 		key := name
-		// Rename only if the alias target won't itself be emitted, else both
-		// claims collide on one key.
+		// rename only if the alias target is not itself emitted (key collision)
 		if alias, ok := claimAliases[name]; ok && !claimEmitted(rawClaims, alias, include) {
 			key = alias
 		}
@@ -370,8 +363,7 @@ func auditClaims(cfg *config.Config, issuer string, rawClaims map[string]any) ma
 	return out
 }
 
-// claimEmitted reports whether name would itself be recorded by auditClaims,
-// applying the same drop rules as the loop above. Collision test for claimAliases.
+// claimEmitted reports whether auditClaims would record name, using the same drop rules.
 func claimEmitted(rawClaims map[string]any, name string, include func(string) bool) bool {
 	raw, ok := rawClaims[name]
 	if !ok || raw == nil || !include(name) {

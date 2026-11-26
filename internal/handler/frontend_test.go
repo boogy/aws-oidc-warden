@@ -6,6 +6,7 @@ package handler_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -590,6 +591,61 @@ func TestALBHandler_ALBModeMissingHeaderDenies(t *testing.T) {
 
 	assert.Equal(t, 401, resp.StatusCode)
 	assert.Zero(t, fc.assumeCalls, "no credentials may be issued without the ALB header")
+}
+
+func TestFrontendsDecodeBase64Body(t *testing.T) {
+	plain := `{"token":"body-token","role":"arn:aws:iam::123456789012:role/MyRole"}`
+	enc := base64.StdEncoding.EncodeToString([]byte(plain))
+	send := map[string]func(t *testing.T, ex validator.ClaimsExtractorInterface, body string, b64 bool) int{
+		"apigateway": func(t *testing.T, ex validator.ClaimsExtractorInterface, body string, b64 bool) int {
+			h := handler.NewAwsApiGateway(staticProvider(t), mockConsumer(t), ex, nil)
+			r, err := h.Handler(context.Background(), events.APIGatewayProxyRequest{HTTPMethod: "POST", Path: "/", Body: body, IsBase64Encoded: b64})
+			require.NoError(t, err)
+			return r.StatusCode
+		},
+		"apigatewayv2": func(t *testing.T, ex validator.ClaimsExtractorInterface, body string, b64 bool) int {
+			h := handler.NewAwsApiGatewayV2(staticProvider(t), mockConsumer(t), ex, nil)
+			ev := events.APIGatewayV2HTTPRequest{RawPath: "/", Body: body, IsBase64Encoded: b64}
+			ev.RequestContext.HTTP.Method = "POST"
+			r, err := h.Handler(context.Background(), ev)
+			require.NoError(t, err)
+			return r.StatusCode
+		},
+		"alb": func(t *testing.T, ex validator.ClaimsExtractorInterface, body string, b64 bool) int {
+			h := handler.NewAwsApplicationLoadBalancer(staticProvider(t), mockConsumer(t), ex, nil)
+			ev := albEvent(nil, body)
+			ev.IsBase64Encoded = b64
+			r, err := h.Handler(context.Background(), ev)
+			require.NoError(t, err)
+			return r.StatusCode
+		},
+		"lambdaurl": func(t *testing.T, ex validator.ClaimsExtractorInterface, body string, b64 bool) int {
+			h := handler.NewAwsLambdaUrl(staticProvider(t), mockConsumer(t), ex, nil)
+			ev := events.LambdaFunctionURLRequest{RawPath: "/", Body: body, IsBase64Encoded: b64}
+			ev.RequestContext.HTTP.Method = "POST"
+			r, err := h.Handler(context.Background(), ev)
+			require.NoError(t, err)
+			return r.StatusCode
+		},
+	}
+	cases := []struct {
+		name string
+		body string
+		b64  bool
+		want int
+	}{
+		{"base64 body decoded", enc, true, 401},
+		{"plain body unchanged", plain, false, 401},
+		{"invalid base64 rejected", "!!not-base64!!", true, 400},
+		{"base64 flag false leaves encoded body undecoded", enc, false, 400},
+	}
+	for name, fn := range send {
+		for _, tc := range cases {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				assert.Equal(t, tc.want, fn(t, &captureExtractor{}, tc.body, tc.b64))
+			})
+		}
+	}
 }
 
 func TestFrontendResponseHeadersAreCopied(t *testing.T) {

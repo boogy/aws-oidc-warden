@@ -362,6 +362,8 @@ Both work per entry (`role_mappings`), in `role_groups[].defaults` and per `role
 | `max_session_duration: 12h`                         | 1h                   | 30m             | 6h, through the IdP |
 | `max_session_duration: 12h`, `session_duration: 2h` | 2h                   | 30m             | 6h, through the IdP |
 
+With `idp.enabled: false`, a `session_duration` over 1h applies as 1h through `AssumeRole` (logged as `idp.default_duration.capped`); a caller asking over 1h is refused.
+
 ```yaml
 idp:
   enabled: true
@@ -502,10 +504,10 @@ Absent leaves the service unchanged; so does `enabled: false`, except under `idp
 
 Every request goes to `/verify`. The body takes `token` and `role`, plus:
 
-| Field             | Notes                                                                                                                                                                                                            |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `durationSeconds` | 900..43200, up to the limit (`max_session_duration`), never clamped. Omitted = the mapping's `session_duration`, else `min(3600, limit)`. `AssumeRole` roles: limit 3600 ([Session lifetime](#session-lifetime)) |
-| `sessionName`     | `^[\w+=,.@-]{2,64}$`. Used only with the mapping's `allow_session_name: true`, else ignored; a `role_session_name` overrides it                                                                                  |
+| Field             | Notes                                                                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `durationSeconds` | 900..43200, up to the limit (`max_session_duration`), never clamped. Omitted = the mapping's `session_duration` (1h while `idp.enabled: false`), else `min(3600, limit)`. `AssumeRole` roles: limit 3600 ([Session lifetime](#session-lifetime)) |
+| `sessionName`     | `^[\w+=,.@-]{2,64}$`. Used only with the mapping's `allow_session_name: true`, else ignored; a `role_session_name` overrides it                                                                                                                  |
 
 A mapping with `max_session_duration` over 1h or `idp_token: true` is issued through the IdP while `idp.enabled`; any other uses `AssumeRole`, capped at 1h, unless `idp.only` sends every request through the IdP ([IDP.md § When the IdP is used](IDP.md#when-the-idp-is-used)). The response `data` is the STS credentials (`AccessKeyId`, `SecretAccessKey`, `SessionToken`, `Expiration`); an IdP-issued session adds `issuer`, `roleArn`, `sessionName`, `sourceIdentity`, `durationSeconds`, `tokenId`. The minted token is never returned.
 
