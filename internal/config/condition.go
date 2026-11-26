@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"regexp/syntax"
 	"slices"
@@ -569,12 +570,20 @@ func (r *claimResolver) buildFolded() {
 	}
 }
 
-// claimText renders a scalar claim value via utils.FormatClaimValue; false for a structural shape.
+// maxExactFloat is 2^53; a float64 at or above it may be a rounded, different integer.
+const maxExactFloat = 1 << 53
+
+// claimText renders a scalar claim value via utils.FormatClaimValue; false for a structural shape or an inexact number.
 func claimText(v any) (string, bool) {
 	switch t := v.(type) {
 	case types.OpaqueClaim:
 		return utils.FormatClaimValue(string(t)), true
-	case string, bool, float64, float32,
+	case float64:
+		if math.Abs(t) >= maxExactFloat {
+			return "", false
+		}
+		return utils.FormatClaimValue(t), true
+	case string, bool, float32,
 		int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
 		json.Number:
