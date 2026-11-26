@@ -16,9 +16,7 @@ import (
 // frontendAPIGatewayV2 identifies this adapter in audit records/logs.
 const frontendAPIGatewayV2 = "apigatewayv2"
 
-// AwsApiGatewayV2 handles AWS API Gateway HTTP API (v2) requests with a JWT Authorizer.
-// Use this adapter when API Gateway validates the JWT and passes claims via
-// event.requestContext.authorizer.jwt.claims. Set jwt_validation.mode: "apigw".
+// AwsApiGatewayV2 handles HTTP API (v2) requests whose JWT Authorizer already validated the token (jwt_validation.mode: "apigw").
 type AwsApiGatewayV2 struct {
 	processor *RequestProcessor
 }

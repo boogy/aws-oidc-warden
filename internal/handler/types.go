@@ -23,8 +23,7 @@ const (
 	StartTimeContextKey         contextKey = "startTime"
 	SourceIPContextKey          contextKey = "sourceIp"
 	FrontendRequestIDContextKey contextKey = "frontendRequestId"
-	// SourceIPSourceContextKey carries the provenance of SourceIPContextKey:
-	// "frontend" (attested by AWS) or "x-forwarded-for" (client-supplied).
+	// SourceIPSourceContextKey is "frontend" (AWS-attested) or "x-forwarded-for" (client-supplied).
 	SourceIPSourceContextKey contextKey = "sourceIpSource"
 )
 
@@ -67,8 +66,7 @@ var (
 		"arn:aws-cn:iam::",     // AWS China
 	}
 
-	// ResponseHeaders: no-store is explicit because a 200 here carries live
-	// AWS credentials and handlers don't vary caching by HTTP method.
+	// ResponseHeaders: no-store is explicit because a 200 carries live credentials.
 	ResponseHeaders = map[string]string{
 		"Content-Type":  "application/json",
 		"Cache-Control": "no-store",

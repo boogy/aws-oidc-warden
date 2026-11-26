@@ -69,8 +69,7 @@ type Bootstrap struct {
 	IdP       *idp.Service
 }
 
-// NewBootstrap initializes all common components needed by Lambda handlers.
-// adapter names the deploying binary and is stamped on every log line.
+// NewBootstrap builds the shared handler components; adapter names the binary on every log line.
 func NewBootstrap(adapter string) (*Bootstrap, error) {
 	versionInfo := version.Get()
 	ctx := context.Background()
