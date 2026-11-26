@@ -19,6 +19,7 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/logevent"
 	"github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 const defaultALBKeyEndpoint = "https://public-keys.auth.elb.%s.amazonaws.com/%s"
@@ -28,10 +29,17 @@ const defaultALBKeyEndpoint = "https://public-keys.auth.elb.%s.amazonaws.com/%s"
 // testable guard rather than a fix for an exploit.
 var albRegionRe = regexp.MustCompile(`^[a-z]{2}-[a-z]+-\d+$`)
 
-// albKeyCache is a short-lived in-memory cache for ALB EC public keys, keyed by kid.
+// albKeyCache is a short-lived in-memory cache for ALB EC public keys and failed lookups, keyed by kid.
 type albKeyCache struct {
-	mu      sync.RWMutex
-	entries map[string]albKeyCacheEntry
+	mu       sync.RWMutex
+	entries  map[string]albKeyCacheEntry
+	failures map[string]albKeyFailure
+	now      func() time.Time
+}
+
+type albKeyFailure struct {
+	err       error
+	expiresAt time.Time
 }
 
 type albKeyCacheEntry struct {
@@ -41,13 +49,22 @@ type albKeyCacheEntry struct {
 
 const albKeyCacheTTL = 5 * time.Minute
 
+const albKeyFailureTTL = jwksFailureMemoTTL
+
 // maxALBKeyCacheEntries bounds the in-process ALB public-key cache so churn
 // of distinct kids can't grow it unboundedly. Hitting the cap just clears the
 // cache; the next lookups re-fetch (perf cost only, mirrors keymemo.go).
 const maxALBKeyCacheEntries = 128
 
+func (c *albKeyCache) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
 func (c *albKeyCache) get(kid string) (*ecdsa.PublicKey, bool) {
-	now := time.Now()
+	now := c.clock()
 	c.mu.RLock()
 	e, ok := c.entries[kid]
 	c.mu.RUnlock()
@@ -76,12 +93,32 @@ func (c *albKeyCache) set(kid string, key *ecdsa.PublicKey) {
 	if _, exists := c.entries[kid]; !exists && len(c.entries) >= maxALBKeyCacheEntries {
 		c.entries = make(map[string]albKeyCacheEntry)
 	}
-	c.entries[kid] = albKeyCacheEntry{key: key, expiresAt: time.Now().Add(albKeyCacheTTL)}
+	c.entries[kid] = albKeyCacheEntry{key: key, expiresAt: c.clock().Add(albKeyCacheTTL)}
+	delete(c.failures, kid)
+}
+
+// failed returns the memoized error for kid while it is fresh.
+func (c *albKeyCache) failed(kid string) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if f, ok := c.failures[kid]; ok && c.clock().Before(f.expiresAt) {
+		return f.err
+	}
+	return nil
+}
+
+func (c *albKeyCache) fail(kid string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failures == nil || len(c.failures) >= maxALBKeyCacheEntries {
+		c.failures = make(map[string]albKeyFailure)
+	}
+	c.failures[kid] = albKeyFailure{err: err, expiresAt: c.clock().Add(albKeyFailureTTL)}
 }
 
 // ALBExtractor verifies the ALB-signed x-amzn-oidc-data JWT (ES256) and
-// extracts GitHub OIDC claims. If expectedSigner is non-empty, the JWT
-// header's "signer" field must match exactly (prevents cross-ALB injection).
+// extracts GitHub OIDC claims. The JWT header's "signer" field must equal
+// alb_expected_signer exactly (prevents cross-ALB injection).
 // Re-validates issuer and every other claim self mode checks through the same
 // checkAndNormalizeClaims path Validate() uses — ALB signs the token itself,
 // so only signature trust differs from self mode.
@@ -91,6 +128,7 @@ type ALBExtractor struct {
 	testEndpoint   bool   // true when keyEndpointFmt uses a single %s (test override)
 	httpClient     *http.Client
 	keyCache       albKeyCache
+	keyFlight      singleflight.Group
 }
 
 // ALBOption configures ALBExtractor (functional option pattern).
@@ -166,8 +204,11 @@ func (a *ALBExtractor) Extract(ctx context.Context, input ExtractionInput) (*typ
 	}
 
 	expectedSigner := cfg.JWTValidation.ALBExpectedSigner
+	if expectedSigner == "" {
+		return nil, fmt.Errorf("jwt_validation.alb_expected_signer is not set")
+	}
 	signer, _ := unverified.Header["signer"].(string)
-	if expectedSigner != "" && signer != expectedSigner {
+	if signer != expectedSigner {
 		return nil, fmt.Errorf("ALB JWT signer mismatch: got %q, want %q", signer, expectedSigner)
 	}
 
@@ -206,6 +247,9 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	if key, ok := a.keyCache.get(kid); ok {
 		return key, nil
 	}
+	if err := a.keyCache.failed(kid); err != nil {
+		return nil, err
+	}
 
 	if !a.testEndpoint {
 		if region == "" {
@@ -223,6 +267,32 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 		keyURL = fmt.Sprintf(a.keyEndpointFmt, kid)
 	}
 
+	// Detached so one caller's cancellation can't fail, or memoize a failure for, the others sharing the flight.
+	flightCtx := context.WithoutCancel(ctx)
+	ch := a.keyFlight.DoChan(kid, func() (any, error) {
+		if key, ok := a.keyCache.get(kid); ok {
+			return key, nil
+		}
+		key, err := a.downloadPublicKey(flightCtx, keyURL, region, kid)
+		if err != nil {
+			a.keyCache.fail(kid, err)
+			return nil, err
+		}
+		a.keyCache.set(kid, key)
+		return key, nil
+	})
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*ecdsa.PublicKey), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (a *ALBExtractor) downloadPublicKey(ctx context.Context, keyURL, region, kid string) (*ecdsa.PublicKey, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, keyURL, nil)
 	if err != nil {
 		return nil, err
@@ -263,6 +333,5 @@ func (a *ALBExtractor) fetchPublicKey(ctx context.Context, region, kid string) (
 	if ecKey.Curve != elliptic.P256() {
 		return nil, fmt.Errorf("ALB public key uses unexpected curve %s, expected P-256", ecKey.Curve.Params().Name)
 	}
-	a.keyCache.set(kid, ecKey)
 	return ecKey, nil
 }

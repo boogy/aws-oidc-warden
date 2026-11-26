@@ -1765,3 +1765,31 @@ func TestPositiveMatchWithNewlineUnchanged(t *testing.T) {
 	assert.True(t, authorizes(dot, map[string]any{"note": "axb"}))
 	assert.True(t, authorizes(double, map[string]any{"note": "a\nb"}), "double negation is positive polarity")
 }
+
+func TestLargeNumericClaimsFailClosed(t *testing.T) {
+	const big = float64(9007199254740993) // rounds to 2^53
+	cases := []struct {
+		name  string
+		cond  *Condition
+		value any
+		want  bool
+	}{
+		{"positive pattern rejects rounded neighbour", &Condition{Claims: map[string]Patterns{"id": {"9007199254740992"}}}, big, false},
+		{"positive pattern rejects exact 2^53", &Condition{Claims: map[string]Patterns{"id": {"9007199254740992"}}}, float64(1 << 53), false},
+		{"positive pattern rejects large negative", &Condition{Claims: map[string]Patterns{"id": {"-9007199254740992"}}}, -float64(1 << 53), false},
+		{"none_of veto fires on rounded value", &Condition{NoneOf: []*Condition{{Claims: map[string]Patterns{"id": {"9007199254740993"}}}}}, big, false},
+		{"array element rounded is unreadable", &Condition{Claims: map[string]Patterns{"id": {"9007199254740992"}}}, []any{big}, false},
+		{"largest exact integer still matches", &Condition{Claims: map[string]Patterns{"id": {"9007199254740991"}}}, float64(1<<53 - 1), true},
+		{"none_of veto does not fire on unrelated exact value", &Condition{NoneOf: []*Condition{{Claims: map[string]Patterns{"id": {"9007199254740991"}}}}}, float64(42), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := compileCondition(tc.cond, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := satisfiesConditions(tc.cond, map[string]any{"id": tc.value}); got != tc.want {
+				t.Fatalf("satisfiesConditions = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

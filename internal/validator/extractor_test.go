@@ -91,6 +91,8 @@ func newTestALBExtractor(expectedSigner string, iss *config.IssuerConfig, leeway
 	return validator.NewALBExtractor(config.NewStaticProvider(cfg), opts...)
 }
 
+const testALBSigner = "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/test/abc"
+
 func makeALBJWT(t *testing.T, key *ecdsa.PrivateKey, kid, signer string, claims map[string]any) string {
 	t.Helper()
 	tok := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims(claims))
@@ -127,7 +129,7 @@ func TestALBExtractor_Extract(t *testing.T) {
 		"actor":      "octocat",
 	})
 
-	ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	ex := newTestALBExtractor(alb, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	claims, err := ex.Extract(context.Background(), validator.ExtractionInput{
 		ALBOIDCData: token,
 		AWSRegion:   "us-east-1",
@@ -138,7 +140,7 @@ func TestALBExtractor_Extract(t *testing.T) {
 }
 
 func TestALBExtractor_MissingHeader(t *testing.T) {
-	ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
+	ex := newTestALBExtractor(testALBSigner, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: ""})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "x-amzn-oidc-data")
@@ -168,13 +170,35 @@ func TestALBExtractor_WrongSigner(t *testing.T) {
 	assert.Contains(t, err.Error(), "signer")
 }
 
+func TestALBExtractor_RejectsUnsetExpectedSigner(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	pubDER, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(pubPEM) }))
+	defer srv.Close()
+
+	for name, tokenSigner := range map[string]string{"token carries a signer": testALBSigner, "token has no signer": ""} {
+		t.Run(name, func(t *testing.T) {
+			token := makeALBJWT(t, priv, "unset-signer-kid", tokenSigner, map[string]any{
+				"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
+				"sub": "repo:org/repo:ref:refs/heads/main", "repository": "org/repo",
+				"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
+			})
+			ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+			_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "alb_expected_signer")
+		})
+	}
+}
+
 func TestALBExtractor_MaliciousKID(t *testing.T) {
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	for _, badKid := range []string{"../../etc/passwd", "?redirect=http://evil", "http://attacker.com/key", " ", ""} {
-		token := makeALBJWT(t, priv, badKid, "", map[string]any{
+		token := makeALBJWT(t, priv, badKid, testALBSigner, map[string]any{
 			"repository": "org/repo", "exp": time.Now().Add(time.Hour).Unix(),
 		})
-		ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
+		ex := newTestALBExtractor(testALBSigner, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
 		_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 		require.Errorf(t, err, "expected error for kid=%q", badKid)
 		assert.Contains(t, err.Error(), "kid")
@@ -189,11 +213,11 @@ func TestALBExtractor_IssuerMismatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(pubPEM) }))
 	defer srv.Close()
 
-	token := makeALBJWT(t, priv, kid, "", map[string]any{
+	token := makeALBJWT(t, priv, kid, testALBSigner, map[string]any{
 		"iss": "https://evil.example.com", "aud": "sts.amazonaws.com",
 		"repository": "org/repo", "exp": time.Now().Add(time.Hour).Unix(),
 	})
-	ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	ex := newTestALBExtractor(testALBSigner, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "iss")
@@ -212,7 +236,7 @@ func TestALBExtractor_KeyCache(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	token := makeALBJWT(t, priv, kid, "", map[string]any{
+	token := makeALBJWT(t, priv, kid, testALBSigner, map[string]any{
 		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
 		"sub":        "repo:org/repo:ref:refs/heads/main",
 		"repository": "org/repo",
@@ -220,7 +244,7 @@ func TestALBExtractor_KeyCache(t *testing.T) {
 		"iat":        time.Now().Unix(),
 	})
 
-	ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	ex := newTestALBExtractor(testALBSigner, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	input := validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"}
 
 	_, err := ex.Extract(context.Background(), input)
@@ -241,13 +265,13 @@ func TestALBExtractor_ExpiredToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(pubPEM) }))
 	defer srv.Close()
 
-	token := makeALBJWT(t, priv, kid, "", map[string]any{
+	token := makeALBJWT(t, priv, kid, testALBSigner, map[string]any{
 		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
 		"repository": "org/repo",
 		"exp":        time.Now().Add(-time.Hour).Unix(),
 		"iat":        time.Now().Add(-2 * time.Hour).Unix(),
 	})
-	ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	ex := newTestALBExtractor(testALBSigner, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
@@ -262,11 +286,11 @@ func TestALBExtractor_MissingExp(t *testing.T) {
 	defer srv.Close()
 
 	// No exp claim — WithExpirationRequired() must reject at the library level.
-	token := makeALBJWT(t, priv, kid, "", map[string]any{
+	token := makeALBJWT(t, priv, kid, testALBSigner, map[string]any{
 		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
 		"repository": "org/repo",
 	})
-	ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	ex := newTestALBExtractor(testALBSigner, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 	require.Error(t, err)
 }
@@ -279,25 +303,25 @@ func TestALBExtractor_FutureIssuedAt(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(pubPEM) }))
 	defer srv.Close()
 
-	token := makeALBJWT(t, priv, kid, "", map[string]any{
+	token := makeALBJWT(t, priv, kid, testALBSigner, map[string]any{
 		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
 		"repository": "org/repo",
 		"exp":        time.Now().Add(2 * time.Hour).Unix(),
 		"iat":        time.Now().Add(time.Hour).Unix(),
 	})
-	ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	ex := newTestALBExtractor(testALBSigner, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0, validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 	require.Error(t, err)
 }
 
 func TestALBExtractor_MissingRegion(t *testing.T) {
 	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	token := makeALBJWT(t, priv, "valid-kid", "", map[string]any{
+	token := makeALBJWT(t, priv, "valid-kid", testALBSigner, map[string]any{
 		"iss": "https://token.actions.githubusercontent.com", "aud": "sts.amazonaws.com",
 		"repository": "org/repo",
 		"exp":        time.Now().Add(time.Hour).Unix(),
 	})
-	ex := newTestALBExtractor("", githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
+	ex := newTestALBExtractor(testALBSigner, githubIssuerConfig("https://token.actions.githubusercontent.com", "sts.amazonaws.com"), 30*time.Second, 0, 0)
 	_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: ""})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AWSRegion")
@@ -744,12 +768,12 @@ func TestALBExtractor_HonorsConfiguredLeeway(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			now := time.Now()
-			token := makeALBJWT(t, priv, "leeway-kid", "", map[string]any{
+			token := makeALBJWT(t, priv, "leeway-kid", testALBSigner, map[string]any{
 				"iss": iss, "sub": "repo:org/repo", "aud": "sts.amazonaws.com", "repository": "org/repo",
 				"exp": now.Add(tt.expOff).Unix(),
 				"iat": now.Add(tt.iatOff).Unix(),
 			})
-			ex := newTestALBExtractor("", githubIssuerConfig(iss, "sts.amazonaws.com"), tt.leeway, 0, 0,
+			ex := newTestALBExtractor(testALBSigner, githubIssuerConfig(iss, "sts.amazonaws.com"), tt.leeway, 0, 0,
 				validator.WithALBKeyEndpoint(srv.URL+"/%s"), validator.WithALBHTTPClient(&http.Client{Timeout: 5 * time.Second}))
 			_, err := ex.Extract(context.Background(), validator.ExtractionInput{ALBOIDCData: token, AWSRegion: "us-east-1"})
 			if tt.wantErr {
