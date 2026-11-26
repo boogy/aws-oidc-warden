@@ -17,8 +17,7 @@ const fallbackErrorBody = `{"success":false,"statusCode":500,"errorCode":"intern
 // msgAssumed is the success message for a role assumption.
 const msgAssumed = "Token validation successful and role assumed"
 
-// requestMeta extracts the request ID and elapsed time from ctx. No fallback
-// on empty: minting a second UUID would report an ID absent from any log line.
+// requestMeta reads the request ID and elapsed time from ctx; no fallback ID, since a minted one would match no log line.
 func requestMeta(ctx context.Context) (requestID string, processingMS int64) {
 	requestID, _ = ctx.Value(RequestIDContextKey).(string)
 	if startTime, ok := ctx.Value(StartTimeContextKey).(time.Time); ok {

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -39,6 +40,21 @@ func ValidateRequestData(token, role string) error {
 		return ErrTokenTooLarge
 	}
 	return validateRole(role)
+}
+
+// eventBody returns the raw request body, base64-decoding it when the front end flagged it so.
+func eventBody(body string, isBase64 bool) (string, error) {
+	if !isBase64 {
+		return body, nil
+	}
+	if len(body) > base64.StdEncoding.EncodedLen(MaxBodyBytes) {
+		return "", fmt.Errorf("request body too large: %w", ErrInvalidJSON)
+	}
+	raw, err := base64.StdEncoding.DecodeString(body)
+	if err != nil {
+		return "", fmt.Errorf("invalid base64 body: %w", ErrInvalidJSON)
+	}
+	return string(raw), nil
 }
 
 // decodeRequestBody bounds and decodes a JSON body; returns ErrInvalidJSON on failure.
