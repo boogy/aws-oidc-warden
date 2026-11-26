@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Cached spoke credentials are keyed by account, `spoke_role_name` and `external_id`, so a reload that changes either assumes the new spoke role instead of reusing old credentials.
 - The spoke credential cache holds one entry per account, so superseded credentials are replaced on the account's next lookup instead of kept for the process lifetime, and an assume that a reload overtakes is not cached.
 
+### Documentation
+
+- Architecture and request-pipeline diagrams; all doc images live in `docs/img/`.
+
 ## [5.0.0] - 2026-11-25
 
 Roles in a mapping can carry their own settings, `idp.only` routes every credential through the IdP, and `session_duration` sets the default session length.

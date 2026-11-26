@@ -30,7 +30,7 @@ Serving roles from **other AWS accounts** is configured separately via the top-l
 
 ## How it works
 
-![Authorization decision flow](images/tag-auth-decision.svg)
+![Authorization decision flow](img/tag-auth-decision.svg)
 
 1. The workflow requests a role ARN as usual.
 2. The warden validates the OIDC token, derives the canonical **subject** (GitHub: the `repository` claim), and extracts the verified raw claims (`ref`, `actor`, …).
@@ -55,7 +55,7 @@ aow/ref:     "refs/heads/main"
 
 The combining rules:
 
-![Tag matching: AND across tags, OR within a tag](images/tag-auth-matching.svg)
+![Tag matching: AND across tags, OR within a tag](img/tag-auth-matching.svg)
 
 - **AND across tags** — every `aow/*` tag present on the role must match its corresponding claim. Add more tags to narrow access.
 - **OR within a tag** — a tag value is a single value or a **space-separated list**; the claim must equal one of them.
@@ -152,7 +152,7 @@ Rules:
 
 When `tag_auth.enabled` is `true` **and** `role_mappings` is also configured, both are consulted in this order for the requested role:
 
-![Precedence: mapping first, then tags for unmapped roles](images/tag-auth-precedence.svg)
+![Precedence: mapping first, then tags for unmapped roles](img/tag-auth-precedence.svg)
 
 ```
 explicitlyAllowed = mapping matches subject AND passes conditions AND lists the requested role
@@ -275,7 +275,7 @@ Three behaviors are intentional but easy to misjudge. Review them before enablin
 
 Authorization tags decide **whether** a role may be assumed; **session tags** then travel with the issued credentials so downstream resources can restrict access by the calling subject/ref (ABAC). The warden attaches session tags on **every** `AssumeRole` — both the explicit-mapping path and the tag-auth path — via `sts:TagSession`. The tag set is **per-issuer and spec-driven**: each issuer's `session_tags` map (STS tag key ← raw claim name) decides what is attached (see [SESSION_TAGGING.md](SESSION_TAGGING.md)).
 
-![Session tags enable ABAC downstream](images/tag-auth-abac.svg)
+![Session tags enable ABAC downstream](img/tag-auth-abac.svg)
 
 The standard GitHub `session_tags` spec produces:
 
@@ -323,7 +323,7 @@ For the target role's **own** trust or boundary, you can also gate the assume it
 
 ## Role chaining & transitive session tags
 
-![Role chaining and transitive session tags](images/tag-auth-transitive.svg)
+![Role chaining and transitive session tags](img/tag-auth-transitive.svg)
 
 > **RECOMMENDED.** Enable this even if you don't use tag-based authorization — it's a top-level setting (`session_tags_transitive`, independent of `tag_auth.enabled`) documented here because role chaining is where it matters most. Every session tag the warden attaches is dropped the instant the target role assumes another role: `sts:AssumeRole` does not propagate the calling principal's session tags to the next hop unless they were explicitly marked transitive on _this_ hop. So without it, any ABAC policy written against `aws:PrincipalTag/repo` (or any other identity tag) silently stops seeing who the original caller was as soon as the chain goes one role deep — and so does your audit trail. The service defaults this to `false` only for upgrade safety, not because it's a weaker posture: see "When NOT to use" below for the one failure mode this default protects against.
 
@@ -385,7 +385,7 @@ With `session_tags_transitive: true`, even if the target role chains to another 
 
 ## Target account allow-list
 
-![Target account allow-list gate](images/tag-auth-accounts.svg)
+![Target account allow-list gate](img/tag-auth-accounts.svg)
 
 With `cross_account.enabled: true` and no `allowed_accounts` set, the warden may assume roles in **any** AWS account. In production, restrict this to a known set of member accounts with `cross_account.allowed_accounts`.
 
@@ -412,7 +412,7 @@ Or as a comma-separated environment variable: `AOW_CROSS_ACCOUNT_ALLOWED_ACCOUNT
 
 ## Cross-account
 
-![Cross-account hub/spoke flow](images/tag-auth-crossaccount.svg)
+![Cross-account hub/spoke flow](img/tag-auth-crossaccount.svg)
 
 Gated by the top-level `cross_account` block. `cross_account.enabled: true` is **required** for any cross-account operation — `false` or the block omitted hard-blocks both role assumption and tag reads with an error. Once enabled, it applies independent of `tag_auth`; explicit `role_mappings` targeting member-account ARNs are gated the same way. A full worked example (config + IAM roles + StackSets template) lives in [examples/cross-account/](examples/cross-account/).
 

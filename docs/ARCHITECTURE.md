@@ -2,58 +2,24 @@
 
 ## Overview
 
-The AWS OIDC Warden is designed as a secure, high-performance, and scalable service that acts as a bridge between GitHub Actions (and other OIDC providers) and AWS resources. This document provides a comprehensive overview of the system architecture, component interactions, and data flow.
+AWS OIDC Warden exchanges an OIDC token from a CI system (GitHub Actions, GitLab CI, or any configured issuer) for short-lived AWS credentials. It runs as a Lambda behind one of four AWS front-ends, or as a local HTTP server. This document covers its components, request flow, and security model.
 
 ## High-Level Architecture
 
-```mermaid
-graph TB
-    subgraph "GitHub Actions"
-        GA[GitHub Actions Workflow]
-    end
+![AWS OIDC Warden architecture: CI job, front-end, request pipeline, JWKS cache, IdP service, S3, IAM and STS](img/architecture.svg)
 
-    subgraph "AWS OIDC Warden"
-        ENTRY[Entry Point<br/>API Gateway / Lambda URL / ALB]
-        PROCESSOR[Request Processor]
-        VALIDATOR[Token Validator]
-        CACHE[Cache Layer<br/>Memory / DynamoDB / S3]
-        CONSUMER[AWS Consumer]
-        CONFIG[Configuration<br/>Issuers, Role Mappings & Conditions]
-    end
+Dashed arrows are return paths: credentials back to the caller, and STS fetching the warden's own discovery/JWKS during `AssumeRoleWithWebIdentity`. S3 holds the optional config overlay, S3-hosted session policies and the audit trail. In `apigw` and `alb` modes the front-end verifies the token and the extractor reads the claims it forwards; only `self` mode uses the JWKS cache. `AssumeRole` always runs hub → target with the warden's own credentials; cross-account spoke credentials are used only to read role tags.
 
-    subgraph "External Services"
-        JWKS[Per-Issuer JWKS<br/>e.g. GitHub, GitLab, ...]
-        AWS[AWS Services<br/>STS / IAM / S3]
-    end
+### Request Lifecycle
 
-    GA -->|OIDC Token + Role ARN| ENTRY
-    ENTRY --> PROCESSOR
-    PROCESSOR --> VALIDATOR
-    PROCESSOR --> CONSUMER
-    PROCESSOR --> CONFIG
-
-    VALIDATOR -->|Fetch JWKS| JWKS
-    VALIDATOR --> CACHE
-
-    CONSUMER -->|AssumeRole| AWS
-
-    PROCESSOR -->|AWS Credentials| ENTRY
-    ENTRY -->|HTTP Response| GA
-
-    style PROCESSOR fill:#e1f5fe
-    style VALIDATOR fill:#f3e5f5
-    style CONSUMER fill:#e8f5e8
-```
-
-### Simple Flow Overview
-
-1. **An OIDC client** (GitHub Actions, GitLab CI, or any configured issuer) sends an OIDC token and desired role ARN to the service
-2. **Entry Point** receives the HTTP request (via API Gateway, Lambda URL, or ALB)
-3. **Request Processor** orchestrates the validation and role assumption process
-4. **Token Validator** routes the token to its issuer and verifies the JWT signature against that issuer's JWKS (with caching)
-5. **Configuration** engine matches the canonical subject against the issuer's role mappings and checks their conditions
-6. **AWS Consumer** assumes the requested IAM role with session tags and policies
-7. **Response** contains temporary AWS credentials with tagged session
+1. **Front-end** receives `POST` with the token and role ARN (API Gateway, Lambda URL, ALB, or local server).
+2. **Adapter** parses the event and routes it: IdP discovery/JWKS paths are served directly; everything else enters the pipeline.
+3. **Claims extractor** verifies the token (`self`) or reads the front-end's verified claims (`apigw`, `alb`), then derives the issuer-bound canonical subject.
+4. **Account guard** rejects target accounts outside `cross_account.allowed_accounts` (hub-only when disabled).
+5. **Authorize** matches the subject against that issuer's role mappings and conditions; if no mapping names the role, tag-auth may grant it from the role's IAM tags.
+6. **Grant scope** resolves the session policy (inline or S3) and builds session tags once.
+7. **Issue** credentials through `AssumeRole` (≤ 1h) or, for IdP-eligible roles and under `idp.only`, by minting a token and calling `AssumeRoleWithWebIdentity`; over 1h without the IdP is refused (see [IDP.md](IDP.md)).
+8. **Audit** records the decision; with `audit_required`, the write must succeed before credentials return.
 
 ## Component Architecture
 
@@ -119,7 +85,7 @@ OIDC Client → HTTP Server → AWS OIDC Warden
 
 ### 2. Core Processing Pipeline
 
-The request processing follows a strict pipeline ensuring security and performance:
+Sequence for `self` mode issuing through `AssumeRole`; the stale gate, audit-on-deny and IdP path are in the [Request Processing Flow](#1-request-processing-flow):
 
 ```mermaid
 sequenceDiagram
@@ -220,13 +186,15 @@ type RequestProcessor struct {
     provider  *config.Provider
     consumer  aws.AwsConsumerInterface
     extractor validator.ClaimsExtractorInterface
-    audit     AuditSink // nil is a safe no-op
-    frontend  string    // apigateway/apigatewayv2/alb/lambdaurl
+    audit     AuditSink    // nil is a safe no-op
+    frontend  string       // apigateway/apigatewayv2/alb/lambdaurl
+    idp       *idp.Service // nil disables the IdP mint path
 }
 
 func NewRequestProcessor(provider *config.Provider, consumer aws.AwsConsumerInterface, extractor validator.ClaimsExtractorInterface, audit AuditSink, frontend string) *RequestProcessor
+func (r *RequestProcessor) WithIdP(s *idp.Service) *RequestProcessor
 
-func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*types.Credentials, error)
+func (r *RequestProcessor) ProcessRequest(ctx context.Context, requestData *RequestData, input validator.ExtractionInput, requestID string, log *slog.Logger) (*IssuedCredentials, error)
 ```
 
 **Key Responsibilities:**
@@ -405,31 +373,11 @@ role_mappings:
 
 ### 1. Request Processing Flow
 
-```mermaid
-flowchart TD
-    A[Incoming Request] --> B{Parse Request}
-    B -->|Invalid| C[Return 400 Error]
-    B -->|Valid| D[Extract Token & Role]
+![Request pipeline: extract, stale gate, account guard, authorize, duration and path, grant scope, AssumeRole or IdP mint, audit](img/request-pipeline.svg)
 
-    D --> E[Validate JWT Token]
-    E -->|Invalid| F[Return 401/403 Error]
-    E -->|Valid| G[Extract Claims]
+Each box shows the HTTP status it denies with. A body that fails to parse is rejected with 400 before step 1; IdP discovery and JWKS paths bypass the pipeline. Grant scope runs inside both issue paths, after the path is chosen.
 
-    G --> GB[IsTargetAccountAllowed]
-    GB -->|Denied| GC[Return 403 Error]
-    GB -->|Allowed| H[AuthorizeRoles issuer+subject]
-
-    H -->|Explicit match| N[Apply Session Policy]
-    H -->|No match| HA{tag_auth enabled and role unmapped?}
-    HA -->|No| I[Return 403 Error]
-    HA -->|Yes| HB[GetRoleTags + TagAuth.Authorize]
-    HB -->|Denied| I[Return 403 Error]
-    HB -->|Authorized| N
-
-    N --> O[Assume AWS Role via STS]
-    O -->|Failed| P[Return 500 Error]
-    O -->|Success| Q[Return Credentials]
-```
+Every decision, allow or deny, writes an audit record. Status codes come from `classifyError` in `internal/handler/errors.go`; the IdP error table is in [IDP.md](IDP.md#error-codes-and-audit-fields).
 
 ### 2. Condition Validation
 
@@ -488,21 +436,11 @@ flowchart LR
 
 ### 1. Token Validation Security
 
-```mermaid
-flowchart TD
-    A[Receive JWT Token] --> B[Parse JWT Header]
-    B --> C[Extract Key ID]
-    C --> D[Fetch JWKS from Provider]
-    D --> E[Find Matching Public Key]
-    E --> F[Verify Signature]
-    F -->|Invalid| G[Reject Token]
-    F -->|Valid| H[Validate Claims]
-    H --> I[Check Issuer]
-    I --> J[Check Audience]
-    J --> K[Check Expiration]
-    K --> L[Extract Custom Claims]
-    L --> M[Token Accepted]
-```
+`self` mode only; `apigw` and `alb` delegate signature checks to the front-end.
+
+![Token validation](img/token-validation.svg)
+
+Details in [TOKEN_VALIDATION.md](TOKEN_VALIDATION.md).
 
 ### 2. Subject-Based Authorization
 
@@ -545,10 +483,10 @@ No claim is privileged or evaluated in a fixed order: every key under `condition
 
 Both features are opt-in and default to `false`:
 
-| Toggle                  | Off means                                                                                              | On means                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `tag_auth.enabled`      | Only explicit `role_mappings` authorize                                                                | Role IAM tags authorize roles that **no mapping names**                 |
-| `cross_account.enabled` | **Every** cross-account operation fails closed — assumption and tag reads, mappings and tag-auth alike | Accounts in `allowed_accounts` are reachable                            |
+| Toggle                  | Off means                                                                                              | On means                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `tag_auth.enabled`      | Only explicit `role_mappings` authorize                                                                | Role IAM tags authorize roles that **no mapping names** |
+| `cross_account.enabled` | **Every** cross-account operation fails closed — assumption and tag reads, mappings and tag-auth alike | Accounts in `allowed_accounts` are reachable            |
 
 **The one-hop rule.** Every role assumption — same-account or cross-account — goes directly from the hub's own credentials to the target role. The spoke role exists only to read tags, and is never an assume target.
 
@@ -573,15 +511,15 @@ Full tag reference and IAM setup: [TAG_BASED_AUTHORIZATION.md](TAG_BASED_AUTHORI
 
 **Diagrams:**
 
-| Diagram                        | File                                                                 |
-| ------------------------------ | -------------------------------------------------------------------- |
-| Authorization decision flow    | [images/tag-auth-decision.svg](images/tag-auth-decision.svg)         |
-| Cross-account hub/spoke flow   | [images/tag-auth-crossaccount.svg](images/tag-auth-crossaccount.svg) |
-| ABAC session tag flow          | [images/tag-auth-abac.svg](images/tag-auth-abac.svg)                 |
-| Transitive session tags        | [images/tag-auth-transitive.svg](images/tag-auth-transitive.svg)     |
-| Account allow-list enforcement | [images/tag-auth-accounts.svg](images/tag-auth-accounts.svg)         |
-| Tag matching logic             | [images/tag-auth-matching.svg](images/tag-auth-matching.svg)         |
-| Authorization precedence       | [images/tag-auth-precedence.svg](images/tag-auth-precedence.svg)     |
+| Diagram                        | File                                                           |
+| ------------------------------ | -------------------------------------------------------------- |
+| Authorization decision flow    | [img/tag-auth-decision.svg](img/tag-auth-decision.svg)         |
+| Cross-account hub/spoke flow   | [img/tag-auth-crossaccount.svg](img/tag-auth-crossaccount.svg) |
+| ABAC session tag flow          | [img/tag-auth-abac.svg](img/tag-auth-abac.svg)                 |
+| Transitive session tags        | [img/tag-auth-transitive.svg](img/tag-auth-transitive.svg)     |
+| Account allow-list enforcement | [img/tag-auth-accounts.svg](img/tag-auth-accounts.svg)         |
+| Tag matching logic             | [img/tag-auth-matching.svg](img/tag-auth-matching.svg)         |
+| Authorization precedence       | [img/tag-auth-precedence.svg](img/tag-auth-precedence.svg)     |
 
 ### 5. Residual Risk: Stateless Replay
 
