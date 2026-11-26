@@ -245,7 +245,7 @@ type Config struct {
 	// as "@name", resolved at Validate() before the requested-role gate.
 	RoleSets map[string][]string `mapstructure:"role_sets" json:"role_sets,omitempty"`
 
-	// Never mutated by Validate(); the expanded set lives in `effective`.
+	// RoleMappings and RoleGroups are the raw configured grants; Validate() never mutates them (expanded set: `effective`).
 	RoleMappings []RoleMapping `mapstructure:"role_mappings" json:"role_mappings,omitempty"`
 	RoleGroups   []RoleGroup   `mapstructure:"role_groups"   json:"role_groups,omitempty"`
 
