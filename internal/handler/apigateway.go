@@ -90,19 +90,12 @@ func (h *AwsApiGateway) unmarshalRequestData(event events.APIGatewayProxyRequest
 
 // newResponse builds this frontend's response type from a status and body.
 func (h *AwsApiGateway) newResponse(statusCode int, body string) events.APIGatewayProxyResponse {
-	return events.APIGatewayProxyResponse{
-		StatusCode:      statusCode,
-		Headers:         ResponseHeaders,
-		Body:            body,
-		IsBase64Encoded: false,
-	}
+	return h.newResponseWithHeaders(statusCode, body, nil)
 }
 
-// newResponseWithHeaders is newResponse with extra headers overlaid on ResponseHeaders.
+// newResponseWithHeaders builds a response with extra headers overlaid on a copy of ResponseHeaders.
 func (h *AwsApiGateway) newResponseWithHeaders(statusCode int, body string, extra map[string]string) events.APIGatewayProxyResponse {
-	resp := h.newResponse(statusCode, body)
-	resp.Headers = mergeHeaders(extra)
-	return resp
+	return events.APIGatewayProxyResponse{StatusCode: statusCode, Headers: mergeHeaders(extra), Body: body}
 }
 
 // WithIdP enables the IdP routes and returns the handler.
