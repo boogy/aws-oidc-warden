@@ -47,6 +47,12 @@ func IsMultiRegionKMSKey(arn string) bool {
 	return strings.Contains(arn, ":key/mrk-")
 }
 
+// mrkIdentity is a multi-region key ARN without its region, shared by every replica.
+func mrkIdentity(arn string) string {
+	p := strings.Split(arn, ":")
+	return "mrk:" + p[1] + ":" + p[4] + ":" + p[5]
+}
+
 // IdPConfig configures the optional token-minting identity provider.
 type IdPConfig struct {
 	Enabled                bool            `mapstructure:"enabled"                  json:"enabled"`
@@ -275,6 +281,13 @@ func (c *IdPConfig) validateKeys(allowInsecure bool) error {
 			return fmt.Errorf("idp.signing_keys[%d]: duplicate key %s", i, k.Source())
 		}
 		seen[k.Source()] = true
+		if IsMultiRegionKMSKey(k.KMSKeyID) {
+			id := mrkIdentity(k.KMSKeyID)
+			if seen[id] {
+				return fmt.Errorf("idp.signing_keys[%d]: %s is a replica of an earlier multi-region key; list it once", i, k.KMSKeyID)
+			}
+			seen[id] = true
+		}
 	}
 	if active != 1 {
 		return errors.New("idp.signing_keys: exactly one active key is required")
