@@ -1178,6 +1178,33 @@ func TestAssumeRoleNoClampIAMUser(t *testing.T) {
 	})
 }
 
+func TestSpokeCredsFor_ReloadDuringAssumeIsNotCached(t *testing.T) {
+	base := gtvcfg.CrossAccount{Enabled: true, SpokeRoleName: "aow-spoke", ExternalID: "ext-1", SpokeSessionDuration: 15 * time.Minute}
+	ca := base
+	live := &gtvcfg.Config{CrossAccount: &ca}
+
+	m := new(MockAwsServiceWrapper)
+	m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
+	exp := time.Now().Add(time.Hour)
+	m.On("AssumeRole", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+		reloaded := base
+		reloaded.ExternalID = "ext-2"
+		live = &gtvcfg.Config{CrossAccount: &reloaded}
+	}).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
+		SessionToken: aws.String("ST"), Expiration: &exp,
+	}}, nil).Once()
+
+	c := NewAwsConsumer(live)
+	c.AWS = m
+	c.SetConfigSource(func() *gtvcfg.Config { return live })
+
+	p, err := c.spokeCredsFor(context.Background(), "222222222222")
+	require.NoError(t, err)
+	assert.NotNil(t, p, "the in-flight caller still gets its credentials")
+	assert.Empty(t, c.spokeCache, "credentials assumed under a superseded config are not cached")
+}
+
 func TestSpokeCredsFor_ReloadedSpokeSettingsReassume(t *testing.T) {
 	base := gtvcfg.CrossAccount{Enabled: true, SpokeRoleName: "aow-spoke", ExternalID: "ext-1", SpokeSessionDuration: 15 * time.Minute}
 	cases := []struct {
@@ -1210,8 +1237,11 @@ func TestSpokeCredsFor_ReloadedSpokeSettingsReassume(t *testing.T) {
 			c.AWS = m
 			c.SetConfigSource(func() *gtvcfg.Config { return live })
 
-			_, err := c.spokeCredsFor(context.Background(), "222222222222")
+			_, err := c.spokeCredsFor(context.Background(), "333333333333")
 			require.NoError(t, err)
+			_, err = c.spokeCredsFor(context.Background(), "222222222222")
+			require.NoError(t, err)
+			calls = calls[1:]
 
 			reloaded := base
 			tc.reload(&reloaded)
@@ -1223,6 +1253,8 @@ func TestSpokeCredsFor_ReloadedSpokeSettingsReassume(t *testing.T) {
 			last := calls[len(calls)-1]
 			assert.Equal(t, "arn:aws:iam::222222222222:role/"+tc.wantRole, *last.RoleArn)
 			assert.Equal(t, tc.wantExtID, *last.ExternalId)
+			assert.Len(t, c.spokeCache, 2)
+			assert.Contains(t, c.spokeCache, "333333333333")
 		})
 	}
 }
