@@ -202,9 +202,11 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		rec.MatchedVia = "explicit"
 	}
 	mayTagAuth := !allowed && cfg.TagAuthMayGrant(requestedRole)
+	lookupFailed := false
 	if mayTagAuth {
 		roleTags, terr := r.consumer.GetRoleTags(ctx, requestedRole)
 		if terr != nil {
+			lookupFailed = true
 			logevent.Warn(ctx, log, logevent.AuthzTagAuthLookupFailure, "role tag lookup failed",
 				slog.String("error", terr.Error()))
 		} else if cfg.TagAuth.Authorize(roleTags, claimsMap, claims.Issuer, claims.Subject) {
@@ -219,6 +221,9 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		rec.Reason = "role not allowed for this subject or its conditions are not met"
 		if cfg.TagAuthOn() && !mayTagAuth {
 			rec.Reason = "role is named by a mapping, so tag-auth is not consulted; no mapping allowed it for this subject or its conditions"
+		}
+		if lookupFailed {
+			rec.Reason = "tag-auth role tag lookup failed"
 		}
 		denyAttrs := []slog.Attr{slog.Any("allowedRoles", roles)}
 		if cfg.LogClaimValues {
