@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -67,5 +68,35 @@ func TestMaxBodyBytesCoversLegitimateBody(t *testing.T) {
 	}
 	if MaxBodyBytes >= 64*1024 {
 		t.Errorf("MaxBodyBytes = %d, want well under 64 KiB", MaxBodyBytes)
+	}
+}
+
+func TestEventBody(t *testing.T) {
+	over := base64.StdEncoding.EncodeToString(make([]byte, MaxBodyBytes+3))
+	cases := []struct {
+		name    string
+		body    string
+		b64     bool
+		want    string
+		wantErr bool
+	}{
+		{"plain passes through", "{}", false, "{}", false},
+		{"base64 decoded", "e30=", true, "{}", false},
+		{"invalid base64", "e30", true, "", true},
+		{"oversized encoding rejected before decode", over, true, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := eventBody(tc.body, tc.b64)
+			if tc.wantErr {
+				if !errors.Is(err, ErrInvalidJSON) {
+					t.Fatalf("err = %v, want ErrInvalidJSON", err)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
+			}
+		})
 	}
 }

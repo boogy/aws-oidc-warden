@@ -73,7 +73,11 @@ func (h *AwsLambdaUrl) createRequestContext(ctx context.Context, event events.La
 
 // unmarshalRequestData parses and validates the request data from a Lambda URL event
 func (h *AwsLambdaUrl) unmarshalRequestData(event events.LambdaFunctionURLRequest) (*RequestData, error) {
-	return ParseRequestBody(event.Body)
+	body, err := eventBody(event.Body, event.IsBase64Encoded)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRequestBody(body)
 }
 
 // newResponse builds this frontend's response type from a status and body.

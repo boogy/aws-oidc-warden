@@ -45,7 +45,12 @@ func (h *AwsApiGatewayV2) Handler(ctx context.Context, event events.APIGatewayV2
 		return resp, nil
 	}
 
-	requestData, err := ParseRoleOnlyRequestBody(event.Body)
+	body, err := eventBody(event.Body, event.IsBase64Encoded)
+	if err != nil {
+		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
+		return h.respondError(ctx, err, http.StatusBadRequest)
+	}
+	requestData, err := ParseRoleOnlyRequestBody(body)
 	if err != nil {
 		logevent.Warn(ctx, log, logevent.RequestRejected, "request rejected", slog.String("reason", err.Error()))
 		return h.respondError(ctx, err, http.StatusBadRequest)
