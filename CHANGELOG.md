@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [5.0.1] - 2026-11-27
+
+Fixes across the handler, ALB validator, config matching and cross-account spoke credential cache.
+
 ### Changed
 
 - With `idp.enabled: false`, an omitted `durationSeconds` over a `session_duration` above 1h gets 1h through `AssumeRole` instead of 503.
@@ -922,7 +926,8 @@ Multi-issuer, any-provider release with provider-neutral canonical **subject** a
 - Container image published to GHCR and Docker Hub
 - CodeQL, Trivy, and gosec security scanning in CI
 
-[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v5.0.0...HEAD
+[Unreleased]: https://github.com/boogy/aws-oidc-warden/compare/v5.0.1...HEAD
+[5.0.1]: https://github.com/boogy/aws-oidc-warden/compare/v5.0.0...v5.0.1
 [5.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v4.0.0...v5.0.0
 [4.0.0]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.2...v4.0.0
 [3.5.2]: https://github.com/boogy/aws-oidc-warden/compare/v3.5.1...v3.5.2
