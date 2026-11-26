@@ -1226,3 +1226,52 @@ func TestSpokeCredsFor_ReloadedSpokeSettingsReassume(t *testing.T) {
 		})
 	}
 }
+
+func TestCrossAccountChecksUseOneConfigSnapshot(t *testing.T) {
+	allow := func(acct string) *gtvcfg.Config {
+		return &gtvcfg.Config{CrossAccount: &gtvcfg.CrossAccount{
+			Enabled: true, SpokeRoleName: "aow-spoke", SpokeSessionDuration: 15 * time.Minute,
+			AllowedAccounts: []string{acct},
+		}}
+	}
+	cases := []struct {
+		name string
+		call func(*AwsConsumer) error
+	}{
+		{"spokeCredsFor", func(c *AwsConsumer) error {
+			_, err := c.spokeCredsFor(context.Background(), "222222222222")
+			return err
+		}},
+		{"IsTargetAccountAllowed", func(c *AwsConsumer) error {
+			ok, err := c.IsTargetAccountAllowed(context.Background(), "arn:aws:iam::222222222222:role/app")
+			if err == nil && !ok {
+				return errors.New("not allowed")
+			}
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := new(MockAwsServiceWrapper)
+			m.On("GetCallerAccount", mock.Anything).Return("111111111111", nil)
+			exp := time.Now().Add(time.Hour)
+			m.On("AssumeRole", mock.Anything, mock.Anything).Return(&sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+				AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"),
+				SessionToken: aws.String("ST"), Expiration: &exp,
+			}}, nil)
+
+			c := NewAwsConsumer(allow("222222222222"))
+			c.AWS = m
+			reads := 0
+			c.SetConfigSource(func() *gtvcfg.Config {
+				reads++
+				if reads == 1 {
+					return allow("222222222222")
+				}
+				return allow("333333333333")
+			})
+
+			require.NoError(t, tc.call(c))
+		})
+	}
+}

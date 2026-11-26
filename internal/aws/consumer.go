@@ -111,7 +111,7 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 	if account == hub {
 		return nil, nil
 	}
-	if !a.accountAllowed(account, hub) {
+	if !accountAllowed(cfg, account, hub) {
 		return nil, fmt.Errorf("target account %s is not in cross_account.allowed_accounts", account)
 	}
 
@@ -303,7 +303,7 @@ func (a *AwsConsumer) AssumeRole(ctx context.Context, roleArn, sessionName strin
 		return nil, fmt.Errorf("resolve caller identity: %w", err)
 	}
 
-	if !a.targetAllowed(account, hub) {
+	if !targetAllowed(a.cfg(), account, hub) {
 		return nil, fmt.Errorf("%w: %s", ErrAccountNotAllowed, roleArn)
 	}
 
@@ -409,8 +409,7 @@ func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map
 }
 
 // accountAllowed reports whether account is the hub or allow-listed; an empty list permits any.
-func (a *AwsConsumer) accountAllowed(account, hub string) bool {
-	cfg := a.cfg()
+func accountAllowed(cfg *gtvcfg.Config, account, hub string) bool {
 	if cfg == nil {
 		return true
 	}
@@ -434,15 +433,15 @@ func (a *AwsConsumer) IsTargetAccountAllowed(ctx context.Context, roleArn string
 	if err != nil {
 		return false, fmt.Errorf("resolve hub account: %w", err)
 	}
-	return a.targetAllowed(account, hub), nil
+	return targetAllowed(a.cfg(), account, hub), nil
 }
 
 // targetAllowed is the cross_account rule: disabled means hub-only.
-func (a *AwsConsumer) targetAllowed(account, hub string) bool {
-	if cfg := a.cfg(); cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
+func targetAllowed(cfg *gtvcfg.Config, account, hub string) bool {
+	if cfg == nil || cfg.CrossAccount == nil || !cfg.CrossAccount.Enabled {
 		return account == hub
 	}
-	return a.accountAllowed(account, hub)
+	return accountAllowed(cfg, account, hub)
 }
 
 // roleTagCacheTTL bounds how long role tags are cached.
