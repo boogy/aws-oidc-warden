@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1152 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="request-pipeline-title request-pipeline-desc" id="request-pipeline-root">
+      <title id="request-pipeline-title">AWS OIDC Warden request pipeline</title>
+      <desc id="request-pipeline-desc">Each request passes claim extraction, the stale-config gate, the target-account guard and authorization; then the duration picks AssumeRole (at most one hour) or an IdP-minted token exchanged with AssumeRoleWithWebIdentity, the session policy and tags are attached, and the decision is audited before credentials return. Every gate denies with the HTTP status shown, and denials are audited too.</desc>
+      <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #request-pipeline-root { --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #request-pipeline-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #request-pipeline-root .diagram-container { width: 100%; overflow-x: auto; }</style>
+        <pattern id="request-pipeline-dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.9" fill="#2d3142" fill-opacity="0.10"/></pattern>
+        <marker id="request-pipeline-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        <marker id="request-pipeline-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+        <marker id="request-pipeline-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+      </defs>
+      <rect width="100%" height="100%" fill="#f5f5f5"/>
+      <rect width="100%" height="100%" fill="url(#request-pipeline-dots)" opacity="0.55"/>
+
+    <rect x="40" y="64" width="1072" height="128" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/>
+    <rect x="508" y="68" width="136" height="12" rx="2" fill="#f5f5f5"/>
+    <text x="576" y="77" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">AUTHENTICATE · AUTHORIZE</text>
+
+    <path d="M 264,136 H 320" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#request-pipeline-arrow)"/>
+    <path d="M 544,136 H 600" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#request-pipeline-arrow)"/>
+    <path d="M 824,136 H 872" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#request-pipeline-arrow)"/>
+    <path d="M 984,168 V 272" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#request-pipeline-arrow)"/>
+    <path d="M 872,304 H 824" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#request-pipeline-arrow)"/>
+    <path d="M 600,292 H 584 Q 576,292 576,284 V 240 Q 576,232 568,232 H 520" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#request-pipeline-arrow)"/>
+    <path d="M 600,316 H 584 Q 576,316 576,324 V 368 Q 576,376 568,376 H 520" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#request-pipeline-arrow-link)"/>
+    <path d="M 296,232 H 168 Q 160,232 160,240 V 272" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#request-pipeline-arrow-accent)"/>
+    <path d="M 296,376 H 168 Q 160,376 160,368 V 336" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#request-pipeline-arrow-accent)"/>
+
+    <rect x="961" y="212" width="46" height="12" rx="2" fill="#f5f5f5"/>
+    <text x="984" y="221" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ALLOWED</text>
+    <rect x="561" y="254" width="30" height="12" rx="2" fill="#f5f5f5"/>
+    <text x="576" y="263" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">≤ 1H</text>
+    <rect x="564" y="338" width="24" height="12" rx="2" fill="#f5f5f5"/>
+    <text x="576" y="347" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">IDP</text>
+
+    <rect x="56" y="104" width="208" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="56" y="104" width="208" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <rect x="64" y="112" width="60" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+    <text x="94" y="121" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">1 · EXTRACT</text>
+    <text x="160" y="144" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Extract claims</text>
+    <text x="160" y="160" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">verify · subject · 401</text>
+    <rect x="320" y="104" width="224" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="320" y="104" width="224" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <rect x="328" y="112" width="56" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+    <text x="356" y="121" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">2 · CONFIG</text>
+    <text x="432" y="144" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Stale gate</text>
+    <text x="432" y="160" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">mappings_max_stale · 503</text>
+    <rect x="600" y="104" width="224" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="600" y="104" width="224" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <rect x="608" y="112" width="60" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+    <text x="638" y="121" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">3 · ACCOUNT</text>
+    <text x="712" y="144" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Account guard</text>
+    <text x="712" y="160" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">target account · 403</text>
+    <rect x="872" y="104" width="224" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="872" y="104" width="224" height="64" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+    <rect x="880" y="112" width="51" height="12" rx="2" fill="none" stroke="#bf4520" stroke-width="0.8" stroke-opacity="0.50"/>
+    <text x="905.5" y="121" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">4 · AUTHZ</text>
+    <text x="984" y="144" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Authorize</text>
+    <text x="984" y="160" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">mappings → tag-auth · 403</text>
+    <rect x="872" y="272" width="224" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="872" y="272" width="224" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <rect x="880" y="280" width="46" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+    <text x="903" y="289" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">5 · PATH</text>
+    <text x="984" y="312" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Duration &amp; path</text>
+    <text x="984" y="328" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">selectIdP · 400/403/503</text>
+    <rect x="600" y="272" width="224" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="600" y="272" width="224" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <rect x="608" y="280" width="51" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+    <text x="633.5" y="289" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">6 · SCOPE</text>
+    <text x="712" y="312" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Grant scope</text>
+    <text x="712" y="328" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">policy · tags · 500</text>
+    <rect x="296" y="200" width="224" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="296" y="200" width="224" height="64" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+    <rect x="304" y="208" width="46" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.22"/>
+    <text x="327" y="217" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">7a · STS</text>
+    <text x="408" y="240" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">AssumeRole</text>
+    <text x="408" y="256" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">hub → target · 403/500</text>
+    <rect x="296" y="344" width="224" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="296" y="344" width="224" height="64" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+    <rect x="304" y="352" width="46" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.22"/>
+    <text x="327" y="361" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">7b · IDP</text>
+    <text x="408" y="384" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Mint + AR-WI</text>
+    <text x="408" y="400" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">IdP-eligible · 403/503</text>
+    <rect x="56" y="272" width="208" height="64" rx="6" fill="#f5f5f5"/>
+    <rect x="56" y="272" width="208" height="64" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+    <rect x="64" y="280" width="51" height="12" rx="2" fill="none" stroke="#4f5d75" stroke-width="0.8" stroke-opacity="0.50"/>
+    <text x="89.5" y="289" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">8 · AUDIT</text>
+    <text x="160" y="312" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Audit, then return</text>
+    <text x="160" y="328" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">required → 500 on fail</text>
+
+    <line x1="48" y1="440" x2="1104" y2="440" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+    <text x="48" y="456" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND · NUMBERS ARE THE DENY STATUS</text>
+    <rect x="48" y="472" width="14" height="10" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+    <text x="68" y="480" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Authorization decision</text>
+    <rect x="210" y="472" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+    <text x="230" y="480" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Pipeline step</text>
+    <rect x="326" y="472" width="14" height="10" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+    <text x="346" y="480" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">STS call</text>
+    <rect x="416" y="472" width="14" height="10" rx="2" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+    <text x="436" y="480" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Audit sink</text>
+    <line x1="516" y1="478" x2="544" y2="478" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#request-pipeline-arrow-link)"/>
+    <text x="552" y="480" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">IdP path</text>
+    <line x1="622" y1="478" x2="650" y2="478" stroke="#bf4520" stroke-width="1.2" marker-end="url(#request-pipeline-arrow-accent)"/>
+    <text x="658" y="480" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Credentials issued</text>
+    </svg>
