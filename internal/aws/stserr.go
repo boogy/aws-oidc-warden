@@ -1,10 +1,15 @@
 package aws
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/smithy-go"
 )
 
@@ -31,6 +36,33 @@ func classifyAssumeRoleError(err error) error {
 		return fmt.Errorf("%w: %w", ErrAssumeRoleDenied, err)
 	}
 	return err
+}
+
+// IsTransient reports whether err is a throttling, server-fault, connection or timeout failure a retry may clear.
+func IsTransient(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if (retry.RetryableHTTPStatusCode{Codes: retry.DefaultRetryableHTTPStatusCodes}).IsErrorRetryable(err) == aws.TrueTernary ||
+		retry.IsErrorThrottles(retry.DefaultThrottles).IsErrorThrottle(err) == aws.TrueTernary {
+		return true
+	}
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
+		// The error text can carry the caller's role name, so an API error is never string-matched.
+		return apiErr.ErrorFault() == smithy.FaultServer ||
+			(retry.RetryableErrorCode{Codes: retry.DefaultRetryableErrorCodes}).IsErrorRetryable(err) == aws.TrueTernary
+	}
+	if dnsErr, ok := errors.AsType[*net.DNSError](err); errors.Is(err, context.Canceled) || ok && dnsErr.IsNotFound {
+		return false
+	}
+	// Typed checks only: a local error's text can carry the caller's role name.
+	var conErr interface{ ConnectionError() bool }
+	var netErr net.Error
+	var opErr *net.OpError
+	return (errors.As(err, &conErr) && conErr.ConnectionError()) ||
+		(errors.As(err, &netErr) && netErr.Timeout()) ||
+		errors.As(err, &opErr) ||
+		errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // ErrAccountNotAllowed marks a target account refused by cross_account.

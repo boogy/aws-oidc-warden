@@ -77,7 +77,7 @@ The status code tells your client whether retrying is worth anything:
 | `500 audit_write_failed`          | `audit_required` is on and the audit write to S3 failed                                                        | **No** — deterministic²                              |
 | `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h (not under `idp.only`)       | **No** — deterministic                               |
 | `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                    | **No** — deterministic                               |
-| `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                           | **No** — deterministic                               |
+| `403 idp_source_identity_invalid` | The source identity could not be derived (missing or unusable claim) or overflowed with `reject`               | **No** — deterministic                               |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                      | **No** — deterministic                               |
 | `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                           | **No** — deterministic                               |
 | `400 duration_exceeds_cap`        | Above the mapping's `max_session_duration` (at most 1h for `AssumeRole`), or over 1h with no `idp` block       | **No** — deterministic                               |
@@ -89,6 +89,7 @@ The status code tells your client whether retrying is worth anything:
 | `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h, or for any request under `idp.only` | **Yes** — transient                                  |
 | `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the minted token expired                   | **Yes** — transient                                  |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`                                                              | **Yes** — transient, retry with backoff or fail over |
+| `503 role_tags_unavailable`       | Tag-auth could not read the role's IAM tags (throttling, AWS server fault, network error or timeout)           | **Yes** — transient                                  |
 | `502` / `503` / timeout           | The endpoint is unhealthy or unreachable                                                                       | **Yes**                                              |
 
 ¹ Unless it persists: a malformed session policy fails the same way in every region — the log's `stsErrorCode` is `MalformedPolicyDocument`.

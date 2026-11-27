@@ -42,6 +42,7 @@ var (
 	ErrAssumeRoleDenied      = errors.New("aws denied the assume-role request for the requested role")
 	ErrAuditWriteFailed      = errors.New("audit record could not be durably written")
 	ErrConfigStale           = errors.New("configuration is stale")
+	ErrRoleTagsUnavailable   = errors.New("role tags could not be read for tag-auth")
 
 	ErrIdPNotPermitted          = errors.New("IdP token not permitted for this role")
 	ErrIdPUnavailable           = errors.New("IdP token signing temporarily unavailable")
