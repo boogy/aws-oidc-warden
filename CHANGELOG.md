@@ -11,6 +11,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A tag-auth role tag read that fails on throttling, a server fault or the network answers `503 role_tags_unavailable` instead of `403 permission_denied`.
 - A numeric claim at or above 2^53 is dropped from session tags and fails a `{claim:…}` SourceIdentity (also inside a list or object), instead of carrying a rounded neighbour.
 
+### Dependencies
+
+- **AWS SDK for Go v2 bumps.**
+  - `github.com/aws/aws-sdk-go-v2` 1.48.0 → 1.48.2
+  - `github.com/aws/aws-sdk-go-v2/config` 1.33.21 → 1.33.23
+  - `github.com/aws/aws-sdk-go-v2/credentials` 1.21.3 → 1.21.5
+  - `github.com/aws/aws-sdk-go-v2/service/dynamodb` 1.74.1 → 1.74.3
+  - `github.com/aws/aws-sdk-go-v2/service/iam` 1.68.0 → 1.68.2
+  - `github.com/aws/aws-sdk-go-v2/service/kms` 1.63.0 → 1.63.2
+  - `github.com/aws/aws-sdk-go-v2/service/s3` 1.116.0 → 1.116.2
+  - `github.com/aws/aws-sdk-go-v2/service/sts` 1.53.0 → 1.53.2
+  - `github.com/aws/smithy-go` 1.28.10 → 1.28.11
+  - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` bumps
+
 ## [5.0.1] - 2026-11-27
 
 Fixes across the handler, ALB validator, config matching and cross-account spoke credential cache.
