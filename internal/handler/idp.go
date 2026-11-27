@@ -89,7 +89,7 @@ func (r *RequestProcessor) issueIdP(ctx context.Context, o *authzOutcome, role s
 	if r.sourceIdentity != nil {
 		sourceIdentity, truncated, err = r.sourceIdentity.render(requestID, claims.Issuer, claims.Subject, claims.Raw)
 		if err != nil {
-			return nil, r.refuse(ctx, o, "idp_mint", "source identity could not be derived", "Source identity could not be derived", err)
+			return nil, r.refuse(ctx, o, "idp_mint", err.Error(), "Source identity could not be derived", err)
 		}
 	}
 

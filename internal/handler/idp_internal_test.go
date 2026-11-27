@@ -9,6 +9,7 @@ import (
 
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -115,7 +116,15 @@ func TestRenderSourceIdentity(t *testing.T) {
 		{"empty claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": ""}, "", false, ErrIdPSourceIdentityInvalid},
 		{"empty list claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": []any{}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"empty object claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": map[string]any{}}, "", false, ErrIdPSourceIdentityInvalid},
+		{"list claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": []any{"a", "b"}}, "=a=b=-gh" + tail("[a b]"), false, nil},
+		{"object claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": map[string]any{"k": "v"}}, "map=k=v=-gh" + tail("map[k:v]"), false, nil},
+		{"apigw opaque list claim", "{claim:groups}", "", gh, "s", map[string]any{"groups": gtypes.OpaqueClaim("[team-a team-b]")}, "=team-a=team-b=" + tail("[team-a team-b]"), false, nil},
+		{"list with inexact number", "{claim:n}", "", gh, "s", map[string]any{"n": []any{"a", float64(1 << 53)}}, "", false, ErrIdPSourceIdentityInvalid},
+		{"object with inexact number", "{claim:n}", "", gh, "s", map[string]any{"n": map[string]any{"k": []any{float64(-(1 << 53))}}}, "", false, ErrIdPSourceIdentityInvalid},
+		{"bool claim", "{claim:v}-gh", "", gh, "s", map[string]any{"v": true}, "true-gh", false, nil},
 		{"claim of non-string type", "{claim:n}", "", gh, "s", map[string]any{"n": 42}, "42", false, nil},
+		{"largest exact numeric claim", "{claim:n}", "", gh, "s", map[string]any{"n": float64(9007199254740991)}, "9007199254740991", false, nil},
+		{"inexact numeric claim", "{claim:n}", "", gh, "s", map[string]any{"n": float64(1 << 53)}, "", false, ErrIdPSourceIdentityInvalid},
 		{"unparsable issuer", "{issuer}", "", "://bad", "s", nil, "", false, ErrIdPSourceIdentityInvalid},
 		{"hostless issuer", "{issuer}:{subject}", "", "a.example.com", "s", nil, "", false, ErrIdPSourceIdentityInvalid},
 	}

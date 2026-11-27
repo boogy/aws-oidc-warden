@@ -384,6 +384,14 @@ func TestBuildSessionTags(t *testing.T) {
 		}, tagMap)
 	})
 
+	t.Run("numeric claim at or above 2^53 is skipped, never rounded", func(t *testing.T) {
+		raw := map[string]any{"id": float64(9007199254740993), "neg": float64(-(1 << 53)), "ok": float64(9007199254740991)}
+		tags := BuildSessionTags(context.Background(), raw, map[string]string{"id": "id", "neg": "neg", "ok": "ok"})
+		require.Len(t, tags, 1)
+		assert.Equal(t, "ok", *tags[0].Key)
+		assert.Equal(t, "9007199254740991", *tags[0].Value)
+	})
+
 	t.Run("nil/empty rawClaims or tagSpec produces no tags", func(t *testing.T) {
 		assert.Nil(t, BuildSessionTags(context.Background(), nil, map[string]string{"repo": "repository"}))
 		assert.Nil(t, BuildSessionTags(context.Background(), map[string]any{"repository": "owner/repo"}, nil))

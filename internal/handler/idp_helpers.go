@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"regexp"
 	"slices"
@@ -103,12 +104,16 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
 		default:
-			cv, ok := claims[strings.TrimPrefix(key, "claim:")]
-			if !ok || isEmptyClaim(cv) {
-				return "", false, ErrIdPSourceIdentityInvalid
+			name := strings.TrimPrefix(key, "claim:")
+			cv, ok := claims[name]
+			switch {
+			case !ok || cv == nil:
+				return "", false, fmt.Errorf("%w: claim %q is missing", ErrIdPSourceIdentityInvalid, name)
+			case hasInexactNumber(cv):
+				return "", false, fmt.Errorf("%w: claim %q has a number at or above 2^53", ErrIdPSourceIdentityInvalid, name)
 			}
-			if v = utils.FormatClaimValue(cv); v == "" {
-				return "", false, ErrIdPSourceIdentityInvalid
+			if v = utils.FormatClaimValue(cv); v == "" || isEmptyClaim(cv) {
+				return "", false, fmt.Errorf("%w: claim %q is empty", ErrIdPSourceIdentityInvalid, name)
 			}
 		}
 		s := utils.SanitizeSTSName(v)
@@ -158,14 +163,30 @@ func sourceIdentityTail(raw []string) string {
 
 func isEmptyClaim(raw any) bool {
 	switch c := raw.(type) {
-	case nil:
-		return true
 	case []any:
 		return len(c) == 0
 	case map[string]any:
 		return len(c) == 0
 	}
 	return false
+}
+
+func hasInexactNumber(raw any) bool {
+	switch c := raw.(type) {
+	case []any:
+		for _, e := range c {
+			if hasInexactNumber(e) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, e := range c {
+			if hasInexactNumber(e) {
+				return true
+			}
+		}
+	}
+	return utils.IsInexactNumber(raw)
 }
 
 // exchangeFailureKind labels a non-API failure without its text, which may echo the token.

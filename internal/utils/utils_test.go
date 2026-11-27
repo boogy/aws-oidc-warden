@@ -228,6 +228,23 @@ func TestFormatClaimValue(t *testing.T) {
 	}
 }
 
+func TestIsInexactNumber(t *testing.T) {
+	for _, tc := range []struct {
+		raw  any
+		want bool
+	}{
+		{float64(9007199254740991), false},
+		{float64(-9007199254740991), false},
+		{float64(1 << 53), true},
+		{float64(-(1 << 53)), true},
+		{1e300, true},
+		{int64(1 << 60), false},
+		{"9007199254740993", false},
+	} {
+		assert.Equal(t, tc.want, utils.IsInexactNumber(tc.raw), "%#v", tc.raw)
+	}
+}
+
 func TestFormatClaimValue_ExactIntegerRangeUnchanged(t *testing.T) {
 	for _, f := range []float64{
 		0, 1, -1, 42, -42, 1 << 53, -(1 << 53),

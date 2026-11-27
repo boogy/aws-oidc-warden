@@ -43,7 +43,7 @@ Tag **keys** must be written lower-case; values are capped at 256 chars.
 >
 > This applies to the tag **key** only. The tag **value** is a config value and is passed through with the claim's case untouched.
 
-**An invalid key or value is skipped and logged — never sanitized or truncated.** That is deliberate: an ABAC condition must be able to trust that a tag it sees carries the exact claim value, since a silently mangled value would be a security bug.
+**An invalid key or value is skipped and logged — never sanitized or truncated.** That is deliberate: an ABAC condition must be able to trust that a tag it sees carries the exact claim value, since a silently mangled value would be a security bug. A number at or above 2^53 in magnitude is dropped too (`dropReason` `inexact_number`): float64 decoding may have rounded it.
 
 > **Breaking change from v1:** the default `repo` tag now carries the **full `owner/repo`** (the raw `repository` claim). v1 stripped the owner to a bare repo name. If an ABAC policy matched a bare repo name, update it — or map `repo` to a claim that is already bare.
 
