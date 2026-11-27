@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"testing"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,6 +87,15 @@ func TestAssumeRoleInfraErrorIsNotADenial(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrAssumeRoleDenied)
 }
 
+func unmodeledErr(status int, code string) error {
+	return &smithy.OperationError{ServiceID: "IAM", OperationName: "GetRole", Err: &awshttp.ResponseError{
+		ResponseError: &smithyhttp.ResponseError{
+			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}},
+			Err:      &smithy.GenericAPIError{Code: code, Message: "m"},
+		},
+	}}
+}
+
 func TestIsTransient(t *testing.T) {
 	tests := []struct {
 		name string
@@ -94,6 +106,10 @@ func TestIsTransient(t *testing.T) {
 		{"iam service failure", &iamtypes.ServiceFailureException{Message: new("boom")}, true},
 		{"connection refused", &net.OpError{Op: "dial", Err: errors.New("connection refused")}, true},
 		{"deadline", fmt.Errorf("get role x: %w", context.DeadlineExceeded), true},
+		{"unmodeled service unavailable", unmodeledErr(503, "ServiceUnavailable"), true},
+		{"unmodeled internal failure", unmodeledErr(500, "InternalFailure"), true},
+		{"unmodeled request timeout", unmodeledErr(400, "RequestTimeout"), true},
+		{"unmodeled access denied", unmodeledErr(403, "AccessDenied"), false},
 		{"access denied", apiErr("AccessDenied"), false},
 		{"validation error", apiErr("ValidationError"), false},
 		{"no such entity", &iamtypes.NoSuchEntityException{Message: new("gone")}, false},

@@ -41,8 +41,14 @@ func IsTransient(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
+	if (retry.RetryableHTTPStatusCode{Codes: retry.DefaultRetryableHTTPStatusCodes}).IsErrorRetryable(err) == aws.TrueTernary {
+		return true
+	}
 	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		if apiErr.ErrorFault() == smithy.FaultServer {
+			return true
+		}
+		if (retry.RetryableErrorCode{Codes: retry.DefaultRetryableErrorCodes}).IsErrorRetryable(err) == aws.TrueTernary {
 			return true
 		}
 		// The error text can carry the caller's role name, so an API error is never string-matched.
