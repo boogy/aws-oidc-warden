@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"testing"
 
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,4 +86,55 @@ func TestAssumeRolePropagatesDenial(t *testing.T) {
 func TestAssumeRoleInfraErrorIsNotADenial(t *testing.T) {
 	err := assumeWithSTSError(t, apiErr("ThrottlingException"))
 	assert.NotErrorIs(t, err, ErrAssumeRoleDenied)
+}
+
+func httpErr(status int, inner error) error {
+	return &smithy.OperationError{ServiceID: "IAM", OperationName: "GetRole", Err: &awshttp.ResponseError{
+		ResponseError: &smithyhttp.ResponseError{
+			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}},
+			Err:      inner,
+		},
+	}}
+}
+
+func unmodeledErr(status int, code string) error {
+	return httpErr(status, &smithy.GenericAPIError{Code: code, Message: "m"})
+}
+
+func TestIsTransient(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"throttling", fmt.Errorf("get role x: %w", apiErr("Throttling")), true},
+		{"iam service failure", &iamtypes.ServiceFailureException{Message: new("boom")}, true},
+		{"connection refused", &net.OpError{Op: "dial", Err: errors.New("connection refused")}, true},
+		{"deadline", fmt.Errorf("get role x: %w", context.DeadlineExceeded), true},
+		{"unmodeled service unavailable", unmodeledErr(503, "ServiceUnavailable"), true},
+		{"unmodeled internal failure", unmodeledErr(500, "InternalFailure"), true},
+		{"unmodeled request timeout", unmodeledErr(400, "RequestTimeout"), true},
+		{"unmodeled access denied", unmodeledErr(403, "AccessDenied"), false},
+		{"429 with unparsable body", httpErr(429, &smithy.DeserializationError{Err: io.EOF}), true},
+		{"400 with unparsable body", httpErr(400, &smithy.DeserializationError{Err: io.EOF}), false},
+		{"access denied", apiErr("AccessDenied"), false},
+		{"validation error", apiErr("ValidationError"), false},
+		{"no such entity", &iamtypes.NoSuchEntityException{Message: new("gone")}, false},
+		{"spoke assume denied", fmt.Errorf("assume spoke: %w", fmt.Errorf("%w: %w", ErrAssumeRoleDenied, apiErr("AccessDenied"))), false},
+		{"account refused", errors.New("refusing to read tags for role arn:aws:iam::1:role/app: target account is not allowed"), false},
+		{"validation error naming a connection-reset role", fmt.Errorf("get role arn:aws:iam::1:role/connection reset: %w", &smithy.GenericAPIError{Code: "ValidationError", Message: "connection reset", Fault: smithy.FaultClient}), false},
+		{"local error naming a connection-reset role", fmt.Errorf("get role connection reset: %w", errors.New(`role name "connection reset" exceeds 64 characters`)), false},
+		{"request send failure", &smithyhttp.RequestSendError{Err: errors.New("dial")}, true},
+		{"read timeout", fmt.Errorf("get role x: %w", &net.DNSError{IsTimeout: true}), true},
+		{"unexpected eof", fmt.Errorf("get role x: %w", io.ErrUnexpectedEOF), true},
+		{"canceled", context.Canceled, false},
+		{"canceled dial", &net.OpError{Op: "dial", Err: context.Canceled}, false},
+		{"unknown host", &smithyhttp.RequestSendError{Err: &net.OpError{Op: "dial", Err: &net.DNSError{IsNotFound: true}}}, false},
+		{"plain error", errors.New("role name too long"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsTransient(tt.err))
+		})
+	}
 }

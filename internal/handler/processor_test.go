@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	"github.com/aws/smithy-go"
 	gtvaws "github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
@@ -339,40 +341,52 @@ func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
 	}
 }
 
-// A failed IAM tag read must deny, not fall through as if the role carried no
-// disqualifying tags. GetRoleTags reaches the network (and, cross-account, an
-// spoke AssumeRole), so an error here is the expected transient case.
 func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
-	cfg := baseTagCfg(t)
-	claims := &types.Claims{
-		Issuer: testIssuer, Subject: "acme/api",
-		Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
-		Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
+	tests := []struct {
+		name       string
+		tagsErr    error
+		want       error
+		wantReason string
+	}{
+		{"throttling is 503", &smithy.GenericAPIError{Code: "Throttling"}, handler.ErrRoleTagsUnavailable, "tag-auth role tag lookup failed transiently"},
+		{"access denied is 403", &smithy.GenericAPIError{Code: "AccessDenied", Message: "iam:GetRole"}, handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
+		{"missing role is 403", &iamtypes.NoSuchEntityException{Message: aws.String("gone")}, handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
+		{"account refused is 403", errors.New("refusing to read tags for role arn:aws:iam::1:role/app: target account is not allowed"), handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
+		{"validation error naming a connection-reset role is 403", fmt.Errorf("get role arn:aws:iam::1:role/connection reset: %w", &smithy.GenericAPIError{Code: "ValidationError", Message: "connection reset", Fault: smithy.FaultClient}), handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
 	}
-	exp := time.Now()
-	fc := &fakeConsumer{
-		tags:         map[string]string{"aow/repo": "acme/api"}, // would authorize if it were read
-		tagsErr:      errors.New("AccessDenied: iam:GetRole"),
-		assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
-		allowAccount: true,
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseTagCfg(t)
+			claims := &types.Claims{
+				Issuer: testIssuer, Subject: "acme/api",
+				Repository: "acme/api", RepositoryOwner: "acme", Ref: "refs/heads/main",
+				Raw: map[string]any{"repository": "acme/api", "repository_owner": "acme", "ref": "refs/heads/main"},
+			}
+			exp := time.Now()
+			fc := &fakeConsumer{
+				tags:         map[string]string{"aow/repo": "acme/api"}, // would authorize if it were read
+				tagsErr:      tt.tagsErr,
+				assumeOut:    &ststypes.Credentials{AccessKeyId: aws.String("AK"), SecretAccessKey: aws.String("SK"), SessionToken: aws.String("ST"), Expiration: &exp},
+				allowAccount: true,
+			}
+
+			var buf bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			sink := &fakeAuditSink{}
+			proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, sink, "test")
+			_, err := proc.ProcessRequest(context.Background(),
+				&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
+				validator.ExtractionInput{Token: "t"},
+				"rid", log)
+
+			require.ErrorIs(t, err, tt.want)
+			assert.Empty(t, fc.assumed, "FAIL-OPEN: credentials minted after the role-tag read failed")
+			assert.Contains(t, buf.String(), `"eventType":"authz.tag_auth.lookup_failure"`)
+			assert.Contains(t, buf.String(), tt.tagsErr.Error())
+			assert.Equal(t, tt.wantReason, sink.last(t)["reason"])
+		})
 	}
-
-	var buf bytes.Buffer
-	log := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-	sink := &fakeAuditSink{}
-	proc := handler.NewRequestProcessor(config.NewStaticProvider(cfg), fc, &tagModeExtractor{claims}, sink, "test")
-	_, err := proc.ProcessRequest(context.Background(),
-		&handler.RequestData{Token: "t", Role: "arn:aws:iam::111111111111:role/app"},
-		validator.ExtractionInput{Token: "t"},
-		"rid", log)
-
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, handler.ErrRoleNotPermitted), "want ErrRoleNotPermitted, got %v", err)
-	assert.Empty(t, fc.assumed, "FAIL-OPEN: credentials minted after the role-tag read failed")
-	assert.Contains(t, buf.String(), `"eventType":"authz.tag_auth.lookup_failure"`, "the read failure must be visible in the log stream")
-	assert.Contains(t, buf.String(), "AccessDenied: iam:GetRole", "the underlying AWS error must be reported")
-	assert.Equal(t, "tag-auth role tag lookup failed", sink.last(t)["reason"], "audit must not blame the subject for an IAM read failure")
 }
 
 // The audit record must attribute a tag-authorized grant to tag-auth, not to an

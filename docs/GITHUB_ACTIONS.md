@@ -89,6 +89,7 @@ The status code tells your client whether retrying is worth anything:
 | `503 idp_signing_unavailable`     | KMS signing unavailable or throttled; also the kill-switch answer over 1h, or for any request under `idp.only` | **Yes** — transient                                  |
 | `503 idp_exchange_unavailable`    | STS could not reach the IdP discovery or JWKS document, or reported the minted token expired                   | **Yes** — transient                                  |
 | `503 config_stale`                | Role mappings are older than `mappings_max_stale`                                                              | **Yes** — transient, retry with backoff or fail over |
+| `503 role_tags_unavailable`       | Tag-auth could not read the role's IAM tags (throttling, AWS server fault, network error or timeout)           | **Yes** — transient                                  |
 | `502` / `503` / timeout           | The endpoint is unhealthy or unreachable                                                                       | **Yes**                                              |
 
 ¹ Unless it persists: a malformed session policy fails the same way in every region — the log's `stsErrorCode` is `MalformedPolicyDocument`.

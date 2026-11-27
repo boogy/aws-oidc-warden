@@ -252,6 +252,7 @@ Validation failures propagate as sentinel errors mapped to HTTP status by the fr
 | AssumeRole failed for any other reason                                                                                   | `ErrAssumeRoleFailed`         | 500  | `assume_role_failed`          |
 | Required audit write failed (`audit_required=true`)                                                                      | `ErrAuditWriteFailed`         | 500  | `audit_write_failed`          |
 | Role mappings older than `mappings_max_stale` (retryable)                                                                | `ErrConfigStale`              | 503  | `config_stale`                |
+| Tag-auth could not read the role's IAM tags on throttling, a server fault or the network                                 | `ErrRoleTagsUnavailable`      | 503  | `role_tags_unavailable`       |
 | IdP mode: over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h (not under `idp.only`)       | `ErrIdPNotPermitted`          | 403  | `idp_not_permitted`           |
 | IdP mode: `subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                        | `ErrIdPSubjectInvalid`        | 403  | `idp_subject_invalid`         |
 | IdP mode: the source identity could not be derived (missing or unusable claim) or overflowed with `reject`               | `ErrIdPSourceIdentityInvalid` | 403  | `idp_source_identity_invalid` |
