@@ -192,6 +192,8 @@ Added by `auditLogAttrs` for the decision itself:
 | `reason`                                                         | Deny only                                      |                                                                                                                                                                                                                                 |
 | `jwtSub`, `subject`, `audience`, `claims`                        | When `log_claim_values=true` **and** non-empty | Suppressed entirely, not blanked, when the gate is off                                                                                                                                                                          |
 
+A transient tag-auth read failure at `authorize` answers `503 role_tags_unavailable`.
+
 Two fields are worth calling out:
 
 - **`matchedRole` is synthesized, not stored** — the granted role once one was assumed, otherwise the requested role. It is the **only** role field on the decision line: key queries on it, never on `requestedRole`/`grantedRole`, which are record-only.

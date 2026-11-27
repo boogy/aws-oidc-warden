@@ -584,7 +584,7 @@ func TestProcessMintSignErrors(t *testing.T) {
 		{name: "too_large", spec: bigSpec, raw: bigRaw, want: handler.ErrIdPTokenTooLarge},
 		{name: "loader_error", loadErr: errBoom, want: handler.ErrIdPUnavailable},
 		{name: "invalid_subject", subTmpl: "{source_issuer}#{source_subject}#{role_arn}", subject: "org/my repo", want: handler.ErrIdPSubjectInvalid},
-		{name: "source_identity", tmpl: "{claim:nope}", want: handler.ErrIdPSourceIdentityInvalid, reason: "source identity could not be derived"},
+		{name: "source_identity", tmpl: "{claim:nope}", want: handler.ErrIdPSourceIdentityInvalid, reason: `source identity could not be derived for this request: claim "nope" is missing`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
