@@ -116,6 +116,8 @@ func TestRenderSourceIdentity(t *testing.T) {
 		{"empty list claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": []any{}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"empty object claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": map[string]any{}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"claim of non-string type", "{claim:n}", "", gh, "s", map[string]any{"n": 42}, "42", false, nil},
+		{"largest exact numeric claim", "{claim:n}", "", gh, "s", map[string]any{"n": float64(9007199254740991)}, "9007199254740991", false, nil},
+		{"inexact numeric claim", "{claim:n}", "", gh, "s", map[string]any{"n": float64(1 << 53)}, "", false, ErrIdPSourceIdentityInvalid},
 		{"unparsable issuer", "{issuer}", "", "://bad", "s", nil, "", false, ErrIdPSourceIdentityInvalid},
 		{"hostless issuer", "{issuer}:{subject}", "", "a.example.com", "s", nil, "", false, ErrIdPSourceIdentityInvalid},
 	}

@@ -28,6 +28,12 @@ func FormatClaimValue(raw any) string {
 	return fmt.Sprintf("%v", raw)
 }
 
+// IsInexactNumber reports whether raw is a float64 at or above 2^53, which may be a rounded, different integer.
+func IsInexactNumber(raw any) bool {
+	f, ok := raw.(float64)
+	return ok && math.Abs(f) >= 1<<53
+}
+
 // ExtractBranchFromRef reduces a branch ref to its short name
 // ("refs/heads/main" -> "main"). Anything else is returned unchanged.
 func ExtractBranchFromRef(ref string) string {

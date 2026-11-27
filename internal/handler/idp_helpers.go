@@ -104,7 +104,7 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 			}
 		default:
 			cv, ok := claims[strings.TrimPrefix(key, "claim:")]
-			if !ok || isEmptyClaim(cv) {
+			if !ok || isEmptyClaim(cv) || utils.IsInexactNumber(cv) {
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
 			if v = utils.FormatClaimValue(cv); v == "" {

@@ -18,7 +18,7 @@ var STSSessionNameTruncated = newEvent("sts.session_name.truncated")
 var STSDurationClamped = newEvent("sts.duration.clamped")
 
 // STSSessionTagDropped is emitted when a session tag is dropped; attr
-// dropReason: invalid_key, invalid_value, limit_reached (Warn).
+// dropReason: invalid_key, invalid_value, inexact_number, limit_reached (Warn).
 var STSSessionTagDropped = newEvent("sts.session_tag.dropped")
 
 // STSExternalIDSuspicious is emitted when a supplied external ID looks
