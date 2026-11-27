@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- A list- or object-valued `{claim:…}`, including an `apigw` stringified list, now fails SourceIdentity with `idp_source_identity_invalid`; a `source_identity` template using one denies every IdP request. The audit reason names the claim and why.
+- **Breaking:** a list- or object-valued `{claim:…}` (e.g. an array `aud`), including an `apigw` stringified list, now fails SourceIdentity with `idp_source_identity_invalid`; a `source_identity` template using one denies every IdP request. The audit reason names the claim and why.
 
 ### Fixed
 
