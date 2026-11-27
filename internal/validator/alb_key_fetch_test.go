@@ -135,6 +135,8 @@ func TestALBKeyFetchCallerCancelDoesNotFailSharedFetch(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		a, rt := newGatedALB(body)
+		release := sync.OnceFunc(func() { close(rt.gate) })
+		defer release()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		var errA, errB error
@@ -153,7 +155,7 @@ func TestALBKeyFetchCallerCancelDoesNotFailSharedFetch(t *testing.T) {
 		var errC error
 		wg.Go(func() { keyC, errC = a.fetchPublicKey(context.Background(), "us-east-1", "kid-1") })
 		synctest.Wait()
-		close(rt.gate)
+		release()
 		wg.Wait()
 
 		if !errors.Is(errA, context.Canceled) {
