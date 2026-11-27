@@ -9,6 +9,7 @@ import (
 
 	"github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
+	gtypes "github.com/boogy/aws-oidc-warden/internal/types"
 	"github.com/boogy/aws-oidc-warden/internal/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -118,6 +119,9 @@ func TestRenderSourceIdentity(t *testing.T) {
 		{"list claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": []any{"a", "b"}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"list with inexact number", "{claim:n}", "", gh, "s", map[string]any{"n": []any{float64(1 << 53)}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"object claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": map[string]any{"k": "v"}}, "", false, ErrIdPSourceIdentityInvalid},
+		{"apigw opaque list claim", "{claim:groups}", "", gh, "s", map[string]any{"groups": gtypes.OpaqueClaim("[team-a team-b]")}, "", false, ErrIdPSourceIdentityInvalid},
+		{"apigw string list claim", "{claim:aud}", "", gh, "s", map[string]any{"aud": []string{"a", "b"}}, "", false, ErrIdPSourceIdentityInvalid},
+		{"bool claim", "{claim:v}-gh", "", gh, "s", map[string]any{"v": true}, "true-gh", false, nil},
 		{"claim of non-string type", "{claim:n}", "", gh, "s", map[string]any{"n": 42}, "42", false, nil},
 		{"largest exact numeric claim", "{claim:n}", "", gh, "s", map[string]any{"n": float64(9007199254740991)}, "9007199254740991", false, nil},
 		{"inexact numeric claim", "{claim:n}", "", gh, "s", map[string]any{"n": float64(1 << 53)}, "", false, ErrIdPSourceIdentityInvalid},

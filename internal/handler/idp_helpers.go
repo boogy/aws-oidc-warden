@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"regexp"
 	"slices"
@@ -103,12 +105,18 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
 		default:
-			cv, ok := claims[strings.TrimPrefix(key, "claim:")]
-			if !ok || !isScalarClaim(cv) || utils.IsInexactNumber(cv) {
-				return "", false, ErrIdPSourceIdentityInvalid
+			name := strings.TrimPrefix(key, "claim:")
+			cv, ok := claims[name]
+			switch {
+			case !ok || cv == nil:
+				return "", false, fmt.Errorf("%w: claim %q is missing", ErrIdPSourceIdentityInvalid, name)
+			case !isScalarClaim(cv):
+				return "", false, fmt.Errorf("%w: claim %q is not a scalar", ErrIdPSourceIdentityInvalid, name)
+			case utils.IsInexactNumber(cv):
+				return "", false, fmt.Errorf("%w: claim %q is a number at or above 2^53", ErrIdPSourceIdentityInvalid, name)
 			}
 			if v = utils.FormatClaimValue(cv); v == "" {
-				return "", false, ErrIdPSourceIdentityInvalid
+				return "", false, fmt.Errorf("%w: claim %q is empty", ErrIdPSourceIdentityInvalid, name)
 			}
 		}
 		s := utils.SanitizeSTSName(v)
@@ -158,10 +166,10 @@ func sourceIdentityTail(raw []string) string {
 
 func isScalarClaim(raw any) bool {
 	switch raw.(type) {
-	case nil, []any, map[string]any:
-		return false
+	case string, bool, float64, json.Number, int, int64:
+		return true
 	}
-	return true
+	return false
 }
 
 // exchangeFailureKind labels a non-API failure without its text, which may echo the token.
