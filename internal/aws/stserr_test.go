@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"testing"
@@ -116,7 +117,12 @@ func TestIsTransient(t *testing.T) {
 		{"spoke assume denied", fmt.Errorf("assume spoke: %w", fmt.Errorf("%w: %w", ErrAssumeRoleDenied, apiErr("AccessDenied"))), false},
 		{"account refused", errors.New("refusing to read tags for role arn:aws:iam::1:role/app: target account is not allowed"), false},
 		{"validation error naming a connection-reset role", fmt.Errorf("get role arn:aws:iam::1:role/connection reset: %w", &smithy.GenericAPIError{Code: "ValidationError", Message: "connection reset", Fault: smithy.FaultClient}), false},
+		{"local error naming a connection-reset role", fmt.Errorf("get role connection reset: %w", errors.New(`role name "connection reset" exceeds 64 characters`)), false},
+		{"request send failure", &smithyhttp.RequestSendError{Err: errors.New("dial")}, true},
+		{"read timeout", fmt.Errorf("get role x: %w", &net.DNSError{IsTimeout: true}), true},
+		{"unexpected eof", fmt.Errorf("get role x: %w", io.ErrUnexpectedEOF), true},
 		{"canceled", context.Canceled, false},
+		{"canceled dial", &net.OpError{Op: "dial", Err: context.Canceled}, false},
 		{"plain error", errors.New("role name too long"), false},
 	}
 	for _, tt := range tests {

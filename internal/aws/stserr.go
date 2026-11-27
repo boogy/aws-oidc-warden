@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -54,7 +56,17 @@ func IsTransient(err error) bool {
 		// The error text can carry the caller's role name, so an API error is never string-matched.
 		return retry.IsErrorThrottles(retry.DefaultThrottles).IsErrorThrottle(err) == aws.TrueTernary
 	}
-	return retry.IsErrorRetryables(retry.DefaultRetryables).IsErrorRetryable(err) == aws.TrueTernary
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	// Typed checks only: a local error's text can carry the caller's role name.
+	var conErr interface{ ConnectionError() bool }
+	var netErr net.Error
+	var opErr *net.OpError
+	return (errors.As(err, &conErr) && conErr.ConnectionError()) ||
+		(errors.As(err, &netErr) && netErr.Timeout()) ||
+		errors.As(err, &opErr) ||
+		errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // ErrAccountNotAllowed marks a target account refused by cross_account.
