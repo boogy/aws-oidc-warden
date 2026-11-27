@@ -21,13 +21,27 @@ import (
 	"github.com/boogy/aws-oidc-warden/internal/config"
 )
 
-func TestALBKeyFetchMemoizesFailures(t *testing.T) {
+func newTestKeyPEM(t *testing.T) (*ecdsa.PrivateKey, []byte) {
+	t.Helper()
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	der, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
-	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	der, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return priv, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+}
+
+func newGatedALB(body []byte) (*ALBExtractor, *gatedRoundTripper) {
+	rt := &gatedRoundTripper{gate: make(chan struct{}), body: body}
+	return NewALBExtractor(config.NewStaticProvider(&config.Config{}),
+		WithALBKeyEndpoint("http://keys.test/%s"), WithALBHTTPClient(&http.Client{Transport: rt})), rt
+}
+
+func TestALBKeyFetchMemoizesFailures(t *testing.T) {
+	_, pubPEM := newTestKeyPEM(t)
 
 	var hits atomic.Int32
 	var serveKey atomic.Bool
@@ -88,17 +102,10 @@ func (g *gatedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 }
 
 func TestALBKeyFetchConcurrentLookupsShareOneFetch(t *testing.T) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	der, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
-	body := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	priv, body := newTestKeyPEM(t)
 
 	synctest.Test(t, func(t *testing.T) {
-		rt := &gatedRoundTripper{gate: make(chan struct{}), body: body}
-		a := NewALBExtractor(config.NewStaticProvider(&config.Config{}),
-			WithALBKeyEndpoint("http://keys.test/%s"), WithALBHTTPClient(&http.Client{Transport: rt}))
+		a, rt := newGatedALB(body)
 
 		const n = 8
 		var wg sync.WaitGroup
@@ -124,17 +131,10 @@ func TestALBKeyFetchConcurrentLookupsShareOneFetch(t *testing.T) {
 }
 
 func TestALBKeyFetchCallerCancelDoesNotFailSharedFetch(t *testing.T) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	der, _ := x509.MarshalPKIXPublicKey(&priv.PublicKey)
-	body := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+	priv, body := newTestKeyPEM(t)
 
 	synctest.Test(t, func(t *testing.T) {
-		rt := &gatedRoundTripper{gate: make(chan struct{}), body: body}
-		a := NewALBExtractor(config.NewStaticProvider(&config.Config{}),
-			WithALBKeyEndpoint("http://keys.test/%s"), WithALBHTTPClient(&http.Client{Transport: rt}))
+		a, rt := newGatedALB(body)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		var errA, errB error
@@ -146,6 +146,13 @@ func TestALBKeyFetchCallerCancelDoesNotFailSharedFetch(t *testing.T) {
 		synctest.Wait()
 		cancel()
 		synctest.Wait()
+		if err := a.keyCache.failed("kid-1"); err != nil {
+			t.Fatalf("failure memoized after a caller cancelled: %v", err)
+		}
+		var keyC *ecdsa.PublicKey
+		var errC error
+		wg.Go(func() { keyC, errC = a.fetchPublicKey(context.Background(), "us-east-1", "kid-1") })
+		synctest.Wait()
 		close(rt.gate)
 		wg.Wait()
 
@@ -155,8 +162,8 @@ func TestALBKeyFetchCallerCancelDoesNotFailSharedFetch(t *testing.T) {
 		if errB != nil || keyB == nil || !keyB.Equal(&priv.PublicKey) {
 			t.Fatalf("sharing caller: key %v, err %v", keyB, errB)
 		}
-		if err := a.keyCache.failed("kid-1"); err != nil {
-			t.Fatalf("failure memoized after a caller cancelled: %v", err)
+		if errC != nil || keyC == nil || !keyC.Equal(&priv.PublicKey) {
+			t.Fatalf("caller joining after the cancel: key %v, err %v", keyC, errC)
 		}
 		if got := rt.hits.Load(); got != 1 {
 			t.Fatalf("fetches = %d, want 1", got)
