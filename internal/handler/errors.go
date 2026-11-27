@@ -33,6 +33,10 @@ func classifyError(err error, statusCode *int) (errCode, errMsg string) {
 		errCode = "permission_denied"
 		errMsg = "Permission denied for the requested operation"
 		*statusCode = http.StatusForbidden
+	case errors.Is(err, ErrRoleTagsUnavailable):
+		errCode = "role_tags_unavailable"
+		errMsg = "Role tags could not be read; try again later"
+		*statusCode = http.StatusServiceUnavailable
 	case errors.Is(err, ErrSessionPolicyAccess):
 		errCode = "policy_error"
 		errMsg = "Error accessing policy information"

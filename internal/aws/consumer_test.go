@@ -985,9 +985,9 @@ func TestGetRoleTagsCrossAccountDisabledFailsClosed(t *testing.T) {
 	c.AWS = m
 
 	_, err := c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrAccountNotAllowed)
 	_, err = c.GetRoleTags(context.Background(), "arn:aws:iam::222222222222:role/app")
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrAccountNotAllowed)
 
 	m.AssertNotCalled(t, "GetRole", mock.Anything)
 	m.AssertNotCalled(t, "GetRoleAs", mock.Anything, mock.Anything)

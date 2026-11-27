@@ -202,11 +202,12 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		rec.MatchedVia = "explicit"
 	}
 	mayTagAuth := !allowed && cfg.TagAuthMayGrant(requestedRole)
-	lookupFailed := false
+	lookupFailed, lookupTransient := false, false
 	if mayTagAuth {
 		roleTags, terr := r.consumer.GetRoleTags(ctx, requestedRole)
 		if terr != nil {
 			lookupFailed = true
+			lookupTransient = !errors.Is(terr, aws.ErrRoleNotFound) && !errors.Is(terr, aws.ErrAccountNotAllowed)
 			logevent.Warn(ctx, log, logevent.AuthzTagAuthLookupFailure, "role tag lookup failed",
 				slog.String("error", terr.Error()))
 		} else if cfg.TagAuth.Authorize(roleTags, claimsMap, claims.Issuer, claims.Subject) {
@@ -229,7 +230,11 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		if cfg.LogClaimValues {
 			denyAttrs = append(denyAttrs, identityAttrs(claims)...)
 		}
-		return nil, r.deny(ctx, o, "Role not allowed for this subject or its conditions are not met", ErrRoleNotPermitted, denyAttrs...)
+		ret := ErrRoleNotPermitted
+		if lookupTransient {
+			ret = ErrRoleTagsUnavailable
+		}
+		return nil, r.deny(ctx, o, "Role not allowed for this subject or its conditions are not met", ret, denyAttrs...)
 	}
 
 	return o, nil

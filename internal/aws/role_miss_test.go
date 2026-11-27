@@ -33,6 +33,7 @@ func TestGetRoleTags_NoSuchEntityIsNegativelyCached(t *testing.T) {
 		_, err := c.GetRoleTags(context.Background(), missRole)
 		var got *iamtypes.NoSuchEntityException
 		require.ErrorAs(t, err, &got)
+		require.ErrorIs(t, err, ErrRoleNotFound)
 	}
 	m.AssertNumberOfCalls(t, "GetRole", 1)
 
@@ -60,6 +61,7 @@ func TestGetRoleTags_TransientErrorsAreNotCached(t *testing.T) {
 			for range 2 {
 				_, err := c.GetRoleTags(context.Background(), missRole)
 				require.Error(t, err)
+				require.NotErrorIs(t, err, ErrRoleNotFound)
 			}
 			m.AssertNumberOfCalls(t, "GetRole", 2)
 			assert.Empty(t, c.roleMissCache)
@@ -75,7 +77,7 @@ func TestGetRoleTags_NegativeCacheDoesNotBypassAccountCheck(t *testing.T) {
 	c.roleMissCache = map[string]cachedMiss{blocked: {err: errors.New("cached miss"), expires: clock.Add(time.Minute)}}
 
 	_, err := c.GetRoleTags(context.Background(), blocked)
-	require.ErrorContains(t, err, "not allowed")
+	require.ErrorIs(t, err, ErrAccountNotAllowed)
 	m.AssertNotCalled(t, "GetRole", mock.Anything, mock.Anything)
 }
 

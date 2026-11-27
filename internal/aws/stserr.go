@@ -36,6 +36,9 @@ func classifyAssumeRoleError(err error) error {
 // ErrAccountNotAllowed marks a target account refused by cross_account.
 var ErrAccountNotAllowed = errors.New("target account is not allowed by cross_account")
 
+// ErrRoleNotFound marks a GetRoleTags role that IAM reports does not exist.
+var ErrRoleNotFound = errors.New("iam role does not exist")
+
 var (
 	// ErrWebIdentityDenied marks an AssumeRoleWithWebIdentity refusal that a retry will not fix.
 	ErrWebIdentityDenied = errors.New("sts:AssumeRoleWithWebIdentity denied by AWS")

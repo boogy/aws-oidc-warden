@@ -254,6 +254,7 @@ With that config a role tagged `gh/subject` is reachable only by a GitHub token,
 - **Prefix collisions.** Only keys under the prefix in force for the verifying issuer are inspected; unrelated tags (cost-center, team, …) are ignored. Changing a prefix changes which keys are read — keep it consistent with how roles are tagged.
 - **Tag charset.** `*`, `(`, `)`, `[`, `]`, `|`, `^`, `$`, `\`, `?`, `,` are rejected by AWS in tag values. Lists are **space**-separated, not comma.
 - **`aow/branch` vs `aow/ref`.** `aow/branch` is forgiving (matches the full ref _or_ the short name); `aow/ref` is strict (full ref only). Prefer `aow/ref` when you need an exact ref including tags like `refs/tags/v1.2.3`.
+- **A failed tag read is 503, not 403.** An IAM or spoke-role failure answers `503 role_tags_unavailable`; a role that does not exist or an account `cross_account` refuses stays `403 permission_denied`.
 - **Caching.** Spoke credentials are cached until ~5 min before expiry; role tags are cached ~60 s. A tag change can take up to ~60 s to take effect.
 - **`cross_account.enabled` gates everything cross-account.** `false` (or the block omitted) hard-blocks a cross-account tag read with an error — it does not silently deny only that role, it fails the request. With it `true`, a cross-account tag read additionally fails closed if the `aow-spoke` role is missing or untrusted in the target account. The final `AssumeRole` on the target role never uses the spoke — see [Cross-account](#cross-account).
 
