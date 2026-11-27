@@ -88,13 +88,17 @@ func TestAssumeRoleInfraErrorIsNotADenial(t *testing.T) {
 	assert.NotErrorIs(t, err, ErrAssumeRoleDenied)
 }
 
-func unmodeledErr(status int, code string) error {
+func httpErr(status int, inner error) error {
 	return &smithy.OperationError{ServiceID: "IAM", OperationName: "GetRole", Err: &awshttp.ResponseError{
 		ResponseError: &smithyhttp.ResponseError{
 			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}},
-			Err:      &smithy.GenericAPIError{Code: code, Message: "m"},
+			Err:      inner,
 		},
 	}}
+}
+
+func unmodeledErr(status int, code string) error {
+	return httpErr(status, &smithy.GenericAPIError{Code: code, Message: "m"})
 }
 
 func TestIsTransient(t *testing.T) {
@@ -111,6 +115,8 @@ func TestIsTransient(t *testing.T) {
 		{"unmodeled internal failure", unmodeledErr(500, "InternalFailure"), true},
 		{"unmodeled request timeout", unmodeledErr(400, "RequestTimeout"), true},
 		{"unmodeled access denied", unmodeledErr(403, "AccessDenied"), false},
+		{"429 with unparsable body", httpErr(429, &smithy.DeserializationError{Err: io.EOF}), true},
+		{"400 with unparsable body", httpErr(400, &smithy.DeserializationError{Err: io.EOF}), false},
 		{"access denied", apiErr("AccessDenied"), false},
 		{"validation error", apiErr("ValidationError"), false},
 		{"no such entity", &iamtypes.NoSuchEntityException{Message: new("gone")}, false},
