@@ -52,7 +52,7 @@ func IsTransient(err error) bool {
 		return apiErr.ErrorFault() == smithy.FaultServer ||
 			(retry.RetryableErrorCode{Codes: retry.DefaultRetryableErrorCodes}).IsErrorRetryable(err) == aws.TrueTernary
 	}
-	if errors.Is(err, context.Canceled) {
+	if dnsErr, ok := errors.AsType[*net.DNSError](err); errors.Is(err, context.Canceled) || ok && dnsErr.IsNotFound {
 		return false
 	}
 	// Typed checks only: a local error's text can carry the caller's role name.

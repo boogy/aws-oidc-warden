@@ -129,6 +129,7 @@ func TestIsTransient(t *testing.T) {
 		{"unexpected eof", fmt.Errorf("get role x: %w", io.ErrUnexpectedEOF), true},
 		{"canceled", context.Canceled, false},
 		{"canceled dial", &net.OpError{Op: "dial", Err: context.Canceled}, false},
+		{"unknown host", &smithyhttp.RequestSendError{Err: &net.OpError{Op: "dial", Err: &net.DNSError{IsNotFound: true}}}, false},
 		{"plain error", errors.New("role name too long"), false},
 	}
 	for _, tt := range tests {
