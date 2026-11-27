@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Tests
+
+- Concurrent `alb` public-key lookups of one `kid` are tested to share a single fetch.
+
 ## [5.0.1] - 2026-11-27
 
 Fixes across the handler, ALB validator, config matching and cross-account spoke credential cache.
