@@ -443,7 +443,7 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | Code                          | Status | Retry | Cause                                                                                                                                       |
 | ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant (not under `idp.only`)                                            |
-| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                                                                            |
+| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived (missing or unusable claim) or overflowed with `reject`                                                |
 | `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`                                                                 |
 | `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider                                                                         |
 | `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                                                                                        |
