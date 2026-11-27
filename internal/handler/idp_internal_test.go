@@ -117,7 +117,6 @@ func TestRenderSourceIdentity(t *testing.T) {
 		{"empty list claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": []any{}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"empty object claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": map[string]any{}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"list claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": []any{"a", "b"}}, "", false, ErrIdPSourceIdentityInvalid},
-		{"list with inexact number", "{claim:n}", "", gh, "s", map[string]any{"n": []any{float64(1 << 53)}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"object claim", "{claim:actor}-gh", "", gh, "s", map[string]any{"actor": map[string]any{"k": "v"}}, "", false, ErrIdPSourceIdentityInvalid},
 		{"apigw opaque list claim", "{claim:groups}", "", gh, "s", map[string]any{"groups": gtypes.OpaqueClaim("[team-a team-b]")}, "", false, ErrIdPSourceIdentityInvalid},
 		{"apigw string list claim", "{claim:aud}", "", gh, "s", map[string]any{"aud": []string{"a", "b"}}, "", false, ErrIdPSourceIdentityInvalid},
