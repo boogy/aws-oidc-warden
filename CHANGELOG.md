@@ -25,6 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `github.com/aws/smithy-go` 1.28.10 → 1.28.11
   - transitive `aws/protocol/eventstream`, `feature/ec2/imds`, `internal/*`, `service/internal/*`, `signin`, `sso`, `ssooidc` bumps
 
+### Tests
+
+- Concurrent `alb` public-key lookups of one `kid` are tested to share a single fetch and return the key, and one caller's cancellation is tested not to fail it for the others.
+
 ## [5.0.1] - 2026-11-27
 
 Fixes across the handler, ALB validator, config matching and cross-account spoke credential cache.
