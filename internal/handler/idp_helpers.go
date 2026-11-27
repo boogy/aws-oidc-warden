@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -110,12 +109,10 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 			switch {
 			case !ok || cv == nil:
 				return "", false, fmt.Errorf("%w: claim %q is missing", ErrIdPSourceIdentityInvalid, name)
-			case !isScalarClaim(cv):
-				return "", false, fmt.Errorf("%w: claim %q is not a scalar", ErrIdPSourceIdentityInvalid, name)
-			case utils.IsInexactNumber(cv):
-				return "", false, fmt.Errorf("%w: claim %q is a number at or above 2^53", ErrIdPSourceIdentityInvalid, name)
+			case hasInexactNumber(cv):
+				return "", false, fmt.Errorf("%w: claim %q has a number at or above 2^53", ErrIdPSourceIdentityInvalid, name)
 			}
-			if v = utils.FormatClaimValue(cv); v == "" {
+			if v = utils.FormatClaimValue(cv); v == "" || isEmptyClaim(cv) {
 				return "", false, fmt.Errorf("%w: claim %q is empty", ErrIdPSourceIdentityInvalid, name)
 			}
 		}
@@ -164,12 +161,32 @@ func sourceIdentityTail(raw []string) string {
 	return "+" + base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:8])
 }
 
-func isScalarClaim(raw any) bool {
-	switch raw.(type) {
-	case string, bool, float64, json.Number, int, int64:
-		return true
+func isEmptyClaim(raw any) bool {
+	switch c := raw.(type) {
+	case []any:
+		return len(c) == 0
+	case map[string]any:
+		return len(c) == 0
 	}
 	return false
+}
+
+func hasInexactNumber(raw any) bool {
+	switch c := raw.(type) {
+	case []any:
+		for _, e := range c {
+			if hasInexactNumber(e) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, e := range c {
+			if hasInexactNumber(e) {
+				return true
+			}
+		}
+	}
+	return utils.IsInexactNumber(raw)
 }
 
 // exchangeFailureKind labels a non-API failure without its text, which may echo the token.

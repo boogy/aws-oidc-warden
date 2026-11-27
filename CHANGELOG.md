@@ -6,13 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Changed
-
-- **Breaking:** a list- or object-valued `{claim:…}` (e.g. an array `aud`), including an `apigw` stringified list, now fails SourceIdentity with `idp_source_identity_invalid`; a `source_identity` template using one denies every IdP request. The audit reason names the claim and why.
-
 ### Fixed
 
-- A numeric claim at or above 2^53 is dropped from session tags and fails a `{claim:…}` SourceIdentity, instead of carrying a rounded neighbour.
+- A numeric claim at or above 2^53 is dropped from session tags and fails a `{claim:…}` SourceIdentity (also inside a list or object), instead of carrying a rounded neighbour.
 
 ## [5.0.1] - 2026-11-27
 
