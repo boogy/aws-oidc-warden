@@ -336,7 +336,7 @@ The same rule applies to every request, IdP or `AssumeRole`:
 | `{request_id}`   | the warden request ID                                                                                                            |
 | `{subject}`      | the canonical subject                                                                                                            |
 | `{issuer}`       | the inbound issuer's host and path (not `idp.issuer`), so with the default template two issuers sharing a subject cannot collide |
-| `{claim:<name>}` | a verified inbound claim; a missing, null or empty claim fails with 403 `idp_source_identity_invalid`                            |
+| `{claim:<name>}` | a verified inbound claim; one missing, null, empty or holding a 2^53+ number fails with 403 `idp_source_identity_invalid`        |
 
 The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. If any substituted value needed sanitizing, or a value other than the last could blur its boundary (it contains the first character of the sanitized literal after it, or no literal follows), the result ends in `+` and 11 base64url characters of a SHA-256 over the raw values, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<11 chars>` (60 characters). With this issuer, a subject of up to 16 characters fits; with a single inbound issuer, `{subject}` alone leaves room for the subject.
 
@@ -443,7 +443,7 @@ Every response uses the standard error envelope. "Retry" means the same request 
 | Code                          | Status | Retry | Cause                                                                                                                                       |
 | ----------------------------- | ------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `idp_not_permitted`           | 403    | No    | Over 1h for a mapping that is not an IdP mapping, or for a tag-auth grant (not under `idp.only`)                                            |
-| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived or overflowed with `reject`                                                                            |
+| `idp_source_identity_invalid` | 403    | No    | Source identity could not be derived (missing or unusable claim) or overflowed with `reject`                                                |
 | `idp_subject_invalid`         | 403    | No    | `subject_template` rendered a `sub` over 255 bytes or outside ASCII `!`–`~`                                                                 |
 | `idp_exchange_denied`         | 403    | No    | STS refused: fix the trust policy or the warden's IAM OIDC provider                                                                         |
 | `invalid_duration`            | 400    | No    | `durationSeconds` outside 900..43200                                                                                                        |

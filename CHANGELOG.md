@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- A numeric claim at or above 2^53 is dropped from session tags and fails a `{claim:…}` SourceIdentity (also inside a list or object), instead of carrying a rounded neighbour.
+
 ## [5.0.1] - 2026-11-27
 
 Fixes across the handler, ALB validator, config matching and cross-account spoke credential cache.

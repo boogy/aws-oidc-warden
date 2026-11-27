@@ -77,7 +77,7 @@ The status code tells your client whether retrying is worth anything:
 | `500 audit_write_failed`          | `audit_required` is on and the audit write to S3 failed                                                        | **No** — deterministic²                              |
 | `403 idp_not_permitted`           | Over 1h for a mapping with neither `idp_token` nor `max_session_duration` over 1h (not under `idp.only`)       | **No** — deterministic                               |
 | `403 idp_subject_invalid`         | `idp.subject_template` rendered an unusable `sub` (over 255 bytes or outside ASCII `!`–`~`)                    | **No** — deterministic                               |
-| `403 idp_source_identity_invalid` | The source identity could not be derived (missing claim) or overflowed with `reject`                           | **No** — deterministic                               |
+| `403 idp_source_identity_invalid` | The source identity could not be derived (missing or unusable claim) or overflowed with `reject`               | **No** — deterministic                               |
 | `403 idp_exchange_denied`         | STS refused the minted token: fix the role trust policy or the warden's IAM OIDC provider                      | **No** — deterministic                               |
 | `400 invalid_duration`            | `durationSeconds` outside 900..43200                                                                           | **No** — deterministic                               |
 | `400 duration_exceeds_cap`        | Above the mapping's `max_session_duration` (at most 1h for `AssumeRole`), or over 1h with no `idp` block       | **No** — deterministic                               |

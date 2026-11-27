@@ -375,6 +375,12 @@ func BuildSessionTags(ctx context.Context, rawClaims map[string]any, tagSpec map
 		if !ok || raw == nil {
 			continue
 		}
+		if utils.IsInexactNumber(raw) {
+			logevent.Warn(ctx, nil, logevent.STSSessionTagDropped, "skipping session tag: numeric claim is not exact",
+				slog.String("tagKey", tagKey), slog.String("claim", claimName),
+				slog.String("dropReason", "inexact_number"))
+			continue
+		}
 		value := utils.FormatClaimValue(raw)
 		if value == "" {
 			continue
