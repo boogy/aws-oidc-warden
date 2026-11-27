@@ -351,7 +351,8 @@ func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 		{"throttling is 503", &smithy.GenericAPIError{Code: "Throttling"}, handler.ErrRoleTagsUnavailable, "tag-auth role tag lookup failed transiently"},
 		{"access denied is 403", &smithy.GenericAPIError{Code: "AccessDenied", Message: "iam:GetRole"}, handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
 		{"missing role is 403", &iamtypes.NoSuchEntityException{Message: aws.String("gone")}, handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
-		{"account refused is 403", fmt.Errorf("refusing: %w", gtvaws.ErrAccountNotAllowed), handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
+		{"account refused is 403", errors.New("refusing to read tags for role arn:aws:iam::1:role/app: target account is not allowed"), handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
+		{"validation error naming a connection-reset role is 403", fmt.Errorf("get role arn:aws:iam::1:role/connection reset: %w", &smithy.GenericAPIError{Code: "ValidationError", Message: "connection reset", Fault: smithy.FaultClient}), handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

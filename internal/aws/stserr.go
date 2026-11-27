@@ -41,8 +41,12 @@ func IsTransient(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	if apiErr, ok := errors.AsType[smithy.APIError](err); ok && apiErr.ErrorFault() == smithy.FaultServer {
-		return true
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
+		if apiErr.ErrorFault() == smithy.FaultServer {
+			return true
+		}
+		// The error text can carry the caller's role name, so an API error is never string-matched.
+		return retry.IsErrorThrottles(retry.DefaultThrottles).IsErrorThrottle(err) == aws.TrueTernary
 	}
 	return retry.IsErrorRetryables(retry.DefaultRetryables).IsErrorRetryable(err) == aws.TrueTernary
 }

@@ -233,11 +233,11 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		if cfg.LogClaimValues {
 			denyAttrs = append(denyAttrs, identityAttrs(claims)...)
 		}
-		ret := ErrRoleNotPermitted
+		ret, msg := ErrRoleNotPermitted, "Role not allowed for this subject or its conditions are not met"
 		if lookupTransient {
-			ret = ErrRoleTagsUnavailable
+			ret, msg = ErrRoleTagsUnavailable, "Role tags could not be read"
 		}
-		return nil, r.deny(ctx, o, "Role not allowed for this subject or its conditions are not met", ret, denyAttrs...)
+		return nil, r.deny(ctx, o, msg, ret, denyAttrs...)
 	}
 
 	return o, nil

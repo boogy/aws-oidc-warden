@@ -98,7 +98,8 @@ func TestIsTransient(t *testing.T) {
 		{"validation error", apiErr("ValidationError"), false},
 		{"no such entity", &iamtypes.NoSuchEntityException{Message: new("gone")}, false},
 		{"spoke assume denied", fmt.Errorf("assume spoke: %w", fmt.Errorf("%w: %w", ErrAssumeRoleDenied, apiErr("AccessDenied"))), false},
-		{"account refused", fmt.Errorf("%w: x", ErrAccountNotAllowed), false},
+		{"account refused", errors.New("refusing to read tags for role arn:aws:iam::1:role/app: target account is not allowed"), false},
+		{"validation error naming a connection-reset role", fmt.Errorf("get role arn:aws:iam::1:role/connection reset: %w", &smithy.GenericAPIError{Code: "ValidationError", Message: "connection reset", Fault: smithy.FaultClient}), false},
 		{"canceled", context.Canceled, false},
 		{"plain error", errors.New("role name too long"), false},
 	}
