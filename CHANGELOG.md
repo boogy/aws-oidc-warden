@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - A numeric claim at or above 2^53 is dropped from session tags and fails a `{claim:…}` SourceIdentity, instead of carrying a rounded neighbour.
+- A list- or object-valued `{claim:…}` fails SourceIdentity with `idp_source_identity_invalid` instead of rendering its Go text.
 
 ## [5.0.1] - 2026-11-27
 

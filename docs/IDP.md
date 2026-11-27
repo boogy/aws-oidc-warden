@@ -336,7 +336,7 @@ The same rule applies to every request, IdP or `AssumeRole`:
 | `{request_id}`   | the warden request ID                                                                                                            |
 | `{subject}`      | the canonical subject                                                                                                            |
 | `{issuer}`       | the inbound issuer's host and path (not `idp.issuer`), so with the default template two issuers sharing a subject cannot collide |
-| `{claim:<name>}` | a verified inbound claim; a missing, null or empty claim fails with 403 `idp_source_identity_invalid`                            |
+| `{claim:<name>}` | a verified scalar claim; a missing, null, empty, list, object or 2^53+ number fails with 403 `idp_source_identity_invalid`       |
 
 The default is `{issuer}:{subject}`. STS allows only `[\w=,.@-]`, so every other character becomes `=`, including the literal `:`. If any substituted value needed sanitizing, or a value other than the last could blur its boundary (it contains the first character of the sanitized literal after it, or no literal follows), the result ends in `+` and 11 base64url characters of a SHA-256 over the raw values, so distinct inputs stay distinct. Example: inbound issuer `https://token.actions.githubusercontent.com`, subject `octo-org/api` renders `token.actions.githubusercontent.com=octo-org=api+<11 chars>` (60 characters). With this issuer, a subject of up to 16 characters fits; with a single inbound issuer, `{subject}` alone leaves room for the subject.
 

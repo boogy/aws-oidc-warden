@@ -104,7 +104,7 @@ func (t *sourceIdentityTemplate) render(requestID, issuer, subject string, claim
 			}
 		default:
 			cv, ok := claims[strings.TrimPrefix(key, "claim:")]
-			if !ok || isEmptyClaim(cv) || utils.IsInexactNumber(cv) {
+			if !ok || !isScalarClaim(cv) || utils.IsInexactNumber(cv) {
 				return "", false, ErrIdPSourceIdentityInvalid
 			}
 			if v = utils.FormatClaimValue(cv); v == "" {
@@ -156,16 +156,12 @@ func sourceIdentityTail(raw []string) string {
 	return "+" + base64.RawURLEncoding.EncodeToString(h.Sum(nil)[:8])
 }
 
-func isEmptyClaim(raw any) bool {
-	switch c := raw.(type) {
-	case nil:
-		return true
-	case []any:
-		return len(c) == 0
-	case map[string]any:
-		return len(c) == 0
+func isScalarClaim(raw any) bool {
+	switch raw.(type) {
+	case nil, []any, map[string]any:
+		return false
 	}
-	return false
+	return true
 }
 
 // exchangeFailureKind labels a non-API failure without its text, which may echo the token.
