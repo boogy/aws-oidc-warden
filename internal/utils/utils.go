@@ -28,7 +28,7 @@ func FormatClaimValue(raw any) string {
 	return fmt.Sprintf("%v", raw)
 }
 
-// IsInexactNumber reports whether raw is a float64 at or above 2^53, which may be a rounded, different integer.
+// IsInexactNumber reports whether raw is a float64 of magnitude at least 2^53.
 func IsInexactNumber(raw any) bool {
 	f, ok := raw.(float64)
 	return ok && math.Abs(f) >= 1<<53
