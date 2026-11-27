@@ -1,10 +1,13 @@
 package aws
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/smithy-go"
 )
 
@@ -33,11 +36,19 @@ func classifyAssumeRoleError(err error) error {
 	return err
 }
 
+// IsTransient reports whether err is a throttling, server-fault, connection or timeout failure a retry may clear.
+func IsTransient(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok && apiErr.ErrorFault() == smithy.FaultServer {
+		return true
+	}
+	return retry.IsErrorRetryables(retry.DefaultRetryables).IsErrorRetryable(err) == aws.TrueTernary
+}
+
 // ErrAccountNotAllowed marks a target account refused by cross_account.
 var ErrAccountNotAllowed = errors.New("target account is not allowed by cross_account")
-
-// ErrRoleNotFound marks a GetRoleTags role that IAM reports does not exist.
-var ErrRoleNotFound = errors.New("iam role does not exist")
 
 var (
 	// ErrWebIdentityDenied marks an AssumeRoleWithWebIdentity refusal that a retry will not fix.

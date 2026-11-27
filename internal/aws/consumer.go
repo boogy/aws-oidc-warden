@@ -113,7 +113,7 @@ func (a *AwsConsumer) spokeCredsFor(ctx context.Context, account string) (aws.Cr
 		return nil, nil
 	}
 	if !accountAllowed(cfg, account, hub) {
-		return nil, fmt.Errorf("%w: %s is not in cross_account.allowed_accounts", ErrAccountNotAllowed, account)
+		return nil, fmt.Errorf("target account %s is not in cross_account.allowed_accounts", account)
 	}
 
 	key := spokeCacheKey(account, cfg.CrossAccount)
@@ -471,7 +471,7 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 		return nil, err
 	}
 	if !allowed {
-		return nil, fmt.Errorf("refusing to read tags for role %s: %w", roleARN, ErrAccountNotAllowed)
+		return nil, fmt.Errorf("refusing to read tags for role %s: target account is not allowed", roleARN)
 	}
 
 	a.mu.Lock()
@@ -504,7 +504,7 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 			return nil, herr
 		}
 		if account != hub {
-			return nil, fmt.Errorf("%w: cross-account is disabled; refusing to read role tags in account %s (would read a same-named hub role)", ErrAccountNotAllowed, account)
+			return nil, fmt.Errorf("cross-account is disabled; refusing to read role tags in account %s (would read a same-named hub role)", account)
 		}
 	}
 
@@ -516,18 +516,17 @@ func (a *AwsConsumer) GetRoleTags(ctx context.Context, roleARN string) (map[stri
 		out, err = a.AWS.GetRoleAs(ctx, input, creds)
 	}
 	if err != nil {
+		err = fmt.Errorf("get role %s: %w", roleName, err)
 		// Only a definitive NoSuchEntity is cached; throttling, network and AccessDenied are not.
 		if _, ok := errors.AsType[*iamtypes.NoSuchEntityException](err); ok {
-			err = fmt.Errorf("get role %s: %w: %w", roleName, ErrRoleNotFound, err)
 			a.mu.Lock()
 			if a.roleMissCache == nil || len(a.roleMissCache) >= maxRoleMisses {
 				a.roleMissCache = make(map[string]cachedMiss)
 			}
 			a.roleMissCache[roleARN] = cachedMiss{err: err, expires: a.now().Add(roleMissTTL)}
 			a.mu.Unlock()
-			return nil, err
 		}
-		return nil, fmt.Errorf("get role %s: %w", roleName, err)
+		return nil, err
 	}
 	if out.Role == nil {
 		return nil, errors.New("role information not available")

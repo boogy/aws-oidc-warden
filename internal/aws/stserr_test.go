@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"testing"
 
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 	"github.com/aws/smithy-go"
@@ -80,4 +82,29 @@ func TestAssumeRolePropagatesDenial(t *testing.T) {
 func TestAssumeRoleInfraErrorIsNotADenial(t *testing.T) {
 	err := assumeWithSTSError(t, apiErr("ThrottlingException"))
 	assert.NotErrorIs(t, err, ErrAssumeRoleDenied)
+}
+
+func TestIsTransient(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"throttling", fmt.Errorf("get role x: %w", apiErr("Throttling")), true},
+		{"iam service failure", &iamtypes.ServiceFailureException{Message: new("boom")}, true},
+		{"connection refused", &net.OpError{Op: "dial", Err: errors.New("connection refused")}, true},
+		{"deadline", fmt.Errorf("get role x: %w", context.DeadlineExceeded), true},
+		{"access denied", apiErr("AccessDenied"), false},
+		{"validation error", apiErr("ValidationError"), false},
+		{"no such entity", &iamtypes.NoSuchEntityException{Message: new("gone")}, false},
+		{"spoke assume denied", fmt.Errorf("assume spoke: %w", fmt.Errorf("%w: %w", ErrAssumeRoleDenied, apiErr("AccessDenied"))), false},
+		{"account refused", fmt.Errorf("%w: x", ErrAccountNotAllowed), false},
+		{"canceled", context.Canceled, false},
+		{"plain error", errors.New("role name too long"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsTransient(tt.err))
+		})
+	}
 }

@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
+	"github.com/aws/smithy-go"
 	gtvaws "github.com/boogy/aws-oidc-warden/internal/aws"
 	"github.com/boogy/aws-oidc-warden/internal/config"
 	"github.com/boogy/aws-oidc-warden/internal/handler"
@@ -341,13 +343,15 @@ func TestProcessRequest_TagAuthNeverGrants(t *testing.T) {
 
 func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 	tests := []struct {
-		name    string
-		tagsErr error
-		want    error
+		name       string
+		tagsErr    error
+		want       error
+		wantReason string
 	}{
-		{"transient IAM error is 503", errors.New("AccessDenied: iam:GetRole"), handler.ErrRoleTagsUnavailable},
-		{"missing role is 403", fmt.Errorf("get role app: %w: NoSuchEntity", gtvaws.ErrRoleNotFound), handler.ErrRoleNotPermitted},
-		{"account refused is 403", fmt.Errorf("refusing: %w", gtvaws.ErrAccountNotAllowed), handler.ErrRoleNotPermitted},
+		{"throttling is 503", &smithy.GenericAPIError{Code: "Throttling"}, handler.ErrRoleTagsUnavailable, "tag-auth role tag lookup failed transiently"},
+		{"access denied is 403", &smithy.GenericAPIError{Code: "AccessDenied", Message: "iam:GetRole"}, handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
+		{"missing role is 403", &iamtypes.NoSuchEntityException{Message: aws.String("gone")}, handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
+		{"account refused is 403", fmt.Errorf("refusing: %w", gtvaws.ErrAccountNotAllowed), handler.ErrRoleNotPermitted, "tag-auth role tag lookup failed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -379,7 +383,7 @@ func TestProcessRequest_TagAuthReadFailureDenies(t *testing.T) {
 			assert.Empty(t, fc.assumed, "FAIL-OPEN: credentials minted after the role-tag read failed")
 			assert.Contains(t, buf.String(), `"eventType":"authz.tag_auth.lookup_failure"`)
 			assert.Contains(t, buf.String(), tt.tagsErr.Error())
-			assert.Equal(t, "tag-auth role tag lookup failed", sink.last(t)["reason"])
+			assert.Equal(t, tt.wantReason, sink.last(t)["reason"])
 		})
 	}
 }

@@ -246,7 +246,7 @@ With that config a role tagged `gh/subject` is reachable only by a GitHub token,
 
 - **No identity tag → deny.** A role with none of `aow/subject`, `aow/repo`, or `aow/repo-owner` is never tag-authorized, even if other `aow/*` tags match.
 - **Multi-issuer without `aow/issuer` → deny.** Once a second issuer is configured, a role with no `aow/issuer` tag is unreachable via tag-auth (fails closed) — add the tag when you add the issuer.
-- **Tag read fails → deny (logged, not fatal).** If `iam:GetRole` errors (role missing, no permission, spoke assume failed), tag-auth treats the role as not authorized and logs a warning; the explicit-mapping result still stands.
+- **Tag read fails → deny (logged, not fatal).** If `iam:GetRole` errors (role missing, no permission, spoke assume denied), tag-auth treats the role as not authorized and logs a warning; the explicit-mapping result still stands.
 - **Empty claim never matches.** If a claim is absent/empty (e.g. no `environment`), a role requiring that tag is denied. Don't tag dimensions the workflow won't present.
 - **`aow/claim.` names are case-sensitive.** IAM stores tag keys verbatim, so `aow/claim.isContractor` reads the claim `isContractor` exactly — unlike `conditions:` keys, which viper lower-cases on the way in and which therefore fall back to a case-folded lookup. Spell the claim the way the issuer mints it. A bare `aow/claim.` names no claim and denies.
 - **`aow/claim.<name>` on a list claim matches any element.** A claim holding `["platform","sre"]` satisfies `aow/claim.groups: sre`.
@@ -254,7 +254,7 @@ With that config a role tagged `gh/subject` is reachable only by a GitHub token,
 - **Prefix collisions.** Only keys under the prefix in force for the verifying issuer are inspected; unrelated tags (cost-center, team, …) are ignored. Changing a prefix changes which keys are read — keep it consistent with how roles are tagged.
 - **Tag charset.** `*`, `(`, `)`, `[`, `]`, `|`, `^`, `$`, `\`, `?`, `,` are rejected by AWS in tag values. Lists are **space**-separated, not comma.
 - **`aow/branch` vs `aow/ref`.** `aow/branch` is forgiving (matches the full ref _or_ the short name); `aow/ref` is strict (full ref only). Prefer `aow/ref` when you need an exact ref including tags like `refs/tags/v1.2.3`.
-- **A failed tag read is 503, not 403.** An IAM or spoke-role failure answers `503 role_tags_unavailable`; a role that does not exist or an account `cross_account` refuses stays `403 permission_denied`.
+- **A transient tag read failure is 503, not 403.** Throttling, an AWS server fault, a network error or a timeout answers `503 role_tags_unavailable`; access denied, a missing role or spoke, or an account `cross_account` refuses stays `403 permission_denied`.
 - **Caching.** Spoke credentials are cached until ~5 min before expiry; role tags are cached ~60 s. A tag change can take up to ~60 s to take effect.
 - **`cross_account.enabled` gates everything cross-account.** `false` (or the block omitted) hard-blocks a cross-account tag read with an error — it does not silently deny only that role, it fails the request. With it `true`, a cross-account tag read additionally fails closed if the `aow-spoke` role is missing or untrusted in the target account. The final `AssumeRole` on the target role never uses the spoke — see [Cross-account](#cross-account).
 

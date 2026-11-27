@@ -207,7 +207,7 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		roleTags, terr := r.consumer.GetRoleTags(ctx, requestedRole)
 		if terr != nil {
 			lookupFailed = true
-			lookupTransient = !errors.Is(terr, aws.ErrRoleNotFound) && !errors.Is(terr, aws.ErrAccountNotAllowed)
+			lookupTransient = aws.IsTransient(terr)
 			logevent.Warn(ctx, log, logevent.AuthzTagAuthLookupFailure, "role tag lookup failed",
 				slog.String("error", terr.Error()))
 		} else if cfg.TagAuth.Authorize(roleTags, claimsMap, claims.Issuer, claims.Subject) {
@@ -225,6 +225,9 @@ func (r *RequestProcessor) authorizeRequest(ctx context.Context, requestData *Re
 		}
 		if lookupFailed {
 			rec.Reason = "tag-auth role tag lookup failed"
+		}
+		if lookupTransient {
+			rec.Reason = "tag-auth role tag lookup failed transiently"
 		}
 		denyAttrs := []slog.Attr{slog.Any("allowedRoles", roles)}
 		if cfg.LogClaimValues {

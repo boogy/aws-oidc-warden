@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- A tag-auth role tag read that fails on IAM or the spoke role answers `503 role_tags_unavailable` instead of `403 permission_denied`.
+- A tag-auth role tag read that fails on throttling, a server fault or the network answers `503 role_tags_unavailable` instead of `403 permission_denied`.
 
 ## [5.0.1] - 2026-11-27
 
